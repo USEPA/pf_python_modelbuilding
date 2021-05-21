@@ -1,0 +1,6 @@
+.idea/
+*.pyc
+*.p
+*.zip
+Data/
+bash.exe.stackdump
