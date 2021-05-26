@@ -10,6 +10,15 @@ app = Flask(__name__)
 log = logging.getLogger('werkzeug')
 log.setLevel(logging.ERROR)
 
+"""
+Flask webservice to build QSAR models with a variety of modeling strategies (RF, SVM, DNN, XGB...more to come?)
+Run with Python 3.9 to avoid problems with parallelizing RF (bug in older versions of joblib backing sklearn)
+@author: TMARTI02 (Todd Martin) - RF, base webservice code
+@author: GSincl01 (Gabriel Sinclair) - SVM (based on work by CRupakhe), XGB, refactored webservice code
+@author: cramslan (Christian Ramsland) - DNN
+Repository created 05/21/2021
+"""
+
 
 @app.route('/models/<string:qsar_method>/info', methods=['GET'])
 def info(qsar_method):
