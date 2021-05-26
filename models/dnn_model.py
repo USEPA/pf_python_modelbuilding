@@ -250,7 +250,6 @@ class Model:
 class ModelDescription:
     def __init__(self, Model):
         self.is_binary = Model.is_binary
-        self.version = Model.version
         self.remove_log_p_descriptors = Model.remove_log_p_descriptors
         self.version = Model.version
         self.qsar_method = Model.qsar_method

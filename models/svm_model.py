@@ -335,8 +335,8 @@ def main():
     descriptor_software = 'T.E.S.T. 5.1'
     # descriptor_software = 'Padelpy webservice single'
 
-    folder = 'C:/Users/GSincl01/OneDrive - Environmental Protection Agency (EPA)/Python QSAR WS/data/'
-    folder += 'datasets_benchmark/' + endpoint + ' OPERA/'
+    folder = 'C:/Users/GSincl01/OneDrive - Environmental Protection Agency (EPA)/Python/pf-python-modelbuilding/data/'
+    folder += 'DataSetsBenchmark/' + endpoint + ' OPERA/'
     # folder += 'datasets_benchmark_toxicity/' + endpoint + '/'
     training_file_name = endpoint + ' OPERA ' + descriptor_software + ' training.tsv'
     prediction_file_name = endpoint + ' OPERA ' + descriptor_software + ' prediction.tsv'

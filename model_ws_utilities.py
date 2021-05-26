@@ -27,7 +27,8 @@ def get_model_info(qsar_method):
     elif qsar_method == 'dnn':
         return 'tensorflow/keras implementation of DNN'
     elif qsar_method == 'xgb':
-        return 'python implementation of xgboost'
+        return 'python implementation of extreme gradient boosting ' \
+                           '(https://xgboost.readthedocs.io/en/latest/get_started.html)'
     else:
         return qsar_method + ' not implemented'
 
