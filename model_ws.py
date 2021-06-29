@@ -22,32 +22,39 @@ Repository created 05/21/2021
 
 @app.route('/models/<string:qsar_method>/info', methods=['GET'])
 def info(qsar_method):
+    """Returns a short, generic description of the QSAR method"""
     return model_ws_utilities.get_model_info(qsar_method), 200
 
 
 @app.route('/models/<string:qsar_method>/train', methods=['POST'])
 def train(qsar_method):
+    """Trains a model for the specified QSAR method on provided data"""
     obj = request.form
-    training_tsv = obj.get('training_tsv')
-    model_id = obj.get('model_id')
-    if obj.get('remove_log_p'):
+    training_tsv = obj.get('training_tsv')  # Retrieves the training data as a TSV
+    model_id = obj.get('model_id')  # Retrieves the model number to use for persistent storage
+    if obj.get('remove_log_p'):  # Sets boolean remove_log_p from string
         remove_log_p = obj.get('remove_log_p', '').lower() == 'true'
     else:
         remove_log_p = False
 
+    # Can't train a model without data
     if training_tsv is None:
         abort(400, 'missing training tsv')
 
+    # Calls the appropriate model training method, throwing 500 SERVER ERROR if it does not give back a good model
     model = model_ws_utilities.call_build_model(qsar_method, training_tsv, remove_log_p)
     if model is None:
         abort(500, 'unknown model training error')
 
+    # Sets status 200 OK
     status = 200
+    # If model number provided for storage, stores the model and sets status 201 CREATED instead
     if model_id.strip():
         model_ws_utilities.models[model_id] = model
         status = 201
 
-    if qsar_method.lower() == 'dnn':
+    # Returns model bytes
+    if qsar_method.lower() == 'dnn' or qsar_method.lower() == 'dnn_new':
         return dill.dumps(model), status
     else:
         return pickle.dumps(model), status
@@ -55,59 +62,78 @@ def train(qsar_method):
 
 @app.route('/models/<string:qsar_method>/predict', methods=['POST'])
 def predict(qsar_method):
+    """Makes predictions for a stored model on provided data"""
     obj = request.form
-    prediction_tsv = obj.get('prediction_tsv')
-    model_id = obj.get('model_id')
+    prediction_tsv = obj.get('prediction_tsv')  # Retrieves the prediction data as a TSV
+    model_id = obj.get('model_id')  # Retrieves the model number to use
 
+    # Can't make predictions without data
     if prediction_tsv is None:
         abort(400, 'missing prediction tsv')
+    # Can't make predictions without a model
     if model_id is None:
         abort(400, 'missing model id')
 
+    # Gets stored model using model number
     model = model_ws_utilities.models[model_id]
+    # 404 NOT FOUND if no model stored under provided number
     if model is None:
         abort(404, 'no stored model with id ' + model_id)
 
+    # Calls the appropriate prediction method and returns the results
     return model_ws_utilities.call_do_predictions(prediction_tsv, model), 200
 
 
 @app.route('/models/<string:qsar_method>/init', methods=['POST'])
 def init(qsar_method):
+    """Loads a model and stores it under the provided number"""
     form_obj = request.form
-    files_obj = request.files
-    model_id = form_obj.get('model_id')
+    files_obj = request.files  # Retrieves the files attached to the request
+    model_id = form_obj.get('model_id')  # Retrieves the model number to use for persistent storage
 
+    # Can't store a model unless number is specified
     if model_id is None:
         abort(400, 'missing model id')
 
+    # Retrieves the model file from the request files
     model_file = files_obj['model']
     model = None
     if model_file is not None:
-        if qsar_method.lower() == 'dnn':
+        # Loads model bytes
+        if qsar_method.lower() == 'dnn' or qsar_method.lower() == 'dnn_new':
             model = dill.loads(model_file.read())
         else:
             model = pickle.loads(model_file.read())
+        # Stores model under provided number
         model_ws_utilities.models[model_id] = model
     else:
+        # Can't store a model if none provided
         abort(400, 'missing model bytes')
 
+    # 400 BAD REQUEST if something is wrong with the loaded bytes
     if model is None:
         abort(400, 'unknown model initialization error')
 
+    # Return storage ID and 201 CREATED
     return model_id, 201
 
 
 @app.route('/models/<string:qsar_method>/<string:model_id>', methods=['GET'])
 def details(qsar_method, model_id):
+    """Returns a detailed description of the QSAR model with version and parameter information"""
     model = model_ws_utilities.models[model_id]
 
+    # 404 NOT FOUND if no model stored under provided number
     if model is None:
         abort(404, 'no stored model with id ' + model_id)
 
+    # Retrieves details from specified model
     model_details = model_ws_utilities.get_model_details(qsar_method, model)
     if model_details is None:
+        # 404 NOT FOUND if model has no detail information
         abort(404, 'no details for stored model with id ' + model_id)
 
+    # Return description and 200 OK
     return model_details, 200
 
 
