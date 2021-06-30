@@ -15,7 +15,9 @@ __author__ = "Todd Martin"
 # descriptors
 
 class Model:
+    """Trains and makes predictions with a random forest model"""
     def __init__(self, df_training, remove_log_p_descriptors, n_threads):
+        """Initializes the RF model with optimal parameters and provided data in pandas dataframe"""
         self.rfr = None
         self.descriptor_names = None
         self.remove_log_p_descriptors = remove_log_p_descriptors
@@ -31,11 +33,14 @@ class Model:
                            'sklearn.ensemble.RandomForestClassifier.html)'
 
     def build_model(self):
+        """Trains the RF model on provided data"""
         t1 = time.time()
 
+        # Call prepare_instances without removing correlated descriptors
         train_ids, train_labels, train_features, train_column_names, self.is_binary = \
             DFU.prepare_instances(self.df_training, "training", self.remove_log_p_descriptors, False)
 
+        # Use columns selected by prepare_instances (in case logp descriptors were removed)
         self.descriptor_names = train_column_names
 
         if self.is_binary:
@@ -59,17 +64,21 @@ class Model:
         return self
 
     def do_predictions(self, df_prediction):
+        """Makes predictions using the trained model"""
+        # Prepare prediction instances using columns from training data
         pred_ids, pred_labels, pred_features = DFU.prepare_prediction_instances(df_prediction, self.descriptor_names)
         # print ('pred version 1.4')
         predictions = self.rfr.predict(pred_features)
 
         print('Score for Test data = ', self.rfr.score(pred_features, pred_labels))
 
+        # Return predictions
         return predictions
 
 
 class ModelDescription:
     def __init__(self, model):
+        """Describes parameters of the specific model as built"""
         self.is_binary = model.is_binary
         self.n_estimators = model.n_estimators
         self.min_impurity_decrease = model.min_impurity_decrease
@@ -79,6 +88,7 @@ class ModelDescription:
         self.description = model.description
 
     def to_json(self):
+        """Returns description as a JSON"""
         return json.dumps(self.__dict__)
 
 

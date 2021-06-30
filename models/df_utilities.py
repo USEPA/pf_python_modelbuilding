@@ -4,10 +4,7 @@ from io import StringIO
 
 
 def load_df(tsv_string):
-    """
-    :param tsv_string:
-    :return: df
-    """
+    """Loads data from TSV/CSV into a pandas dataframe"""
     if "\t" in tsv_string:
         separator = '\t'
     else:
@@ -15,14 +12,15 @@ def load_df(tsv_string):
 
     df = pd.read_csv(StringIO(tsv_string), sep=separator)
 
-    # deletes rows with bad values:
+    # Deletes rows with bad values
     df = df[~df.isin([np.nan, np.inf, -np.inf]).any(1)]
     return df
 
 
 def load_df_from_file(filepath, sep='\t'):
-    # Automatically reads .csv and .tsv
-    # Otherwise specify delimiter (e.g. for tab-delimited .txt)
+    """Loads data from delimited file into a pandas dataframe
+    Automatically reads .csv and .tsv
+    Otherwise specify delimiter (e.g. for tab-delimited .txt)"""
     if filepath.endswith(".csv"):
         df = pd.read_csv(filepath, delimiter=',')
     elif filepath.endswith(".tsv"):
@@ -31,10 +29,10 @@ def load_df_from_file(filepath, sep='\t'):
         df = pd.read_csv(filepath, delimiter=sep)
     print(df.shape)
 
-    # deletes rows with bad values:
+    # Deletes rows with bad values
     df = df[~df.isin([np.nan, np.inf, -np.inf]).any(1)]
 
-    # deletes columns with bad values:
+    # Deletes columns with bad values
     # df = df.dropna(axis=1)
     # df = df.reset_index(drop=True)
 
@@ -43,6 +41,7 @@ def load_df_from_file(filepath, sep='\t'):
 
 
 def is_descriptor_nearly_constant(df, column_name):
+    """Checks if descriptor is ~nearly~ constant (for a given threshold) over the provided data"""
     mean = df[column_name].mean()
     stdev = df[column_name].std()
     constant_threshold = 0.000001
@@ -54,6 +53,7 @@ def is_descriptor_nearly_constant(df, column_name):
 
 
 def remove_log_p_descriptors(df, which_set):
+    """Removes descriptor columns that contain logp"""
     drop_column_names = []
     for column in df:
         if 'logp' in column.lower():
@@ -69,9 +69,11 @@ def remove_log_p_descriptors(df, which_set):
 
 
 def prepare_prediction_instances(df, train_column_names):
+    """Prepares a pandas df of prediction data using descriptor set from training data"""
     ids = np.array(df[df.columns[0]])
     labels = np.array(df[df.columns[1]])
 
+    # Remove ids and exp vals
     df.drop(df.columns[0], axis=1)
     df.drop(df.columns[1], axis=1)
 
@@ -81,16 +83,19 @@ def prepare_prediction_instances(df, train_column_names):
         if column not in train_column_names:
             drop_column_names.append(column)
 
+    # Drop the same columns that were dropped from training data
     df = df.drop(drop_column_names, axis=1)
 
     print('The shape of features is:', df.shape)
 
     features = np.array(df)
 
+    # Return ids, exp vals, and descriptors as separate arrays
     return ids, labels, features
 
 
 def prepare_instances(df, which_set, remove_logp, remove_corr):
+    """Prepares a pandas df of training data by removing logp and correlated descriptors"""
     df_labels = df[df.columns[1]]
     if df_labels.isin([0, 1]).all():
         is_binary = True
@@ -131,7 +136,7 @@ def prepare_instances(df, which_set, remove_logp, remove_corr):
 
 
 def do_remove_constant_descriptors(df, drop_column_names):
-    # print('dropping constant descriptors')
+    """Removes constant descriptors"""
     num_rows = len(df.index)
 
     for column in df:
@@ -150,6 +155,8 @@ def do_remove_constant_descriptors(df, drop_column_names):
 
 
 def do_remove_correlated_descriptors(df, threshold):
+    """Removes descriptors correlated above a certain threshold
+    Adapted from https://chrisalbon.com/machine_learning/feature_selection/drop_highly_correlated_features/"""
     corr = df.corr().abs()
     upper = corr.where(np.triu(np.ones(corr.shape), k=1).astype(bool))
     corr_to_drop = [column for column in upper.columns if any(upper[column] > threshold)]

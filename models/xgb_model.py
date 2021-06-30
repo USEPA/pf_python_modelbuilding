@@ -6,7 +6,9 @@ from models import df_utilities as dfu
 
 
 class Model:
+    """Trains and makes predictions with an out-of-the-box XGBoost model"""
     def __init__(self, df_training, remove_log_p_descriptors):
+        """Initializes the XGB model with provided data in pandas dataframe"""
         self.model = None
         self.descriptor_names = None
         self.remove_log_p_descriptors = remove_log_p_descriptors
@@ -18,11 +20,14 @@ class Model:
                            '(https://xgboost.readthedocs.io/en/latest/get_started.html)'
 
     def build_model(self):
+        """Trains the XGB model on provided data"""
         t1 = time.time()
 
+        # Call prepare_instances without removing correlated descriptors
         train_ids, train_labels, train_features, train_column_names, self.is_binary = \
             dfu.prepare_instances(self.df_training, "training", self.remove_log_p_descriptors, False)
 
+        # Use columns selected by prepare_instances (in case logp descriptors were removed)
         self.descriptor_names = train_column_names
 
         if self.is_binary:
@@ -34,25 +39,32 @@ class Model:
 
         print('Score for Training data = ', self.model.score(train_features, train_labels))
 
-        # Save space in database:
+        # Save space in database
         self.df_training = None
 
         t2 = time.time()
         print('Time to train model  = ', t2 - t1, 'seconds')
 
+        # Return built model
         return self
 
     def do_predictions(self, df_prediction):
+        """Makes predictions using the trained model"""
+        # Prepare prediction instances using columns from training data
         pred_ids, pred_labels, pred_features = dfu.prepare_prediction_instances(df_prediction, self.descriptor_names)
+
+        # Makes predictions
         predictions = self.model.predict(pred_features)
 
         print('Score for Test data = ', self.model.score(pred_features, pred_labels))
 
+        # Return predictions
         return predictions
 
 
 class ModelDescription:
     def __init__(self, model):
+        """Describes parameters of the specific model as built"""
         self.is_binary = model.is_binary
         self.remove_log_p_descriptors = model.remove_log_p_descriptors
         self.version = model.version
@@ -60,6 +72,7 @@ class ModelDescription:
         self.description = model.description
 
     def to_json(self):
+        """Returns description as a JSON"""
         return json.dumps(self.__dict__)
 
 
