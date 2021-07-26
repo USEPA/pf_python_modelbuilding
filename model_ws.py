@@ -31,6 +31,10 @@ def train(qsar_method):
     """Trains a model for the specified QSAR method on provided data"""
     obj = request.form
     training_tsv = obj.get('training_tsv')  # Retrieves the training data as a TSV
+
+    if training_tsv is None:
+        training_tsv = request.files.get('training_tsv').read().decode('UTF-8')
+
     model_id = obj.get('model_id')  # Retrieves the model number to use for persistent storage
     if obj.get('remove_log_p'):  # Sets boolean remove_log_p from string
         remove_log_p = obj.get('remove_log_p', '').lower() == 'true'
@@ -64,8 +68,11 @@ def train(qsar_method):
 def predict(qsar_method):
     """Makes predictions for a stored model on provided data"""
     obj = request.form
-    prediction_tsv = obj.get('prediction_tsv')  # Retrieves the prediction data as a TSV
     model_id = obj.get('model_id')  # Retrieves the model number to use
+
+    prediction_tsv = obj.get('prediction_tsv')  # Retrieves the prediction data as a TSV
+    if prediction_tsv is None:
+        prediction_tsv = request.files.get('prediction_tsv').read().decode('UTF-8')
 
     # Can't make predictions without data
     if prediction_tsv is None:
@@ -138,4 +145,5 @@ def details(qsar_method, model_id):
 
 
 if __name__ == '__main__':
-    app.run(host='localhost', port=5000, debug=True)
+    # app.run(host='localhost', port=5000, debug=True)
+    app.run(host='0.0.0.0', port=5000)
