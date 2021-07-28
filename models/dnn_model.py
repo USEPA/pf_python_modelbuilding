@@ -12,11 +12,12 @@ from keras import regularizers
 import json
 import os
 import time
-from models import df_utilities as dfu
+from Machine_Learning import DataFrameUtilities as DFU
 
-# technically a redundant function that is handled in the DFU.prepareinstances method but I have noticed my models are much worse if I don't send train_features and pred_features
-# through. Normalizes the data and returns test data based on the mean and standard deviation determined by the train data.
 def normalize(train_pandas, test_pandas):
+    """ technically a redundant function that is handled in the DFU.prepareinstances method but I have noticed my models
+    are much worse if I don't send train_features and pred_featuresthrough. Normalizes the data and returns test data
+    based on the mean and standard deviation determined by the train data."""
     mean = train_pandas.mean(axis=0)
     train_pandas -= mean
     std = train_pandas.std(axis=0)
@@ -31,18 +32,18 @@ def normalize(train_pandas, test_pandas):
         return train_pandas
 
 
-# this has to be done because I can't pickle the tensorflow model files, can only do so for the compressed model files
-# this class describes everything about a folder directory that tensorflow uses to store model file binaries about weights, biases, etc.
-# unlike random forest where in the model class self.rfr equals whatever the model object is, I have to set its Model.model_files_objects
-# equal to these classes, these classes are capable of picking up everything in tensorflow model folders, and also recreating those
-# folders whenever a prediction is made
 class ModelFiles:
+    """this has to be done because I can't pickle the tensorflow model files, can only do so for the compressed model
+    files this class describes everything about a folder directory that tensorflow uses to store model file binaries
+    about weights, biases, etc.unlike random forest where in the model class self.rfr equals whatever the model object
+    is, I have to set its Model.model_files_objects equal to these classes, these classes are capable of picking up
+    everything in tensorflow model folders, and also recreating those folders whenever a prediction is made"""
     def __init__(self, path):
         self.assetfolder_string = "assets"
         self.variablefolder_string = "variables"
         self.saved_model_filename = "saved_model.pb"
         self.variables_index_filename = "variables.index"
-        self.variables_DATA_00000_OF_00001_filename = "variables.DATA-00000-OF-00001"
+        self.variables_DATA_00000_OF_00001_filename = None
         self.saved_model_pb = None
         self.variables_index = None
         self.variables_DATA_00000_OF_00001 = None
@@ -53,17 +54,23 @@ class ModelFiles:
         self.variables_index = self.openandclose(path, self.variablefolder_string, self.variables_index_filename)
         self.variables_DATA_00000_OF_00001 = self.openandclose(path, self.variablefolder_string,
                                                                self.variables_DATA_00000_OF_00001_filename)
+        if (os.name == "nt"):
+            self.variables_DATA_00000_OF_00001_filename = "variables.DATA-00000-OF-00001"
+        elif (os.name == "posix"):
+            self.variables_DATA_00000_OF_00001_filename = "variables.data-00000-of-00001"
 
-# opens and closes files and saves the content in the ModelFiles object
     def openandclose(self, path, subfolder, filename):
+        """opens and closes files and saves the content in the ModelFiles object"""
         f = open(path + "/" + subfolder + "/" + filename, "rb")
         file_content = f.read()
         f.close()
         return file_content
 
-# this method is used whenever binaries for models are sent through the web service (like when only a prediction request is made)
-# all the binaries are unpacked and tensorflow is able to use the folders it recognizes (like model0 - model4) to reconstruct the models
     def create_model_directory_from_binary(self, parent_dir, modelnum):
+        """this method is used whenever binaries for models are sent through the web service (like when only a
+        prediction request is made) all the binaries are unpacked and tensorflow is able to use the folders it
+        recognizes (like model0 - model4) to reconstruct the models"""
+
         modelnumdir_string = "model" + str(modelnum)
         self.destination_path = parent_dir + "/" +modelnumdir_string
         if not os.path.exists(self.destination_path):
@@ -77,6 +84,7 @@ class ModelFiles:
         return self
 
     def populate_model_directory_from_binary(self):
+        """populates directories from binary of model file that gets sent through the web service for prediction"""
         pbFile = open(self.destination_path + "/" + self.saved_model_filename, "wb")
         pbFile.write(self.saved_model_pb)
         index_File = open(self.destination_variables_subpath + "/" + self.variables_index_filename, "wb")
@@ -84,8 +92,8 @@ class ModelFiles:
         DATA_File = open(self.destination_variables_subpath + "/" + self.variables_DATA_00000_OF_00001_filename, "wb")
         DATA_File.write(self.variables_DATA_00000_OF_00001)
 
-# model class that houses most information about the model tuning.
 class Model:
+    """model class that houses most information about the model tuning."""
     def __init__(self, df_training, remove_log_p_descriptors):
         self.model_files_objects = None
         self.descriptor_names = None
@@ -103,11 +111,11 @@ class Model:
         self.qsar_method = 'Deep Neural Network'
         self.description = 'keras implementation of DNN'
 
-    # model building method that calls the k-fold cross validation on the data output from prepare instances
-    # first of two calls to normalize that I need to figure out how to remove at some point.
     def build_model(self):
+        """ model building method that calls the k-fold cross validation on the data output from prepare instances
+            first of two calls to normalize that I need to figure out how to remove at some point."""
         train_ids, train_labels, train_features, train_column_names, self.is_binary = \
-            dfu.prepare_instances(self.df_training, "training", self.remove_log_p_descriptors, self.remove_corr)
+            DFU.prepare_instances(self.df_training, "training", self.remove_log_p_descriptors, self.remove_corr)
         self.descriptor_names = train_column_names
         train_features_pandas = pd.DataFrame(train_features)
         normalized_features_pandas = normalize(train_features_pandas, None)
@@ -115,8 +123,9 @@ class Model:
         self.kxfoldvalidation(normalized_features_np, train_labels)
         return self
 
-    # this is the method called for continuous models, taking in the train and test data as well as the index of the fold in k-fold cross validation (k)
     def kerasmodel(self, train_data_np, test_data_np, index):
+        """this is the method called for continuous models, taking in the train and test data as well as the index of
+        the fold in k-fold cross validation (k)"""
         model = models.Sequential()
         #chunk 1
         model.add(layers.Dense(120, kernel_regularizer=regularizers.l1(0.001),
@@ -145,9 +154,9 @@ class Model:
         tf.keras.backend.clear_session()
         return model
 
-    # the settings for the categorical model, turns out copying the network structure of the continuous model works fine.
-    # Different loss, different metrics for evaluation when training than continuous, but very similar.
     def categorical_model(self, train_data_np, test_data_np, index):
+        """ the settings for the categorical model, turns out copying the network structure of the continuous model
+        works fine. Different loss, different metrics for evaluation when training than continuous, but very similar."""
         model = models.Sequential()
         #chunk 1
         model.add(layers.Dense(120, kernel_regularizer=regularizers.l1(0.001),
@@ -172,11 +181,12 @@ class Model:
 
 
 
-    # k-fold cross validation method that creates multiple models depending on the number of folds
-    # parameters are the features and target numpy arrays, adds model files to the Model class as a list depending on the number of folds k.
-    # does the validation/train splitting based on the size of the dataset
-    # is endpoint specific (binary/continuous)
     def kxfoldvalidation(self, features_np, targets_np):
+        """" k-fold cross validation method that creates multiple models depending on the number of folds
+        parameters are the features and target numpy arrays, adds model files to the Model class as a list depending on
+        the number of folds k. does the validation/train splitting based on the size of the dataset
+        is endpoint specific (binary/continuous)"""
+
         k = self.k
         num_validation_samples = len(features_np) // k
         all_train_mae = []
@@ -234,12 +244,14 @@ class Model:
 
         print("all scores accuracy", all_scores_accuracy)
 
-    # does the predictions on the prediction dataframe taken in as a parameter. cycles through all the models, generates predictions, and averages those as final predictions
-    # after predictions are generated, does some console output of performance based on binary status.
     def do_predictions(self, df_prediction):
+        """does the predictions on the prediction dataframe taken in as a parameter. cycles through all the models,
+        generates predictions, and averages those as final predictions after predictions are generated, does some
+        console output of performance based on binary status."""
+
         train_ids, train_labels, train_features, train_column_names, isbinary = \
-            dfu.prepare_instances(self.df_training, "training", self.remove_log_p_descriptors, self.remove_corr)
-        pred_ids, pred_labels, pred_features = dfu.prepare_prediction_instances(df_prediction, train_column_names)
+            DFU.prepare_instances(self.df_training, "training", self.remove_log_p_descriptors, self.remove_corr)
+        pred_ids, pred_labels, pred_features = DFU.prepare_prediction_instances(df_prediction, train_column_names)
         train_features_pandas = pd.DataFrame(train_features)
         pred_features_pandas = pd.DataFrame(pred_features)
         normalized_test_features_pandas = normalize(train_features_pandas, pred_features_pandas)
@@ -272,8 +284,8 @@ class Model:
             Modelfiles_i = self.model_files_objects[i]
             Modelfiles_i.create_model_directory_from_binary(model_dropoff_path, i)
 
-# class for the model description
 class ModelDescription:
+    """class for the model description"""
     def __init__(self, Model):
         self.is_binary = Model.is_binary
         self.version = Model.version
@@ -286,12 +298,12 @@ class ModelDescription:
         self.epochs = Model.epochs
         self.batches = Model.batch
 
-    # converts the model description to json format to be stored in the database
     def to_json(self):
+        """converts the model description to json format to be stored in the database"""
         return json.dumps(self.__dict__)
 
-# tracks how long the model takes to train and run on tsv files wherever those are in the path.
 def main():
+    # tracks how long the model takes to train and run on tsv files wherever those are in the path.
     startTime = time.time()
 
     # df_training = pd.read_csv("E:\OPERA benchmark sets\LogHalfLife OPERA\LogHalfLife OPERA T.E.S.T. 5.1 training.tsv", delimiter='\t')
