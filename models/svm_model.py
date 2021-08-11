@@ -19,7 +19,7 @@ from sklearn.svm import NuSVR, SVC
 from sklearn.metrics import r2_score, roc_curve, auc
 from sklearn.decomposition import PCA
 from models import df_utilities as DFU
-
+import math
 
 # Stripped-down class to run the single optimal SVM model for webservice: no consensus, predetermined optimal
 # parameters, etc. Use SVM_Full_Python.py for consensus modeling, parameter testing, or other tasks
@@ -106,6 +106,11 @@ class Model:
         np.random.shuffle(folds)
         self.n_feats = max(self.auto_select_n_feats(folds, training_features, training_labels), 40)
 
+        if (self.n_feats>len(training_ids)):
+            self.n_feats=math.ceil(len(training_ids)/5)
+            print("#pca features=", self.n_feats)
+
+
         # Splits data into five "folds" and performs PCA for each
         for i in range(self.n_folds):
             training_features_i, training_labels_i, test_features_i, test_labels_i \
@@ -144,7 +149,7 @@ class Model:
         return training_descriptors, training_exp_vals, test_descriptors, test_exp_vals
 
     def auto_select_n_feats(self, folds, descriptors, exp_vals):
-        """Selects the number of featyres needed to achieve the given cumulative explained variance
+        """Selects the number of features needed to achieve the given cumulative explained variance
         for auto-selection, n_feats is initialized as the desired cum exp var
         then reset to the number of features to achieve it by this method"""
         scree = []
