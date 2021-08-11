@@ -52,12 +52,17 @@ class ModelFiles:
         self.destination_variables_subpath = None
         self.saved_model_pb = self.openandclose(path, "", self.saved_model_filename)
         self.variables_index = self.openandclose(path, self.variablefolder_string, self.variables_index_filename)
-        self.variables_DATA_00000_OF_00001 = self.openandclose(path, self.variablefolder_string,
-                                                               self.variables_DATA_00000_OF_00001_filename)
+
         if (os.name == "nt"):
             self.variables_DATA_00000_OF_00001_filename = "variables.DATA-00000-OF-00001"
         elif (os.name == "posix"):
             self.variables_DATA_00000_OF_00001_filename = "variables.data-00000-of-00001"
+
+        self.variables_DATA_00000_OF_00001 = self.openandclose(path, self.variablefolder_string,
+                                                               self.variables_DATA_00000_OF_00001_filename)
+
+        # print("check", os.name, self.variables_DATA_00000_OF_00001_filename)
+
 
     def openandclose(self, path, subfolder, filename):
         """opens and closes files and saves the content in the ModelFiles object"""
