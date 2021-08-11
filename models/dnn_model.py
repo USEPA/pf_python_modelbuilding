@@ -12,7 +12,7 @@ from keras import regularizers
 import json
 import os
 import time
-from Machine_Learning import DataFrameUtilities as DFU
+from models import df_utilities as DFU
 
 def normalize(train_pandas, test_pandas):
     """ technically a redundant function that is handled in the DFU.prepareinstances method but I have noticed my models
