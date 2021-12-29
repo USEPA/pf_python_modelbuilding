@@ -105,7 +105,7 @@ class Model:
         self.remove_log_p_descriptors = remove_log_p_descriptors
         self.df_training = df_training
         self.is_binary = None
-        self.temp_path = os.path.join(os.getcwd(), "temp")
+        self.temp_path = os.path.join(os.getcwd(), "temp" + str(time.time()))
         self.epochs = 300
         self.batch = 32
         self.k = 5
