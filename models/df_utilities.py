@@ -122,7 +122,7 @@ def prepare_instances(df, which_set, remove_logp, remove_corr):
     if remove_logp:
         df = remove_log_p_descriptors(df, which_set)
     
-    print("shape of dataset after removing corr descriptors" + df.shape)
+    print("shape of dataset prior to removing corr descriptors", df.shape)
 
     if remove_corr:
         do_remove_correlated_descriptors(df, 0.95)
