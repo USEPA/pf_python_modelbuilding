@@ -259,6 +259,7 @@ class Model:
         pred_ids, pred_labels, pred_features = DFU.prepare_prediction_instances(df_prediction, train_column_names)
         train_features_pandas = pd.DataFrame(train_features)
         pred_features_pandas = pd.DataFrame(pred_features)
+        print("prediction features size=" pred_features_pandas.shape)
         normalized_test_features_pandas = normalize(train_features_pandas, pred_features_pandas)
         normalized_test_features_np = np.array(normalized_test_features_pandas)
 
@@ -279,7 +280,7 @@ class Model:
             BA = balanced_accuracy_score(pred_labels, avg_predictions_binary)
             print('Balanced Accuracy for Test Data =', BA)
             shutil.rmtree(self.temp_path)
-            return avg_predictions_binary
+            
 
         # remove the folder files
         shutil.rmtree(self.temp_path)

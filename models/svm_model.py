@@ -312,9 +312,9 @@ class CrossValThread(threading.Thread):
         # Creates model with appropriate params for selected kernel function
         if self.is_binary:
             if self.kernel == "rbf":
-                clf = SVC(C=self.c, gamma=self.g, kernel=self.kernel)
+                clf = SVC(C=self.c, gamma=self.g, kernel=self.kernel, probability=True)
             elif self.kernel == "linear":
-                clf = SVC(C=self.c, kernel=self.kernel)
+                clf = SVC(C=self.c, kernel=self.kernel, probability=True)
         else:
             if self.kernel == "rbf":
                 clf = NuSVR(C=self.c, nu=self.n, gamma=self.g, kernel=self.kernel)
