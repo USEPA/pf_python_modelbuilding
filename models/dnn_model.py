@@ -177,6 +177,8 @@ class Model:
         #chunk 3
 
         model.add(layers.Dense(1))
+        # need to add this for probability predictions
+        model.add(Activation("sigmoid"))
 
         model.compile(optimizer='rmsprop', loss='binary_crossentropy', metrics=['accuracy'])
         model.fit(train_data_np, test_data_np, epochs=self.epochs, batch_size=self.batch, verbose=0)
