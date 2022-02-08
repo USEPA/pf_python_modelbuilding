@@ -225,7 +225,10 @@ class Model:
             for j in range(self.n_folds):
                 # Makes five predictions for each chemical
                 chemical_features = test_descriptors_by_fold[j][i]
-                single_chemical_prediction = self.model[j].predict([chemical_features])
+                if (self.is_binary == False):
+                    single_chemical_prediction = self.model[j].predict([chemical_features])
+                else:
+                    single_chemical_prediction = self.model[j].predict_proba([chemical_features])[:,1]
                 chemical_predictions.append(single_chemical_prediction)
             # Averages all predictions
             avg_chemical_prediction = np.sum(chemical_predictions) / len(chemical_predictions) * 1.0

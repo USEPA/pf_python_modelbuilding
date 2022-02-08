@@ -279,7 +279,6 @@ class Model:
             avg_predictions_binary = np.where(avg_predictions > 0.5, 1, 0)
             BA = balanced_accuracy_score(pred_labels, avg_predictions_binary)
             print('Balanced Accuracy for Test Data =', BA)
-            shutil.rmtree(self.temp_path)
             
 
         # remove the folder files
