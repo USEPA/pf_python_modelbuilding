@@ -232,12 +232,9 @@ class Model:
                 chemical_predictions.append(single_chemical_prediction)
             # Averages all predictions
             avg_chemical_prediction = np.sum(chemical_predictions) / len(chemical_predictions) * 1.0
-            # 0.5 threshold for binary predictions
-            if self.is_binary:
-                final_chemical_prediction = 1.0 if avg_chemical_prediction >= 0.5 else 0.0
-            else:
-                final_chemical_prediction = avg_chemical_prediction
-            predictions.append(final_chemical_prediction)
+            # 0.5 threshold for binary predictions 
+            # CR edit removes 
+            predictions.append(avg_chemical_prediction)
 
         # Scores all predictions
         if self.is_binary:
