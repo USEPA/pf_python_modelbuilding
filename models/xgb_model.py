@@ -54,7 +54,10 @@ class Model:
         pred_ids, pred_labels, pred_features = dfu.prepare_prediction_instances(df_prediction, self.descriptor_names)
 
         # Makes predictions
-        predictions = self.model.predict(pred_features)
+        if (self.is_binary == True):
+            predictions = self.model.predict_proba(pred_features)[:, 1]
+        else:
+            predictions = self.model.predict(pred_features)
 
         print('Score for Test data = ', self.model.score(pred_features, pred_labels))
 

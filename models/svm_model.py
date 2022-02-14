@@ -225,16 +225,16 @@ class Model:
             for j in range(self.n_folds):
                 # Makes five predictions for each chemical
                 chemical_features = test_descriptors_by_fold[j][i]
-                single_chemical_prediction = self.model[j].predict([chemical_features])
+                if (self.is_binary == False):
+                    single_chemical_prediction = self.model[j].predict([chemical_features])
+                else:
+                    single_chemical_prediction = self.model[j].predict_proba([chemical_features])[:,1]
                 chemical_predictions.append(single_chemical_prediction)
             # Averages all predictions
             avg_chemical_prediction = np.sum(chemical_predictions) / len(chemical_predictions) * 1.0
-            # 0.5 threshold for binary predictions
-            if self.is_binary:
-                final_chemical_prediction = 1.0 if avg_chemical_prediction >= 0.5 else 0.0
-            else:
-                final_chemical_prediction = avg_chemical_prediction
-            predictions.append(final_chemical_prediction)
+            # 0.5 threshold for binary predictions 
+            # CR edit removes 
+            predictions.append(avg_chemical_prediction)
 
         # Scores all predictions
         if self.is_binary:
@@ -312,9 +312,9 @@ class CrossValThread(threading.Thread):
         # Creates model with appropriate params for selected kernel function
         if self.is_binary:
             if self.kernel == "rbf":
-                clf = SVC(C=self.c, gamma=self.g, kernel=self.kernel)
+                clf = SVC(C=self.c, gamma=self.g, kernel=self.kernel, probability=True)
             elif self.kernel == "linear":
-                clf = SVC(C=self.c, kernel=self.kernel)
+                clf = SVC(C=self.c, kernel=self.kernel, probability=True)
         else:
             if self.kernel == "rbf":
                 clf = NuSVR(C=self.c, nu=self.n, gamma=self.g, kernel=self.kernel)

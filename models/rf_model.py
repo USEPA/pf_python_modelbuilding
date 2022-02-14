@@ -68,7 +68,10 @@ class Model:
         # Prepare prediction instances using columns from training data
         pred_ids, pred_labels, pred_features = DFU.prepare_prediction_instances(df_prediction, self.descriptor_names)
         # print ('pred version 1.4')
-        predictions = self.rfr.predict(pred_features)
+        if (self.is_binary == True):
+            predictions = self.rfr.predict_proba(pred_features)[:,1]
+        else:
+            predictions = self.rfr.predict(pred_features)
 
         print('Score for Test data = ', self.rfr.score(pred_features, pred_labels))
 
