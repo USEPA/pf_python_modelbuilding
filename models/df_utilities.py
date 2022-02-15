@@ -121,12 +121,48 @@ def prepare_instances(df, which_set, remove_logp, remove_corr):
 
     if remove_logp:
         df = remove_log_p_descriptors(df, which_set)
-    
-    print("shape of dataset prior to removing corr descriptors", df.shape)
 
     if remove_corr:
         do_remove_correlated_descriptors(df, 0.95)
-        
+
+    print(which_set + ': The shape of features is:', df.shape)
+
+    # Convert to numpy array
+    features = np.array(df)
+
+    column_names = list(df.columns)
+
+    return ids, labels, features, column_names, is_binary
+
+
+def prepare_instances_with_preselected_descriptors(df, which_set, descriptor_names):
+    """Prepares a pandas df of training data by removing logp and correlated descriptors"""
+    df_labels = df[df.columns[1]]
+    if df_labels.isin([0, 1]).all():
+        is_binary = True
+    else:
+        is_binary = False
+
+    # Labels are the values we want to predict
+    labels = np.array(df_labels)
+    ids = np.array(df[df.columns[0]])
+    col_name_id = df.columns[0]
+    col_name_property = df.columns[1]
+
+    # drop Property column with experimental property we are trying to correlate (# axis 1 refers to the columns):
+    df = df.drop(col_name_property, axis=1)
+
+    # drop ID column:
+    df = df.drop(col_name_id, axis=1)
+
+    drop_column_names = []
+
+    for column in df:
+        if column not in descriptor_names:
+            drop_column_names.append(column)
+
+    # Drop the same columns that were dropped from training data
+    df = df.drop(drop_column_names, axis=1)
 
     print(which_set + ': The shape of features is:', df.shape)
 

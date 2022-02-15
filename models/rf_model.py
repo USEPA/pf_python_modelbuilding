@@ -62,6 +62,37 @@ class Model:
 
         # pickle.dump(rfr, open("rfr.p", "wb"))
         return self
+    
+    def build_model_with_preselected_descriptors(self, descriptor_names):
+        """Trains the RF model on provided data"""
+        t1 = time.time()
+
+        # Call prepare_instances without removing correlated descriptors
+        train_ids, train_labels, train_features, train_column_names, self.is_binary = \
+            DFU.prepare_instances_with_preselected_descriptors(self.df_training, "training", descriptor_names)
+
+        # Use columns selected by prepare_instances (in case logp descriptors were removed)
+        self.descriptor_names = train_column_names
+
+        if self.is_binary:
+            self.rfr = RandomForestClassifier(n_estimators=self.n_estimators, random_state=42, n_jobs=self.n_threads,
+                                              min_impurity_decrease=self.min_impurity_decrease)
+        else:
+            self.rfr = RandomForestRegressor(n_estimators=self.n_estimators, random_state=42, n_jobs=self.n_threads,
+                                             min_impurity_decrease=self.min_impurity_decrease)
+        # Train the model on training data
+        self.rfr.fit(train_features, train_labels)
+
+        print('Score for Training data = ', self.rfr.score(train_features, train_labels))
+
+        # Save space in database:
+        self.df_training = None
+
+        t2 = time.time()
+        print('Time to train model  = ', t2 - t1, 'seconds')
+
+        # pickle.dump(rfr, open("rfr.p", "wb"))
+        return self
 
     def do_predictions(self, df_prediction):
         """Makes predictions using the trained model"""

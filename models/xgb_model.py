@@ -47,6 +47,36 @@ class Model:
 
         # Return built model
         return self
+    
+    def build_model_with_preselected_descriptors(self, descriptor_names):
+        """Trains the XGB model on provided data"""
+        t1 = time.time()
+
+        # Call prepare_instances without removing correlated descriptors
+        train_ids, train_labels, train_features, train_column_names, self.is_binary = \
+            dfu.prepare_instances_with_preselected_descriptors(self.df_training, "training", descriptor_names)
+
+        # Use columns selected by prepare_instances (in case logp descriptors were removed)
+        self.descriptor_names = train_column_names
+        print(self.descriptor_names)
+
+        if self.is_binary:
+            self.model = XGBClassifier(disable_default_eval_metric=True, eval_metric='auc')
+        else:
+            self.model = XGBRegressor()
+        # Train the model on training data
+        self.model.fit(train_features, train_labels)
+
+        print('Score for Training data = ', self.model.score(train_features, train_labels))
+
+        # Save space in database
+        self.df_training = None
+
+        t2 = time.time()
+        print('Time to train model  = ', t2 - t1, 'seconds')
+
+        # Return built model
+        return self
 
     def do_predictions(self, df_prediction):
         """Makes predictions using the trained model"""

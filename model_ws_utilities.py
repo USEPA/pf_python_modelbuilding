@@ -57,6 +57,25 @@ def call_build_model(qsar_method, training_tsv, remove_log_p):
     return model
 
 
+def call_build_model_with_preselected_descriptors(qsar_method, training_tsv, descriptor_names_tsv):
+    """Loads TSV training data into a pandas DF and calls the appropriate training method"""
+    df_training = dfu.load_df(training_tsv)
+    qsar_method = qsar_method.lower()
+
+    model = None
+    if qsar_method == 'rf':
+        model = rf.Model(df_training, False, 30)
+    elif qsar_method == 'xgb':
+        model = xgb.Model(df_training, False)
+    else:
+        # 404 NOT FOUND if requested QSAR method has not been implemented
+        abort(404, qsar_method + ' not implemented with preselected descriptors')
+
+    # Returns trained model
+    model.build_model_with_preselected_descriptors()
+    return model
+
+
 def call_do_predictions(prediction_tsv, model):
     """Loads TSV prediction data into a pandas DF, stores IDs and exp vals,
     and calls the appropriate prediction method"""

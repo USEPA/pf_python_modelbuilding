@@ -31,9 +31,12 @@ def train(qsar_method):
     """Trains a model for the specified QSAR method on provided data"""
     obj = request.form
     training_tsv = obj.get('training_tsv')  # Retrieves the training data as a TSV
+    embedding_tsv = obj.get('embedding_tsv')
 
     if training_tsv is None:
         training_tsv = request.files.get('training_tsv').read().decode('UTF-8')
+    if embedding_tsv is None:
+        embedding_tsv = request.files.get('embedding_tsv').read().decode('UTF-8')
 
     model_id = obj.get('model_id')  # Retrieves the model number to use for persistent storage
     if obj.get('remove_log_p'):  # Sets boolean remove_log_p from string
@@ -45,11 +48,21 @@ def train(qsar_method):
     if training_tsv is None:
         abort(400, 'missing training tsv')
 
-    # Calls the appropriate model training method, throwing 500 SERVER ERROR if it does not give back a good model
-    model = model_ws_utilities.call_build_model(qsar_method, training_tsv, remove_log_p)
-    if model is None:
-        abort(500, 'unknown model training error')
-
+    if embedding_tsv is None:
+        # Calls the appropriate model training method, throwing 500 SERVER ERROR if it does not give back a good model
+        model = model_ws_utilities.call_build_model(qsar_method, training_tsv, remove_log_p)
+        if model is None:
+            abort(500, 'unknown model training error')
+    else:
+        embedding = []
+        if "," in embedding_tsv:
+            embedding = embedding_tsv.split(",")
+        elif "\t" in embedding_tsv:
+            embedding = embedding_tsv.split("\t")
+        model = model_ws_utilities.call_build_model_with_preselected_descriptors(qsar_method, training_tsv, embedding)
+        if model is None:
+            abort(500, 'unknown model training error')
+            
     # Sets status 200 OK
     status = 200
     # If model number provided for storage, stores the model and sets status 201 CREATED instead
@@ -145,5 +158,4 @@ def details(qsar_method, model_id):
 
 
 if __name__ == '__main__':
-    # app.run(host='localhost', port=5000, debug=True)
-    app.run(host='0.0.0.0', port=5000)
+    app.run(host='0.0.0.0', port=5004, debug=True)

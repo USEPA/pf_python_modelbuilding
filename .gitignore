@@ -6,3 +6,7 @@ data/
 __pycache__/
 bash.exe.stackdump
 temp/
+.spyproject*
+.settings*
+.pydevproject
+.project
