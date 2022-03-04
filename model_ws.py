@@ -36,7 +36,9 @@ def train(qsar_method):
     if training_tsv is None:
         training_tsv = request.files.get('training_tsv').read().decode('UTF-8')
     if embedding_tsv is None:
-        embedding_tsv = request.files.get('embedding_tsv').read().decode('UTF-8')
+        embedding_tsv_obj = request.files.get('embedding_tsv')
+        if embedding_tsv_obj is not None:
+            embedding_tsv = embedding_tsv_obj.read().decode('UTF-8')
 
     model_id = obj.get('model_id')  # Retrieves the model number to use for persistent storage
     if obj.get('remove_log_p'):  # Sets boolean remove_log_p from string
@@ -48,7 +50,7 @@ def train(qsar_method):
     if training_tsv is None:
         abort(400, 'missing training tsv')
 
-    if embedding_tsv is None:
+    if embedding_tsv is None or len(embedding_tsv)==0:
         # Calls the appropriate model training method, throwing 500 SERVER ERROR if it does not give back a good model
         model = model_ws_utilities.call_build_model(qsar_method, training_tsv, remove_log_p)
         if model is None:
