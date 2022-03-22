@@ -67,6 +67,8 @@ def call_build_model_with_preselected_descriptors(qsar_method, training_tsv, des
         model = rf.Model(df_training, False, 30)
     elif qsar_method == 'xgb':
         model = xgb.Model(df_training, False)
+    elif qsar_method == 'svm':
+        model = svm.Model(df_training, False, 30)
     else:
         # 404 NOT FOUND if requested QSAR method has not been implemented
         abort(404, qsar_method + ' not implemented with preselected descriptors')

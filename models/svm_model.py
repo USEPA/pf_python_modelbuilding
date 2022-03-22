@@ -70,7 +70,21 @@ class Model:
         """Trains the SVM model on provided data"""
         t1 = time.time()
         # Do data prep
-        self.prepare_training_data()
+        self.prepare_training_data(False)
+        # Train the model by five-fold cross-validation with hyperparameter optimization
+        score = self.cross_validate()
+        print('Score for Training data = ', score)
+        self.df_training = None  # Delete training data to save space in database
+        t2 = time.time()
+        print('Time to train model  = ', t2 - t1, 'seconds')
+        # pickle.dump(self, open("svm.p", "wb"))
+        
+    def build_model_with_preselected_descriptors(self, descriptor_names):
+        """Trains the SVM model on provided data"""
+        t1 = time.time()
+        # Do data prep
+        self.descriptor_names = descriptor_names
+        self.prepare_training_data(True)
         # Train the model by five-fold cross-validation with hyperparameter optimization
         score = self.cross_validate()
         print('Score for Training data = ', score)
@@ -79,12 +93,15 @@ class Model:
         print('Time to train model  = ', t2 - t1, 'seconds')
         # pickle.dump(self, open("svm.p", "wb"))
 
-    def prepare_training_data(self):
+    def prepare_training_data(self, use_preselected_descriptors):
         """Calls the usual prepare_instances method, plus other SVM-specific prep"""
-        # Call prepare_instances, removing correlated descriptors
-        training_ids, training_labels, training_features, training_column_names, self.is_binary = \
-            DFU.prepare_instances(self.df_training, "training", self.remove_log_p_descriptors, True)
-        self.descriptor_names = training_column_names
+        if use_preselected_descriptors:
+            training_ids, training_labels, training_features, training_column_names, self.is_binary = \
+                DFU.prepare_instances_with_preselected_descriptors(self.df_training, "training", self.descriptor_names)
+        else:
+            training_ids, training_labels, training_features, training_column_names, self.is_binary = \
+                DFU.prepare_instances(self.df_training, "training", self.remove_log_p_descriptors, True)
+            self.descriptor_names = training_column_names
         if self.is_binary:
             self.nu_space = [0]  # Parameter nu is not used in SVC
 
