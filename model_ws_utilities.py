@@ -1,7 +1,7 @@
 from models import df_utilities as dfu
 from models import rf_model as rf
 from models import svm_model as svm
-from models import dnn_model as dnn
+# from models import dnn_model as dnn
 from models import xgb_model as xgb
 
 import numpy as np
@@ -46,8 +46,8 @@ def call_build_model(qsar_method, training_tsv, remove_log_p):
         model = rf.Model(df_training, remove_log_p, 30)
     elif qsar_method == 'xgb':
         model = xgb.Model(df_training, remove_log_p)
-    elif qsar_method == 'dnn':
-        model = dnn.Model(df_training, remove_log_p)
+    # elif qsar_method == 'dnn':
+    #     model = dnn.Model(df_training, remove_log_p)
     else:
         # 404 NOT FOUND if requested QSAR method has not been implemented
         abort(404, qsar_method + ' not implemented')
@@ -102,8 +102,8 @@ def get_model_details(qsar_method, model):
         return rf.ModelDescription(model).to_json()
     elif qsar_method.lower() == 'svm':
         return svm.ModelDescription(model).to_json()
-    elif qsar_method.lower() == 'dnn':
-        return dnn.ModelDescription(model).to_json()
+    # elif qsar_method.lower() == 'dnn':
+    #     return dnn.ModelDescription(model).to_json()
     elif qsar_method.lower() == 'xgb':
         return xgb.ModelDescription(model).to_json()
     else:
