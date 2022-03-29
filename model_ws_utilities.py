@@ -74,7 +74,7 @@ def call_build_model_with_preselected_descriptors(qsar_method, training_tsv, des
         abort(404, qsar_method + ' not implemented with preselected descriptors')
 
     # Returns trained model
-    model.build_model_with_preselected_descriptors()
+    model.build_model_with_preselected_descriptors(descriptor_names_tsv)
     return model
 
 
