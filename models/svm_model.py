@@ -121,12 +121,8 @@ class Model:
         # Performs PCA with automatic selection of n_feats
         folds = [i % self.n_folds for i in range(len(training_labels))]
         np.random.shuffle(folds)
-        self.n_feats = max(self.auto_select_n_feats(folds, training_features, training_labels), 40)
-
-        if (self.n_feats>len(training_ids)):
-            self.n_feats=math.ceil(len(training_ids)/5)
-            print("#pca features=", self.n_feats)
-
+        self.n_feats = min(self.auto_select_n_feats(folds, training_features, training_labels),
+                           math.ceil(len(training_ids)/5))
 
         # Splits data into five "folds" and performs PCA for each
         for i in range(self.n_folds):
