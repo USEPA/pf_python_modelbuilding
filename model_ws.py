@@ -1,7 +1,6 @@
 from flask import Flask, request, abort
 import logging
 import pickle
-import dill
 
 import model_ws_utilities
 
@@ -73,10 +72,7 @@ def train(qsar_method):
         status = 201
 
     # Returns model bytes
-    if qsar_method.lower() == 'dnn' or qsar_method.lower() == 'dnn_new':
-        return dill.dumps(model), status
-    else:
-        return pickle.dumps(model), status
+    return pickle.dumps(model), status
 
 
 @app.route('/models/<string:qsar_method>/predict', methods=['POST'])
@@ -122,10 +118,7 @@ def init(qsar_method):
     model = None
     if model_file is not None:
         # Loads model bytes
-        if qsar_method.lower() == 'dnn' or qsar_method.lower() == 'dnn_new':
-            model = dill.loads(model_file.read())
-        else:
-            model = pickle.loads(model_file.read())
+        model = pickle.loads(model_file.read())
         # Stores model under provided number
         model_ws_utilities.models[model_id] = model
     else:
