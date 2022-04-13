@@ -10,10 +10,12 @@ def load_df(tsv_string):
     else:
         separator = ','
 
-    df = pd.read_csv(StringIO(tsv_string), sep=separator)
+    df = pd.read_csv(StringIO(tsv_string), sep=separator, na_values = "null")
 
     # Deletes rows with bad values
     df = df[~df.isin([np.nan, np.inf, -np.inf]).any(1)]
+    
+    
     return df
 
 
