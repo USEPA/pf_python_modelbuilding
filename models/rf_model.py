@@ -24,7 +24,7 @@ class Model:
         self.is_binary = None  # Set automatically when training data is loaded
         self.df_training = df_training
         self.version = '1.1'
-        self.n_estimators = int(df_training.shape[0] * 1.2)
+        self.n_estimators = int(df_training.shape[0] * 0.3)
         self.min_impurity_decrease = 1e-5
         self.n_threads = n_threads
         self.qsar_method = 'Random forest'
@@ -45,10 +45,10 @@ class Model:
 
         if self.is_binary:
             self.rfr = RandomForestClassifier(n_estimators=self.n_estimators, random_state=42, n_jobs=self.n_threads,
-                                              min_impurity_decrease=self.min_impurity_decrease, max_samples=0.1)
+                                              min_impurity_decrease=self.min_impurity_decrease, max_samples=0.2)
         else:
             self.rfr = RandomForestRegressor(n_estimators=self.n_estimators, random_state=42, n_jobs=self.n_threads,
-                                             min_impurity_decrease=self.min_impurity_decrease, max_samples=0.1)
+                                             min_impurity_decrease=self.min_impurity_decrease, max_samples=0.2)
         # Train the model on training data
         self.rfr.fit(train_features, train_labels)
 
