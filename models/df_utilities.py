@@ -69,6 +69,11 @@ def remove_log_p_descriptors(df, which_set):
     print(which_set + ': The shape of our features after removing logp descriptors is:', df.shape)
     return df
 
+def do_remove_non_double_descriptors(df):
+    df_non_num = df.select_dtypes(exclude=[np.number])
+    df = df.drop(df_non_num, axis=1)
+    return df
+
 
 def prepare_prediction_instances(df, train_column_names):
     """Prepares a pandas df of prediction data using descriptor set from training data"""
@@ -115,6 +120,8 @@ def prepare_instances(df, which_set, remove_logp, remove_corr):
 
     # drop ID column:
     df = df.drop(col_name_id, axis=1)
+    
+    df = do_remove_non_double_descriptors(df)
 
     drop_column_names = []
 
@@ -156,6 +163,8 @@ def prepare_instances_with_preselected_descriptors(df, which_set, descriptor_nam
 
     # drop ID column:
     df = df.drop(col_name_id, axis=1)
+    
+    df = do_remove_non_double_descriptors(df)
 
     drop_column_names = []
 
