@@ -115,6 +115,7 @@ def trainpythonstorage(qsar_method):
             print('model is None')
             abort(500, 'unknown model training error')
         else:
+            print("postgresql://" + os.getenv("DEV_QSAR_USER") + ":" + os.getenv("DEV_QSAR_PASS") + "@" + os.getenv("DEV_QSAR_HOST") + ":" + os.getenv("DEV_QSAR_PORT") + "/" + os.getenv("DEV_QSAR_DATABASE"))
             engine = create_engine("postgresql://" + os.getenv("DEV_QSAR_USER") + ":" + os.getenv("DEV_QSAR_PASS") + "@" + os.getenv("DEV_QSAR_HOST") + ":" + os.getenv("DEV_QSAR_PORT") + "/" + os.getenv("DEV_QSAR_DATABASE"), echo=True)
             Session = sessionmaker(bind = engine)
             session = Session()
