@@ -149,7 +149,7 @@ def trainpythonstorage(qsar_method):
     """
     
     # Returns model bytes
-    return None, status
+    return 'worked', status
 
 
 
