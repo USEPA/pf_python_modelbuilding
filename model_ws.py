@@ -1,8 +1,17 @@
 from flask import Flask, request, abort
 import logging
 import pickle
-
+from dotenv import load_dotenv
+load_dotenv()
 import model_ws_utilities
+import os
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.sql import func
+from qsar_models import ModelByte
+
+
+
 
 app = Flask(__name__)
 # Limit logging output for easier readability
@@ -74,6 +83,74 @@ def train(qsar_method):
     # Returns model bytes
     return pickle.dumps(model), status
 
+@app.route('/models/<string:qsar_method>/trainpythonstorage', methods=['POST'])
+def trainpythonstorage(qsar_method):
+    """Trains a model for the specified QSAR method on provided data"""
+    obj = request.form
+    training_tsv = obj.get('training_tsv')  # Retrieves the training data as a TSV
+    embedding_tsv = obj.get('embedding_tsv')
+
+    if training_tsv is None:
+        training_tsv = request.files.get('training_tsv').read().decode('UTF-8')
+    if embedding_tsv is None:
+        embedding_tsv_obj = request.files.get('embedding_tsv')
+        print(training_tsv)
+        if embedding_tsv_obj is not None:
+            embedding_tsv = embedding_tsv_obj.read().decode('UTF-8')
+
+    model_id = obj.get('model_id')  # Retrieves the model number to use for persistent storage
+    if obj.get('remove_log_p'):  # Sets boolean remove_log_p from string
+        remove_log_p = obj.get('remove_log_p', '').lower() == 'true'
+    else:
+        remove_log_p = False
+
+    # Can't train a model without data
+    if training_tsv is None:
+        abort(400, 'missing training tsv')
+
+    if embedding_tsv is None or len(embedding_tsv)==0:
+        # Calls the appropriate model training method, throwing 500 SERVER ERROR if it does not give back a good model
+        model = model_ws_utilities.call_build_model(qsar_method, training_tsv, remove_log_p)
+        if model is None:
+            print('model is None')
+            abort(500, 'unknown model training error')
+        else:
+            engine = create_engine("postgresql://" + os.getenv("DEV_QSAR_USER") + ":" + os.getenv("DEV_QSAR_PASS") + "@" + os.getenv("DEV_QSAR_HOST") + ":" + os.getenv("DEV_QSAR_PORT") + "/" + os.getenv("DEV_QSAR_DATABASE"), echo=True)
+            Session = sessionmaker(bind = engine)
+            session = Session()
+            modelBytes = ModelByte(created_at = func.now(),
+                                   created_by = os.getenv("LAN_ID"),
+                                   updated_at = func.now(),
+                                   updated_by = None,
+                                   fk_model_id = model_id,
+                                   bytes = pickle.dumps(model))
+            session.add(modelBytes)
+
+
+    else:
+        embedding = []
+        if "," in embedding_tsv:
+            embedding = embedding_tsv.split(",")
+        elif "\t" in embedding_tsv:
+            embedding = embedding_tsv.split("\t")
+        model = model_ws_utilities.call_build_model_with_preselected_descriptors(qsar_method, training_tsv, embedding)
+        if model is None:
+            abort(500, 'unknown model training error')
+    
+    # Sets status 200 OK
+    status = 200
+    
+    """
+    # If model number provided for storage, stores the model and sets status 201 CREATED instead
+    if model_id.strip():
+        model_ws_utilities.models[model_id] = model
+        status = 201
+    """
+    
+    # Returns model bytes
+    return None, status
+
+
 
 @app.route('/models/<string:qsar_method>/predict', methods=['POST'])
 def predict(qsar_method):
@@ -131,6 +208,7 @@ def init(qsar_method):
 
     # Return storage ID and 201 CREATED
     return model_id, 201
+
 
 
 @app.route('/models/<string:qsar_method>/<string:model_id>', methods=['GET'])

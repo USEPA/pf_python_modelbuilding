@@ -4,6 +4,7 @@ from models import svm_model as svm
 # from models import dnn_model as dnn
 from models import xgb_model as xgb
 
+
 import numpy as np
 import pandas as pd
 
@@ -38,7 +39,7 @@ def call_build_model(qsar_method, training_tsv, remove_log_p):
     """Loads TSV training data into a pandas DF and calls the appropriate training method"""
     df_training = dfu.load_df(training_tsv)
     qsar_method = qsar_method.lower()
-
+    
     model = None
     if qsar_method == 'svm':
         model = svm.Model(df_training, remove_log_p, 30)
