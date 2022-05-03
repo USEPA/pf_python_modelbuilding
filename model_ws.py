@@ -8,15 +8,14 @@ import os
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.sql import func
-from qsar_models import ModelByte
-
+from qsar_models import ModelByte, Model
 
 
 
 app = Flask(__name__)
 # Limit logging output for easier readability
 log = logging.getLogger('werkzeug')
-log.setLevel(logging.ERROR)
+log.setLevel(logging.DEBUG)
 
 """
 Flask webservice to build QSAR models with a variety of modeling strategies (RF, SVM, DNN, XGB...more to come?)
@@ -119,14 +118,17 @@ def trainpythonstorage(qsar_method):
             engine = create_engine("postgresql://" + os.getenv("DEV_QSAR_USER") + ":" + os.getenv("DEV_QSAR_PASS") + "@" + os.getenv("DEV_QSAR_HOST") + ":" + os.getenv("DEV_QSAR_PORT") + "/" + os.getenv("DEV_QSAR_DATABASE"), echo=True)
             Session = sessionmaker(bind = engine)
             session = Session()
+            genericModel = session.query(Model).filter_by(id=model_id).first()
+            
             modelBytes = ModelByte(created_at = func.now(),
                                    created_by = os.getenv("LAN_ID"),
                                    updated_at = func.now(),
                                    updated_by = None,
-                                   fk_model_id = model_id,
-                                   bytes = pickle.dumps(model))
+                                   bytes = pickle.dumps(model),
+                                   fk_model = genericModel)
             session.add(modelBytes)
-
+            session.flush()
+            session.commit()
 
     else:
         embedding = []
