@@ -141,12 +141,12 @@ def trainpythonstorage(qsar_method):
     # Sets status 200 OK
     status = 200
     
-    """
+    
     # If model number provided for storage, stores the model and sets status 201 CREATED instead
     if model_id.strip():
         model_ws_utilities.models[model_id] = model
         status = 201
-    """
+    
     
     # Returns model bytes
     return 'worked', status
