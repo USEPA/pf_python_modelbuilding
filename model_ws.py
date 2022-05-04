@@ -153,6 +153,41 @@ def trainpythonstorage(qsar_method):
     # Returns model bytes
     return 'worked', status
 
+@app.route('/models/<string:qsar_method>/predictsa', methods=['POST'])
+def predictpythonstorage(qsar_method):
+    """Makes predictions for a stored model on provided data"""
+    obj = request.form
+    model_id = obj.get('model_id')  # Retrieves the model number to use
+
+    prediction_tsv = obj.get('prediction_tsv')  # Retrieves the prediction data as a TSV
+    if prediction_tsv is None:
+        prediction_tsv = request.files.get('prediction_tsv').read().decode('UTF-8')
+
+    # Can't make predictions without data
+    if prediction_tsv is None:
+        abort(400, 'missing prediction tsv')
+    # Can't make predictions without a model
+    if model_id is None:
+        abort(400, 'missing model id')
+
+    # Gets stored model using model number
+    engine = create_engine("postgresql://" + os.getenv("DEV_QSAR_USER") + ":" + os.getenv("DEV_QSAR_PASS") + "@" + os.getenv("DEV_QSAR_HOST") + ":" + os.getenv("DEV_QSAR_PORT") + "/" + os.getenv("DEV_QSAR_DATABASE"), echo=True)
+    Session = sessionmaker(bind = engine)
+    session = Session()
+    query = session.query(ModelByte).filter_by(fk_model_id=model_id).one()
+    
+    bytes = query.bytes
+    model = pickle.loads(bytes)
+
+    session.flush()
+    session.commit()
+
+    # 404 NOT FOUND if no model stored under provided number
+    if model is None:
+        abort(404, 'no stored model with id ' + model_id)
+
+    # Calls the appropriate prediction method and returns the results
+    return model_ws_utilities.call_do_predictions(prediction_tsv, model), 200
 
 
 @app.route('/models/<string:qsar_method>/predict', methods=['POST'])
