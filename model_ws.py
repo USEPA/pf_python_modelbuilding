@@ -171,16 +171,18 @@ def predictpythonstorage(qsar_method):
         abort(400, 'missing model id')
 
     # Gets stored model using model number
-    engine = create_engine("postgresql://" + os.getenv("DEV_QSAR_USER") + ":" + os.getenv("DEV_QSAR_PASS") + "@" + os.getenv("DEV_QSAR_HOST") + ":" + os.getenv("DEV_QSAR_PORT") + "/" + os.getenv("DEV_QSAR_DATABASE"), echo=True)
-    Session = sessionmaker(bind = engine)
-    session = Session()
-    query = session.query(ModelByte).filter_by(fk_model_id=model_id).one()
-    
-    bytes = query.bytes
-    model = pickle.loads(bytes)
-
-    session.flush()
-    session.commit()
+    model = None
+    if model_ws_utilities.models[model_id] is not None:
+        model = model_ws_utilities.models[model_id]
+    else:
+        engine = create_engine("postgresql://" + os.getenv("DEV_QSAR_USER") + ":" + os.getenv("DEV_QSAR_PASS") + "@" + os.getenv("DEV_QSAR_HOST") + ":" + os.getenv("DEV_QSAR_PORT") + "/" + os.getenv("DEV_QSAR_DATABASE"), echo=True)
+        Session = sessionmaker(bind = engine)
+        session = Session()
+        query = session.query(ModelByte).filter_by(fk_model_id=model_id).one()
+        bytes = query.bytes
+        model = pickle.loads(bytes)
+        session.flush()
+        session.commit()
 
     # 404 NOT FOUND if no model stored under provided number
     if model is None:
