@@ -82,7 +82,7 @@ def train(qsar_method):
     # Returns model bytes
     return pickle.dumps(model), status
 
-@app.route('/models/<string:qsar_method>/trainpythonstorage', methods=['POST'])
+@app.route('/models/<string:qsar_method>/trainsa', methods=['POST'])
 def trainpythonstorage(qsar_method):
     """Trains a model for the specified QSAR method on provided data"""
     obj = request.form
@@ -114,12 +114,11 @@ def trainpythonstorage(qsar_method):
             print('model is None')
             abort(500, 'unknown model training error')
         else:
-            print("postgresql://" + os.getenv("DEV_QSAR_USER") + ":" + os.getenv("DEV_QSAR_PASS") + "@" + os.getenv("DEV_QSAR_HOST") + ":" + os.getenv("DEV_QSAR_PORT") + "/" + os.getenv("DEV_QSAR_DATABASE"))
+            # stores bytes in postgres database
             engine = create_engine("postgresql://" + os.getenv("DEV_QSAR_USER") + ":" + os.getenv("DEV_QSAR_PASS") + "@" + os.getenv("DEV_QSAR_HOST") + ":" + os.getenv("DEV_QSAR_PORT") + "/" + os.getenv("DEV_QSAR_DATABASE"), echo=True)
             Session = sessionmaker(bind = engine)
             session = Session()
             genericModel = session.query(Model).filter_by(id=model_id).first()
-            
             modelBytes = ModelByte(created_at = func.now(),
                                    created_by = os.getenv("LAN_ID"),
                                    updated_at = func.now(),
@@ -139,7 +138,22 @@ def trainpythonstorage(qsar_method):
         model = model_ws_utilities.call_build_model_with_preselected_descriptors(qsar_method, training_tsv, embedding)
         if model is None:
             abort(500, 'unknown model training error')
-    
+        else:
+            # stores bytes in postgres database
+            engine = create_engine("postgresql://" + os.getenv("DEV_QSAR_USER") + ":" + os.getenv("DEV_QSAR_PASS") + "@" + os.getenv("DEV_QSAR_HOST") + ":" + os.getenv("DEV_QSAR_PORT") + "/" + os.getenv("DEV_QSAR_DATABASE"), echo=True)
+            Session = sessionmaker(bind = engine)
+            session = Session()
+            genericModel = session.query(Model).filter_by(id=model_id).first()
+            modelBytes = ModelByte(created_at = func.now(),
+                                   created_by = os.getenv("LAN_ID"),
+                                   updated_at = func.now(),
+                                   updated_by = None,
+                                   bytes = pickle.dumps(model),
+                                   fk_model = genericModel)
+            session.add(modelBytes)
+            session.flush()
+            session.commit()
+
     # Sets status 200 OK
     status = 200
     
@@ -151,7 +165,7 @@ def trainpythonstorage(qsar_method):
     
     
     # Returns model bytes
-    return 'worked', status
+    return 'bytes stored', status
 
 @app.route('/models/<string:qsar_method>/predictsa', methods=['POST'])
 def predictpythonstorage(qsar_method):
