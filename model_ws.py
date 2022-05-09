@@ -6,6 +6,7 @@ load_dotenv()
 import model_ws_utilities
 import os
 from sqlalchemy import create_engine
+from sqlalchemy.engine import URL
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.sql import func
 from qsar_models import ModelByte, Model
@@ -115,7 +116,13 @@ def trainpythonstorage(qsar_method):
             abort(500, 'unknown model training error')
         else:
             # stores bytes in postgres database
-            engine = create_engine("postgresql://" + os.getenv("DEV_QSAR_USER") + ":" + os.getenv("DEV_QSAR_PASS") + "@" + os.getenv("DEV_QSAR_HOST") + ":" + os.getenv("DEV_QSAR_PORT") + "/" + os.getenv("DEV_QSAR_DATABASE"), echo=True)
+            connect_url = URL('postgresql',
+                              username=os.getenv('DEV_QSAR_USER'),
+                              password=os.getenv('DEV_QSAR_PASS'),
+                              host=os.getenv('DEV_QSAR_HOST'),
+                              port=os.getenv('DEV_QSAR_PORT'),
+                              database=os.getenv('DEV_QSAR_DATABASE'))
+            engine = create_engine(connect_url, echo=True)
             Session = sessionmaker(bind = engine)
             session = Session()
             genericModel = session.query(Model).filter_by(id=model_id).first()
@@ -140,7 +147,13 @@ def trainpythonstorage(qsar_method):
             abort(500, 'unknown model training error')
         else:
             # stores bytes in postgres database
-            engine = create_engine("postgresql://" + os.getenv("DEV_QSAR_USER") + ":" + os.getenv("DEV_QSAR_PASS") + "@" + os.getenv("DEV_QSAR_HOST") + ":" + os.getenv("DEV_QSAR_PORT") + "/" + os.getenv("DEV_QSAR_DATABASE"), echo=True)
+            connect_url = URL('postgresql',
+                              username=os.getenv('DEV_QSAR_USER'),
+                              password=os.getenv('DEV_QSAR_PASS'),
+                              host=os.getenv('DEV_QSAR_HOST'),
+                              port=os.getenv('DEV_QSAR_PORT'),
+                              database=os.getenv('DEV_QSAR_DATABASE'))
+            engine = create_engine(connect_url, echo=True)
             Session = sessionmaker(bind = engine)
             session = Session()
             genericModel = session.query(Model).filter_by(id=model_id).first()
@@ -189,7 +202,13 @@ def predictpythonstorage(qsar_method):
     if model_ws_utilities.models[model_id] is not None:
         model = model_ws_utilities.models[model_id]
     else:
-        engine = create_engine("postgresql://" + os.getenv("DEV_QSAR_USER") + ":" + os.getenv("DEV_QSAR_PASS") + "@" + os.getenv("DEV_QSAR_HOST") + ":" + os.getenv("DEV_QSAR_PORT") + "/" + os.getenv("DEV_QSAR_DATABASE"), echo=True)
+        connect_url = URL('postgresql',
+                          username=os.getenv('DEV_QSAR_USER'),
+                          password=os.getenv('DEV_QSAR_PASS'),
+                          host=os.getenv('DEV_QSAR_HOST'),
+                          port=os.getenv('DEV_QSAR_PORT'),
+                          database=os.getenv('DEV_QSAR_DATABASE'))
+        engine = create_engine(connect_url, echo=True)
         Session = sessionmaker(bind = engine)
         session = Session()
         query = session.query(ModelByte).filter_by(fk_model_id=model_id).one()
