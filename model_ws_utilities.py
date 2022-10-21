@@ -3,6 +3,7 @@ from models import rf_model as rf
 from models import svm_model as svm
 # from models import dnn_model as dnn
 from models import xgb_model as xgb
+from models import knn_model as knn
 
 
 import numpy as np
@@ -31,6 +32,10 @@ def get_model_info(qsar_method):
     elif qsar_method == 'xgb':
         return 'python implementation of extreme gradient boosting ' \
                            '(https://xgboost.readthedocs.io/en/latest/get_started.html)'
+    elif qsar_method == 'knn':
+        return 'sklearn implementation of KNN' \
+            'https://scikit-learn.org/stable/modules/generated/' \
+            'sklearn.neighbors.KNeighborsClassifier.html'
     else:
         return qsar_method + ' not implemented'
 
@@ -47,6 +52,8 @@ def call_build_model(qsar_method, training_tsv, remove_log_p):
         model = rf.Model(df_training, remove_log_p, 30)
     elif qsar_method == 'xgb':
         model = xgb.Model(df_training, remove_log_p)
+    elif qsar_method == 'knn':
+        model = knn.Model(df_training, remove_log_p)
     # elif qsar_method == 'dnn':
     #     model = dnn.Model(df_training, remove_log_p)
     else:
@@ -107,6 +114,8 @@ def get_model_details(qsar_method, model):
     #     return dnn.ModelDescription(model).to_json()
     elif qsar_method.lower() == 'xgb':
         return xgb.ModelDescription(model).to_json()
+    elif qsar_method.lower() == 'knn':
+        return knn.ModelDescription(model).to_json()
     else:
         # 404 NOT FOUND if requested QSAR method has not been implemented
         abort(404, qsar_method + ' not implemented')

@@ -91,7 +91,6 @@ def wardsMethod(train_tsv, threshold, yLabel):
 
 if __name__ == '__main__':
 
-
     trainPath = directory+trainPath
     testPath = directory+testPath
     ### Apply Ward filtering to eliminate colinear data
@@ -122,6 +121,7 @@ if __name__ == '__main__':
                                   num_survivors=NUMBER_SURVIVORS)
     final_embedding = final_selection.optimal_sequence
     print(final_embedding)
+    
 
 
 """

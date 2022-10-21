@@ -26,7 +26,7 @@ NUMBER_SURVIVORS = 10
 THRESHOLD = 2
 
 
-def wardsMethod(train_tsv, threshold, yLabel):
+def wardsMethod(df, threshold, yLabel):
     ## This method implements Ward's hierarchical clustering on the distance matrix derived from Spearman's correlations between descriptors.
     ## Inputs: threshold (float) -- this is the cutoff t-value that determines the size and number of colinearity clusters.
     ########## test (Boolean) -- if True then trains a RF model with default hyperparameters using Ward embedding
@@ -34,14 +34,26 @@ def wardsMethod(train_tsv, threshold, yLabel):
     ## Source documentation: https://scikit-learn.org/stable/auto_examples/inspection/plot_permutation_importance_multicollinear.html
 
     ## We standardize data
-    train_tsv = train_tsv.drop(['ID'], axis=1)
-    # train_tsv = train_tsv2.drop(['Property'], axis=1)
 
-    feature_names = list(train_tsv.columns)
+    
+    ids = np.array(df[df.columns[0]])
+    col_name_id = df.columns[0]
+    col_name_property = df.columns[1]
 
-    scaler = preprocessing.StandardScaler().fit(train_tsv)
+    # drop Property column with experimental property we are trying to correlate (# axis 1 refers to the columns):
+    df = df.drop(col_name_property, axis=1)
+
+    # drop ID column:
+    df = df.drop(col_name_id, axis=1)
+    
+    feature_names = list(df.columns)
+
+    df = df.loc[:, (df != 0).any(axis=0)]
+
+    scaler = preprocessing.StandardScaler().fit(df)
+    
     ## Compute spearman's r and ensure symmetry of correlation matrix
-    corr = spearmanr(scaler.transform(train_tsv)).correlation
+    corr = spearmanr(scaler.transform(df)).correlation
     corr = (corr + corr.T) / 2
     np.fill_diagonal(corr, 1)
     ## Compute distance matrix and form hierarchical clusters
@@ -68,12 +80,14 @@ def runGA(df_train, IDENTIFIER, PROPERTY, model):
     # TODO use DFU.prepareInstances instead of IDENTIFIER and PROPERTY
 
     descriptor_pool = features
-    print(descriptor_pool)
     x_internal = df_train[descriptor_pool]
     # model = Pipeline([('standardizer', StandardScaler()), ('estimator', KNeighborsRegressor())])
+    
 
-    fitness_calculator = GeneticOptimizer.FiveFoldFitness(X_train=x_internal, y_train=y_internal, model=model)
-    ensemble_selector = GeneticOptimizer.GeneticSelector(descriptor_pool, fitness_calculator)
+    fitness_calculator = FiveFoldFitness(X_train=x_internal, y_train=y_internal, model=model)
+    go = GeneticOptimizer(descriptor_pool, fitness_calculator)
+
+    ensemble_selector = GeneticSelector(descriptor_pool, fitness_calculator)
 
     ensemble_selector.ensemble_evolution(num_optimizers=NUM_OPTIMIZERS, num_generations=NUM_GENERATIONS,
                                          num_parents=NUM_PARENTS, min_length=MINIMUM_LENGTH,
@@ -82,12 +96,12 @@ def runGA(df_train, IDENTIFIER, PROPERTY, model):
 
     high_count_descriptors = ensemble_selector.descriptor_threshold(THRESHOLD)
     print(high_count_descriptors)
-    final_selection = GeneticOptimizer.GeneticOptimizer(high_count_descriptors, fitness_calculator)
-    final_selection.run_evolution(num_generations=NUM_GENERATIONS, num_parents=NUM_PARENTS,
+    go2 = GeneticOptimizer(high_count_descriptors, fitness_calculator)
+    go2.run_evolution(num_generations=NUM_GENERATIONS, num_parents=NUM_PARENTS,
                                   min_length=MINIMUM_LENGTH,
                                   max_length=MAXIMUM_LENGTH, mutation_probability=MUTATION_PROBABILITY,
                                   num_survivors=NUMBER_SURVIVORS)
-    return final_selection.optimal_sequence
+    return go2.optimal_sequence
 #%% 
 class FitnessFunctions:    
     @staticmethod
@@ -282,5 +296,7 @@ class GeneticSelector:
 
 
 
-
+if __name__ == '__main__':
+    
+    runGA()
 

@@ -45,7 +45,7 @@ def caseStudyGA():
         IDENTIFIER = 'ID'
         PROPERTY = 'Property'
         DELIMITER = '\t'
-        directory = r"C:\\Users\Weeb\\Documents\\QSARmod\\data\\DataSetsBenchmark\\" + ENDPOINT + " OPERA\\" + ENDPOINT + " OPERA T.E.S.T. 5.1"
+        directory = r"C:\Users\CRAMSLAN\OneDrive - Environmental Protection Agency (EPA)\VDI_Repo\java\mm\new_hibernate_qsar_model_building\data\webtestHLC.tsv"
         trainPath = "training.tsv"
         testPath = "prediction.tsv"
     elif ENDPOINT in endpointsTEST:
@@ -73,8 +73,14 @@ def caseStudyGA():
     prediction_tsv_path = folder + prediction_file_name
     prediction_tsv_path2 = folder + prediction_file_name2
 
-    df_training = DFU.load_df_from_file(training_tsv_path, sep='\t')
-    df_prediction = DFU.load_df_from_file(prediction_tsv_path, sep='\t')
+    df_training = DFU.load_df_from_file(directory, sep='\t')
+    df_prediction = DFU.load_df_from_file(directory, sep='\t')
+    
+    train_ids, train_labels, train_features, train_column_names, is_binary = \
+        DFU.prepare_instances(df_training, "training", False, False)
+            
+        
+    print(train_column_names)
 
     # df_training = df_training.loc[:, (df_training != 0).any(axis=0)]
 
@@ -84,7 +90,7 @@ def caseStudyGA():
 
     model = Pipeline([('standardizer', StandardScaler()), ('estimator', KNeighborsRegressor())])
 
-
+    
 
 
     features = go.runGA(df_training, IDENTIFIER, PROPERTY, model)
