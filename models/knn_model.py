@@ -52,9 +52,9 @@ class Model:
         self.descriptor_names = train_column_names
 
         if self.is_binary:
-            self.knn = KNeighborsRegressor(self.n_neighbors, weights='distance')
-        else:
             self.knn = KNeighborsClassifier(self.n_neighbors, weights='distance')
+        else:
+            self.knn = KNeighborsRegressor(self.n_neighbors, weights='distance')
         # Train the model on training data
         self.knn.fit(train_features, train_labels)
 
@@ -80,9 +80,9 @@ class Model:
         self.descriptor_names = train_column_names
 
         if self.is_binary:
-            self.knn = KNeighborsRegressor(self.n_neighbors, weights='distance')
-        else:
             self.knn = KNeighborsClassifier(self.n_neighbors, weights='distance')
+        else:
+            self.knn = KNeighborsRegressor(self.n_neighbors, weights='distance')
         # Train the model on training data
         self.knn.fit(train_features, train_labels)
 
@@ -106,7 +106,7 @@ class Model:
         else:
             predictions = self.knn.predict(pred_features)
 
-        print('Score for Test data = ', self.rfr.score(pred_features, pred_labels))
+        print('Score for Test data = ', self.knn.score(pred_features, pred_labels))
 
         # Return predictions
         return predictions
@@ -162,6 +162,70 @@ def main():
 
     print(ModelDescription(model).to_json())
     model.do_predictions(df_prediction)
+
+def CaseStudyKNN():
+    ENDPOINT = "Henry's law constant"
+
+    endpointsOPERA = ["Water solubility", "LogKmHL", "LogKOA", "LogKOC", "LogBCF", "Vapor pressure", "Boiling point",
+                      "Melting point","Henry's law constant"]
+    endpointsTEST = ['LC50', 'LC50DM', 'IGC50', 'LD50']
+
+    if ENDPOINT in endpointsOPERA:
+        IDENTIFIER = 'ID'
+        PROPERTY = 'Property'
+        DELIMITER = '\t'
+        directory = r"C:\Users\CRAMSLAN\OneDrive - Environmental Protection Agency (EPA)\VDI_Repo\python\pf_python_modelbuilding\datasets\DataSetsBenchmark\\" + ENDPOINT + " OPERA" + r"\\"
+        trainPath = "training.tsv"
+        testPath = "prediction.tsv"
+    elif ENDPOINT in endpointsTEST:
+        IDENTIFIER = 'CAS'
+        PROPERTY = 'Tox'
+        DELIMITER = ','
+        directory = r"C:\Users\CRAMSLAN\OneDrive - Environmental Protection Agency (EPA)\VDI_Repo\python\pf_python_modelbuilding\datasets\DataSetsBenchmarkTEST_Toxicity" + ENDPOINT + r"\\" + ENDPOINT
+        trainPath = "_training_set-2d.csv"
+        testPath = "_prediction_set-2d.csv"
+
+
+    descriptor_software = 'T.E.S.T. 5.1'
+    # descriptor_software = 'PaDEL-default'
+    # descriptor_software = 'PaDEL_OPERA'
+
+    training_file_name = ENDPOINT + ' OPERA ' + descriptor_software + ' training.tsv'
+    prediction_file_name = ENDPOINT + ' OPERA ' + descriptor_software + ' prediction.tsv'
+    folder = directory
+
+    
+    training_tsv_path = folder + training_file_name
+    prediction_tsv_path = folder + prediction_file_name
+
+
+    print(training_tsv_path)
+
+
+    df_training = DFU.load_df_from_file(training_tsv_path, sep='\t')
+    df_prediction = DFU.load_df_from_file(prediction_tsv_path, sep='\t')
+    
+    train_ids, train_labels, train_features, train_column_names, is_binary = \
+        DFU.prepare_instances(df_training, "training", False, False)
+        
+    knn = KNeighborsRegressor(5, weights='distance')
+    
+    knn.fit(train_features, train_labels)
+    
+    
+    
+    knn.predict(df_prediction)
+    
+    pred_ids, pred_labels, pred_features = DFU.prepare_prediction_instances(df_prediction, train_column_names)
+    
+    knn.score(pred_features, pred_labels)
+    
+    
+    
+    
+
+
+    
 
 def caseStudyGA():
 
