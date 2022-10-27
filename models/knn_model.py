@@ -8,6 +8,11 @@ Created on Wed Oct 19 11:51:07 2022
 import time
 from models import df_utilities as DFU
 from sklearn.neighbors import KNeighborsRegressor, KNeighborsClassifier
+from sklearn.preprocessing import StandardScaler
+from sklearn.pipeline import Pipeline
+
+import GeneticOptimizer as go
+from os.path import exists
 import json
 
 __author__ = "Christian Ramsland"
@@ -20,7 +25,7 @@ __author__ = "Christian Ramsland"
 # descriptors
 
 class Model:
-    """Trains and makes predictions with a random forest model"""
+    """Trains and makes predictions with a k nearest neighbors model"""
     def __init__(self, df_training, remove_log_p_descriptors):
         """Initializes the RF model with optimal parameters and provided data in pandas dataframe"""
         self.knn = None
@@ -47,9 +52,9 @@ class Model:
         self.descriptor_names = train_column_names
 
         if self.is_binary:
-            self.knn = KNeighborsRegressor(self.n_neighbors)
+            self.knn = KNeighborsRegressor(self.n_neighbors, weights='distance')
         else:
-            self.knn = KNeighborsClassifier(self.n_neighbors)
+            self.knn = KNeighborsClassifier(self.n_neighbors, weights='distance')
         # Train the model on training data
         self.knn.fit(train_features, train_labels)
 
@@ -61,10 +66,9 @@ class Model:
         t2 = time.time()
         print('Time to train model  = ', t2 - t1, 'seconds')
 
-        # pickle.dump(rfr, open("rfr.p", "wb"))
         return self
     
-    """
+    
     def build_model_with_preselected_descriptors(self, descriptor_names):
         t1 = time.time()
 
@@ -76,15 +80,13 @@ class Model:
         self.descriptor_names = train_column_names
 
         if self.is_binary:
-            self.rfr = RandomForestClassifier(n_estimators=self.n_estimators, random_state=42, n_jobs=self.n_threads,
-                                              min_impurity_decrease=self.min_impurity_decrease, max_samples=0.66)
+            self.knn = KNeighborsRegressor(self.n_neighbors, weights='distance')
         else:
-            self.rfr = RandomForestRegressor(n_estimators=self.n_estimators, random_state=42, n_jobs=self.n_threads,
-                                             min_impurity_decrease=self.min_impurity_decrease, max_samples=0.66)
+            self.knn = KNeighborsClassifier(self.n_neighbors, weights='distance')
         # Train the model on training data
-        self.rfr.fit(train_features, train_labels)
+        self.knn.fit(train_features, train_labels)
 
-        print('Score for Training data = ', self.rfr.score(train_features, train_labels))
+        print('Score for Training data = ', self.knn.score(train_features, train_labels))
 
         # Save space in database:
         self.df_training = None
@@ -92,9 +94,8 @@ class Model:
         t2 = time.time()
         print('Time to train model  = ', t2 - t1, 'seconds')
 
-        # pickle.dump(rfr, open("rfr.p", "wb"))
         return self
-    """
+    
     def do_predictions(self, df_prediction):
         """Makes predictions using the trained model"""
         # Prepare prediction instances using columns from training data
@@ -162,6 +163,79 @@ def main():
     print(ModelDescription(model).to_json())
     model.do_predictions(df_prediction)
 
+def caseStudyGA():
+
+    # ENDPOINT = "LogKmHL"
+    ENDPOINT = "Henry's law constant"
+
+    endpointsOPERA = ["Water solubility", "LogKmHL", "LogKOA", "LogKOC", "LogBCF", "Vapor pressure", "Boiling point",
+                      "Melting point","Henry's law constant"]
+    endpointsTEST = ['LC50', 'LC50DM', 'IGC50', 'LD50']
+
+    if ENDPOINT in endpointsOPERA:
+        IDENTIFIER = 'ID'
+        PROPERTY = 'Property'
+        DELIMITER = '\t'
+        directory = r"C:\Users\CRAMSLAN\OneDrive - Environmental Protection Agency (EPA)\VDI_Repo\python\pf_python_modelbuilding\datasets\DataSetsBenchmark\\" + ENDPOINT + " OPERA" + r"\\"
+        trainPath = "training.tsv"
+        testPath = "prediction.tsv"
+    elif ENDPOINT in endpointsTEST:
+        IDENTIFIER = 'CAS'
+        PROPERTY = 'Tox'
+        DELIMITER = ','
+        directory = r"C:\Users\CRAMSLAN\OneDrive - Environmental Protection Agency (EPA)\VDI_Repo\python\pf_python_modelbuilding\datasets\DataSetsBenchmarkTEST_Toxicity" + ENDPOINT + r"\\" + ENDPOINT
+        trainPath = "_training_set-2d.csv"
+        testPath = "_prediction_set-2d.csv"
+
+
+    descriptor_software = 'T.E.S.T. 5.1'
+    # descriptor_software = 'PaDEL-default'
+    # descriptor_software = 'PaDEL_OPERA'
+
+    training_file_name = ENDPOINT + ' OPERA ' + descriptor_software + ' training.tsv'
+    prediction_file_name = ENDPOINT + ' OPERA ' + descriptor_software + ' prediction.tsv'
+    folder = directory
+
+    
+    training_tsv_path = folder + training_file_name
+    prediction_tsv_path = folder + prediction_file_name
+
+
+    print(training_tsv_path)
+
+
+    df_training = DFU.load_df_from_file(training_tsv_path, sep='\t')
+    df_prediction = DFU.load_df_from_file(prediction_tsv_path, sep='\t')
+    
+    train_ids, train_labels, train_features, train_column_names, is_binary = \
+        DFU.prepare_instances(df_training, "training", False, False)
+            
+        
+    print(train_column_names)
+
+    # df_training = df_training.loc[:, (df_training != 0).any(axis=0)]
+
+    # Parameters needed to build model:
+    n_threads = 20
+    remove_log_p_descriptors = False
+
+    model = Pipeline([('standardizer', StandardScaler()), ('estimator', KNeighborsRegressor())])
+
+
+    features = go.runGA(df_training, IDENTIFIER, PROPERTY, model)
+
+    print(features)
+    
+    
+    embed_model = Model(df_training, False)
+    embed_model.build_model_with_preselected_descriptors(features)
+    embed_model_predictions = embed_model.do_predictions(df_prediction)
+    
+    full_model = Model(df_training, False)
+    full_model.build_model()
+    full_model_predictions = full_model.do_predictions(df_prediction)
+
+
 
 if __name__ == "__main__":
-    main()
+    caseStudyGA()
