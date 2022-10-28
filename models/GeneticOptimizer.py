@@ -81,8 +81,7 @@ def runGA(df_train, IDENTIFIER, PROPERTY, model):
 
     descriptor_pool = features
     x_internal = df_train[descriptor_pool]
-    # model = Pipeline([('standardizer', StandardScaler()), ('estimator', KNeighborsRegressor())])
-    
+
 
     fitness_calculator = FiveFoldFitness(X_train=x_internal, y_train=y_internal, model=model)
     go = GeneticOptimizer(descriptor_pool, fitness_calculator)

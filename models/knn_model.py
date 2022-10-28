@@ -34,7 +34,7 @@ class Model:
         self.is_binary = None  # Set automatically when training data is loaded
         self.df_training = df_training
         self.version = '1.3'
-        self.n_neighbors = 5
+        self.n_neighbors = 3
         self.qsar_method = 'knn'
         self.description = 'sklearn implementation of k-nearest neighbors ' \
                            'https://scikit-learn.org/stable/modules/generated/' \
@@ -54,7 +54,12 @@ class Model:
         if self.is_binary:
             self.knn = KNeighborsClassifier(self.n_neighbors, weights='distance')
         else:
-            self.knn = KNeighborsRegressor(self.n_neighbors, weights='distance')
+            # self.knn = KNeighborsRegressor(self.n_neighbors, weights='distance')
+            self.knn = Pipeline([('standardizer', StandardScaler()), ('estimator', KNeighborsRegressor(self.n_neighbors))])
+
+
+            # self.knn = KNeighborsRegressor(self.n_neighbors)
+
         # Train the model on training data
         self.knn.fit(train_features, train_labels)
 
@@ -231,6 +236,9 @@ def caseStudyGA():
 
     # ENDPOINT = "LogKmHL"
     ENDPOINT = "Henry's law constant"
+    # ENDPOINT = "Vapor pressure"
+    # ENDPOINT = "Water solubility"
+    # ENDPOINT = "Boiling point"
 
     endpointsOPERA = ["Water solubility", "LogKmHL", "LogKOA", "LogKOC", "LogBCF", "Vapor pressure", "Boiling point",
                       "Melting point","Henry's law constant"]
@@ -239,17 +247,13 @@ def caseStudyGA():
     if ENDPOINT in endpointsOPERA:
         IDENTIFIER = 'ID'
         PROPERTY = 'Property'
-        DELIMITER = '\t'
-        directory = r"C:\Users\CRAMSLAN\OneDrive - Environmental Protection Agency (EPA)\VDI_Repo\python\pf_python_modelbuilding\datasets\DataSetsBenchmark\\" + ENDPOINT + " OPERA" + r"\\"
-        trainPath = "training.tsv"
-        testPath = "prediction.tsv"
+        # directory = r"C:\Users\CRAMSLAN\OneDrive - Environmental Protection Agency (EPA)\VDI_Repo\python\pf_python_modelbuilding\datasets\DataSetsBenchmark\\" + ENDPOINT + " OPERA" + r"\\"
+        directory = "C:/Users/TMARTI02/OneDrive - Environmental Protection Agency (EPA)/0 java/QSAR_Model_Building/data/datasets_benchmark/"+ENDPOINT+' OPERA/'
+
     elif ENDPOINT in endpointsTEST:
         IDENTIFIER = 'CAS'
         PROPERTY = 'Tox'
-        DELIMITER = ','
         directory = r"C:\Users\CRAMSLAN\OneDrive - Environmental Protection Agency (EPA)\VDI_Repo\python\pf_python_modelbuilding\datasets\DataSetsBenchmarkTEST_Toxicity" + ENDPOINT + r"\\" + ENDPOINT
-        trainPath = "_training_set-2d.csv"
-        testPath = "_prediction_set-2d.csv"
 
 
     descriptor_software = 'T.E.S.T. 5.1'
@@ -263,19 +267,14 @@ def caseStudyGA():
     
     training_tsv_path = folder + training_file_name
     prediction_tsv_path = folder + prediction_file_name
-
-
     print(training_tsv_path)
-
 
     df_training = DFU.load_df_from_file(training_tsv_path, sep='\t')
     df_prediction = DFU.load_df_from_file(prediction_tsv_path, sep='\t')
     
-    train_ids, train_labels, train_features, train_column_names, is_binary = \
-        DFU.prepare_instances(df_training, "training", False, False)
-            
-        
-    print(train_column_names)
+    # train_ids, train_labels, train_features, train_column_names, is_binary = \
+    #     DFU.prepare_instances(df_training, "training", False, False)
+    # print(train_column_names)
 
     # df_training = df_training.loc[:, (df_training != 0).any(axis=0)]
 
@@ -287,10 +286,10 @@ def caseStudyGA():
 
 
     features = go.runGA(df_training, IDENTIFIER, PROPERTY, model)
-
+    #
     print(features)
-    
-    
+    #
+    #
     embed_model = Model(df_training, False)
     embed_model.build_model_with_preselected_descriptors(features)
     embed_model_predictions = embed_model.do_predictions(df_prediction)
