@@ -38,8 +38,23 @@ class Model:
         self.qsar_method = 'knn'
         self.description = 'sklearn implementation of k-nearest neighbors ' \
                            'https://scikit-learn.org/stable/modules/generated/' \
-                           'sklearn.neighbors.KNeighborsClassifier.html' 
-                           
+                           'sklearn.neighbors.KNeighborsClassifier.html'
+
+    def getModel(self):
+
+        # print ("here:",self.is_binary)
+
+        if self.is_binary:
+            # self.knn = KNeighborsClassifier(self.n_neighbors, weights='distance')
+            self.knn = Pipeline([('standardizer', StandardScaler()),
+                                 ('estimator', KNeighborsClassifier(self.n_neighbors, weights='distance'))])
+
+        else:
+            # self.knn = KNeighborsRegressor(self.n_neighbors, weights='distance')
+            self.knn = Pipeline([('standardizer', StandardScaler()),
+                                 ('estimator', KNeighborsRegressor(self.n_neighbors, weights='distance'))])
+        return self.knn
+
 
     def build_model(self):
         t1 = time.time()
@@ -51,12 +66,7 @@ class Model:
         # Use columns selected by prepare_instances (in case logp descriptors were removed)
         self.descriptor_names = train_column_names
 
-        if self.is_binary:
-            self.knn = KNeighborsClassifier(self.n_neighbors, weights='distance')
-        else:
-            # self.knn = KNeighborsRegressor(self.n_neighbors, weights='distance')
-            self.knn = Pipeline([('standardizer', StandardScaler()), ('estimator', KNeighborsRegressor(self.n_neighbors))])
-
+        self.getModel()
 
             # self.knn = KNeighborsRegressor(self.n_neighbors)
 
@@ -72,7 +82,9 @@ class Model:
         print('Time to train model  = ', t2 - t1, 'seconds')
 
         return self
-    
+
+
+
     
     def build_model_with_preselected_descriptors(self, descriptor_names):
         t1 = time.time()
@@ -84,10 +96,8 @@ class Model:
         # Use columns selected by prepare_instances (in case logp descriptors were removed)
         self.descriptor_names = train_column_names
 
-        if self.is_binary:
-            self.knn = KNeighborsClassifier(self.n_neighbors, weights='distance')
-        else:
-            self.knn = KNeighborsRegressor(self.n_neighbors, weights='distance')
+        self.getModel()
+
         # Train the model on training data
         self.knn.fit(train_features, train_labels)
 
@@ -235,8 +245,8 @@ def CaseStudyKNN():
 def caseStudyGA():
 
     # ENDPOINT = "LogKmHL"
-    ENDPOINT = "Henry's law constant"
-    # ENDPOINT = "Vapor pressure"
+    # ENDPOINT = "Henry's law constant"
+    ENDPOINT = "Vapor pressure"
     # ENDPOINT = "Water solubility"
     # ENDPOINT = "Boiling point"
 
@@ -276,16 +286,18 @@ def caseStudyGA():
     #     DFU.prepare_instances(df_training, "training", False, False)
     # print(train_column_names)
 
-    # df_training = df_training.loc[:, (df_training != 0).any(axis=0)]
+    df_training = df_training.loc[:, (df_training != 0).any(axis=0)]
 
     # Parameters needed to build model:
     n_threads = 20
     remove_log_p_descriptors = False
 
-    model = Pipeline([('standardizer', StandardScaler()), ('estimator', KNeighborsRegressor())])
+    ga_model = Model(df_training, False)
+    ga_model.is_binary = False # todo determine based on df_training
+    features = go.runGA(df_training, IDENTIFIER, PROPERTY, ga_model.getModel())
 
+    # features = ['-OH [aromatic attach]', 'Hmax', 'SsOH', 'MDEN11', 'x0', 'Qv', 'nN', 'SaaNH', '-C#N [aliphatic attach]', 'SdO', '-CHO [aliphatic attach]', 'MDEN33', 'xch6']
 
-    features = go.runGA(df_training, IDENTIFIER, PROPERTY, model)
     #
     print(features)
     #
