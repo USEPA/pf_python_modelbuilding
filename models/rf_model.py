@@ -32,6 +32,19 @@ class Model:
                            '(https://scikit-learn.org/stable/modules/generated/' \
                            'sklearn.ensemble.RandomForestClassifier.html)'
 
+    def getModel(self):
+
+        #TODO remove max_samples...
+
+        if self.is_binary:
+            self.rfr = RandomForestClassifier(n_estimators=self.n_estimators, random_state=42, n_jobs=self.n_threads,
+                                              min_impurity_decrease=self.min_impurity_decrease, max_samples=0.66)
+        else:
+            self.rfr = RandomForestRegressor(n_estimators=self.n_estimators, random_state=42, n_jobs=self.n_threads,
+                                             min_impurity_decrease=self.min_impurity_decrease, max_samples=0.66)
+        return self.rfr
+
+
     def build_model(self):
         """Trains the RF model on provided data"""
         t1 = time.time()
@@ -43,12 +56,8 @@ class Model:
         # Use columns selected by prepare_instances (in case logp descriptors were removed)
         self.descriptor_names = train_column_names
 
-        if self.is_binary:
-            self.rfr = RandomForestClassifier(n_estimators=self.n_estimators, random_state=1920, n_jobs=self.n_threads,
-                                              min_impurity_decrease=self.min_impurity_decrease, max_samples=0.66)
-        else:
-            self.rfr = RandomForestRegressor(n_estimators=self.n_estimators, random_state=1920, n_jobs=self.n_threads,
-                                             min_impurity_decrease=self.min_impurity_decrease, max_samples=0.66)
+        self.getModel()
+
         # Train the model on training data
         self.rfr.fit(train_features, train_labels)
 

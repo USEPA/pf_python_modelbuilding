@@ -7,7 +7,7 @@ Created on Tue Jul  5 07:18:59 2022
 #%%
 import numpy as np
 from sklearn.model_selection import cross_val_score
-import GeneticOptimizer
+
 from sklearn import preprocessing
 from scipy.stats import spearmanr, pearsonr
 from scipy.cluster import hierarchy
@@ -16,17 +16,18 @@ import numpy as np
 import pandas as pd
 from collections import defaultdict
 
-NUM_GENERATIONS = 10
-NUM_OPTIMIZERS = 10
+NUM_GENERATIONS = 10 #kamel used 100
+NUM_OPTIMIZERS = 10 #kamel used 100
 NUM_PARENTS = 10
 MINIMUM_LENGTH = 4
 MAXIMUM_LENGTH = 24
 MUTATION_PROBABILITY = 0.001
 NUMBER_SURVIVORS = 10
 THRESHOLD = 2
+NUM_JOBS = 16
 
 
-def wardsMethod(df, threshold, yLabel):
+def wardsMethod(df, threshold):
     ## This method implements Ward's hierarchical clustering on the distance matrix derived from Spearman's correlations between descriptors.
     ## Inputs: threshold (float) -- this is the cutoff t-value that determines the size and number of colinearity clusters.
     ########## test (Boolean) -- if True then trains a RF model with default hyperparameters using Ward embedding
@@ -73,15 +74,19 @@ def wardsMethod(df, threshold, yLabel):
     return wardsFeatures
 
 
-def runGA(df_train, IDENTIFIER, PROPERTY, model):
-    features = wardsMethod(df_train, 0.5, IDENTIFIER)
-    y_internal = df_train[PROPERTY]
+def runGA(df_train, model):
+
+    features = wardsMethod(df_train, 0.5)
+    y_internal = df_train.iloc[:,1]
+
+    # print(y_internal)
+
+    # print(NUM_GENERATIONS)
 
     # TODO use DFU.prepareInstances instead of IDENTIFIER and PROPERTY
 
     descriptor_pool = features
     x_internal = df_train[descriptor_pool]
-
 
     fitness_calculator = FiveFoldFitness(X_train=x_internal, y_train=y_internal, model=model)
     go = GeneticOptimizer(descriptor_pool, fitness_calculator)
@@ -105,7 +110,7 @@ def runGA(df_train, IDENTIFIER, PROPERTY, model):
 class FitnessFunctions:    
     @staticmethod
     def five_fold_cv(descriptors, X_train, Y_train, model):
-        results = cross_val_score(model, X_train[descriptors], Y_train, cv=5, n_jobs=16)
+        results = cross_val_score(model, X_train[descriptors], Y_train, cv=5, n_jobs=NUM_JOBS)
         score = np.mean(results) - np.std(results) - 0.002*len(descriptors)
         return score
         
@@ -190,8 +195,14 @@ class GeneticOptimizer:
     def initialize_parents(self, num_parents, minimum_length, maximum_length):
         generation = []
         while len(generation) < num_parents:
-            size = np.random.randint(minimum_length, maximum_length)
+
+            # size = np.random.randint(minimum_length, maximum_length)
+            size = np.random.randint(minimum_length, min(len(self.descriptor_pool), maximum_length)) #Fix added by TMM
+
             candidate = list(np.random.choice(self.descriptor_pool, size, replace=False))
+
+
+
             if candidate not in generation:
                 generation.append(candidate)
         return generation

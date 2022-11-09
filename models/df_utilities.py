@@ -29,7 +29,7 @@ def load_df_from_file(filepath, sep='\t'):
         df = pd.read_csv(filepath, delimiter='\t')
     else:
         df = pd.read_csv(filepath, delimiter=sep)
-    print(df.shape)
+    # print(df.shape)
 
     # Deletes rows with bad values
     df = df[~df.isin([np.nan, np.inf, -np.inf]).any(1)]
@@ -38,7 +38,7 @@ def load_df_from_file(filepath, sep='\t'):
     # df = df.dropna(axis=1)
     # df = df.reset_index(drop=True)
 
-    print(df.shape)
+    # print(df.shape)
     return df
 
 
@@ -143,6 +143,15 @@ def prepare_instances(df, which_set, remove_logp, remove_corr):
 
     return ids, labels, features, column_names, is_binary
 
+
+def isBinary(df):
+    """Prepares a pandas df of training data by removing logp and correlated descriptors"""
+    df_labels = df[df.columns[1]]
+
+    if df_labels.isin([0, 1]).all():
+        return True
+    else:
+        return False
 
 def prepare_instances_with_preselected_descriptors(df, which_set, descriptor_names):
     """Prepares a pandas df of training data by removing logp and correlated descriptors"""
