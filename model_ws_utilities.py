@@ -107,12 +107,12 @@ def call_build_embedding_ga(qsar_method, training_tsv, remove_log_p, n_threads, 
 
     timeMin = (t2-t1)/60
 
-    embedding = json.dumps(descriptor_names)
+    # embedding = json.dumps(descriptor_names)
 
     # print('embedding='+embedding)
 
     # Returns embedding
-    return embedding, timeMin
+    return descriptor_names, timeMin
 
 def api_call_build_embedding_ga(qsar_method, training_tsv, remove_log_p, n_threads, num_generations, num_optimizers, num_jobs, urlHost):
 
