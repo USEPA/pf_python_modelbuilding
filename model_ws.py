@@ -120,15 +120,21 @@ def train_embedding(qsar_method):
     num_optimizers = int(obj.get('num_optimizers'))
     num_jobs = int(obj.get('num_jobs'))
 
+    max_length = int(obj.get('max_length'))
+    descriptor_coefficient = float(obj.get('descriptor_coefficient'))
+
     # print(num_generations)
 
 
     n_threads = obj.get('n_threads')
 
-
-    embedding, timeMin = model_ws_utilities.call_build_embedding_ga(qsar_method=qsar_method,training_tsv=training_tsv,
-                                               remove_log_p=remove_log_p,n_threads=n_threads,
-                                               num_generations=num_generations,num_optimizers=num_optimizers, num_jobs=num_jobs)
+    embedding, timeMin = model_ws_utilities.call_build_embedding_ga(qsar_method=qsar_method, training_tsv=training_tsv,
+                                                                    remove_log_p=remove_log_p, n_threads=n_threads,
+                                                                    num_generations=num_generations,
+                                                                    num_optimizers=num_optimizers,
+                                                                    num_jobs=num_jobs,
+                                                                    descriptor_coefficient=descriptor_coefficient,
+                                                                    max_length=max_length)
 
     result_obj = {}
     result_obj['embedding'] = embedding

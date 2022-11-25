@@ -16,15 +16,17 @@ import numpy as np
 import pandas as pd
 from collections import defaultdict
 
-NUM_GENERATIONS = 10 #kamel used 100
-NUM_OPTIMIZERS = 10 #kamel used 100
+NUM_GENERATIONS = 10 # kamel used 100
+NUM_OPTIMIZERS = 10 # kamel used 100
 NUM_PARENTS = 10
 MINIMUM_LENGTH = 4
 MAXIMUM_LENGTH = 24
 MUTATION_PROBABILITY = 0.001
 NUMBER_SURVIVORS = 10
 THRESHOLD = 2
-NUM_JOBS = 16
+# NUM_JOBS = 16
+NUM_JOBS = 4  # calculation time is barely reduced by using more than 4 threads
+DESCRIPTOR_COEFFICIENT = 0.002
 
 
 def wardsMethod(df, threshold):
@@ -111,7 +113,7 @@ class FitnessFunctions:
     @staticmethod
     def five_fold_cv(descriptors, X_train, Y_train, model):
         results = cross_val_score(model, X_train[descriptors], Y_train, cv=5, n_jobs=NUM_JOBS)
-        score = np.mean(results) - np.std(results) - 0.002*len(descriptors)
+        score = np.mean(results) - np.std(results) - DESCRIPTOR_COEFFICIENT * len(descriptors)  # Objective function
         return score
         
     @staticmethod
@@ -193,16 +195,17 @@ class GeneticOptimizer:
             A[index] = mutation
             
     def initialize_parents(self, num_parents, minimum_length, maximum_length):
-        generation = []
-        while len(generation) < num_parents:
 
+        print('Here1 maximum_length=',maximum_length)
+        generation = []
+
+        while len(generation) < num_parents:
             # size = np.random.randint(minimum_length, maximum_length)
             size = np.random.randint(minimum_length, min(len(self.descriptor_pool), maximum_length)) #Fix added by TMM
+            print('Here2 maximum_length=', maximum_length)
+            print('Here size=', size)
 
             candidate = list(np.random.choice(self.descriptor_pool, size, replace=False))
-
-
-
             if candidate not in generation:
                 generation.append(candidate)
         return generation

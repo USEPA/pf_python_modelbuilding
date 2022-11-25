@@ -12,6 +12,7 @@ from models import GeneticOptimizer as go
 from flask import abort
 import json
 import requests
+
 models = {}
 
 
@@ -21,22 +22,22 @@ def get_model_info(qsar_method):
 
     if qsar_method == 'rf':
         return 'sklearn implementation of random forest ' \
-                           '(https://scikit-learn.org/stable/modules/generated/' \
-                           'sklearn.ensemble.RandomForestClassifier.html)'
+               '(https://scikit-learn.org/stable/modules/generated/' \
+               'sklearn.ensemble.RandomForestClassifier.html)'
     elif qsar_method == 'svm':
         return 'sklearn implementation of SVM using NuSVR for regression' \
-                           ' or SVC for classification ' \
-                           '(https://scikit-learn.org/stable/modules/svm.html),' \
-                           ' no applicability domain'
+               ' or SVC for classification ' \
+               '(https://scikit-learn.org/stable/modules/svm.html),' \
+               ' no applicability domain'
     elif qsar_method == 'dnn':
         return 'tensorflow/keras implementation of DNN'
     elif qsar_method == 'xgb':
         return 'python implementation of extreme gradient boosting ' \
-                           '(https://xgboost.readthedocs.io/en/latest/get_started.html)'
+               '(https://xgboost.readthedocs.io/en/latest/get_started.html)'
     elif qsar_method == 'knn':
         return 'sklearn implementation of KNN' \
-            'https://scikit-learn.org/stable/modules/generated/' \
-            'sklearn.neighbors.KNeighborsClassifier.html'
+               'https://scikit-learn.org/stable/modules/generated/' \
+               'sklearn.neighbors.KNeighborsClassifier.html'
     else:
         return qsar_method + ' not implemented'
 
@@ -45,7 +46,7 @@ def call_build_model(qsar_method, training_tsv, remove_log_p):
     """Loads TSV training data into a pandas DF and calls the appropriate training method"""
     df_training = dfu.load_df(training_tsv)
     qsar_method = qsar_method.lower()
-    
+
     model = None
     if qsar_method == 'svm':
         model = svm.Model(df_training, remove_log_p, 30)
@@ -66,7 +67,8 @@ def call_build_model(qsar_method, training_tsv, remove_log_p):
     return model
 
 
-def call_build_embedding_ga(qsar_method, training_tsv, remove_log_p, n_threads, num_generations, num_optimizers, num_jobs):
+def call_build_embedding_ga(qsar_method, training_tsv, remove_log_p, n_threads,
+                            num_generations, num_optimizers, num_jobs, descriptor_coefficient, max_length):
     """Loads TSV training data into a pandas DF and calls the appropriate training method"""
 
     if isinstance(training_tsv, pd.DataFrame):
@@ -85,27 +87,25 @@ def call_build_embedding_ga(qsar_method, training_tsv, remove_log_p, n_threads, 
     if qsar_method == 'rf':
         ga_model = rf.Model(df_training=df_training, remove_log_p_descriptors=remove_log_p, n_threads=n_threads)
     elif qsar_method == 'knn':
-        ga_model = knn.Model(df_training=df_training, remove_log_p_descriptors=remove_log_p) #TODO should we add threads to knn?
+        ga_model = knn.Model(df_training=df_training,
+                             remove_log_p_descriptors=remove_log_p)  # TODO should we add threads to knn?
     else:
         # 404 NOT FOUND if requested QSAR method has not been implemented
         abort(404, qsar_method + ' not implemented')
 
     ga_model.is_binary = DFU.isBinary(df_training)
 
-    if num_generations > 0:
-        go.NUM_GENERATIONS = num_generations
-
-    if num_optimizers > 0:
-        go.NUM_OPTIMIZERS = num_optimizers
-
-    if num_jobs > 0:
-        go.NUM_JOBS = num_jobs
+    go.NUM_GENERATIONS = num_generations
+    go.NUM_OPTIMIZERS = num_optimizers
+    go.NUM_JOBS = num_jobs
+    go.DESCRIPTOR_COEFFICIENT = descriptor_coefficient
+    go.MAXIMUM_LENGTH = max_length
 
     t1 = time.time()
     descriptor_names = go.runGA(df_training, ga_model.getModel())
     t2 = time.time()
 
-    timeMin = (t2-t1)/60
+    timeMin = (t2 - t1) / 60
 
     # embedding = json.dumps(descriptor_names)
 
@@ -114,27 +114,31 @@ def call_build_embedding_ga(qsar_method, training_tsv, remove_log_p, n_threads, 
     # Returns embedding
     return descriptor_names, timeMin
 
-def api_call_build_embedding_ga(qsar_method, training_tsv, remove_log_p, n_threads, num_generations, num_optimizers, num_jobs, urlHost):
 
+def api_call_build_embedding_ga(qsar_method, training_tsv, remove_log_p, n_threads, num_generations, num_optimizers,
+                                num_jobs, descriptor_coefficient, max_length, urlHost):
     data = {'qsar_method': qsar_method,
             'training_tsv': training_tsv,
             'remove_log_p': remove_log_p,
             'n_threads': n_threads,
             'num_generations': num_generations,
             'num_optimizers': num_optimizers,
+            'descriptor_coefficient': descriptor_coefficient,
+            'max_length': max_length,
             'num_jobs': num_jobs}
 
     # print(data)
 
-    url = urlHost+'models/' + qsar_method + '/embedding'
+    url = urlHost + 'models/' + qsar_method + '/embedding'
 
     # print(url)
     # sending post request and saving response as response object
-    r = requests.post(url=url, data=data,timeout=999999)
-    print(r.text)
+    r = requests.post(url=url, data=data, timeout=999999)
+    # print(r.text)
     return r.text
 
-def call_build_model_with_preselected_descriptors(qsar_method, training_tsv, remove_log_p,descriptor_names_tsv):
+
+def call_build_model_with_preselected_descriptors(qsar_method, training_tsv, remove_log_p, descriptor_names_tsv):
     """Loads TSV training data into a pandas DF and calls the appropriate training method"""
     df_training = dfu.load_df(training_tsv)
     qsar_method = qsar_method.lower()
