@@ -196,14 +196,14 @@ class GeneticOptimizer:
             
     def initialize_parents(self, num_parents, minimum_length, maximum_length):
 
-        print('Here1 maximum_length=',maximum_length)
+        # print('Here1 maximum_length=',maximum_length)
         generation = []
 
         while len(generation) < num_parents:
             # size = np.random.randint(minimum_length, maximum_length)
             size = np.random.randint(minimum_length, min(len(self.descriptor_pool), maximum_length)) #Fix added by TMM
-            print('Here2 maximum_length=', maximum_length)
-            print('Here size=', size)
+            # print('Here2 maximum_length=', maximum_length)
+            # print('Here size=', size)
 
             candidate = list(np.random.choice(self.descriptor_pool, size, replace=False))
             if candidate not in generation:

@@ -16,8 +16,8 @@ class Model:
         self.df_training = df_training
         self.version = '1.0'
         self.qsar_method = 'XGBoost'
-        self.description = 'python implementation of extreme gradient boosting ' \
-                           '(https://xgboost.readthedocs.io/en/latest/get_started.html)'
+        self.description = 'python implementation of extreme gradient boosting'
+        self.description_url = 'https://xgboost.readthedocs.io/en/latest/get_started.html'
 
     def build_model(self):
         """Trains the XGB model on provided data"""
@@ -103,6 +103,8 @@ class ModelDescription:
         self.version = model.version
         self.qsar_method = model.qsar_method
         self.description = model.description
+        self.description_url = model.description_url
+
 
     def to_json(self):
         """Returns description as a JSON"""

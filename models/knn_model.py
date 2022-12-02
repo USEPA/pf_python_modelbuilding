@@ -32,23 +32,23 @@ class Model:
 
     def __init__(self, df_training, remove_log_p_descriptors):
         """Initializes the RF model with optimal parameters and provided data in pandas dataframe"""
+        self.qsar_method = 'knn'
+        self.description = 'sklearn implementation of k-nearest neighbors'
+        self.description_url = 'https://scikit-learn.org/stable/modules/generated/sklearn.neighbors.KNeighborsClassifier.html'
+        self.version = '1.0'
+
         self.knn = None
         self.descriptor_names = None
         self.remove_log_p_descriptors = remove_log_p_descriptors
         self.is_binary = None  # Set automatically when training data is loaded
         self.df_training = df_training
-        self.version = '1.0'
+
+        # kNN parameters:
         self.n_neighbors = 5
-        self.qsar_method = 'knn'
-        self.description = 'sklearn implementation of k-nearest neighbors ' \
-                           'https://scikit-learn.org/stable/modules/generated/sklearn.neighbors.KNeighborsClassifier.html'
-        #todo should url not be a part of description in all methods?
-
-        self.url = 'https://scikit-learn.org/stable/modules/generated/sklearn.neighbors.KNeighborsClassifier.html'
-
             # self.metric = 'cosine'
         self.metric = 'minkowski'  # default in knn
         self.weights = 'distance'
+
         # self.weights = 'uniform'
 
     def getModel(self):
@@ -154,19 +154,17 @@ class Model:
 class ModelDescription:
     def __init__(self, model):
         """Describes parameters of the specific model as built"""
-
         # kNN specific params:
-        self.metric = model.metric
         self.n_neighbors = model.n_neighbors
         self.weights = model.weights
+        self.metric = model.metric
+
         self.is_binary = model.is_binary
         self.remove_log_p_descriptors = model.remove_log_p_descriptors
-
         self.version = model.version
         self.qsar_method = model.qsar_method
         self.description = model.description
-        self.url = model.url
-
+        self.description_url = model.description_url
 
     def to_json(self):
         """Returns description as a JSON"""
@@ -334,7 +332,6 @@ def caseStudyGA2():
 
     # endpointsOPERA = ["Melting point", "Octanol water partition coefficient"]
 
-
     # endpointsOPERA = ["Octanol water partition coefficient"]
     # endpointsTEST = ['LC50', 'LC50DM', 'IGC50', 'LD50']
 
@@ -343,13 +340,14 @@ def caseStudyGA2():
     # descriptor_software = 'PaDEL_OPERA'
 
     # Set GA hyperparameters:
-    num_generations = 1
-    num_optimizers = 10
+    num_generations = 100
+    num_optimizers = 100
     qsar_method = 'knn'
-    n_threads = 16 # threads to use with kNN- TODO
-    num_jobs = 16 # jobs to use for GA search for embedding
+    n_threads = 16 # threads to use with rF- TODO
+    num_jobs = 8 # jobs to use for GA search for embedding- is 8 good enough? Need to determine at what point more jobs doesnt help because 8 works as well as 16
 
     urlHost = 'http://localhost:5004/'
+    # urlHost = 'http://v2626umcth819.rtord.epa.gov:5004/'
 
     filename = '../data/opera kNN results NUM_GENERATIONS=' + str(num_generations) + \
                ' NUM_OPTIMIZERS=' + str(num_optimizers) + '.txt'
@@ -407,7 +405,8 @@ def caseStudyGA2():
                                     num_generations=num_generations, num_optimizers=num_optimizers, num_jobs=num_jobs, urlHost=urlHost)
 
         dict_result = json.loads(str_result)
-        features = json.loads(dict_result['embedding'])
+        # features = json.loads(dict_result['embedding'])
+        features = dict_result['embedding']
         timeGA = dict_result['timeMin']
 
         print('embedding = ', features)
