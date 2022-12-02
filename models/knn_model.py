@@ -208,7 +208,7 @@ def main():
     model.do_predictions(df_prediction)
 
 
-def CaseStudyKNN():
+def caseStudyKNN():
     ENDPOINT = "Henry's law constant"
 
     endpointsOPERA = ["Water solubility", "LogKmHL", "LogKOA", "LogKOC", "LogBCF", "Vapor pressure", "Boiling point",
@@ -257,183 +257,7 @@ def CaseStudyKNN():
     knn.score(pred_features, pred_labels)
 
 
-def caseStudyGA():
-    # ENDPOINT = "LogKmHL"
-    # ENDPOINT = "Henry's law constant"
-    # ENDPOINT = "Vapor pressure"
-    ENDPOINT = "Water solubility"
-    # ENDPOINT = "Boiling point"
-
-    endpointsOPERA = ["Water solubility", "LogKmHL", "LogKOA", "LogKOC", "LogBCF", "Vapor pressure", "Boiling point",
-                      "Melting point", "Henry's law constant"]
-    endpointsTEST = ['LC50', 'LC50DM', 'IGC50', 'LD50']
-
-    if ENDPOINT in endpointsOPERA:
-        IDENTIFIER = 'ID'
-        PROPERTY = 'Property'
-        # directory = r"C:\Users\CRAMSLAN\OneDrive - Environmental Protection Agency (EPA)\VDI_Repo\python\pf_python_modelbuilding\datasets\DataSetsBenchmark\\" + ENDPOINT + " OPERA" + r"\\"
-        directory = "C:/Users/TMARTI02/OneDrive - Environmental Protection Agency (EPA)/0 java/QSAR_Model_Building/data/datasets_benchmark/" + ENDPOINT + ' OPERA/'
-
-    elif ENDPOINT in endpointsTEST:
-        IDENTIFIER = 'CAS'
-        PROPERTY = 'Tox'
-        directory = r"C:\Users\CRAMSLAN\OneDrive - Environmental Protection Agency (EPA)\VDI_Repo\python\pf_python_modelbuilding\datasets\DataSetsBenchmarkTEST_Toxicity" + ENDPOINT + r"\\" + ENDPOINT
-
-    descriptor_software = 'T.E.S.T. 5.1'
-    # descriptor_software = 'PaDEL-default'
-    # descriptor_software = 'PaDEL_OPERA'
-
-    training_file_name = ENDPOINT + ' OPERA ' + descriptor_software + ' training.tsv'
-    prediction_file_name = ENDPOINT + ' OPERA ' + descriptor_software + ' prediction.tsv'
-    folder = directory
-
-    training_tsv_path = folder + training_file_name
-    prediction_tsv_path = folder + prediction_file_name
-    print(training_tsv_path)
-
-    df_training = DFU.load_df_from_file(training_tsv_path, sep='\t')
-    df_prediction = DFU.load_df_from_file(prediction_tsv_path, sep='\t')
-
-    # train_ids, train_labels, train_features, train_column_names, is_binary = \
-    #     DFU.prepare_instances(df_training, "training", False, False)
-    # print(train_column_names)
-
-    df_training = df_training.loc[:, (df_training != 0).any(axis=0)]
-
-    # Parameters needed to build model:
-    n_threads = 20
-    remove_log_p_descriptors = False
-
-    ga_model = Model(df_training, False)
-    ga_model.is_binary = False  # todo determine based on df_training
-    # features = go.runGA(df_training, IDENTIFIER, PROPERTY, ga_model.getModel())
-
-    features = ['-OH [aromatic attach]', 'Hmax', 'SsOH', 'MDEN11', 'x0', 'Qv', 'nN', 'SaaNH', '-C#N [aliphatic attach]',
-                'SdO', '-CHO [aliphatic attach]', 'MDEN33', 'xch6']
-
-    #
-    print(features)
-    #
-    #
-    embed_model = Model(df_training, False)
-    embed_model.build_model_with_preselected_descriptors(features)
-    embed_model_predictions = embed_model.do_predictions(df_prediction)
-
-    full_model = Model(df_training, False)
-    full_model.build_model()
-    full_model_predictions = full_model.do_predictions(df_prediction)
-
-
-def caseStudyGA2():
-
-    endpointsOPERA = ["LogKoa", "LogKmHL", "Henry's law constant", "LogBCF", "LogOH", "LogKOC",
-                      "Vapor pressure", "Water solubility", "Boiling point",
-                      "Melting point", "Octanol water partition coefficient"]
-
-    # endpointsOPERA = ["Melting point", "Octanol water partition coefficient"]
-
-    # endpointsOPERA = ["Octanol water partition coefficient"]
-    # endpointsTEST = ['LC50', 'LC50DM', 'IGC50', 'LD50']
-
-    descriptor_software = 'T.E.S.T. 5.1'
-    # descriptor_software = 'PaDEL-default'
-    # descriptor_software = 'PaDEL_OPERA'
-
-    # Set GA hyperparameters:
-    num_generations = 100
-    num_optimizers = 100
-    qsar_method = 'knn'
-    n_threads = 16 # threads to use with rF- TODO
-    num_jobs = 8 # jobs to use for GA search for embedding- is 8 good enough? Need to determine at what point more jobs doesnt help because 8 works as well as 16
-
-    urlHost = 'http://localhost:5004/'
-    # urlHost = 'http://v2626umcth819.rtord.epa.gov:5004/'
-
-    filename = '../data/opera kNN results NUM_GENERATIONS=' + str(num_generations) + \
-               ' NUM_OPTIMIZERS=' + str(num_optimizers) + '.txt'
-    f = open(filename, "w")
-
-    dummy_model = Model(None, False)
-    model_desc = ModelDescription(dummy_model)
-    f.write(model_desc.to_json()+'\n\n')
-
-    f.write('ENDPOINT\tscore\tscore_embed\tlen(features)\tfeatures\tTime(min)\n')
-    f.flush()
-
-    for ENDPOINT in endpointsOPERA:
-        if ENDPOINT == 'Octanol water partition coefficient':
-            remove_log_p = True
-        else:
-            remove_log_p =False
-
-        # directory = r"C:\Users\CRAMSLAN\OneDrive - Environmental Protection Agency (EPA)\VDI_Repo\python\pf_python_modelbuilding\datasets\DataSetsBenchmark\\" + ENDPOINT + " OPERA" + r"\\"
-        directory = "C:/Users/TMARTI02/OneDrive - Environmental Protection Agency (EPA)/0 java/QSAR_Model_Building/data/datasets_benchmark/" + ENDPOINT + ' OPERA/'
-
-        training_file_name = ENDPOINT + ' OPERA ' + descriptor_software + ' training.tsv'
-        prediction_file_name = ENDPOINT + ' OPERA ' + descriptor_software + ' prediction.tsv'
-        folder = directory
-
-        training_tsv_path = folder + training_file_name
-        prediction_tsv_path = folder + prediction_file_name
-        # print(training_tsv_path)
-
-        df_training = DFU.load_df_from_file(training_tsv_path, sep='\t')
-        df_prediction = DFU.load_df_from_file(prediction_tsv_path, sep='\t')
-        df_training = df_training.loc[:, (df_training != 0).any(axis=0)]
-
-        with open(training_tsv_path, 'r') as file:
-            training_tsv = file.read().rstrip()
-
-        # print(training_tsv)
-
-        # **************************************************************************************
-        # t1 = time.time()
-        # ga_model = Model(df_training, False)
-        # ga_model.is_binary = DFU.isBinary(df_training)
-        # features = go.runGA(df_training, ga_model.getModel())
-        # print(features)
-        # print(len(features))
-        # t2 = time.time()
-        # Run from method
-        # json_embedding, timeGA = mwu.call_build_embedding_ga(qsar_method=qsar_method, training_tsv=df_training,
-        #                             remove_log_p=remove_log_p, n_threads=n_threads,
-        #                             num_generations=num_generations, num_optimizers=num_optimizers)
-
-        #Run from API call:
-        str_result = mwu.api_call_build_embedding_ga(qsar_method=qsar_method, training_tsv=training_tsv,
-                                    remove_log_p=remove_log_p, n_threads=n_threads,
-                                    num_generations=num_generations, num_optimizers=num_optimizers, num_jobs=num_jobs, urlHost=urlHost)
-
-        dict_result = json.loads(str_result)
-        # features = json.loads(dict_result['embedding'])
-        features = dict_result['embedding']
-        timeGA = dict_result['timeMin']
-
-        print('embedding = ', features)
-        print('Time to run ga  = ', timeGA, 'mins')
-
-        # **************************************************************************************
-        # Build model based on embedded descriptors: TODO use api to run this code
-        embed_model = mwu.call_build_model_with_preselected_descriptors(qsar_method, training_tsv,remove_log_p, features)
-        score_embed = embed_model.do_predictions_score(df_prediction)
-
-        # **************************************************************************************
-        # Build model based on all descriptors (except correlated and constant ones):
-        full_model = mwu.call_build_model(qsar_method, training_tsv,remove_log_p)
-        score = full_model.do_predictions_score(df_prediction)
-
-        print(ENDPOINT + '\t' + str(score) + '\t' + str(score_embed) + '\t' + str(len(features)) + '\t' + str(
-            features) + '\t' + str(timeGA) + '\n')
-
-        f.write(ENDPOINT + '\t' + str(score) + '\t' + str(score_embed) + '\t' + str(len(features)) + '\t' + str(
-            features) + '\t' + str(timeGA) + '\n')
-        # f.write(ENDPOINT + '\t' + str(score) + '\n')
-        f.flush()
-
-    f.close()
-
-
-def caseStudyGA3():
+def caseStudyMultipleEndpoints():
     '''
     Runs just all descriptors case
     :return:
@@ -493,6 +317,6 @@ def caseStudyGA3():
     f.close()
 
 if __name__ == "__main__":
-    # caseStudyGA()
-    caseStudyGA2()
-    # caseStudyGA3()
+    caseStudyKNN()
+    # caseStudyMultipleEndpoints()
+
