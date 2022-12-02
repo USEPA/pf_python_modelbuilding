@@ -95,16 +95,20 @@ def train(qsar_method):
 def train_embedding(qsar_method):
     """Trains a model for the specified QSAR method on provided data"""
 
+    print('Enter train_embedding')
+
     obj = request.form
     training_tsv = obj.get('training_tsv')  # Retrieves the training data as a TSV
 
-    if obj.get('save_to_database'):  # Sets boolean remove_log_p from string
-        save_to_database = obj.get('save_to_database', '').lower() == 'true'
-    else:
-        save_to_database = False
-
     if training_tsv is None:
+        print('training_tsv is none!')
         training_tsv = request.files.get('training_tsv').read().decode('UTF-8')
+
+    # if obj.get('save_to_database'):  # Sets boolean remove_log_p from string
+    #     save_to_database = obj.get('save_to_database', '').lower() == 'true'
+    # else:
+    #     save_to_database = False
+
 
     model_id = obj.get('model_id')  # Retrieves the model number to use for persistent storage
     if obj.get('remove_log_p'):  # Sets boolean remove_log_p from string
