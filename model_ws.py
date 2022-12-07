@@ -70,7 +70,7 @@ def train(qsar_method):
             embedding = embedding_tsv.split(",")
         elif "\t" in embedding_tsv:
             embedding = embedding_tsv.split("\t")
-        model = model_ws_utilities.call_build_model_with_preselected_descriptors(qsar_method, training_tsv, embedding)
+        model = model_ws_utilities.call_build_model_with_preselected_descriptors(qsar_method, training_tsv, remove_log_p, embedding)
 
     if model is None:
         abort(500, 'unknown model training error')
