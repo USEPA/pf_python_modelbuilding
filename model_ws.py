@@ -36,6 +36,7 @@ def train(qsar_method):
     """Trains a model for the specified QSAR method on provided data"""
 
     obj = request.form
+    model_id = obj.get('model_id')  # Retrieves the model number to use
     training_tsv = obj.get('training_tsv')  # Retrieves the training data as a TSV
     embedding_tsv = obj.get('embedding_tsv')
 
@@ -63,14 +64,14 @@ def train(qsar_method):
 
     if embedding_tsv is None or len(embedding_tsv) == 0:
         # Calls the appropriate model training method, throwing 500 SERVER ERROR if it does not give back a good model
-        model = model_ws_utilities.call_build_model(qsar_method, training_tsv, remove_log_p)
+        model = model_ws_utilities.call_build_model(qsar_method, training_tsv, remove_log_p, model_id)
     else:
         embedding = []
         if "," in embedding_tsv:
             embedding = embedding_tsv.split(",")
         elif "\t" in embedding_tsv:
             embedding = embedding_tsv.split("\t")
-        model = model_ws_utilities.call_build_model_with_preselected_descriptors(qsar_method, training_tsv, remove_log_p, embedding)
+        model = model_ws_utilities.call_build_model_with_preselected_descriptors(qsar_method, training_tsv, remove_log_p, embedding, model_id)
 
     if model is None:
         abort(500, 'unknown model training error')
@@ -138,7 +139,8 @@ def train_embedding(qsar_method):
                                                                     num_optimizers=num_optimizers,
                                                                     num_jobs=num_jobs,
                                                                     descriptor_coefficient=descriptor_coefficient,
-                                                                    max_length=max_length)
+                                                                    max_length=max_length,
+                                                                    model_id=model_id)
 
     result_obj = {}
     result_obj['embedding'] = embedding

@@ -7,7 +7,7 @@ from models import df_utilities as dfu
 
 class Model:
     """Trains and makes predictions with an out-of-the-box XGBoost model"""
-    def __init__(self, df_training, remove_log_p_descriptors):
+    def __init__(self, df_training, remove_log_p_descriptors,modelid):
         """Initializes the XGB model with provided data in pandas dataframe"""
         self.model = None
         self.descriptor_names = None
@@ -18,6 +18,8 @@ class Model:
         self.qsar_method = 'XGBoost'
         self.description = 'python implementation of extreme gradient boosting'
         self.description_url = 'https://xgboost.readthedocs.io/en/latest/get_started.html'
+        self.modelid = modelid
+
 
     def build_model(self):
         """Trains the XGB model on provided data"""

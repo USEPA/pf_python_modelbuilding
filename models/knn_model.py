@@ -30,7 +30,7 @@ __author__ = "Christian Ramsland"
 class Model:
     """Trains and makes predictions with a k nearest neighbors model"""
 
-    def __init__(self, df_training, remove_log_p_descriptors):
+    def __init__(self, df_training, remove_log_p_descriptors, modelid):
         """Initializes the RF model with optimal parameters and provided data in pandas dataframe"""
         self.qsar_method = 'knn'
         self.description = 'sklearn implementation of k-nearest neighbors'
@@ -42,6 +42,8 @@ class Model:
         self.remove_log_p_descriptors = remove_log_p_descriptors
         self.is_binary = None  # Set automatically when training data is loaded
         self.df_training = df_training
+        self.modelid = modelid
+
 
         # kNN parameters:
         self.n_neighbors = 5

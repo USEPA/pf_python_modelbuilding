@@ -42,20 +42,20 @@ def get_model_info(qsar_method):
         return qsar_method + ' not implemented'
 
 
-def call_build_model(qsar_method, training_tsv, remove_log_p):
+def call_build_model(qsar_method, training_tsv, remove_log_p, model_id):
     """Loads TSV training data into a pandas DF and calls the appropriate training method"""
     df_training = dfu.load_df(training_tsv)
     qsar_method = qsar_method.lower()
 
     model = None
     if qsar_method == 'svm':
-        model = svm.Model(df_training, remove_log_p, 30)
+        model = svm.Model(df_training, remove_log_p, 30, model_id)
     elif qsar_method == 'rf':
-        model = rf.Model(df_training, remove_log_p, 30)
+        model = rf.Model(df_training, remove_log_p, 30, model_id)
     elif qsar_method == 'xgb':
-        model = xgb.Model(df_training, remove_log_p)
+        model = xgb.Model(df_training, remove_log_p, model_id)
     elif qsar_method == 'knn':
-        model = knn.Model(df_training, remove_log_p)
+        model = knn.Model(df_training, remove_log_p, model_id)
     # elif qsar_method == 'dnn':
     #     model = dnn.Model(df_training, remove_log_p)
     else:
@@ -68,7 +68,7 @@ def call_build_model(qsar_method, training_tsv, remove_log_p):
 
 
 def call_build_embedding_ga(qsar_method, training_tsv, remove_log_p, n_threads,
-                            num_generations, num_optimizers, num_jobs, descriptor_coefficient, max_length):
+                            num_generations, num_optimizers, num_jobs, descriptor_coefficient, max_length, model_id):
     """Loads TSV training data into a pandas DF and calls the appropriate training method"""
 
     if isinstance(training_tsv, pd.DataFrame):
@@ -85,10 +85,10 @@ def call_build_embedding_ga(qsar_method, training_tsv, remove_log_p, n_threads,
     ga_model = None
 
     if qsar_method == 'rf':
-        ga_model = rf.Model(df_training=df_training, remove_log_p_descriptors=remove_log_p, n_threads=n_threads)
+        ga_model = rf.Model(df_training=df_training, remove_log_p_descriptors=remove_log_p, n_threads=n_threads,modelid=model_id)
     elif qsar_method == 'knn':
         ga_model = knn.Model(df_training=df_training,
-                             remove_log_p_descriptors=remove_log_p)  # TODO should we add threads to knn?
+                             remove_log_p_descriptors=remove_log_p, modelid=model_id)  # TODO should we add threads to knn?
     else:
         # 404 NOT FOUND if requested QSAR method has not been implemented
         abort(404, qsar_method + ' not implemented')
@@ -138,20 +138,20 @@ def api_call_build_embedding_ga(qsar_method, training_tsv, remove_log_p, n_threa
     return r.text
 
 
-def call_build_model_with_preselected_descriptors(qsar_method, training_tsv, remove_log_p, descriptor_names_tsv):
+def call_build_model_with_preselected_descriptors(qsar_method, training_tsv, remove_log_p, descriptor_names_tsv,model_id):
     """Loads TSV training data into a pandas DF and calls the appropriate training method"""
     df_training = dfu.load_df(training_tsv)
     qsar_method = qsar_method.lower()
 
     model = None
     if qsar_method == 'rf':
-        model = rf.Model(df_training, remove_log_p, 30)
+        model = rf.Model(df_training, remove_log_p, 30,model_id)
     elif qsar_method == 'knn':
-        model = knn.Model(df_training, remove_log_p)
+        model = knn.Model(df_training, remove_log_p,model_id)
     elif qsar_method == 'xgb':
-        model = xgb.Model(df_training, remove_log_p)
+        model = xgb.Model(df_training, remove_log_p,model_id)
     elif qsar_method == 'svm':
-        model = svm.Model(df_training, remove_log_p, 30)
+        model = svm.Model(df_training, remove_log_p, 30,model_id)
     else:
         # 404 NOT FOUND if requested QSAR method has not been implemented
         abort(404, qsar_method + ' not implemented with preselected descriptors')

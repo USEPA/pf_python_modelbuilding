@@ -34,7 +34,7 @@ from models import df_utilities as DFU
 class Model:
     """Trains and makes predictions with an optimized support vector machines model"""
 
-    def __init__(self, df_training, remove_log_p_descriptors, n_threads):
+    def __init__(self, df_training, remove_log_p_descriptors, n_threads, modelid):
         """Initializes the SVM model with optimal parameters and provided data in pandas dataframe"""
         # Model description
         self.is_binary = None  # Set automatically when training data is processed
