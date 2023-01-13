@@ -83,6 +83,9 @@ class Model:
 
         return self.model
 
+    def getModel2(self):
+        return  self.model
+
 
 
     def build_model(self):

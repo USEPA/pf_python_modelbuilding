@@ -21,6 +21,10 @@ class Model:
         self.modelid = modelid
 
 
+
+
+
+
     def build_model(self):
         """Trains the XGB model on provided data"""
         t1 = time.time()
@@ -32,10 +36,7 @@ class Model:
         # Use columns selected by prepare_instances (in case logp descriptors were removed)
         self.descriptor_names = train_column_names
 
-        if self.is_binary:
-            self.model = XGBClassifier(disable_default_eval_metric=True, eval_metric='auc')
-        else:
-            self.model = XGBRegressor()
+        self.getModel()
         # Train the model on training data
         self.model.fit(train_features, train_labels)
 
@@ -49,7 +50,17 @@ class Model:
 
         # Return built model
         return self
-    
+
+    def getModel(self):
+        if self.is_binary:
+            self.model = XGBClassifier(disable_default_eval_metric=True, eval_metric='auc')
+        else:
+            self.model = XGBRegressor()
+
+    def getModel2(self):
+        return  self.model
+
+
     def build_model_with_preselected_descriptors(self, descriptor_names):
         """Trains the XGB model on provided data"""
         t1 = time.time()
@@ -62,10 +73,7 @@ class Model:
         self.descriptor_names = train_column_names
         print(self.descriptor_names)
 
-        if self.is_binary:
-            self.model = XGBClassifier(disable_default_eval_metric=True, eval_metric='auc')
-        else:
-            self.model = XGBRegressor()
+        self.getModel()
         # Train the model on training data
         self.model.fit(train_features, train_labels)
 

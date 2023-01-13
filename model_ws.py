@@ -8,6 +8,7 @@ load_dotenv()
 import model_ws_utilities
 from qsar_models import ModelByte, Model
 import model_ws_db_utilities as mwdu
+from applicability_domain import applicability_domain_utilities as adu
 
 
 app = Flask(__name__)
@@ -92,6 +93,68 @@ def train(qsar_method):
         return pickle.dumps(model), status
 
 
+@app.route('/models/prediction_applicability_domain', methods=['POST'])
+def prediction_applicability_domain():
+    """Trains a model for the specified QSAR method on provided data"""
+
+    obj = request.form
+
+    training_tsv = obj.get('training_tsv')  # Retrieves the training data as a TSV
+    test_tsv = obj.get('test_tsv')  # Retrieves the training data as a TSV
+    embedding_tsv = obj.get('embedding_tsv')
+
+    # print(embedding_tsv)
+
+    applicability_domain = obj.get('applicability_domain')
+
+    if training_tsv is None:
+        training_tsv = request.files.get('training_tsv').read().decode('UTF-8')
+
+    if test_tsv is None:
+        test_tsv = request.files.get('test_tsv').read().decode('UTF-8')
+
+    if embedding_tsv is None:
+        embedding_tsv_obj = request.files.get('embedding_tsv')
+        if embedding_tsv_obj is not None:
+            embedding_tsv = embedding_tsv_obj.read().decode('UTF-8')
+
+
+    if obj.get('remove_log_p'):  # Sets boolean remove_log_p from string
+        remove_log_p = obj.get('remove_log_p', '').lower() == 'true'
+    else:
+        remove_log_p = False
+
+    # Can't train a model without data
+    if training_tsv is None:
+        abort(400, 'missing training tsv')
+
+    # Need test set to run AD on:
+    if test_tsv is None:
+        abort(400, 'missing test tsv')
+
+
+    embedding = []
+    if "," in embedding_tsv:
+        embedding = embedding_tsv.split(",")
+    elif "\t" in embedding_tsv:
+        embedding = embedding_tsv.split("\t")
+
+
+    output=adu.generate_applicability_domain_with_preselected_descriptors(training_tsv=training_tsv,
+                                                                              test_tsv=test_tsv,
+                                                                              remove_log_p=remove_log_p,
+                                                                              embedding=embedding,
+                                                                              applicability_domain=applicability_domain)
+
+    # Sets status 200 OK
+    status = 200
+
+    # If model number provided for storage, stores the model and sets status 201 CREATED instead
+
+    result = output.to_json(orient='records', lines=True)
+    # print(result)
+    return result
+
 @app.route('/models/<string:qsar_method>/embedding', methods=['POST'])
 def train_embedding(qsar_method):
     """Trains a model for the specified QSAR method on provided data"""
@@ -99,11 +162,19 @@ def train_embedding(qsar_method):
     print('Enter train_embedding')
 
     obj = request.form
-    training_tsv = obj.get('training_tsv')  # Retrieves the training data as a TSV
 
+    training_tsv = obj.get('training_tsv')  # Retrieves the training data as a TSV
     if training_tsv is None:
-        print('training_tsv is none!')
         training_tsv = request.files.get('training_tsv').read().decode('UTF-8')
+    if training_tsv is None:
+        abort(400, 'missing training tsv')
+
+    prediction_tsv = obj.get('prediction_tsv')  # Retrieves the training data as a TSV
+    if prediction_tsv is None:
+        print('prediction_tsv is none!')
+        prediction_tsv = request.files.get('prediction_tsv').read().decode('UTF-8')
+    if prediction_tsv is None:
+        abort(400, 'missing prediction tsv')
 
     # if obj.get('save_to_database'):  # Sets boolean remove_log_p from string
     #     save_to_database = obj.get('save_to_database', '').lower() == 'true'
@@ -118,14 +189,13 @@ def train_embedding(qsar_method):
         remove_log_p = False
 
     # Can't train a model without data
-    if training_tsv is None:
-        abort(400, 'missing training tsv')
 
     num_generations = int(obj.get('num_generations'))
     num_optimizers = int(obj.get('num_optimizers'))
     num_jobs = int(obj.get('num_jobs'))
 
     max_length = int(obj.get('max_length'))
+    threshold = int(obj.get('threshold'))
     descriptor_coefficient = float(obj.get('descriptor_coefficient'))
 
     # print(num_generations)
@@ -133,13 +203,15 @@ def train_embedding(qsar_method):
 
     n_threads = obj.get('n_threads')
 
-    embedding, timeMin = model_ws_utilities.call_build_embedding_ga(qsar_method=qsar_method, training_tsv=training_tsv,
+    embedding, timeMin = model_ws_utilities.call_build_embedding_ga(qsar_method=qsar_method,
+                                                                    training_tsv=training_tsv,prediction_tsv=prediction_tsv,
                                                                     remove_log_p=remove_log_p, n_threads=n_threads,
                                                                     num_generations=num_generations,
                                                                     num_optimizers=num_optimizers,
                                                                     num_jobs=num_jobs,
                                                                     descriptor_coefficient=descriptor_coefficient,
                                                                     max_length=max_length,
+                                                                    threshold=threshold,
                                                                     model_id=model_id)
 
     result_obj = {}

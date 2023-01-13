@@ -1,0 +1,696 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Thu Apr 21 19:40:56 2022
+
+@author: NCHAREST
+"""
+import json
+import time
+
+from sklearn.neighbors import NearestNeighbors
+from sklearn.preprocessing import StandardScaler
+from sklearn.feature_selection import mutual_info_regression
+import numpy as np
+from scipy.stats import pearsonr
+from sklearn.neighbors import KernelDensity
+from sklearn.metrics import balanced_accuracy_score
+import pandas as pd
+
+class helpers:
+
+    @staticmethod
+    def find_split_value(list_to_split, split_percentile):
+        index = int(len(list_to_split) * split_percentile)
+        list_to_split.sort(key=lambda x: x)
+        splitting_value = (list_to_split[index] + list_to_split[index + 1]) / 2.0
+        return splitting_value
+
+
+class ApplicabilityDomainStrategy:
+    """
+    Parent class for executing and evaluating a particular applicability_domain strategy
+    """
+
+    def __init__(self, TrainSet, TestSet, is_categorical=False):
+        self.TrainSet = TrainSet
+        self.TestSet = TestSet
+        self.model = None
+        self.embedding = None
+        self.response = None
+        self.parameters = None
+        self.is_categorical = is_categorical
+
+    def setEmbedding(self, embedding):
+        self.embedding = embedding
+
+    def setResponse(self, response):
+        self.response = response
+
+    def computeSpreadOfResiduals(self):
+        stdTrainInner = np.std(self.TrainInner['ResidualSquared'])
+        stdTrainOuter = np.std(self.TrainOuter['ResidualSquared'])
+        stdTestInner = np.std(self.TestInner['ResidualSquared'])
+        stdTestOuter = np.std(self.TestOuter['ResidualSquared'])
+        self.spreadRatioTrain = stdTrainInner / stdTrainOuter
+        self.spreadRatioTest = stdTestInner / stdTestOuter
+
+    def computeInnerOuterRatio(self):
+
+        try:
+
+            if self.is_categorical == False:
+                self.scoreTrainInner = pearsonr(self.TrainInner[self.response], self.TrainInner['Prediction'])[0] ** 2
+                self.scoreTrainOuter = pearsonr(self.TrainOuter[self.response], self.TrainOuter['Prediction'])[0] ** 2
+                self.scoreTestInner = pearsonr(self.TestInner[self.response], self.TestInner['Prediction'])[0] ** 2
+                self.scoreTestOuter = pearsonr(self.TestOuter[self.response], self.TestOuter['Prediction'])[0] ** 2
+                self.TrainInnerOuter = self.scoreTrainInner / self.scoreTrainOuter
+                self.TestInnerOuter = self.scoreTestInner / self.scoreTestOuter
+            elif self.is_categorical == True:
+                self.scoreTrainInner = balanced_accuracy_score(self.TrainInner[self.response],
+                                                               self.TrainInner['Prediction'])
+                self.scoreTrainOuter = balanced_accuracy_score(self.TrainOuter[self.response],
+                                                               self.TrainOuter['Prediction'])
+                self.scoreTestInner = balanced_accuracy_score(self.TestInner[self.response],
+                                                              self.TestInner['Prediction'])
+                self.scoreTestOuter = balanced_accuracy_score(self.TestOuter[self.response],
+                                                              self.TestOuter['Prediction'])
+                self.TrainInnerOuter = self.scoreTrainInner / self.scoreTrainOuter
+                self.TestInnerOuter = self.scoreTestInner / self.scoreTestOuter
+            else:
+                raise (ValueError("is_categorical is not set to a boolean"))
+        except Exception as e:
+            print(e)
+
+    def computeCoveragePerformanceProduct(self):
+        coverage = self.TestInner.shape[0] / (self.TestOuter.shape[0] + self.TestInner.shape[0])
+        self.coverage = coverage
+        if self.is_categorical == False:
+            self.scoreTestInner = pearsonr(self.TestInner[self.response], self.TestInner['Prediction'])[0] ** 2
+        elif self.is_categorical == True:
+            self.scoreTestInner = balanced_accuracy_score(self.TestInner[self.response], self.TestInner['Prediction'])
+
+        self.cp_product = coverage * self.scoreTestInner
+
+    def scoreMetrics(self):
+        # self.predict()
+        # self.computeSpreadOfResiduals()
+        self.computeInnerOuterRatio()
+        self.computeCoveragePerformanceProduct()
+
+    def predict(self, model_features):
+
+        train_preds = self.model.predict(self.TrainSet[model_features])
+        test_preds = self.model.predict(self.TestSet[model_features])
+
+        self.TrainSet['Prediction'] = train_preds
+        self.TestSet['Prediction'] = test_preds
+        train_residuals = (self.TrainSet['Prediction'] - self.TrainSet[self.response]) ** 2
+        test_residuals = (self.TestSet['Prediction'] - self.TestSet[self.response]) ** 2
+        self.TrainSet['ResidualSquared'] = train_residuals
+        self.TestSet['ResidualSquared'] = test_residuals
+
+        train_residuals = self.TrainSet['Prediction'] - self.TrainSet[self.response]
+        test_residuals = self.TrainSet['Prediction'] - self.TestSet[self.response]
+
+    def setModel(self, model):
+        self.model = model
+
+    def createSets(self, label):
+        self.TrainInner = self.TrainSet.loc[self.TrainSet[label] == True]
+        self.TrainOuter = self.TrainSet.loc[self.TrainSet[label] == False]
+        self.TestInner = self.TestSet.loc[self.TestSet[label] == True]
+        self.TestOuter = self.TestSet.loc[self.TestSet[label] == False]
+
+    def setParameters(self, parameters):
+        self.parameters = parameters
+
+
+# %% TEST AD
+class TESTApplicabilityDomain(ApplicabilityDomainStrategy):
+    def __init__(self, TrainSet, TestSet, is_categorical):
+        ApplicabilityDomainStrategy.__init__(self, TrainSet, TestSet, is_categorical)
+        self.parameters = {'k': 3, 'exclusionFraction': 0.05, 'similarity': 'cosine'}
+        self.AD_Label = 'WITHIN_TEST_AD'
+        self.is_categorical = is_categorical
+
+    def set_parameters(self, parameters):
+        self.parameters = parameters
+
+    def evaluate(self, embedding):
+        ###
+        self.nbrs = NearestNeighbors(n_neighbors=self.parameters['k'] + 1, algorithm='brute',
+                                     metric=self.parameters['similarity'])
+        nbrs = self.nbrs
+        TrainSet = self.TrainSet[embedding]
+        TestSet = self.TestSet[embedding]
+
+        # print(self.TrainSet)
+
+        ###
+        scaler = StandardScaler().fit(TrainSet)
+        train_x, test_x = scaler.transform(TrainSet), scaler.transform(TestSet)
+        ###
+        nbrs.fit(train_x)
+        train_neighbors, test_neighbors = nbrs.kneighbors(train_x), nbrs.kneighbors(test_x)
+
+        # print(test_neighbors)
+
+        ###
+        train_distances, test_distances = train_neighbors[0][:, 1:], test_neighbors[0][:, :-1]
+        ###
+
+        # print(test_distances)
+
+        train_TESTSimilarity, test_TESTSimilarity = list(np.mean(train_distances, axis=1)), list(
+            np.mean(test_distances, axis=1))
+        ###
+        self.TrainSet['TESTSimilarity'] = train_TESTSimilarity
+        self.TestSet['TESTSimilarity'] = test_TESTSimilarity
+        ###
+        train_TESTSimilarity.sort(key=lambda x: x)
+        splitIndex = int(len(train_TESTSimilarity) * self.parameters['exclusionFraction'])
+        splitSimilarity = train_TESTSimilarity[splitIndex]
+        self.splitSimilarity = splitSimilarity
+        ###
+        self.TrainSet[self.AD_Label] = True
+        self.TrainSet.loc[self.TrainSet['TESTSimilarity'] <= splitSimilarity, self.AD_Label] = False
+
+        self.TestSet[self.AD_Label] = True
+        self.TestSet.loc[self.TestSet['TESTSimilarity'] <= splitSimilarity, self.AD_Label] = False
+
+        # print(self.TestSet[self.AD_Label])  # array of whether or not it's in AD
+
+        return self.TestSet[self.AD_Label]
+
+    def evaluate2(self, embedding):
+        """
+        :return: returns results in dataframe with the cids of the neighbors and the applicability domain result
+        """
+        # print(embedding)
+        t1=time.time()
+
+        ###
+        self.nbrs = NearestNeighbors(n_neighbors=self.parameters['k']+1, algorithm='brute',
+                                     metric=self.parameters['similarity'])
+        nbrs = self.nbrs
+        TrainSet = self.TrainSet[embedding]
+        TestSet = self.TestSet[embedding]
+
+        # print(self.TrainSet)
+        # self.TrainSet.to_excel("bob_training.xlsx")
+
+        ###
+        scaler = StandardScaler().fit(TrainSet)
+        train_x, test_x = scaler.transform(TrainSet), scaler.transform(TestSet)
+        ###
+        nbrs.fit(train_x)
+
+        train_distances, train_indices = nbrs.kneighbors(train_x)
+        test_distances, test_indices = nbrs.kneighbors(test_x)
+
+        train_distances = train_distances[:, 1:]
+        test_distances = test_distances[:, :-1]
+
+        train_indices = train_indices[:, 1:]
+        test_indices = test_indices[:, :-1]
+
+        # print(TrainSet[test_indices[0][1]][0])
+        col_name_id = self.TrainSet.columns[0]
+
+        neighbor1 = test_indices[:, 0]
+        neighbor2 = test_indices[:, 1]
+        neighbor3 = test_indices[:, 2]
+
+        # print(neighbor1[0],neighbor2[0],neighbor3[0])
+        # print(self.TrainSet[col_name_id].loc[219])
+
+        id = self.TestSet[col_name_id]
+        id1 = self.TrainSet[col_name_id].loc[neighbor1]
+        id2 = self.TrainSet[col_name_id].loc[neighbor2]
+        id3 = self.TrainSet[col_name_id].loc[neighbor3]
+
+        train_TESTSimilarity, test_TESTSimilarity = list(np.mean(train_distances, axis=1)), list(
+            np.mean(test_distances, axis=1))
+        ###
+        self.TrainSet['TESTSimilarity'] = train_TESTSimilarity
+        self.TestSet['TESTSimilarity'] = test_TESTSimilarity
+        ###
+        train_TESTSimilarity.sort(key=lambda x: x)
+        splitIndex = int(len(train_TESTSimilarity) * self.parameters['exclusionFraction'])
+        splitSimilarity = train_TESTSimilarity[splitIndex]
+        self.splitSimilarity = splitSimilarity
+        ###
+        self.TrainSet[self.AD_Label] = True
+        self.TrainSet.loc[self.TrainSet['TESTSimilarity'] <= splitSimilarity, self.AD_Label] = False
+
+        self.TestSet[self.AD_Label] = True
+        self.TestSet.loc[self.TestSet['TESTSimilarity'] <= splitSimilarity, self.AD_Label] = False
+
+        # print(self.TestSet[self.AD_Label])  # array of whether or not it's in AD
+
+        AD = self.TestSet[self.AD_Label]
+
+        results = pd.DataFrame(np.column_stack([id, id1, id2, id3, AD]),
+                               columns=['idTest', 'idNeighbor1', 'idNeighbor2', 'idNeighbor3', 'AD'])
+        # print(results)
+
+        t2 = time.time()
+        # print((t2-t1),' secs to evaluate')
+
+        return results
+
+
+# %%
+class AllTESTApplicabilityDomain(ApplicabilityDomainStrategy):
+    def __init__(self, TrainSet, TestSet, is_categorical):
+        ApplicabilityDomainStrategy.__init__(self, TrainSet, TestSet, is_categorical)
+        self.is_categorical = is_categorical
+        self.parameters = {'k': 3, 'exclusionFraction': 0.05, 'similarity': 'cosine'}
+        self.AD_Label = 'WITHIN_TEST_AD'
+
+    def set_parameters(self, parameters):
+        self.parameters = parameters
+
+    def evaluate(self, alternate_embedding):
+        ###
+        self.nbrs = NearestNeighbors(n_neighbors=self.parameters['k'] + 1, algorithm='brute',
+                                     metric=self.parameters['similarity'])
+        nbrs = self.nbrs
+        TrainSet = self.TrainSet[alternate_embedding]
+        TestSet = self.TestSet[alternate_embedding]
+        ###
+        scaler = StandardScaler().fit(TrainSet)
+        train_x, test_x = scaler.transform(TrainSet), scaler.transform(TestSet)
+        ###
+        nbrs.fit(train_x)
+        train_neighbors, test_neighbors = nbrs.kneighbors(train_x), nbrs.kneighbors(test_x)
+        ###
+        train_distances, test_distances = train_neighbors[0][:, 1:], test_neighbors[0][:, :-1]
+        ###
+        train_TESTSimilarity, test_TESTSimilarity = list(np.mean(train_distances, axis=1)), list(
+            np.mean(test_distances, axis=1))
+        ###
+        self.TrainSet['TESTSimilarity'] = train_TESTSimilarity
+        self.TestSet['TESTSimilarity'] = test_TESTSimilarity
+        ###
+        train_TESTSimilarity.sort(key=lambda x: x)
+        splitIndex = int(len(train_TESTSimilarity) * self.parameters['exclusionFraction'])
+        splitSimilarity = train_TESTSimilarity[splitIndex]
+        self.splitSimilarity = splitSimilarity
+        ###
+        self.TrainSet[self.AD_Label] = True
+        self.TrainSet.loc[self.TrainSet['TESTSimilarity'] <= splitSimilarity, self.AD_Label] = False
+
+        self.TestSet[self.AD_Label] = True
+        self.TestSet.loc[self.TestSet['TESTSimilarity'] <= splitSimilarity, self.AD_Label] = False
+
+
+# %%
+class KernelDensityApplicabilityDomain(ApplicabilityDomainStrategy):
+    def __init__(self, TrainSet, TestSet, is_categorical):
+        ApplicabilityDomainStrategy.__init__(self, TrainSet, TestSet, is_categorical)
+        self.parameters = {'k': 3, 'exclusionFraction': 0.05, 'similarity': 'cosine'}
+        self.AD_Label = 'WITHIN_TEST_AD'
+        self.is_categorical = is_categorical
+
+    def set_parameters(self, parameters):
+        self.parameters = parameters
+
+    def evaluate(self):
+        ###
+        TrainSet = self.TrainSet[self.embedding]
+        TestSet = self.TestSet[self.embedding]
+
+        density_estimator = KernelDensity()
+        train_densities = list(np.exp(density_estimator.fit(TrainSet).score_samples(TrainSet)))
+        test_densities = list(np.exp(density_estimator.fit(TrainSet).score_samples(TestSet)))
+
+        ###
+        self.TrainSet['KESimilarity'] = train_densities
+        self.TestSet['KESimilarity'] = test_densities
+        ###
+        train_densities.sort(key=lambda x: x)
+        splitIndex = int(len(train_densities) * self.parameters['exclusionFraction'])
+        splitSimilarity = train_densities[splitIndex]
+        self.splitSimilarity = splitSimilarity
+        ###
+        self.TrainSet[self.AD_Label] = True
+        self.TrainSet.loc[self.TrainSet['KESimilarity'] <= splitSimilarity, self.AD_Label] = False
+
+        self.TestSet[self.AD_Label] = True
+        self.TestSet.loc[self.TestSet['KESimilarity'] <= splitSimilarity, self.AD_Label] = False
+
+
+# %% OPERA AD
+class OPERAApplicabilityDomain(ApplicabilityDomainStrategy):
+    def __init__(self, TrainSet, TestSet, is_categorical):
+        ApplicabilityDomainStrategy.__init__(self, TrainSet, TestSet, is_categorical)
+        self.parameters = {'k': 5, 'weakLocal': 0.4, 'exceptionalLocal': 0.6,
+                           'leverageThreshold': 3 * (TrainSet.shape[1] / TrainSet.shape[0]),
+                           'similarity': 'euclidean', 'onlyLocal': 0.01}
+        self.AD_Label = 'WITHIN_OPERA_AD'
+
+    @staticmethod
+    def MansouriSimilarity(Similarities):
+        weights = OPERAApplicabilityDomain.MansouriWeights(Similarities)
+        return 1 / (1 + np.dot(weights, Similarities))
+
+    @staticmethod
+    def SmoothingFactor(S):
+        if S <= 0.1:
+            f = 5e-4
+        else:
+            f = 5e-2
+        return f
+
+    @staticmethod
+    def MansouriWeights(Similarities):
+        denominator = np.sum(OPERAApplicabilityDomain.MansouriReciprocal(Similarities))
+        fs = np.array([OPERAApplicabilityDomain.SmoothingFactor(i) for i in Similarities])
+        weights = (fs + Similarities) / denominator
+        return weights
+
+    @staticmethod
+    def MansouriReciprocal(S):
+        f = np.array([OPERAApplicabilityDomain.SmoothingFactor(i) for i in S])
+        return 1 / (f + S)
+
+    @staticmethod
+    def LocalIndexConversion(SimilarityArray):
+        return np.array([OPERAApplicabilityDomain.MansouriSimilarity(Similarity) for Similarity in SimilarityArray])
+
+    @staticmethod
+    def Leverage(X):
+        core = np.linalg.inv(np.matmul(X.transpose(), X))
+        hat = np.matmul(X, np.matmul(core, X.transpose()))
+        leverages = np.diagonal(hat)
+        return leverages
+
+    def set_local_parameters(self, weak, strong):
+        self.parameters['weakLocal'] = float(weak)
+        self.parameters['exceptionalLocal'] = float(strong)
+
+    def evaluate(self):
+        ###
+        self.nbrs = NearestNeighbors(n_neighbors=self.parameters['k'] + 1, algorithm='brute',
+                                     metric=self.parameters['similarity'])
+        nbrs = self.nbrs
+        TrainSet = self.TrainSet[self.embedding]
+        TestSet = self.TestSet[self.embedding]
+        ###
+        scaler = StandardScaler().fit(TrainSet)
+        train_x, test_x = scaler.transform(TrainSet), scaler.transform(TestSet)
+        ###
+        nbrs.fit(train_x)
+        train_neighbors, test_neighbors = nbrs.kneighbors(train_x), nbrs.kneighbors(test_x)
+        ###
+        train_distances, test_distances = train_neighbors[0][:, 1:], test_neighbors[0][:, :-1]
+        train_local_index, test_local_index = OPERAApplicabilityDomain.LocalIndexConversion(
+            train_distances), OPERAApplicabilityDomain.LocalIndexConversion(test_distances)
+        ###
+        train_leverages, test_leverages = OPERAApplicabilityDomain.Leverage(train_x), OPERAApplicabilityDomain.Leverage(
+            test_x)
+        ###
+        self.TrainSet['Leverage'] = train_leverages
+        self.TrainSet['OPERALocalIndex'] = train_local_index
+        self.TestSet['Leverage'] = test_leverages
+        self.TestSet['OPERALocalIndex'] = test_local_index
+
+        ###
+        def determineLocalReliability(localIndex):
+            if localIndex <= self.parameters['weakLocal']:
+                return 'WEAK'
+            elif localIndex > self.parameters['weakLocal'] and localIndex <= self.parameters['exceptionalLocal']:
+                return 'MODERATE'
+            else:
+                return 'STRONG'
+
+        def determineLeverageReliability(leverage):
+            if leverage >= self.parameters['leverageThreshold']:
+                return False
+            else:
+                return True
+
+        def combinedCriteria(numericLocalIndex, numericLeverage):
+            localIndex = determineLocalReliability(numericLocalIndex)
+            leverage = determineLeverageReliability(numericLeverage)
+            if localIndex == 'WEAK' and leverage == False:
+                return False
+            elif localIndex == 'MODERATE' and leverage == False:
+                return False
+            elif localIndex == 'STRONG' and leverage == False:
+                return False
+            elif localIndex == 'WEAK' and leverage == True:
+                return False
+            else:
+                return True
+                ###
+
+        combined_train_assignment = [combinedCriteria(i, j) for i, j in
+                                     zip(self.TrainSet['OPERALocalIndex'], self.TrainSet['Leverage'])]
+        combined_test_assignment = [combinedCriteria(i, j) for i, j in
+                                    zip(self.TestSet['OPERALocalIndex'], self.TestSet['Leverage'])]
+        self.TrainSet[self.AD_Label] = combined_train_assignment
+        self.TestSet[self.AD_Label] = combined_test_assignment
+
+
+# %% Leverage
+class LeverageApplicabilityDomain(ApplicabilityDomainStrategy):
+    def __init__(self, TrainSet, TestSet, is_categorical):
+        ApplicabilityDomainStrategy.__init__(self, TrainSet, TestSet, is_categorical)
+        self.parameters = {
+            'leverageThreshold': 3 * (TrainSet.shape[1] / TrainSet.shape[0]),
+            'similarity': 'euclidean'}
+        self.AD_Label = 'WITHIN_OPERA_AD'
+
+    def set_local_parameters(self, parameters):
+        self.parameters = parameters
+
+    def evaluate(self):
+        ###
+        TrainSet = self.TrainSet[self.embedding]
+        TestSet = self.TestSet[self.embedding]
+        ###
+        scaler = StandardScaler().fit(TrainSet)
+        train_x, test_x = scaler.transform(TrainSet), scaler.transform(TestSet)
+        ###
+        train_leverages, test_leverages = OPERAApplicabilityDomain.Leverage(train_x), OPERAApplicabilityDomain.Leverage(
+            test_x)
+        ###
+        self.TrainSet['Leverage'] = train_leverages
+        self.TestSet['Leverage'] = test_leverages
+
+        splitting_value = helpers.find_split_value(list(train_leverages), 0.95)
+        self.set_local_parameters({'leverageThreshold': splitting_value, 'similarity': 'euclidean'})
+        self.splitting_value = splitting_value
+
+        def determineLeverageReliability(leverage):
+            if leverage >= self.parameters['leverageThreshold']:
+                return False
+            else:
+                return True
+
+        combined_train_assignment = [determineLeverageReliability(j) for j in self.TrainSet['Leverage']]
+        combined_test_assignment = [determineLeverageReliability(j) for j in self.TestSet['Leverage']]
+
+        self.TrainSet[self.AD_Label] = combined_train_assignment
+        self.TestSet[self.AD_Label] = combined_test_assignment
+
+
+# %% OPERA Local AD
+class OPERALocalApplicabilityDomain(ApplicabilityDomainStrategy):
+    def __init__(self, TrainSet, TestSet, is_categorical):
+        ApplicabilityDomainStrategy.__init__(self, TrainSet, TestSet, is_categorical)
+        self.parameters = {'k': 5, 'weakLocal': 0.4, 'exceptionalLocal': 0.6,
+                           'similarity': 'euclidean', 'onlyLocal': 0.01}
+        self.AD_Label = 'WITHIN_OPERA_AD'
+
+    def set_parameters(self, parameters):
+        self.parameters = parameters
+
+    def calculate_local(self, percentage_exclusion):
+        ###
+        self.nbrs = NearestNeighbors(n_neighbors=self.parameters['k'] + 1, algorithm='brute',
+                                     metric=self.parameters['similarity'])
+        nbrs = self.nbrs
+        TrainSet = self.TrainSet[self.embedding]
+        TestSet = self.TestSet[self.embedding]
+        ###
+        scaler = StandardScaler().fit(TrainSet)
+        train_x, test_x = scaler.transform(TrainSet), scaler.transform(TestSet)
+        ###
+        nbrs.fit(train_x)
+        train_neighbors, test_neighbors = nbrs.kneighbors(train_x), nbrs.kneighbors(test_x)
+        ###
+        train_distances, test_distances = train_neighbors[0][:, 1:], test_neighbors[0][:, :-1]
+        train_local_index, test_local_index = OPERAApplicabilityDomain.LocalIndexConversion(
+            train_distances), OPERAApplicabilityDomain.LocalIndexConversion(test_distances)
+        ###
+        self.TrainSet['OPERALocalIndex'] = train_local_index
+        self.TestSet['OPERALocalIndex'] = test_local_index
+        ###
+        index = int(self.TrainSet.shape[0] * percentage_exclusion)
+        train_local_index = list(train_local_index)
+        train_local_index.sort(key=lambda x: x)
+        self.splitting_value = (train_local_index[index] + train_local_index[index + 1]) / 2.0
+
+    def evaluate(self):
+        def determineLocalReliability(localIndex):
+            if localIndex <= self.parameters['weakLocal']:
+                return False
+            else:
+                return True
+
+        ###
+        combined_train_assignment = [determineLocalReliability(i) for i in self.TrainSet['OPERALocalIndex']]
+        combined_test_assignment = [determineLocalReliability(i) for i in self.TestSet['OPERALocalIndex']]
+        self.TrainSet[self.AD_Label] = combined_train_assignment
+        self.TestSet[self.AD_Label] = combined_test_assignment
+
+# %% OPERA Local AD
+class OPERALocalApplicabilityDomainRevised(ApplicabilityDomainStrategy):
+    """
+    Revised OPERA local AD to make it consistent with other ADs (TMM)
+    """
+    def __init__(self, TrainSet, TestSet, is_categorical):
+        ApplicabilityDomainStrategy.__init__(self, TrainSet, TestSet, is_categorical)
+
+        self.AD_Label = 'WITHIN_OPERA_AD'
+
+    def set_parameters(self, parameters):
+        self.parameters = parameters
+
+
+    def evaluate(self):
+
+        self.nbrs = NearestNeighbors(n_neighbors=self.parameters['k'] + 1, algorithm='brute',
+                                     metric=self.parameters['similarity'])
+        nbrs = self.nbrs
+        TrainSet = self.TrainSet[self.embedding]
+        TestSet = self.TestSet[self.embedding]
+        ###
+        scaler = StandardScaler().fit(TrainSet)
+        train_x, test_x = scaler.transform(TrainSet), scaler.transform(TestSet)
+        ###
+        nbrs.fit(train_x)
+        train_neighbors, test_neighbors = nbrs.kneighbors(train_x), nbrs.kneighbors(test_x)
+        ###
+        train_distances, test_distances = train_neighbors[0][:, 1:], test_neighbors[0][:, :-1]
+        train_local_index, test_local_index = OPERAApplicabilityDomain.LocalIndexConversion(
+            train_distances), OPERAApplicabilityDomain.LocalIndexConversion(test_distances)
+        ###
+        self.TrainSet['OPERALocalIndex'] = train_local_index
+        self.TestSet['OPERALocalIndex'] = test_local_index
+        ###
+        index = int(self.TrainSet.shape[0] * self.parameters['exclusionFraction'])
+        train_local_index = list(train_local_index)
+        train_local_index.sort(key=lambda x: x)
+        self.splitSimilarity = (train_local_index[index] + train_local_index[index + 1]) / 2.0
+
+
+        ###
+        self.TrainSet[self.AD_Label] = True
+        self.TrainSet.loc[self.TrainSet['OPERALocalIndex'] <= self.splitSimilarity, self.AD_Label] = False
+
+        self.TestSet[self.AD_Label] = True
+        self.TestSet.loc[self.TestSet['OPERALocalIndex'] <= self.splitSimilarity, self.AD_Label] = False
+
+
+
+    def evaluate2(self, embedding):
+        """
+        Returns dataframe with neighbors and AD result
+        """
+        self.nbrs = NearestNeighbors(n_neighbors=self.parameters['k'] + 1, algorithm='brute',
+                                     metric=self.parameters['similarity'])
+        nbrs = self.nbrs
+        TrainSet = self.TrainSet[embedding]
+        TestSet = self.TestSet[embedding]
+        ###
+        scaler = StandardScaler().fit(TrainSet)
+        train_x, test_x = scaler.transform(TrainSet), scaler.transform(TestSet)
+        ###
+        nbrs.fit(train_x)
+
+        train_distances, train_indices = nbrs.kneighbors(train_x)
+        test_distances, test_indices = nbrs.kneighbors(test_x)
+
+        train_distances = train_distances[:, 1:]
+        test_distances = test_distances[:, :-1]
+
+        train_indices = train_indices[:, 1:]
+        test_indices = test_indices[:, :-1]
+
+        # print(TrainSet[test_indices[0][1]][0])
+        col_name_id = self.TrainSet.columns[0]
+
+        neighbor1 = test_indices[:, 0]
+        neighbor2 = test_indices[:, 1]
+        neighbor3 = test_indices[:, 2]
+        neighbor4 = test_indices[:, 3]
+        neighbor5 = test_indices[:, 4]
+
+        id = self.TestSet[col_name_id]
+        id1 = self.TrainSet[col_name_id].loc[neighbor1]
+        id2 = self.TrainSet[col_name_id].loc[neighbor2]
+        id3 = self.TrainSet[col_name_id].loc[neighbor3]
+        id4 = self.TrainSet[col_name_id].loc[neighbor4]
+        id5 = self.TrainSet[col_name_id].loc[neighbor5]
+
+        train_local_index, test_local_index = OPERAApplicabilityDomain.LocalIndexConversion(
+            train_distances), OPERAApplicabilityDomain.LocalIndexConversion(test_distances)
+        ###
+        self.TrainSet['OPERALocalIndex'] = train_local_index
+        self.TestSet['OPERALocalIndex'] = test_local_index
+        ###
+        index = int(self.TrainSet.shape[0] * self.parameters['exclusionFraction'])
+        train_local_index = list(train_local_index)
+        train_local_index.sort(key=lambda x: x)
+        self.splitting_value = (train_local_index[index] + train_local_index[index + 1]) / 2.0
+
+        ###
+        self.TrainSet[self.AD_Label] = True
+        self.TrainSet.loc[self.TrainSet['OPERALocalIndex'] <= self.splitting_value, self.AD_Label] = False
+
+        self.TestSet[self.AD_Label] = True
+        self.TestSet.loc[self.TestSet['OPERALocalIndex'] <= self.splitting_value, self.AD_Label] = False
+
+        AD = self.TestSet[self.AD_Label]
+
+        results = pd.DataFrame(np.column_stack([id, id1, id2, id3, id4, id5, AD]),
+                               columns=['idTest', 'idNeighbor1', 'idNeighbor2',
+                                        'idNeighbor3', 'idNeighbor4', 'idNeighbor5', 'AD'])
+
+        # print (results)
+        return results
+
+
+class OPERAStatic:
+    @staticmethod
+    def MansouriSimilarity(Similarities):
+        weights = OPERAApplicabilityDomain.MansouriWeights(Similarities)
+        return 1 / (1 + np.dot(weights, Similarities))
+
+    @staticmethod
+    def SmoothingFactor(S):
+        if S <= 0.1:
+            f = 5e-4
+        else:
+            f = 5e-2
+        return f
+
+    @staticmethod
+    def MansouriWeights(Similarities):
+        denominator = np.sum(OPERAApplicabilityDomain.MansouriReciprocal(Similarities))
+        fs = np.array([OPERAApplicabilityDomain.SmoothingFactor(i) for i in Similarities])
+        weights = (fs + Similarities) / denominator
+        return weights
+
+    @staticmethod
+    def MansouriReciprocal(S):
+        f = np.array([OPERAApplicabilityDomain.SmoothingFactor(i) for i in S])
+        return 1 / (f + S)
+
+    @staticmethod
+    def LocalIndexConversion(SimilarityArray):
+        return np.array([OPERAApplicabilityDomain.MansouriSimilarity(Similarity) for Similarity in SimilarityArray])

@@ -10,14 +10,18 @@ def load_df(tsv_string):
     else:
         separator = ','
 
-    df = pd.read_csv(StringIO(tsv_string), sep=separator, na_values = "null")
+    df = pd.read_csv(StringIO(tsv_string), sep=separator, na_values="null")
 
     # Deletes rows with bad values CR 4/20/2022: descriptors with full nulls are more frequent in descriptor packages like Mordred than individual compounds with full nulls.
     # df = df[~df.isin([np.nan, np.inf, -np.inf]).any(1)]
-    
-    
+
     return df
 
+
+def read_file_to_string(file_path):
+    text_file = open(file_path, "r")
+    # read whole file to a string
+    return text_file.read()
 
 def load_df_from_file(filepath, sep='\t'):
     """Loads data from delimited file into a pandas dataframe
@@ -31,8 +35,12 @@ def load_df_from_file(filepath, sep='\t'):
         df = pd.read_csv(filepath, delimiter=sep)
     # print(df.shape)
 
+    #############################################################################################################
     # Deletes rows with bad values
-    df = df[~df.isin([np.nan, np.inf, -np.inf]).any(1)]
+    # TMM: this is not what we want to do. We want to delete bad columns not rows.
+    # We need to delete bad columns from prediction set as well- see remove_null_columns_in_both_sets() method
+    # df = df[~df.isin([np.nan, np.inf, -np.inf]).any(1)]
+    #############################################################################################################
 
     # Deletes columns with bad values
     # df = df.dropna(axis=1)
@@ -69,36 +77,83 @@ def remove_log_p_descriptors(df, which_set):
     print(which_set + ': The shape of our features after removing logp descriptors is:', df.shape)
     return df
 
+
 def do_remove_non_double_descriptors(df):
     df_non_num = df.select_dtypes(exclude=[np.number])
     df = df.drop(df_non_num, axis=1)
     return df
 
 
+# def prepare_prediction_instances(df, train_column_names):
+#     """Prepares a pandas df of prediction data using descriptor set from training data"""
+#     ids = np.array(df[df.columns[0]])
+#     labels = np.array(df[df.columns[1]])
+#
+#     # Remove ids and exp vals
+#     df.drop(df.columns[0], axis=1)
+#     df.drop(df.columns[1], axis=1)
+#
+#     drop_column_names = []
+#
+#     for column in df:
+#         if column not in train_column_names:
+#             drop_column_names.append(column)
+#
+#     # Drop the same columns that were dropped from training data
+#     df = df.drop(drop_column_names, axis=1)
+#
+#     print('The shape of features is:', df.shape)
+#
+#     features = np.array(df)
+#
+#     # Return ids, exp vals, and descriptors as separate arrays
+#     return ids, labels, features
+
 def prepare_prediction_instances(df, train_column_names):
-    """Prepares a pandas df of prediction data using descriptor set from training data"""
+    """Prepares a pandas df of prediction data using descriptor set from training data
+    Uses a one liner to drop all the columns: df = df[train_column_names]
+    """
     ids = np.array(df[df.columns[0]])
     labels = np.array(df[df.columns[1]])
 
-    # Remove ids and exp vals
-    df.drop(df.columns[0], axis=1)
-    df.drop(df.columns[1], axis=1)
-
-    drop_column_names = []
-
-    for column in df:
-        if column not in train_column_names:
-            drop_column_names.append(column)
-
-    # Drop the same columns that were dropped from training data
-    df = df.drop(drop_column_names, axis=1)
+    df = df[train_column_names]
 
     print('The shape of features is:', df.shape)
 
-    features = np.array(df)
+    # features = np.array(df)
+    features = df  # scikit learn converts it to numpy array later anyways
+
+    # print(features)
 
     # Return ids, exp vals, and descriptors as separate arrays
     return ids, labels, features
+
+def remove_null_columns_in_both_sets(df_training, df_prediction):
+
+    # Deletes columns with null values:
+    df_training = df_training.dropna(axis=1)
+
+    # Deletes columns with null values:
+    df_prediction = df_prediction.dropna(axis=1)
+
+    # Need to only include the columns in common:
+    column_names = df_training.columns.intersection(df_prediction.columns)
+    df_training = df_training[column_names]
+    return df_training
+
+# def prepare_prediction_instances(df, train_column_names):
+#     """Prepares a pandas df of prediction data using descriptor set from training data"""
+#     ids = np.array(df[df.columns[0]])
+#     labels = np.array(df[df.columns[1]])
+#
+#     df = df[train_column_names]
+#     print('The shape of features is:', df.shape)
+#
+#     # features = np.array(df)
+#     features = df
+#
+#     # Return ids, exp vals, and descriptors as separate arrays
+#     return ids, labels, features
 
 
 def prepare_instances(df, which_set, remove_logp, remove_corr):
@@ -120,7 +175,7 @@ def prepare_instances(df, which_set, remove_logp, remove_corr):
 
     # drop ID column:
     df = df.drop(col_name_id, axis=1)
-    
+
     df = do_remove_non_double_descriptors(df)
 
     drop_column_names = []
@@ -137,7 +192,9 @@ def prepare_instances(df, which_set, remove_logp, remove_corr):
     print(which_set + ': The shape of features is:', df.shape)
 
     # Convert to numpy array
-    features = np.array(df)
+    # features = np.array(df)
+
+    features = df  # scikit learn converts it to numpy array later anyways
 
     column_names = list(df.columns)
 
@@ -153,8 +210,55 @@ def isBinary(df):
     else:
         return False
 
+
+# def prepare_instances_with_preselected_descriptors(df, which_set, descriptor_names):
+#     """Prepares a pandas df of training data by removing logp and correlated descriptors"""
+#     df_labels = df[df.columns[1]]
+#     if df_labels.isin([0, 1]).all():
+#         is_binary = True
+#     else:
+#         is_binary = False
+#
+#     # Labels are the values we want to predict
+#     labels = np.array(df_labels)
+#     ids = np.array(df[df.columns[0]])
+#     col_name_id = df.columns[0]
+#     col_name_property = df.columns[1]
+#
+#     # drop Property column with experimental property we are trying to correlate (# axis 1 refers to the columns):
+#     df = df.drop(col_name_property, axis=1)
+#
+#     # drop ID column:
+#     df = df.drop(col_name_id, axis=1)
+#
+#     df = do_remove_non_double_descriptors(df)
+#
+#     drop_column_names = []
+#
+#     for column in df:
+#         if column not in descriptor_names:
+#             drop_column_names.append(column)
+#
+#     # Drop the same columns that were dropped from training data
+#     df = df.drop(drop_column_names, axis=1)
+#
+#     print(which_set + ': The shape of features is:', df.shape)
+#
+#     # Convert to numpy array
+#     features = np.array(df)
+#
+#     column_names = list(df.columns)
+#
+#     # print('col names=',column_names)
+#     # print('features', features)
+#
+#     return ids, labels, features, column_names, is_binary
+
+
 def prepare_instances_with_preselected_descriptors(df, which_set, descriptor_names):
-    """Prepares a pandas df of training data by removing logp and correlated descriptors"""
+    """Prepares a pandas df of training data by removing logp and correlated descriptors
+    Uses a one liner to drop all the columns: df = df[train_column_names]
+    """
     df_labels = df[df.columns[1]]
     if df_labels.isin([0, 1]).all():
         is_binary = True
@@ -164,32 +268,33 @@ def prepare_instances_with_preselected_descriptors(df, which_set, descriptor_nam
     # Labels are the values we want to predict
     labels = np.array(df_labels)
     ids = np.array(df[df.columns[0]])
-    col_name_id = df.columns[0]
-    col_name_property = df.columns[1]
 
-    # drop Property column with experimental property we are trying to correlate (# axis 1 refers to the columns):
-    df = df.drop(col_name_property, axis=1)
+    # print(descriptor_names)
+    # print(df.columns)
+    # print(df.columns.get_loc("gmax"))
 
-    # drop ID column:
-    df = df.drop(col_name_id, axis=1)
-    
-    df = do_remove_non_double_descriptors(df)
+    # for (columnName, columnData) in df.iteritems():
+    #     print('Column Name : ', columnName)
 
-    drop_column_names = []
+    # Use one liner to drop columns:
+    df = df[descriptor_names]
 
-    for column in df:
-        if column not in descriptor_names:
-            drop_column_names.append(column)
 
-    # Drop the same columns that were dropped from training data
-    df = df.drop(drop_column_names, axis=1)
+
 
     print(which_set + ': The shape of features is:', df.shape)
 
     # Convert to numpy array
-    features = np.array(df)
+    # features = np.array(df)
+    features = df  # scikit learn converts it to numpy array later anyways
+
+    features.to_excel("train_set_embedding.xlsx")
+
 
     column_names = list(df.columns)
+
+    # print('col names=',column_names)
+    # print('features', features)
 
     return ids, labels, features, column_names, is_binary
 
@@ -215,7 +320,8 @@ def do_remove_constant_descriptors(df, drop_column_names):
 
 def do_remove_correlated_descriptors(df, threshold):
     """Removes descriptors correlated above a certain threshold
-    Adapted from https://chrisalbon.com/machine_learning/feature_selection/drop_highly_correlated_features/"""
+    Adapted from https://www.projectpro.io/recipes/drop-out-highly-correlated-features-in-python
+    """
     corr = df.corr().abs()
     upper = corr.where(np.triu(np.ones(corr.shape), k=1).astype(bool))
     corr_to_drop = [column for column in upper.columns if any(upper[column] > threshold)]

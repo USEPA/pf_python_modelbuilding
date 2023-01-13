@@ -70,6 +70,10 @@ class Model:
                                                                    metric=self.metric))])
         return self.knn
 
+    def getModel2(self):
+        return  self.knn
+
+
     def build_model(self):
         t1 = time.time()
 

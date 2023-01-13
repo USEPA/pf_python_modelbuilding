@@ -61,6 +61,10 @@ class Model:
 
         return self.rfr
 
+    def getModel2(self):
+        return  self.rfr
+
+
     def build_model_no_grid_search(self):
         """Trains the RF model on provided data"""
         t1 = time.time()

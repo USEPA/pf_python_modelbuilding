@@ -16,14 +16,16 @@ import numpy as np
 import pandas as pd
 from collections import defaultdict
 
-NUM_GENERATIONS = 10 # kamel used 100
+NUM_GENERATIONS = 100 # kamel used 100
 NUM_OPTIMIZERS = 10 # kamel used 100
 NUM_PARENTS = 10
 MINIMUM_LENGTH = 4
 MAXIMUM_LENGTH = 24
 MUTATION_PROBABILITY = 0.001
 NUMBER_SURVIVORS = 10
-THRESHOLD = 2
+# THRESHOLD = 2  # Nate
+THRESHOLD = 1  # Todd: keeps more descriptors from stage 1 of GA optimization
+
 # NUM_JOBS = 16
 NUM_JOBS = 4  # calculation time is barely reduced by using more than 4 threads
 DESCRIPTOR_COEFFICIENT = 0.002
