@@ -135,11 +135,11 @@ def filter_columns_in_both_sets(df_training, df_prediction, remove_log_p):
 
     # Deletes columns with null values:
     df_training = df_training.dropna(axis=1)
-    df_training = do_remove_non_double_descriptors(df_training)
+    # df_training = do_remove_non_double_descriptors(df_training)
 
     # Deletes columns with null values:
     df_prediction = df_prediction.dropna(axis=1)
-    df_prediction = do_remove_non_double_descriptors(df_prediction)
+    # df_prediction = do_remove_non_double_descriptors(df_prediction)
 
     # Need to only include the columns in common:
     column_names = df_training.columns.intersection(df_prediction.columns)
