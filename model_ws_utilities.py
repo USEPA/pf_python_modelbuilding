@@ -74,17 +74,7 @@ def call_build_embedding_ga(qsar_method, training_tsv, prediction_tsv, remove_lo
     """Loads TSV training data into a pandas DF and calls the appropriate training method"""
     df_training = DFU.load_df(training_tsv)
     df_prediction = DFU.load_df(prediction_tsv)
-    df_training = DFU.remove_null_columns_in_both_sets(df_training,df_prediction)
-
-    if remove_log_p:
-        df_training = dfu.remove_log_p_descriptors(df_training, 'training')
-
-    # print(df_training.dtypes)
-
-    # df_training = df_training.loc[:, (df_training != 0).any(axis=0)]
-    # Deletes columns with bad values
-    # df_training = df_training.dropna(axis=1)
-
+    df_training = DFU.filter_columns_in_both_sets(df_training, df_prediction, remove_log_p)
     print('training shape=', df_training.shape)
 
     qsar_method = qsar_method.lower()

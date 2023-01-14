@@ -257,7 +257,7 @@ def caseStudyTodd():
         ###################################################################################################
         trainData = DFU.load_df_from_file(trainPath, sep=DELIMITER)
         testData = DFU.load_df_from_file(testPath, sep=DELIMITER)
-        trainData = DFU.remove_null_columns_in_both_sets(trainData, testData)
+        trainData = DFU.filter_columns_in_both_sets(trainData, testData)
 
         # testData = testData.loc[[1,2,3,4,5]]  # keep only 3 row to test speed
 

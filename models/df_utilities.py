@@ -128,13 +128,18 @@ def prepare_prediction_instances(df, train_column_names):
     # Return ids, exp vals, and descriptors as separate arrays
     return ids, labels, features
 
-def remove_null_columns_in_both_sets(df_training, df_prediction):
+def filter_columns_in_both_sets(df_training, df_prediction, remove_log_p):
+
+    if remove_log_p:
+        df_training = remove_log_p_descriptors(df_training, 'training')
 
     # Deletes columns with null values:
     df_training = df_training.dropna(axis=1)
+    df_training = do_remove_non_double_descriptors(df_training)
 
     # Deletes columns with null values:
     df_prediction = df_prediction.dropna(axis=1)
+    df_prediction = do_remove_non_double_descriptors(df_prediction)
 
     # Need to only include the columns in common:
     column_names = df_training.columns.intersection(df_prediction.columns)
@@ -178,10 +183,8 @@ def prepare_instances(df, which_set, remove_logp, remove_corr):
 
     df = do_remove_non_double_descriptors(df)
 
-    drop_column_names = []
-
     # Remove constant descriptors:
-    df = do_remove_constant_descriptors(df, drop_column_names)
+    df = do_remove_constant_descriptors(df)
 
     if remove_logp:
         df = remove_log_p_descriptors(df, which_set)
@@ -299,8 +302,10 @@ def prepare_instances_with_preselected_descriptors(df, which_set, descriptor_nam
     return ids, labels, features, column_names, is_binary
 
 
-def do_remove_constant_descriptors(df, drop_column_names):
+def do_remove_constant_descriptors(df):
     """Removes constant descriptors"""
+
+    drop_column_names = []
     num_rows = len(df.index)
 
     for column in df:
