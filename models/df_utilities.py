@@ -118,6 +118,8 @@ def prepare_prediction_instances(df, train_column_names):
 
     df = df[train_column_names]
 
+    # df.to_excel("predset.xlsx")
+
     print('The shape of features is:', df.shape)
 
     # features = np.array(df)
@@ -136,9 +138,14 @@ def filter_columns_in_both_sets(df_training, df_prediction, remove_log_p):
     # Deletes columns with null values:
     df_training = df_training.dropna(axis=1)
     # df_training = do_remove_non_double_descriptors(df_training)
+    df_training = df_training[~df_training.isin([np.nan, np.inf, -np.inf]).any(1)]
 
     # Deletes columns with null values:
     df_prediction = df_prediction.dropna(axis=1)
+    print('shape1', df_prediction.shape)
+    df_prediction = df_prediction[~df_prediction.isin([np.nan, np.inf, -np.inf]).any(1)]
+    print('shape2', df_prediction.shape)
+
     # df_prediction = do_remove_non_double_descriptors(df_prediction)
 
     # Need to only include the columns in common:
