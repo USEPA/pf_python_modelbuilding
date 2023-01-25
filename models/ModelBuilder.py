@@ -55,8 +55,12 @@ def model_registry(regressor_name, is_categorical):
 
 
 def scoring_strategy_defaults(is_categorical):
+    # to see available metrics:
+    # import sklearn
+    # print(sorted(sklearn.metrics.SCORERS.keys()))
+
     if is_categorical == True:
-        return 'matthews_corrcoef'
+        return 'balanced_accuracy'  #TMM: Changed to BA since "matthews_corrcoef" was not an available metric
     elif is_categorical == False:
         return 'r2'
     else:
@@ -114,6 +118,8 @@ class Model:
         # Tune hyperparameters
         # TMM: optimizer made local so won't get stored in the database
         # self.fix_hyperparameter_grid()
+
+        print ('hyperparameters',self.hyperparameters)
 
         optimizer = GridSearchCV(self.model_obj, self.hyperparameters, n_jobs=self.n_jobs,
                                      scoring=scoring_strategy_defaults(self.is_categorical))
@@ -185,12 +191,14 @@ class Model:
 class KNN(Model):
     def __init__(self, df_training, remove_log_p_descriptors, n_jobs=1):
         Model.__init__(self, df_training, remove_log_p_descriptors, n_jobs=n_jobs)
+
         self.regressor_name = 'knn'
         self.version = '1.1'
         self.hyperparameters = {'estimator__n_neighbors': list(range(3, 11)),
                                 'estimator__weights': ['uniform', 'distance']}
         self.description = 'sklearn implementation of k-nearest neighbors'
         self.description_url = 'https://scikit-learn.org/stable/modules/generated/sklearn.neighbors.KNeighborsClassifier.html'
+
 
 
 class XGB(Model):

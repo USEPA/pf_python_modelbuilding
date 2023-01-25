@@ -32,6 +32,78 @@ class EmbeddingImporter:
 
         return embedding
 
+
+def caseStudyTEST_RunGA():
+    """
+    Loops through TEST toxicity data sets :
+    1. Generates GA embedding using chosen QSAR method
+    2. Builds qsar model with and without embedding
+    3. Reports results for test set
+    4. Exports results to text file
+    """
+
+    # change following to folder where TEST sample sets are stored:
+    # test_directory = "C:/Users/TMARTI02/OneDrive - Environmental Protection Agency (EPA)/0 java/QSAR_Model_Building/data/DataSetsBenchmarkTEST_Toxicity/"
+    test_directory = "../datasets_benchmark_TEST/"
+
+    # endpointsTEST = ['LC50DM', 'LC50', 'LD50', 'IGC50', 'DevTox', 'LLNA', 'Mutagenicity']
+    # endpointsTEST = ['LC50DM', 'LC50', 'LD50', 'IGC50', 'LLNA', 'Mutagenicity']
+    endpointsTEST = ['LLNA']
+    # endpointsTEST = ['Mutagenicity']
+
+    # qsar_method = 'rf'
+    qsar_method = 'knn'
+    # qsar_method = 'xgb'
+    # qsar_method = 'svm'
+
+    useGridSearch = True
+
+    # *****************************************************************************************************************
+    # descriptor_software = 'T.E.S.T. 5.1'
+    # descriptor_software = 'Padelpy webservice single'
+    # descriptor_software = 'PaDEL-default'
+    # descriptor_software = 'PaDEL_OPERA'
+    # descriptor_software = 'RDKit-default'
+    # descriptor_software = 'ToxPrints-default'
+    descriptor_software = 'WebTEST-default'
+    # *****************************************************************************************************************
+
+
+    for ENDPOINT in endpointsTEST:
+        remove_log_p = False
+
+        directory = test_directory + ENDPOINT + ' TEST/'
+
+        print(ENDPOINT, descriptor_software)
+
+        # training_file_name = ENDPOINT + '_training_set-2d.csv'
+        # prediction_file_name = ENDPOINT + '_prediction_set-2d.csv'
+
+        training_file_name = ENDPOINT + ' TEST ' + descriptor_software + ' training.tsv'
+        prediction_file_name = ENDPOINT + ' TEST ' + descriptor_software + ' prediction.tsv'
+
+        folder = directory
+
+        training_tsv_path = folder + training_file_name
+        prediction_tsv_path = folder + prediction_file_name
+        # print(training_tsv_path)
+
+        training_tsv = dfu.read_file_to_string(training_tsv_path)
+        prediction_tsv = dfu.read_file_to_string(prediction_tsv_path)
+
+        embedding_tsv = None
+
+
+        model = call_build_model_with_preselected_descriptors(qsar_method=qsar_method,training_tsv=training_tsv,remove_log_p=remove_log_p,
+                                                      descriptor_names_tsv=embedding_tsv,use_grid_search=useGridSearch,model_id=1)
+
+        predictions = call_do_predictions(prediction_tsv, model)
+
+
+
+
+    # f.close()
+
 def a_runCaseStudiesExpPropPFAS():
     inputFolder = '../datasets/'
 
@@ -40,9 +112,9 @@ def a_runCaseStudiesExpPropPFAS():
     num_generations = 100
 
     # qsar_method = 'rf'
-    # qsar_method = 'knn'
+    qsar_method = 'knn'
     # qsar_method = 'xgb'
-    qsar_method = 'svm'
+    # qsar_method = 'svm'
 
     descriptor_software = 'WebTEST-default'
 
@@ -91,11 +163,13 @@ def a_runCaseStudiesExpPropPFAS():
         model = call_build_model_with_preselected_descriptors(qsar_method=qsar_method,training_tsv=training_tsv,remove_log_p=remove_log_p,
                                                       descriptor_names_tsv=embedding_tsv,use_grid_search=useGridSearch,model_id=1)
 
-        R2, MAE = call_do_predictions(prediction_tsv, model)
+        predictions = call_do_predictions(prediction_tsv, model)
+        df_prediction = dfu.load_df(prediction_tsv)
+        strR2, strMAE = run_rf_todd.calcStats(predictions, df_prediction, None)
 
-        print('*****' + datasetName + '\t' + R2 + '\t' + MAE + '\n')
+        print('*****' + datasetName + '\t' + strR2 + '\t' + strMAE + '\n')
 
-        f.write(datasetName+'\t'+R2+'\t'+MAE+'\n')
+        f.write(datasetName+'\t'+strR2+'\t'+strMAE+'\n')
         f.flush()
 
     f.close()
@@ -175,11 +249,9 @@ def call_do_predictions(prediction_tsv, model):
     """Loads TSV prediction data into a pandas DF, stores IDs and exp vals,
     and calls the appropriate prediction method"""
     df_prediction = dfu.load_df(prediction_tsv)
-    pred_ids = np.array(df_prediction[df_prediction.columns[0]])
-    pred_labels = np.array(df_prediction[df_prediction.columns[1]])
     predictions = model.do_predictions(df_prediction)
 
-    return run_rf_todd.calcStats(predictions, df_prediction, None)
+    return predictions
 
 
 def a_runCaseStudiesExpProp():
@@ -299,7 +371,7 @@ def call_build_model_with_preselected_descriptors(qsar_method, training_tsv, rem
     return model
 
 if __name__ == "__main__":
-    a_runCaseStudiesExpPropPFAS()
+    # a_runCaseStudiesExpPropPFAS()
     # a_runCaseStudiesExpProp()
     # compare_spaces()
-
+    caseStudyTEST_RunGA()
