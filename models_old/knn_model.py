@@ -101,6 +101,7 @@ class Model:
 
         return self
 
+
     def build_model_with_preselected_descriptors(self, descriptor_names):
         t1 = time.time()
 
@@ -125,6 +126,12 @@ class Model:
         print('Time to train model  = ', t2 - t1, 'seconds')
 
         return self
+
+
+    def build_model_with_preselected_descriptors_no_grid_search(self, descriptor_names):
+        return self.build_model_with_preselected_descriptors(descriptor_names)
+
+
 
     def do_predictions(self, df_prediction):
         """Makes predictions using the trained model"""

@@ -37,9 +37,20 @@ class Model:
         # self.max_features='auto'
 
         # For build_model_with_grid_search():
-        self.hyper_parameter_grid = {'max_features': [4, 8, 'sqrt', 'log2'],
+        # self.hyper_parameter_grid = {'max_features': [4, 8, 'sqrt', 'log2', None],
+        #                              'min_impurity_decrease': [10 ** x for x in range(-5, 0)],
+        #                              'n_estimators': [10 ** x for x in range(2, 4)], 'max_samples': [0.66, 0.99]}
+
+        # self.hyper_parameter_grid = {'max_features': ['sqrt', 'log2'],
+        #                              'min_impurity_decrease': [10 ** x for x in range(-5, 0)],
+        #                              'n_estimators': [10 ** x for x in range(1, 4)]}
+
+        self.hyper_parameter_grid = {'max_features': ['sqrt', 'log2'],
                                      'min_impurity_decrease': [10 ** x for x in range(-5, 0)],
-                                     'n_estimators': [10 ** x for x in range(2, 4)], 'max_samples': [0.66, 0.99]}
+                                     'n_estimators': [10, 100, 250, 500]}
+
+        self.hyper_parameter_grid['min_impurity_decrease'].append(0)
+
 
         self.modelid = modelid
         self.n_threads = n_threads
@@ -92,6 +103,32 @@ class Model:
         # pickle.dump(rfr, open("rfr.p", "wb"))
         return self
 
+    def build_model_with_preselected_descriptors_no_grid_search(self, descriptor_names):
+
+        t1 = time.time()
+        # Call prepare_instances without removing correlated descriptors
+        train_ids, train_labels, train_features, train_column_names, self.is_binary = \
+            DFU.prepare_instances_with_preselected_descriptors(self.df_training, "training", descriptor_names)
+
+        self.descriptor_names = train_column_names
+
+        self.getModel()
+
+        # Train the model on training data
+        self.rfr.fit(train_features, train_labels)
+
+        print('Score for Training data = ', self.rfr.score(train_features, train_labels))
+
+        # Save space in database:
+        self.df_training = None
+
+        t2 = time.time()
+        print('Time to train model  = ', t2 - t1, 'seconds')
+
+        pass
+
+
+
     def build_model_with_preselected_descriptors(self, descriptor_names):
 
         """Trains the RF model on provided data"""
@@ -107,23 +144,40 @@ class Model:
         else:
             self.rfr = RandomForestRegressor(random_state=42, oob_score=True)
             # Basic hyperparameter optimization
+
         kfold_splitter = KFold(n_splits=5, shuffle=True, random_state=42)
         kfold_splitter.get_n_splits(train_features, train_labels)
+
+        self.fix_hyperparameter_grid(descriptor_names, train_labels)
+
+        # print(self.hyper_parameter_grid['max_features'])
+
+
         optimizer = GridSearchCV(self.rfr, self.hyper_parameter_grid, n_jobs=self.n_threads, return_train_score=True,
                                  cv=kfold_splitter, verbose=3)
+
+        # optimizer = GridSearchCV(self.rfr, self.hyper_parameter_grid, n_jobs=self.n_threads,
+        #                          return_train_score=True,verbose=3)
+
         optimizer.fit(train_features, train_labels)
-        self.optimizer = optimizer
+
         # Set hyperparameters
-        self.rfr.set_params(**self.optimizer.best_params_)
+        self.rfr.set_params(**optimizer.best_params_)
+
+        print('best params=',self.rfr.get_params())
+
         # Train the model on training data
         self.rfr.fit(train_features, y=train_labels)
+
 
         print('Score for Training data = ', self.rfr.score(train_features, train_labels))
 
         # Run final cross validation
         cv_score = cross_val_score(self.rfr, train_features, train_labels, cv=kfold_splitter)
-        # This dictionary will contain enough internal validation to write a qmrf
+
+        # This dictionary will contain enough internal validation to write a qmrf:
         self.internal_validation_scores = {'cross_val': cv_score, 'oob_score': self.rfr.oob_score_}
+
         # Save space in database:
         self.df_training = None
         # upload CV stats to the database
@@ -151,9 +205,22 @@ class Model:
         print('Time to train model  = ', t2 - t1, 'seconds')
         print(r"Out-of-Bag estimates: {oob_score}".format(oob_score=round(self.rfr.oob_score_, 2)))
         print(r"CV Scores: {scores}".format(scores=str(cv_score)))
-        self.optimizer = None  # save database space
+
 
         return self
+
+    def fix_hyperparameter_grid(self, descriptor_names, train_labels):
+
+        for max_features in self.hyper_parameter_grid['max_features']:
+            if max_features == 4 or max_features == 8:
+                if max_features > len(descriptor_names):
+                    self.hyper_parameter_grid['max_features'].remove(max_features)
+
+        for n_estimators in self.hyper_parameter_grid['n_estimators']:
+            if n_estimators / len(train_labels) < 0.01:
+                self.hyper_parameter_grid['n_estimators'].remove(n_estimators)
+
+        print(self.hyper_parameter_grid)
 
     def build_model(self):
 
@@ -176,9 +243,10 @@ class Model:
         optimizer = GridSearchCV(self.rfr, self.hyper_parameter_grid, n_jobs=self.n_threads, return_train_score=True,
                                  cv=kfold_splitter, verbose=3)
         optimizer.fit(train_features, train_labels)
-        self.optimizer = optimizer
+
+
         # Set hyperparameters
-        self.rfr.set_params(**self.optimizer.best_params_)
+        self.rfr.set_params(**optimizer.best_params_)
         # Train the model on training data
         self.rfr.fit(train_features, y=train_labels)
         # Run final cross validation

@@ -1,17 +1,18 @@
 from models import df_utilities as dfu
-from models import rf_model as rf
-from models import svm_model as svm
 # from models import dnn_model as dnn
-from models import xgb_model as xgb
-from models import knn_model as knn
+# from models_old import knn_model as knn, svm_model as svm, rf_model as rf, xgb_model as xgb
+from models_old import knn_model as knn, rf_model as rf
+
+from models import ModelBuilder as mb
+
 from models import df_utilities as DFU
 import time as time
 import numpy as np
 import pandas as pd
 from models import GeneticOptimizer as go
 from flask import abort
-import json
 import requests
+
 
 models = {}
 
@@ -35,28 +36,30 @@ def get_model_info(qsar_method):
         return 'python implementation of extreme gradient boosting ' \
                '(https://xgboost.readthedocs.io/en/latest/get_started.html)'
     elif qsar_method == 'knn':
-        return 'sklearn implementation of KNN' \
-               'https://scikit-learn.org/stable/modules/generated/' \
-               'sklearn.neighbors.KNeighborsClassifier.html'
+        return 'sklearn implementation of KNN ' \
+               '(https://scikit-learn.org/stable/modules/generated/' \
+               'sklearn.neighbors.KNeighborsClassifier.html)'
     else:
         return qsar_method + ' not implemented'
 
 
-def call_build_model(qsar_method, training_tsv, remove_log_p, model_id):
+def call_build_model(qsar_method, training_tsv, remove_log_p):
     """Loads TSV training data into a pandas DF and calls the appropriate training method"""
     df_training = dfu.load_df(training_tsv)
 
     qsar_method = qsar_method.lower()
 
+    n_jobs = 30
+
     model = None
     if qsar_method == 'svm':
-        model = svm.Model(df_training, remove_log_p, 30, model_id)
+        model = mb.SVM(df_training, remove_log_p, n_jobs)
     elif qsar_method == 'rf':
-        model = rf.Model(df_training, remove_log_p, 30, model_id)
+        model = mb.RF(df_training, remove_log_p, n_jobs)
     elif qsar_method == 'xgb':
-        model = xgb.Model(df_training, remove_log_p, model_id)
+        model = mb.XGB(df_training, remove_log_p,n_jobs)
     elif qsar_method == 'knn':
-        model = knn.Model(df_training, remove_log_p, model_id)
+        model = mb.KNN(df_training, remove_log_p,n_jobs)
     # elif qsar_method == 'dnn':
     #     model = dnn.Model(df_training, remove_log_p)
     else:
@@ -81,16 +84,27 @@ def call_build_embedding_ga(qsar_method, training_tsv, prediction_tsv, remove_lo
 
     ga_model = None
 
-    if qsar_method == 'rf':
-        ga_model = rf.Model(df_training=df_training, remove_log_p_descriptors=remove_log_p, n_threads=n_threads,
-                            modelid=model_id)
-    elif qsar_method == 'knn':
+    # if qsar_method == 'rf':
+    #     ga_model = rf.Model(df_training=df_training, remove_log_p_descriptors=remove_log_p, n_threads=n_threads,
+    #                         modelid=model_id)
+    # elif qsar_method == 'knn':
+    #     ga_model = knn.Model(df_training=df_training,
+    #                          remove_log_p_descriptors=remove_log_p,
+    #                          modelid=model_id)  # TODO should we add threads to knn?
+    # else:
+    #     # 404 NOT FOUND if requested QSAR method has not been implemented
+    #     abort(404, qsar_method + ' not implemented')
+
+
+    if qsar_method == 'knn':
         ga_model = knn.Model(df_training=df_training,
                              remove_log_p_descriptors=remove_log_p,
                              modelid=model_id)  # TODO should we add threads to knn?
     else:
         # 404 NOT FOUND if requested QSAR method has not been implemented
         abort(404, qsar_method + ' not implemented')
+
+
 
     ga_model.is_binary = DFU.isBinary(df_training)
 
@@ -142,31 +156,57 @@ def api_call_build_embedding_ga(qsar_method, training_tsv, prediction_tsv, remov
     return r.text
 
 
-def call_build_model_with_preselected_descriptors(qsar_method, training_tsv, remove_log_p, descriptor_names_tsv,
-                                                  model_id):
+# def call_build_model_with_preselected_descriptors(qsar_method, training_tsv, remove_log_p, descriptor_names_tsv,
+#                                                   model_id):
+#     """Loads TSV training data into a pandas DF and calls the appropriate training method"""
+#
+#     df_training = dfu.load_df(training_tsv)
+#
+#     qsar_method = qsar_method.lower()
+#
+#     model = None
+#     if qsar_method == 'rf':
+#         model = rf.Model(df_training, remove_log_p, 30, model_id)
+#     elif qsar_method == 'knn':
+#         model = knn.Model(df_training, remove_log_p, model_id)
+#     elif qsar_method == 'xgb':
+#         model = xgb.Model(df_training, remove_log_p, model_id)
+#     elif qsar_method == 'svm':
+#         model = svm.Model(df_training, remove_log_p, 30, model_id)
+#     else:
+#         # 404 NOT FOUND if requested QSAR method has not been implemented
+#         abort(404, qsar_method + ' not implemented with preselected descriptors')
+#
+#     # Returns trained model
+#     model.build_model_with_preselected_descriptors(descriptor_names_tsv)
+#     return model
+
+def call_build_model_with_preselected_descriptors(qsar_method, training_tsv, remove_log_p, descriptor_names_tsv):
     """Loads TSV training data into a pandas DF and calls the appropriate training method"""
 
     df_training = dfu.load_df(training_tsv)
-
     qsar_method = qsar_method.lower()
+    n_jobs = 4
 
-    model = None
-    if qsar_method == 'rf':
-        model = rf.Model(df_training, remove_log_p, 30, model_id)
+    if qsar_method == 'svm':
+        model = mb.SVM(df_training=df_training, remove_log_p_descriptors=remove_log_p, n_jobs=n_jobs)
     elif qsar_method == 'knn':
-        model = knn.Model(df_training, remove_log_p, model_id)
+        model = mb.KNN(df_training=df_training, remove_log_p_descriptors=remove_log_p, n_jobs=n_jobs)
+    elif qsar_method == 'rf':
+        model = mb.RF(df_training=df_training, remove_log_p_descriptors=remove_log_p, n_jobs=n_jobs)
     elif qsar_method == 'xgb':
-        model = xgb.Model(df_training, remove_log_p, model_id)
-    elif qsar_method == 'svm':
-        model = svm.Model(df_training, remove_log_p, 30, model_id)
+        model = mb.XGB(df_training=df_training, remove_log_p_descriptors=remove_log_p, n_jobs=n_jobs)
     else:
         # 404 NOT FOUND if requested QSAR method has not been implemented
-        abort(404, qsar_method + ' not implemented with preselected descriptors')
+        print(qsar_method + ' not implemented with preselected descriptors')
+        return
 
-    # Returns trained model
-    model.build_model_with_preselected_descriptors(descriptor_names_tsv)
+    # if use_grid_search == False:
+    #     model.hyperparameters = None
+
+    model.build_model(descriptor_names=descriptor_names_tsv)
+    # Returns trained model:
     return model
-
 
 def call_do_predictions(prediction_tsv, model):
     """Loads TSV prediction data into a pandas DF, stores IDs and exp vals,
@@ -174,8 +214,10 @@ def call_do_predictions(prediction_tsv, model):
     df_prediction = dfu.load_df(prediction_tsv)
     pred_ids = np.array(df_prediction[df_prediction.columns[0]])
     pred_labels = np.array(df_prediction[df_prediction.columns[1]])
-
     predictions = model.do_predictions(df_prediction)
+
+    # print(predictions)
+    # print(pred_labels)
 
     if predictions is None:
         return None
@@ -188,16 +230,9 @@ def call_do_predictions(prediction_tsv, model):
 
 def get_model_details(qsar_method, model):
     """Returns detailed description of models, with version and parameter info, for each QSAR method"""
-    if qsar_method.lower() == 'rf':
-        return rf.ModelDescription(model).to_json()
-    elif qsar_method.lower() == 'svm':
-        return svm.ModelDescription(model).to_json()
-    # elif qsar_method.lower() == 'dnn':
-    #     return dnn.ModelDescription(model).to_json()
-    elif qsar_method.lower() == 'xgb':
-        return xgb.ModelDescription(model).to_json()
-    elif qsar_method.lower() == 'knn':
-        return knn.ModelDescription(model).to_json()
+    description = model.getModelDescription()
+    if description:
+        return description
     else:
         # 404 NOT FOUND if requested QSAR method has not been implemented
         abort(404, qsar_method + ' not implemented')

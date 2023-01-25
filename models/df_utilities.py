@@ -120,7 +120,7 @@ def prepare_prediction_instances(df, train_column_names):
 
     # df.to_excel("predset.xlsx")
 
-    print('The shape of features is:', df.shape)
+    print('The shape of prediction features is:', df.shape)
 
     # features = np.array(df)
     features = df  # scikit learn converts it to numpy array later anyways
@@ -142,9 +142,9 @@ def filter_columns_in_both_sets(df_training, df_prediction, remove_log_p):
 
     # Deletes columns with null values:
     df_prediction = df_prediction.dropna(axis=1)
-    print('shape1', df_prediction.shape)
+    # print('shape1', df_prediction.shape)
     df_prediction = df_prediction[~df_prediction.isin([np.nan, np.inf, -np.inf]).any(1)]
-    print('shape2', df_prediction.shape)
+    # print('shape2', df_prediction.shape)
 
     # df_prediction = do_remove_non_double_descriptors(df_prediction)
 
@@ -289,16 +289,13 @@ def prepare_instances_with_preselected_descriptors(df, which_set, descriptor_nam
     # Use one liner to drop columns:
     df = df[descriptor_names]
 
-
-
-
     print(which_set + ': The shape of features is:', df.shape)
 
     # Convert to numpy array
     # features = np.array(df)
     features = df  # scikit learn converts it to numpy array later anyways
 
-    features.to_excel("train_set_embedding.xlsx")
+    # features.to_excel("train_set_embedding.xlsx")
 
 
     column_names = list(df.columns)
