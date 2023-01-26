@@ -16,9 +16,10 @@ from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
 from sklearn.svm import SVC, SVR
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
-from sklearn.model_selection import GridSearchCV
+from sklearn.model_selection import GridSearchCV, KFold, cross_val_score
 from sklearn.metrics import balanced_accuracy_score
 import numpy as np
+
 
 from os.path import exists
 import json
@@ -121,8 +122,15 @@ class Model:
 
         print ('hyperparameters',self.hyperparameters)
 
+        #TMM: I didnt add kfold_splitter because it caused error during XGB run
+        # kfold_splitter = KFold(n_splits=5, shuffle=True, random_state=42)
+        # kfold_splitter.get_n_splits(train_features, train_labels)
+        # optimizer = GridSearchCV(self.model_obj, self.hyperparameters, n_jobs=self.n_jobs,
+        #                              scoring=scoring_strategy_defaults(self.is_categorical), cv=kfold_splitter)
+
         optimizer = GridSearchCV(self.model_obj, self.hyperparameters, n_jobs=self.n_jobs,
                                      scoring=scoring_strategy_defaults(self.is_categorical))
+
         optimizer.fit(train_features, train_labels)
 
         self.model_obj.set_params(**optimizer.best_params_)
@@ -132,6 +140,11 @@ class Model:
         self.model_obj.fit(train_features, train_labels)
         training_score = self.model_obj.score(train_features, train_labels)
         self.training_stats['training_score'] = training_score
+
+        # cv_score = cross_val_score(self.model_obj, train_features, train_labels, cv=kfold_splitter)
+        # self.training_stats['cross_val_score'] = list(cv_score)
+        # self.training_stats['oob_score'] = self.model_obj.oob_score_  #only for RF
+        # print(self.training_stats)
 
         # Save space in database:
         self.df_training = None
@@ -193,9 +206,12 @@ class KNN(Model):
         Model.__init__(self, df_training, remove_log_p_descriptors, n_jobs=n_jobs)
 
         self.regressor_name = 'knn'
-        self.version = '1.1'
-        self.hyperparameters = {'estimator__n_neighbors': list(range(3, 11)),
-                                'estimator__weights': ['uniform', 'distance']}
+        self.version = '1.2'
+
+        # self.hyperparameters = {'estimator__n_neighbors': [5],
+        #                         'estimator__weights': ['uniform', 'distance']}
+        self.hyperparameters = {'estimator__n_neighbors': [5],'estimator__weights': ['distance']}  # keep it consistent between endpoints, match OPERA
+
         self.description = 'sklearn implementation of k-nearest neighbors'
         self.description_url = 'https://scikit-learn.org/stable/modules/generated/sklearn.neighbors.KNeighborsClassifier.html'
 
@@ -205,8 +221,9 @@ class XGB(Model):
     def __init__(self, df_training, remove_log_p_descriptors, n_jobs=1):
         Model.__init__(self, df_training, remove_log_p_descriptors, n_jobs=n_jobs)
         self.regressor_name = 'xgb'
-        self.version = '1.1'
-        self.hyperparameters = {'estimator__booster':['gbtree', 'gblinear','dart']}
+        self.version = '1.3'
+        # self.hyperparameters = {'estimator__booster':['gbtree', 'gblinear','dart']}  #other two make it run a lot slower
+        self.hyperparameters = {'estimator__booster': ['gbtree']}
         # print(self.hyperparameters)
 
         self.description = 'python implementation of extreme gradient boosting'
@@ -217,12 +234,18 @@ class SVM(Model):
     def __init__(self, df_training, remove_log_p_descriptors, n_jobs=20):
         Model.__init__(self, df_training, remove_log_p_descriptors, n_jobs=n_jobs)
         self.regressor_name = "svm"
-        self.version = '1.3'
+        self.version = '1.4'
 
-        self.c_space = list([10 ** x for x in range(-3, 3)])
-        self.gamma_space = [np.power(2, i) / 1000.0 for i in range(0, 10, 2)]
-        self.gamma_space.append('scale')
-        self.gamma_space.append('auto')
+
+        # Following grid takes way too long:
+        # self.c_space = list([10 ** x for x in range(-3, 3)])
+        # self.gamma_space = [np.power(2, i) / 1000.0 for i in range(0, 10, 2)]
+        # self.gamma_space.append('scale')
+        # self.gamma_space.append('auto')
+
+        self.c_space = [1, 10, 100]
+        self.gamma_space = ['scale', 'auto']
+
         self.hyperparameters = {"estimator__C": self.c_space, "estimator__gamma": self.gamma_space}
 
         # self.hyperparameters = {"estimator__C": [10 ** n for n in range(-3, 4)],
@@ -239,25 +262,28 @@ class RF(Model):
     def __init__(self, df_training, remove_log_p_descriptors, n_jobs=20):
         Model.__init__(self, df_training, remove_log_p_descriptors, n_jobs=n_jobs)
         self.regressor_name = "rf"
-        self.version = '1.5'
+        self.version = '1.6'
 
+        #simple grid works fine:
         self.hyperparameters = {"estimator__max_features": ["sqrt", "log2"]}
 
+        #following didnt seem to help at all for predicting PFAS properties:
         # self.hyperparameters = {"estimator__max_features": ["sqrt", "log2"],
-        #                         'estimator__n_estimators': [10, 100, 250, 500]}
+        #                         'estimator__n_estimators': [10, 100, 200, 400],
+        #                         'estimator__min_samples_leaf': [1, 2, 4, 8]}
+
 
         # self.hyperparameters = {'estimator__max_features': ['sqrt', 'log2', 4],
-        #                         'estimator__min_impurity_decrease': [10 ** x for x in range(-5, 0)],
+        #                         'estimator__min_impurity_decrease': [10 ** x for x in range(-5, 0)],   append 0!
         #                         'estimator__n_estimators': [10, 100, 250, 500]}
 
-        self.qsar_method = 'Random forest'
         self.description = 'sklearn implementation of random forest'
         self.description_url = 'https://scikit-learn.org/stable/modules/generated/sklearn.ensemble.RandomForestClassifier.html'
 
 
 class ModelDescription:
     def __init__(self, model):
-        """Describes parameters of the specific model as built"""
+        """Describes parameters of the current method"""
 
         self.is_binary = model.is_categorical
         self.remove_log_p_descriptors = model.remove_log_p_descriptors
@@ -265,8 +291,10 @@ class ModelDescription:
         self.qsar_method = model.regressor_name
         self.description = model.description
         self.description_url = model.description_url
+        self.hyperparameter_grid = model.hyperparameters
 
-        self.params = model.params # best params from the hyperparameter gridsearch
+        # self.params = model.params # best params from the hyperparameter gridsearch - dont store here because this is just general method description
+        # self.training_stats = model.training_stats # dont store here because this is just general method description
 
     def to_json(self):
         """Returns description as a JSON"""
