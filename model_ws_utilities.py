@@ -186,7 +186,7 @@ def call_build_model_with_preselected_descriptors(qsar_method, training_tsv, rem
 
     df_training = dfu.load_df(training_tsv)
     qsar_method = qsar_method.lower()
-    n_jobs = 4
+    n_jobs = 30
 
     if qsar_method == 'svm':
         model = mb.SVM(df_training=df_training, remove_log_p_descriptors=remove_log_p, n_jobs=n_jobs)
