@@ -14,7 +14,7 @@ from models.RF import run_rf_todd as run_rf_todd
 
 from models import ModelBuilder as mb
 
-num_jobs = 8
+num_jobs = 4
 
 
 class EmbeddingImporter:
@@ -262,6 +262,9 @@ def a_runCaseStudiesExpPropPFAS_all():
 def run_dataset(datasetName, descriptor_software, ei, f, inputFolder, num_generations, qsar_method, splitting,
                 useEmbeddings, useGridSearch):
 
+
+    # print (splitting)
+
     training_file_name = datasetName + '_' + descriptor_software + '_' + splitting + "_training.tsv"
     prediction_file_name = training_file_name.replace('training.tsv', 'prediction.tsv')
 
@@ -285,6 +288,13 @@ def run_dataset(datasetName, descriptor_software, ei, f, inputFolder, num_genera
             num_generations = 100
         elif 'MP' in datasetName or splitting == 'T=all but PFAS, P=PFAS':
             num_generations = 10
+
+        if splitting == 'RND_REPRESENTATIVE':
+            splitting ='T=all, P=PFAS'
+
+        # print (datasetName, num_generations,splitting)
+
+
         embedding_tsv = ei.get_embedding(dataset_name=datasetName, num_generations=num_generations,
                                          splitting_name=splitting)
     model = call_build_model_with_preselected_descriptors(qsar_method=qsar_method, training_tsv=training_tsv,
@@ -312,14 +322,14 @@ def a_runCaseStudiesExpProp():
 
     inputFolder = '../datasets/'
 
-    useEmbeddings = True
+    useEmbeddings = False
     useGridSearch = True
     num_generations = 100
 
     # qsar_method = 'rf'
     # qsar_method = 'knn'
-    qsar_method = 'xgb'
-    # qsar_method = 'svm'
+    # qsar_method = 'xgb'
+    qsar_method = 'svm'
 
     descriptor_software = 'WebTEST-default'
     splitting = 'RND_REPRESENTATIVE'
@@ -329,13 +339,13 @@ def a_runCaseStudiesExpProp():
     datasetNames.append("WS from exp_prop and chemprop")
     datasetNames.append("VP from exp_prop and chemprop")
     datasetNames.append("LogP from exp_prop and chemprop")
-    datasetNames.append("MP from exp_prop and chemprop")
+    # datasetNames.append("MP from exp_prop and chemprop")
     # datasetNames.append("BP from exp_prop and chemprop")
 
-    if useEmbeddings:
-        ei = EmbeddingImporter('../embeddings/embeddings.xlsx')
 
-    f = open(inputFolder+'results/'+qsar_method+'_T=all, P=all_useEmbeddings='+str(useEmbeddings)+'.txt', "w")
+    ei = EmbeddingImporter('../embeddings/embeddings.xlsx')
+
+    f = open(inputFolder+'results2/'+qsar_method+'_T=all, P=all_useEmbeddings='+str(useEmbeddings)+'.txt', "w")
     f.write('dataset\tR2\tMAE\n')
 
     for datasetName in datasetNames:
@@ -396,10 +406,10 @@ def call_build_model_with_preselected_descriptors(qsar_method, training_tsv, rem
 def assembleResults():
     splittings = ['T=PFAS only, P=PFAS', 'T=all, P=PFAS', 'T=all but PFAS, P=PFAS','T=all, P=all']
     useEmbeddingsArray = [False, True]
-    qsar_method = 'rf'
+    # qsar_method = 'rf'
     # qsar_method = 'knn'
     # qsar_method = 'xgb'
-    # qsar_method = 'svm'
+    qsar_method = 'svm'
     inputFolder = '../datasets/'
 
     import os.path
@@ -425,14 +435,14 @@ def assembleResults():
 
     print(dfnew)
 
-    dfnew.to_csv(inputFolder + 'results/'+qsar_method+'.csv',index=False)
+    dfnew.to_csv(inputFolder + 'results2/'+qsar_method+'.csv',index=False)
 
 
 
 
 if __name__ == "__main__":
-    # assembleResults()
-    a_runCaseStudiesExpPropPFAS()
+    assembleResults()
+    # a_runCaseStudiesExpPropPFAS()
     # a_runCaseStudiesExpPropPFAS_all()
     # a_runCaseStudiesExpProp()
     # compare_spaces()

@@ -21,11 +21,7 @@ import json
 __author__ = "Christian Ramsland"
 
 
-# class to run random forest using files and be able to use multiple processors. When running using webservice, it
-# doesnt seem to let you use multiple threads...
-# if n_jobs>1, get UserWarning: Loky-backed parallel loops cannot be nested below threads, setting n_jobs=1
-# This class will aid in building models for large data sets like logP which requires one to remove logP based
-# descriptors
+#This version doesnt use hyperparameter optimization and thus works for GA searching for embeddings
 
 class Model:
     """Trains and makes predictions with a k nearest neighbors model"""

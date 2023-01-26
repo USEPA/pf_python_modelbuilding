@@ -40,7 +40,7 @@ def model_registry(regressor_name, is_categorical):
                  False: Pipeline([('standardizer', StandardScaler()), ('estimator', RandomForestRegressor())])
                  },
             'svm':
-                {True: Pipeline([('standardizer', StandardScaler()), ('estimator', SVC())]),
+                {True: Pipeline([('standardizer', StandardScaler()), ('estimator', SVC(probability=True))]),
                  False: Pipeline([('standardizer', StandardScaler()), ('estimator', SVR())])
                  },
             'xgb':
@@ -250,7 +250,7 @@ class SVM(Model):
         self.gamma_space = ['scale', 'auto']
         self.hyperparameters = {"estimator__C": self.c_space, "estimator__gamma": self.gamma_space}
 
-        self.description = 'sklearn implementation of SVM using NuSVR for regression' \
+        self.description = 'sklearn implementation of SVM using SVR for regression' \
                            ' or SVC for classification'
         self.description_url = 'https://scikit-learn.org/stable/modules/svm.html'
 
