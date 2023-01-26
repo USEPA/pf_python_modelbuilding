@@ -24,7 +24,7 @@ import numpy as np
 from os.path import exists
 import json
 
-__author__ = "Nathaniel Charest, Todd Martin (get it working with webservice)"
+__author__ = "Nathaniel Charest, Todd Martin (modified to work with webservice, added XGB)"
 
 
 # %%
@@ -222,9 +222,9 @@ class XGB(Model):
         Model.__init__(self, df_training, remove_log_p_descriptors, n_jobs=n_jobs)
         self.regressor_name = 'xgb'
         self.version = '1.3'
+
         # self.hyperparameters = {'estimator__booster':['gbtree', 'gblinear','dart']}  #other two make it run a lot slower
         self.hyperparameters = {'estimator__booster': ['gbtree']}
-        # print(self.hyperparameters)
 
         self.description = 'python implementation of extreme gradient boosting'
         self.description_url = 'https://xgboost.readthedocs.io/en/latest/get_started.html'
@@ -236,22 +236,19 @@ class SVM(Model):
         self.regressor_name = "svm"
         self.version = '1.4'
 
-
         # Following grid takes way too long:
         # self.c_space = list([10 ** x for x in range(-3, 3)])
         # self.gamma_space = [np.power(2, i) / 1000.0 for i in range(0, 10, 2)]
         # self.gamma_space.append('scale')
         # self.gamma_space.append('auto')
 
-        self.c_space = [1, 10, 100]
-        self.gamma_space = ['scale', 'auto']
-
-        self.hyperparameters = {"estimator__C": self.c_space, "estimator__gamma": self.gamma_space}
-
         # self.hyperparameters = {"estimator__C": [10 ** n for n in range(-3, 4)],
         #                         "estimator__kernel": ["linear", "poly", "rbf"],
         #                         "estimator__gamma": [10 ** n for n in range(-3, 4)]}
 
+        self.c_space = [1, 10, 100]
+        self.gamma_space = ['scale', 'auto']
+        self.hyperparameters = {"estimator__C": self.c_space, "estimator__gamma": self.gamma_space}
 
         self.description = 'sklearn implementation of SVM using NuSVR for regression' \
                            ' or SVC for classification'
