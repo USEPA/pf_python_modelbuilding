@@ -67,10 +67,12 @@ def train(qsar_method):
         model = model_ws_utilities.call_build_model(qsar_method, training_tsv, remove_log_p)
     else:
         embedding = []
-        if "," in embedding_tsv:
-            embedding = embedding_tsv.split(",")
-        elif "\t" in embedding_tsv:
+
+        if "\t" in embedding_tsv:
             embedding = embedding_tsv.split("\t")
+        else:
+            abort(400, 'embedding not in tsv format')
+
         model = model_ws_utilities.call_build_model_with_preselected_descriptors(qsar_method, training_tsv, remove_log_p, embedding)
 
     if model is None:
