@@ -34,161 +34,15 @@ class EmbeddingImporter:
         return eval(str(self.embedding_df.loc[self.embedding_df['Property'] == endpoint]['embedding'].iloc[0]))
 
 
-def train_test_ratios(ad):
 
-    try :
-        test_ratio = ad.TestInner.shape[0] / (ad.TestInner.shape[0] + ad.TestOuter.shape[0])
-        train_ratio = ad.TrainInner.shape[0] / (ad.TrainInner.shape[0] + ad.TrainOuter.shape[0])
-        return train_ratio, test_ratio
-    except Exception as e:
-        return -9999,-9999
+def caseStudies():
 
+    testMetric = 'cosine'
+    # testMetric = 'euclidean'
 
-def caseStudyNate():
-    ei = EmbeddingImporter("../embeddings/opera_knn_ga_embeddings.csv")
-    # %%
-    endpointsOPERA = ["Water solubility", "LogKmHL", "LogKoa", "LogKOC", "LogBCF", "Vapor pressure", "Boiling point",
-                      "Melting point", "LogOH", "Henry's law constant"]
-    # endpointsOPERA = ["LogBCF"]
-    endpointsTEST = ['LC50', 'LC50DM', 'IGC50', 'LD50']
-    stats = {}
-    scores = {}
-    # targets = endpointsOPERA + endpointsTEST
-    targets = endpointsOPERA
-    endpoint_data = {}
-    np.random.seed(100)
-    descriptor_software = 'T.E.S.T. 5.1'
+    # descriptor_software = 'WebTEST-default'
     # descriptor_software = 'PaDEL-default'
-    # descriptor_software = 'PaDEL_OPERA'
-    for endpoint in targets:
-        print("Endpoint " + str(endpoint))
-        if endpoint in endpointsOPERA:
-            IDENTIFIER = 'ID'
-            PROPERTY = 'Property'
-            DELIMITER = '\t'
-            directory = "C:/Users/TMARTI02/OneDrive - Environmental Protection Agency (EPA)/0 java/QSAR_Model_Building/data/datasets_benchmark/" + endpoint + ' OPERA/'
-            trainPath = endpoint + ' OPERA ' + descriptor_software + ' training.tsv'
-            testPath = endpoint + ' OPERA ' + descriptor_software + ' prediction.tsv'
-
-        elif endpoint in endpointsTEST:
-            IDENTIFIER = 'CAS'
-            PROPERTY = 'Tox'
-            DELIMITER = ','
-            directory = r"C:\\Users\\NCharest\\OneDrive - Environmental Protection Agency (EPA)\\Profile\\Documents\\OPERA_TEST_DataSetsBenchmark\\DataSetsBenchmarkTEST_Toxicity\\" + endpoint + r"\\" + endpoint
-            trainPath = "_training_set-2d.csv"
-            testPath = "_prediction_set-2d.csv"
-
-        trainPath = directory + trainPath
-        testPath = directory + testPath
-        # %%
-        embedding = ei.get_embedding(endpoint)
-
-        ds_manager = dsm.DataSetManager()
-        ds_manager.importSplitDataset(trainPath, testPath, PROPERTY, identifier=IDENTIFIER, delimiter=DELIMITER)
-        ds_manager.applyEmbedding(embedding)
-        ds_manager.createStratifiedSplit(test_size=0.3, random_state=1991, scaling_type=None)
-        X_train, X_test, Y_train, Y_test = ds_manager.returnActiveData()
-        # %%
-        data_sets = {'Train': (X_train, Y_train), 'Test': (X_test, Y_test)}
-
-        mCreator = ms.ModelMaker()
-        mCreator.init_xgb(scale_method="standardize")
-        mCreator.set_hyperparameters({'estimator__random_state': 20, 'estimator__eta': 0.1})
-        mCreator.train_model(X_train, Y_train)
-
-        trainData, testData = ds_manager.stratDataframeTrain, ds_manager.stratDataframeTest
-
-        # print(trainData)
-
-        # trainData.to_excel("results/trainData1.xlsx",sheet_name='sheet1')
-
-        endpoint_data[endpoint] = {}
-
-        # %%
-
-        # %% TEST AD
-        ad = adm.TESTApplicabilityDomain(trainData, testData)
-        ad.set_parameters({'k': 3, 'exclusionFraction': 0.05, 'similarity': 'cosine'})
-        ad.setEmbedding(embedding)
-        ad.setResponse(PROPERTY)
-        ad.setModel(mCreator.model)
-        ad.predict()
-        output = ad.evaluate()
-        ad.createSets(ad.AD_Label)
-        ad.scoreMetrics()
-        endpoint_data[endpoint]['TEST'] = {'product': ad.cp_product, 'coverage_train': train_test_ratios(ad)[0],
-                                           'coverage_test': train_test_ratios(ad)[1]}
-
-        # %% TEST All Descriptors
-        ad = adm.AllTESTApplicabilityDomain(trainData, testData)
-        ad.set_parameters({'k': 3, 'exclusionFraction': 0.05, 'similarity': 'cosine'})
-        ad.setEmbedding(embedding)
-        ad.setResponse(PROPERTY)
-        ad.setModel(mCreator.model)
-        ad.predict()
-
-        # print (trainData)
-        # trainData.to_excel("results/trainData2.xlsx", sheet_name='sheet1')
-        # print(ds_manager.feature_names)
-
-        output = ad.evaluate(ds_manager.feature_names)
-        ad.createSets(ad.AD_Label)
-        ad.scoreMetrics()
-        endpoint_data[endpoint]['AllTEST'] = {'product': ad.cp_product, 'coverage_train': train_test_ratios(ad)[0],
-                                              'coverage_test': train_test_ratios(ad)[1]}
-        # %% Local Index
-        ad = adm.OPERALocalApplicabilityDomain(trainData, testData)
-        ad.setEmbedding(embedding)
-        ad.setResponse(PROPERTY)
-        ad.setModel(mCreator.model)
-        ad.calculate_local(0.05)
-        ad.set_parameters({'weakLocal': ad.splitting_value})
-        ad.predict()
-        ad.evaluate()
-        ad.createSets(ad.AD_Label)
-        ad.scoreMetrics()
-        endpoint_data[endpoint]['OPERALocal'] = {'product': ad.cp_product, 'coverage_train': train_test_ratios(ad)[0],
-                                                 'coverage_test': train_test_ratios(ad)[1]}
-        # %% Leverage
-        ad = adm.LeverageApplicabilityDomain(trainData, testData)
-        ad.setEmbedding(embedding)
-        ad.setResponse(PROPERTY)
-        ad.setModel(mCreator.model)
-        ad.predict()
-        ad.evaluate()
-        ad.createSets(ad.AD_Label)
-        ad.scoreMetrics()
-        endpoint_data[endpoint]['Leverage'] = {'product': ad.cp_product, 'coverage_train': train_test_ratios(ad)[0],
-                                               'coverage_test': train_test_ratios(ad)[1]}
-        # %% Kernel
-        ad = adm.KernelDensityApplicabilityDomain(trainData, testData)
-        ad.setEmbedding(embedding)
-        ad.setResponse(PROPERTY)
-        ad.setModel(mCreator.model)
-        ad.predict()
-        ad.evaluate()
-        ad.createSets(ad.AD_Label)
-        ad.scoreMetrics()
-        endpoint_data[endpoint]['KernelDensity'] = {'product': ad.cp_product,
-                                                    'coverage_train': train_test_ratios(ad)[0],
-                                                    'coverage_test': train_test_ratios(ad)[1]}
-    # %%
-    results = {}
-    for key in ['TEST', 'AllTEST', 'OPERALocal', 'Leverage', 'KernelDensity']:
-        results[key] = {}
-        for endpoint in targets:
-            results[key][endpoint] = endpoint_data[endpoint][key]
-    # %%
-    for key in results.keys():
-        pd.DataFrame(results[key]).transpose().to_csv("results/ad_table_" + key + ".csv")
-
-
-def caseStudyTodd():
-
-    # descriptor_software = 'T.E.S.T. 5.1'
-    # descriptor_software = 'PaDEL-default'
-    descriptor_software = 'WebTEST-default'
-    # descriptor_software = 'ToxPrints-default'
+    descriptor_software = 'ToxPrints-default'
 
     ei = EmbeddingImporter("../embeddings/"+descriptor_software+"_ga_embeddings.csv")
 
@@ -205,13 +59,9 @@ def caseStudyTodd():
     # endpointsOPERA = ["Octanol water partition coefficient"]
 
     endpointsTEST = ['LC50DM', 'LC50', 'LD50', 'IGC50', 'LLNA', 'Mutagenicity']
-    # testMetric='cosine'
-    testMetric = 'euclidean'
-
     # endpointsTEST = ['LLNA']
 
-    # endpointsTEST = ['LC50DM']
-    # endpointsTEST = ['LC50']
+
 
     stats = {}
     scores = {}
@@ -302,15 +152,14 @@ def caseStudyTodd():
         # endpoint_data[endpoint]['TEST'] = {'product': ad.cp_product, 'coverage_train': train_test_ratios(ad)[0],
         #                                    'coverage_test': train_test_ratios(ad)[1]}
 
-        endpoint_data[endpoint]['TEST'] = {'r2_test': ad.scoreTestInner, 'coverage_test': train_test_ratios(ad)[1],
-                                           'product': ad.cp_product}
+        endpoint_data[endpoint]['TEST'] = ad.getStats()
 
         ###################################################################################################
         # %% TEST All Descriptors
 
         useEmbeddingModel = True
 
-        ad = adm.AllTESTApplicabilityDomain(trainData, testData, is_categorical)
+        ad = adm.TESTApplicabilityDomain(trainData, testData, is_categorical)
         ad.set_parameters({'k': 3, 'exclusionFraction': 0.05, 'similarity': testMetric})
         ad.setResponse(PROPERTY)
 
@@ -325,19 +174,18 @@ def caseStudyTodd():
         # trainData.to_excel("results/trainData2.xlsx", sheet_name='sheet1')
         # print(ds_manager.feature_names)
 
-        output = ad.evaluate(train_column_names)
+        output = ad.evaluate2(train_column_names)
         ad.createSets(ad.AD_Label)
         ad.scoreMetrics()
         # endpoint_data[endpoint]['AllTEST'] = {'product': ad.cp_product, 'coverage_train': train_test_ratios(ad)[0],
         #                                       'coverage_test': train_test_ratios(ad)[1]}
-        endpoint_data[endpoint]['AllTEST_embedding_model'] = {'r2_test': ad.scoreTestInner, 'coverage_test': train_test_ratios(ad)[1],
-                                           'product': ad.cp_product}
+        endpoint_data[endpoint]['AllTEST_embedding_model'] = ad.getStats()
         ###################################################################################################
         # %% TEST All Descriptors
 
         useEmbeddingModel = False
 
-        ad = adm.AllTESTApplicabilityDomain(trainData, testData, is_categorical)
+        ad = adm.TESTApplicabilityDomain(trainData, testData, is_categorical)
         ad.set_parameters({'k': 3, 'exclusionFraction': 0.05, 'similarity': testMetric})
         ad.setResponse(PROPERTY)
 
@@ -352,14 +200,12 @@ def caseStudyTodd():
         # trainData.to_excel("results/trainData2.xlsx", sheet_name='sheet1')
         # print(ds_manager.feature_names)
 
-        output = ad.evaluate(train_column_names)
+        output = ad.evaluate2(train_column_names)
         ad.createSets(ad.AD_Label)
         ad.scoreMetrics()
         # endpoint_data[endpoint]['AllTEST'] = {'product': ad.cp_product, 'coverage_train': train_test_ratios(ad)[0],
         #                                       'coverage_test': train_test_ratios(ad)[1]}
-        endpoint_data[endpoint]['AllTEST_all_descriptors_model'] = {'r2_test': ad.scoreTestInner,
-                                                              'coverage_test': train_test_ratios(ad)[1],
-                                                              'product': ad.cp_product}
+        endpoint_data[endpoint]['AllTEST_all_descriptors_model'] = ad.getStats()
 
         ###################################################################################################
         # %% Local Index
@@ -383,9 +229,10 @@ def caseStudyTodd():
         #                                          'coverage_test': train_test_ratios(ad)[1]}
 
         try:
-            endpoint_data[endpoint]['OPERALocal'] = {'r2_test': ad.scoreTestInner,
-                                                     'coverage_test': train_test_ratios(ad)[1],
-                                                     'product': ad.cp_product}
+            endpoint_data[endpoint]['OPERALocal'] = ad.getStats()
+
+            print ('OPERA results',endpoint_data[endpoint]['OPERALocal'])
+
         except Exception as e:
             print(e)
 
@@ -437,6 +284,8 @@ def caseStudyTodd():
         pd.DataFrame(results[key]).transpose().to_csv("results/ad_table_" + key + ".csv")
 
 
+
+
 if __name__ == "__main__":
     # caseStudyNate()
-    caseStudyTodd()
+    caseStudies()

@@ -83,10 +83,10 @@ def generateADs():
                                                                                 test_tsv=test_tsv,
                                                                                 remove_log_p=remove_log_p,
                                                                                 embedding=embedding,
-                                                                                applicability_domain=adu.strTESTApplicabilityDomainEmbedding)
+                                                                                applicability_domain=adu.strTESTApplicabilityDomainEmbeddingCosine)
 
-        output.to_csv('results/AD_' + endpoint + '_' + adu.strTESTApplicabilityDomainEmbedding + '.csv', index=False)
-        output.to_json('results/AD_' + endpoint + '_' + adu.strTESTApplicabilityDomainEmbedding + '.json',
+        output.to_csv('results/AD_' + endpoint + '_' + adu.strTESTApplicabilityDomainEmbeddingCosine + '.csv', index=False)
+        output.to_json('results/AD_' + endpoint + '_' + adu.strTESTApplicabilityDomainEmbeddingCosine + '.json',
                        orient='records', lines=True)
 
         ###################################################################################################
@@ -185,12 +185,12 @@ def generateADs_via_API_call():
                                                                                          test_tsv=test_tsv,
                                                                                          remove_log_p=remove_log_p,
                                                                                          embedding_tsv=embedding,
-                                                                                         applicability_domain=adu.strTESTApplicabilityDomainEmbedding,
+                                                                                         applicability_domain=adu.strTESTApplicabilityDomainEmbeddingCosine,
                                                                                          urlHost=urlHost)
 
 
         # print(output)
-        text_file = open('results/AD_' + endpoint + '_' + adu.strTESTApplicabilityDomainEmbedding + '_API.json', "w")
+        text_file = open('results/AD_' + endpoint + '_' + adu.strTESTApplicabilityDomainEmbeddingCosine + '_API.json', "w")
         text_file.write(output)
         text_file.close()
 

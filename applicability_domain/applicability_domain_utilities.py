@@ -5,11 +5,13 @@ Created on 1/9/23
 from models import df_utilities as dfu
 from applicability_domain import ApplicabilityDomain as adm
 
-strTESTApplicabilityDomainEmbedding = "TEST Cosine Similarity Embedding Descriptors"
+strTESTApplicabilityDomainEmbeddingCosine = "TEST Cosine Similarity Embedding Descriptors"
+strTESTApplicabilityDomainEmbeddingEuclidean = "TEST Euclidean Distance Embedding Descriptors"
 strTESTApplicabilityDomainAlLDescriptors = "TEST Cosine Similarity All Descriptors"
 strOPERA_local_index = "OPERA Local Index"
 
 import requests
+
 
 def generate_applicability_domain_with_preselected_descriptors(training_tsv, test_tsv, remove_log_p,
                                                                embedding, applicability_domain):
@@ -21,14 +23,18 @@ def generate_applicability_domain_with_preselected_descriptors(training_tsv, tes
     train_ids, train_labels, train_features, train_column_names, is_binary = \
         dfu.prepare_instances(trainData, "training", remove_log_p, removeCorr)
 
-    if applicability_domain == strTESTApplicabilityDomainEmbedding:
+    if applicability_domain == strTESTApplicabilityDomainEmbeddingCosine:
         ad = adm.TESTApplicabilityDomain(trainData, testData, is_binary)
         ad.set_parameters({'k': 3, 'exclusionFraction': 0.05, 'similarity': 'cosine'})
+        output = ad.evaluate2(embedding=embedding)
+    elif applicability_domain == strTESTApplicabilityDomainEmbeddingEuclidean:
+        ad = adm.TESTApplicabilityDomain(trainData, testData, is_binary)
+        ad.set_parameters({'k': 3, 'exclusionFraction': 0.05, 'similarity': 'euclidean'})
         output = ad.evaluate2(embedding=embedding)
     elif applicability_domain == strTESTApplicabilityDomainAlLDescriptors or embedding is None:
         ad = adm.TESTApplicabilityDomain(trainData, testData, is_binary)
         ad.set_parameters({'k': 3, 'exclusionFraction': 0.05, 'similarity': 'cosine',
-                           'train_column_names':train_column_names})
+                           'train_column_names': train_column_names})
         output = ad.evaluate2(embedding=train_column_names)
     elif applicability_domain == strOPERA_local_index:
         ad = adm.OPERALocalApplicabilityDomainRevised(trainData, testData, is_binary)
@@ -38,13 +44,15 @@ def generate_applicability_domain_with_preselected_descriptors(training_tsv, tes
 
     count_inside_AD = output['AD'].value_counts()[True]
     countTest = output.shape[0]
-    coverage = count_inside_AD/countTest
+    coverage = count_inside_AD / countTest
 
     print('\n***', applicability_domain, coverage)
     # print(output)
     return output
 
-def generate_applicability_domain_with_preselected_descriptors_api_call(training_tsv, test_tsv, remove_log_p, embedding_tsv,applicability_domain, urlHost):
+
+def generate_applicability_domain_with_preselected_descriptors_api_call(training_tsv, test_tsv, remove_log_p,
+                                                                        embedding_tsv, applicability_domain, urlHost):
     """
     Test the API call in python
     """
@@ -62,4 +70,3 @@ def generate_applicability_domain_with_preselected_descriptors_api_call(training
     r = requests.post(url=url, data=data, timeout=999999)
     # print(r.text)
     return r.text
-

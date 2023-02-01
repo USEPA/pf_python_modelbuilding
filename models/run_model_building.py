@@ -50,15 +50,13 @@ def caseStudyTEST_RunGA():
 
     # endpointsTEST = ['LC50DM', 'LC50', 'LD50', 'IGC50', 'DevTox', 'LLNA', 'Mutagenicity']
     # endpointsTEST = ['LC50DM', 'LC50', 'LD50', 'IGC50', 'LLNA', 'Mutagenicity']
-    endpointsTEST = ['LLNA']
-    # endpointsTEST = ['Mutagenicity']
+    # endpointsTEST = ['LLNA']
+    endpointsTEST = ['Mutagenicity']
 
     # qsar_method = 'rf'
     qsar_method = 'knn'
     # qsar_method = 'xgb'
     # qsar_method = 'svm'
-
-    useGridSearch = True
 
     # *****************************************************************************************************************
     # descriptor_software = 'T.E.S.T. 5.1'
@@ -97,9 +95,14 @@ def caseStudyTEST_RunGA():
 
 
         model = call_build_model_with_preselected_descriptors(qsar_method=qsar_method,training_tsv=training_tsv,remove_log_p=remove_log_p,
-                                                      descriptor_names_tsv=embedding_tsv,use_grid_search=useGridSearch,model_id=1)
+                                                      descriptor_names_tsv=embedding_tsv,n_jobs=1)
 
         predictions = call_do_predictions(prediction_tsv, model)
+
+        for pred in predictions:
+            print(pred)
+
+        # print(predictions)
 
 
     # f.close()
@@ -108,11 +111,10 @@ def a_runCaseStudiesExpPropPFAS():
     inputFolder = '../datasets/'
 
     useEmbeddings = True
-    useGridSearch = True
     num_generations = 100
 
-    qsar_method = 'rf'
-    # qsar_method = 'knn'
+    # qsar_method = 'rf'
+    qsar_method = 'knn'
     # qsar_method = 'xgb'
     # qsar_method = 'svm'
 
@@ -139,7 +141,7 @@ def a_runCaseStudiesExpPropPFAS():
 
     for datasetName in datasetNames:
         run_dataset(datasetName, descriptor_software, ei, f, inputFolder, num_generations, qsar_method, splitting,
-                    useEmbeddings, useGridSearch)
+                    useEmbeddings)
 
 
     f.close()
@@ -148,7 +150,7 @@ def a_runCaseStudiesExpPropPFAS():
         inputFolder = '../datasets/'
 
         useEmbeddings = True
-        useGridSearch = True
+
         num_generations = 100
         # qsar_method = 'rf'
         qsar_method = 'knn'
@@ -191,7 +193,6 @@ def a_runCaseStudiesExpPropPFAS():
             embedding_tsv=None
 
             if useEmbeddings:
-
                 if splitting == 'T=PFAS only, P=PFAS':
                     num_generations = 100
                 elif 'MP' in datasetName or splitting == 'T=all but PFAS, P=PFAS':
@@ -200,15 +201,12 @@ def a_runCaseStudiesExpPropPFAS():
                 embedding_tsv = ei.get_embedding(dataset_name=datasetName, num_generations=num_generations,
                                                  splitting_name=splitting)
                 print(embedding_tsv)
-                model = mwu.call_build_model_with_preselected_descriptors2(qsar_method=qsar_method,
-                                                                           training_tsv=training_tsv,
-                                                                           remove_log_p=remove_log_p,
-                                                                           descriptor_names_tsv=embedding_tsv,
-                                                                           use_grid_search=useGridSearch)
-            else:
-                model = mwu.call_build_model2(qsar_method=qsar_method, training_tsv=training_tsv,
-                                              remove_log_p=remove_log_p,
-                                              model_id=1, doGridSearch=useGridSearch)
+
+
+            model = call_build_model_with_preselected_descriptors(qsar_method=qsar_method,
+                                                                       training_tsv=training_tsv,
+                                                                       remove_log_p=remove_log_p,
+                                                                       descriptor_names_tsv=embedding_tsv,n_jobs=4)
 
             r2,MAE=call_do_predictions(prediction_tsv, model)
 
@@ -220,7 +218,7 @@ def a_runCaseStudiesExpPropPFAS_all():
     inputFolder = '../datasets/'
 
 
-    useGridSearch = True
+
     num_generations = 100
 
     # qsar_method = 'rf'
@@ -255,12 +253,12 @@ def a_runCaseStudiesExpPropPFAS_all():
 
             for datasetName in datasetNames:
                 run_dataset(datasetName, descriptor_software, ei, f, inputFolder, num_generations, qsar_method, splitting,
-                            useEmbeddings, useGridSearch)
+                            useEmbeddings)
             f.close()
 
 
 def run_dataset(datasetName, descriptor_software, ei, f, inputFolder, num_generations, qsar_method, splitting,
-                useEmbeddings, useGridSearch):
+                useEmbeddings):
 
 
     # print (splitting)
@@ -300,8 +298,11 @@ def run_dataset(datasetName, descriptor_software, ei, f, inputFolder, num_genera
     model = call_build_model_with_preselected_descriptors(qsar_method=qsar_method, training_tsv=training_tsv,
                                                           remove_log_p=remove_log_p,
                                                           descriptor_names_tsv=embedding_tsv,
-                                                          use_grid_search=useGridSearch,n_jobs=num_jobs)
+                                                          n_jobs=num_jobs)
     predictions = call_do_predictions(prediction_tsv, model)
+
+    # print(predictions)
+
     df_prediction = dfu.load_df(prediction_tsv)
     strR2, strMAE = run_rf_todd.calcStats(predictions, df_prediction, None)
     print('*****' + datasetName + '\t' + strR2 + '\t' + strMAE + '\n')
@@ -322,23 +323,23 @@ def a_runCaseStudiesExpProp():
 
     inputFolder = '../datasets/'
 
-    useEmbeddings = False
-    useGridSearch = True
+    useEmbeddings = True
+
     num_generations = 100
 
     # qsar_method = 'rf'
-    # qsar_method = 'knn'
+    qsar_method = 'knn'
     # qsar_method = 'xgb'
-    qsar_method = 'svm'
+    # qsar_method = 'svm'
 
     descriptor_software = 'WebTEST-default'
     splitting = 'RND_REPRESENTATIVE'
 
     datasetNames = []
     datasetNames.append("HLC from exp_prop and chemprop")
-    datasetNames.append("WS from exp_prop and chemprop")
-    datasetNames.append("VP from exp_prop and chemprop")
-    datasetNames.append("LogP from exp_prop and chemprop")
+    # datasetNames.append("WS from exp_prop and chemprop")
+    # datasetNames.append("VP from exp_prop and chemprop")
+    # datasetNames.append("LogP from exp_prop and chemprop")
     # datasetNames.append("MP from exp_prop and chemprop")
     # datasetNames.append("BP from exp_prop and chemprop")
 
@@ -350,7 +351,7 @@ def a_runCaseStudiesExpProp():
 
     for datasetName in datasetNames:
         run_dataset(datasetName, descriptor_software, ei, f, inputFolder, num_generations, qsar_method, splitting,
-                    useEmbeddings, useGridSearch)
+                    useEmbeddings)
 
     f.close()
 
@@ -374,8 +375,7 @@ def compare_spaces():
     print('c_space3',c_space3)
 
 
-def call_build_model_with_preselected_descriptors(qsar_method, training_tsv, remove_log_p, descriptor_names_tsv,
-                                                  use_grid_search,n_jobs):
+def call_build_model_with_preselected_descriptors(qsar_method, training_tsv, remove_log_p, descriptor_names_tsv,n_jobs):
     """Loads TSV training data into a pandas DF and calls the appropriate training method"""
 
     df_training = dfu.load_df(training_tsv)
@@ -397,11 +397,11 @@ def call_build_model_with_preselected_descriptors(qsar_method, training_tsv, rem
 
     # Returns trained model
 
-    if use_grid_search == False:
-        model.hyperparameters = None
 
     model.build_model(descriptor_names=descriptor_names_tsv)
     return model
+
+
 
 def assembleResults():
     splittings = ['T=PFAS only, P=PFAS', 'T=all, P=PFAS', 'T=all but PFAS, P=PFAS','T=all, P=all']
@@ -411,16 +411,20 @@ def assembleResults():
     # qsar_method = 'xgb'
     qsar_method = 'svm'
     inputFolder = '../datasets/'
+    resultsName = 'results'
 
     import os.path
 
     dfnew = pd.DataFrame()
 
+
+
     for useEmbeddings in useEmbeddingsArray:
         for splitting in splittings:
-            filepath=inputFolder + 'results/' + qsar_method + '_' + splitting + '_useEmbeddings='+str(useEmbeddings) + '.txt'
+            filepath=inputFolder + resultsName+'/' + qsar_method + '_' + splitting + '_useEmbeddings='+str(useEmbeddings) + '.txt'
 
             if not os.path.isfile(filepath):
+                print('missing:'+filepath)
                 continue
 
             df = pd.read_csv(filepath, delimiter='\t')
@@ -435,15 +439,15 @@ def assembleResults():
 
     print(dfnew)
 
-    dfnew.to_csv(inputFolder + 'results2/'+qsar_method+'.csv',index=False)
+    dfnew.to_csv(inputFolder + resultsName+'/'+qsar_method+'.csv',index=False)
 
 
 
 
 if __name__ == "__main__":
-    assembleResults()
+    # assembleResults()
     # a_runCaseStudiesExpPropPFAS()
     # a_runCaseStudiesExpPropPFAS_all()
-    # a_runCaseStudiesExpProp()
+    a_runCaseStudiesExpProp()
     # compare_spaces()
     # caseStudyTEST_RunGA()
