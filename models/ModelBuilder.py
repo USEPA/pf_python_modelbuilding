@@ -7,7 +7,7 @@ This is a refactored version of the python model building repo's model object, i
 """
 
 import time
-
+import pandas as pd
 from xgboost import XGBRegressor, XGBClassifier
 
 from models import df_utilities as DFU
@@ -131,7 +131,7 @@ class Model:
         optimizer = GridSearchCV(self.model_obj, self.hyperparameters, n_jobs=self.n_jobs,
                                      scoring=scoring_strategy_defaults(self.is_categorical))
 
-        optimizer.fit(train_features, train_labels)
+        results = optimizer.fit(train_features, train_labels)
 
         self.model_obj.set_params(**optimizer.best_params_)
         self.params = optimizer.best_params_
@@ -140,6 +140,9 @@ class Model:
         self.model_obj.fit(train_features, train_labels)
         training_score = self.model_obj.score(train_features, train_labels)
         self.training_stats['training_score'] = training_score
+
+        # df_results=pd.DataFrame(results.cv_results_)
+        self.training_stats['training_cv_score'] = optimizer.best_score_
 
         # cv_score = cross_val_score(self.model_obj, train_features, train_labels, cv=kfold_splitter)
         # self.training_stats['cross_val_score'] = list(cv_score)
@@ -290,8 +293,8 @@ class ModelDescription:
         self.description_url = model.description_url
         self.hyperparameter_grid = model.hyperparameters
 
-        # self.params = model.params # best params from the hyperparameter gridsearch - dont store here because this is just general method description
-        # self.training_stats = model.training_stats # dont store here because this is just general method description
+        # self.params = model.params # TODO figure out how to store as extra column in models table
+        self.training_stats = model.training_stats
 
     def to_json(self):
         """Returns description as a JSON"""
