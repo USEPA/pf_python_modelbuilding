@@ -43,32 +43,78 @@ def get_model_info(qsar_method):
         return qsar_method + ' not implemented'
 
 
-def call_build_model(qsar_method, training_tsv, remove_log_p):
+def call_build_model_with_preselected_descriptors(qsar_method, training_tsv, remove_log_p, descriptor_names_tsv=None, n_jobs=8):
     """Loads TSV training data into a pandas DF and calls the appropriate training method"""
-    df_training = dfu.load_df(training_tsv)
 
+    df_training = dfu.load_df(training_tsv)
     qsar_method = qsar_method.lower()
 
-    n_jobs = 30
+    model = instantiateModel(df_training, n_jobs, qsar_method, remove_log_p)
 
+    if not model:
+        abort(404, qsar_method + ' not implemented')
+
+    model.build_model(descriptor_names=descriptor_names_tsv)
+    # Returns trained model:
+    return model
+
+
+def call_cross_validate(qsar_method, cv_training_tsv, cv_prediction_tsv, descriptor_names_tsv, remove_log_p=False, params={}, n_jobs=8):
+    """Loads TSV training data into a pandas DF and calls the appropriate training method"""
+    # print(qsar_method, remove_log_p, params, n_jobs, descriptor_names_tsv)
+
+    # print(cv_training_tsv)
+    # print('\n')
+    # print(cv_prediction_tsv)
+
+    df_training = dfu.load_df(cv_training_tsv)
+    qsar_method = qsar_method.lower()
+
+    model = instantiateModel(df_training, n_jobs, qsar_method, remove_log_p)
+
+    if not model:
+        abort(404, qsar_method + ' not implemented')
+
+    # Returns trained model
+    model.build_cv_model(descriptor_names=descriptor_names_tsv, params=params)
+
+    df_prediction = dfu.load_df(cv_prediction_tsv)
+    predictions = model.do_predictions(df_prediction)
+
+    pred_ids = np.array(df_prediction[df_prediction.columns[0]])
+    pred_labels = np.array(df_prediction[df_prediction.columns[1]])
+
+    if predictions is None:
+        return None
+
+    # Pulls together IDs, exp vals, and predictions into JSON format
+    results = pd.DataFrame(np.column_stack([pred_ids, pred_labels, predictions]), columns=['id', 'exp', 'pred'])
+    results_json = results.to_json(orient='records')
+    return results_json
+
+
+def instantiateModel(df_training, n_jobs, qsar_method, remove_log_p):
     model = None
+
     if qsar_method == 'svm':
         model = mb.SVM(df_training, remove_log_p, n_jobs)
     elif qsar_method == 'rf':
         model = mb.RF(df_training, remove_log_p, n_jobs)
     elif qsar_method == 'xgb':
-        model = mb.XGB(df_training, remove_log_p,n_jobs)
+        model = mb.XGB(df_training, remove_log_p, n_jobs)
     elif qsar_method == 'knn':
-        model = mb.KNN(df_training, remove_log_p,n_jobs)
+        model = mb.KNN(df_training, remove_log_p, n_jobs)
     # elif qsar_method == 'dnn':
     #     model = dnn.Model(df_training, remove_log_p)
     else:
+        pass
         # 404 NOT FOUND if requested QSAR method has not been implemented
-        abort(404, qsar_method + ' not implemented')
 
-    # Returns trained model
-    model.build_model()
     return model
+
+
+
+
 
 
 def call_build_embedding_ga(qsar_method, training_tsv, prediction_tsv, remove_log_p, n_threads,
@@ -181,37 +227,13 @@ def api_call_build_embedding_ga(qsar_method, training_tsv, prediction_tsv, remov
 #     model.build_model_with_preselected_descriptors(descriptor_names_tsv)
 #     return model
 
-def call_build_model_with_preselected_descriptors(qsar_method, training_tsv, remove_log_p, descriptor_names_tsv):
-    """Loads TSV training data into a pandas DF and calls the appropriate training method"""
 
-    df_training = dfu.load_df(training_tsv)
-    qsar_method = qsar_method.lower()
-    n_jobs = 30
-
-    if qsar_method == 'svm':
-        model = mb.SVM(df_training=df_training, remove_log_p_descriptors=remove_log_p, n_jobs=n_jobs)
-    elif qsar_method == 'knn':
-        model = mb.KNN(df_training=df_training, remove_log_p_descriptors=remove_log_p, n_jobs=n_jobs)
-    elif qsar_method == 'rf':
-        model = mb.RF(df_training=df_training, remove_log_p_descriptors=remove_log_p, n_jobs=n_jobs)
-    elif qsar_method == 'xgb':
-        model = mb.XGB(df_training=df_training, remove_log_p_descriptors=remove_log_p, n_jobs=n_jobs)
-    else:
-        # 404 NOT FOUND if requested QSAR method has not been implemented
-        print(qsar_method + ' not implemented with preselected descriptors')
-        return
-
-    # if use_grid_search == False:
-    #     model.hyperparameters = None
-
-    model.build_model(descriptor_names=descriptor_names_tsv)
-    # Returns trained model:
-    return model
 
 def call_do_predictions(prediction_tsv, model):
     """Loads TSV prediction data into a pandas DF, stores IDs and exp vals,
     and calls the appropriate prediction method"""
     df_prediction = dfu.load_df(prediction_tsv)
+
     pred_ids = np.array(df_prediction[df_prediction.columns[0]])
     pred_labels = np.array(df_prediction[df_prediction.columns[1]])
     predictions = model.do_predictions(df_prediction)
@@ -223,14 +245,14 @@ def call_do_predictions(prediction_tsv, model):
         return None
 
     # Pulls together IDs, exp vals, and predictions into JSON format
-    results = pd.DataFrame(np.column_stack([pred_ids, pred_labels, predictions]), columns=['ID', 'exp', 'pred'])
+    results = pd.DataFrame(np.column_stack([pred_ids, pred_labels, predictions]), columns=['id', 'exp', 'pred'])
     results_json = results.to_json(orient='records')
     return results_json
 
 
 def get_model_details(qsar_method, model):
     """Returns detailed description of models, with version and parameter info, for each QSAR method"""
-    description = model.getModelDescription()
+    description = model.get_model_description()
     if description:
         return description
     else:

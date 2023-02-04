@@ -38,7 +38,6 @@ def train(qsar_method):
 
     obj = request.form
     training_tsv = obj.get('training_tsv')  # Retrieves the training data as a TSV
-    embedding_tsv = obj.get('embedding_tsv')
 
     if obj.get('save_to_database'):  # Sets boolean remove_log_p from string
         save_to_database = obj.get('save_to_database', '').lower() == 'true'
@@ -47,33 +46,39 @@ def train(qsar_method):
 
     if training_tsv is None:
         training_tsv = request.files.get('training_tsv').read().decode('UTF-8')
-    if embedding_tsv is None:
-        embedding_tsv_obj = request.files.get('embedding_tsv')
-        if embedding_tsv_obj is not None:
-            embedding_tsv = embedding_tsv_obj.read().decode('UTF-8')
+    # Can't train a model without data
+    if training_tsv is None:
+        abort(400, 'missing training tsv')
 
     model_id = obj.get('model_id')  # Retrieves the model number to use for persistent storage
+
     if obj.get('remove_log_p'):  # Sets boolean remove_log_p from string
         remove_log_p = obj.get('remove_log_p', '').lower() == 'true'
     else:
         remove_log_p = False
 
-    # Can't train a model without data
-    if training_tsv is None:
-        abort(400, 'missing training tsv')
-
-    if embedding_tsv is None or len(embedding_tsv) == 0:
-        # Calls the appropriate model training method, throwing 500 SERVER ERROR if it does not give back a good model
-        model = model_ws_utilities.call_build_model(qsar_method, training_tsv, remove_log_p)
+    if obj.get('n_jobs'):
+        n_jobs = int(obj.get('n_jobs'))
     else:
-        embedding = []
+        n_jobs = 8
 
+    embedding_tsv = obj.get('embedding_tsv')
+
+    if embedding_tsv is None:
+        embedding_tsv_obj = request.files.get('embedding_tsv') # try reading from a file
+        if embedding_tsv_obj is not None:
+            embedding_tsv = embedding_tsv_obj.read().decode('UTF-8')
+
+    embedding = None
+
+    if embedding_tsv is not None:
         if "\t" in embedding_tsv:
             embedding = embedding_tsv.split("\t")
         else:
             abort(400, 'embedding not in tsv format')
 
-        model = model_ws_utilities.call_build_model_with_preselected_descriptors(qsar_method, training_tsv, remove_log_p, embedding)
+    model = model_ws_utilities.call_build_model_with_preselected_descriptors(qsar_method, training_tsv, remove_log_p,
+                                                                             embedding, n_jobs=n_jobs)
 
     if model is None:
         abort(500, 'unknown model training error')
@@ -224,8 +229,58 @@ def train_embedding(qsar_method):
     return result_str
 
 
+@app.route('/models/<string:qsar_method>/cross_validate', methods=['POST'])
+def cross_validate_fold(qsar_method):
+    """Trains a model for the specified QSAR method on provided data"""
+    print('run_cross_validate_fold')
 
+    obj = request.form
 
+    training_tsv = obj.get('training_tsv')  # Retrieves the training data as a TSV
+    if training_tsv is None:
+        training_tsv = request.files.get('training_tsv').read().decode('UTF-8')
+    if training_tsv is None:
+        abort(400, 'missing training tsv')
+
+    prediction_tsv = obj.get('prediction_tsv')  # Retrieves the training data as a TSV
+    if prediction_tsv is None:
+        print('prediction_tsv is none!')
+        prediction_tsv = request.files.get('prediction_tsv').read().decode('UTF-8')
+    if prediction_tsv is None:
+        abort(400, 'missing prediction tsv')
+
+    if obj.get('remove_log_p'):  # Sets boolean remove_log_p from string
+        remove_log_p = obj.get('remove_log_p', '').lower() == 'true'
+    else:
+        remove_log_p = False
+
+    if obj.get('num_jobs'):
+        n_jobs = int(obj.get('num_jobs'))
+    else:
+        n_jobs = 8
+
+    embedding_tsv = obj.get('embedding_tsv')
+
+    if embedding_tsv is None:
+        embedding_tsv_obj = request.files.get('embedding_tsv')  # try reading from a file
+        if embedding_tsv_obj is not None:
+            embedding_tsv = embedding_tsv_obj.read().decode('UTF-8')
+
+    embedding = None
+
+    if embedding_tsv is not None:
+        if "\t" in embedding_tsv:
+            embedding = embedding_tsv.split("\t")
+        else:
+            abort(400, 'embedding not in tsv format')
+
+    params = obj.get('params')
+    params = json.loads(params)  # convert to dictionary
+
+    return model_ws_utilities.call_cross_validate(qsar_method=qsar_method,
+                                                  cv_training_tsv=training_tsv, cv_prediction_tsv=prediction_tsv,
+                                                  descriptor_names_tsv=embedding, remove_log_p=remove_log_p,
+                                                  params=params, n_jobs=n_jobs)
 
 #
 # @app.route('/models/<string:qsar_method>/predictsa', methods=['POST'])
