@@ -62,20 +62,11 @@ def train(qsar_method):
     else:
         n_jobs = 8
 
-    embedding_tsv = obj.get('embedding_tsv')
+    embedding = get_embedding(obj)
+    print("embedding = ***\t", embedding, '\t***')
 
-    if embedding_tsv is None:
-        embedding_tsv_obj = request.files.get('embedding_tsv') # try reading from a file
-        if embedding_tsv_obj is not None:
-            embedding_tsv = embedding_tsv_obj.read().decode('UTF-8')
-
-    embedding = None
-
-    if embedding_tsv is not None:
-        if "\t" in embedding_tsv:
-            embedding = embedding_tsv.split("\t")
-        else:
-            abort(400, 'embedding not in tsv format')
+    if embedding and embedding == 'error':
+        abort(400, 'non blank embedding and dont have tab character')
 
     model = model_ws_utilities.call_build_model_with_preselected_descriptors(qsar_method, training_tsv, remove_log_p,
                                                                              embedding, n_jobs=n_jobs)
@@ -107,7 +98,7 @@ def prediction_applicability_domain():
 
     training_tsv = obj.get('training_tsv')  # Retrieves the training data as a TSV
     test_tsv = obj.get('test_tsv')  # Retrieves the training data as a TSV
-    embedding_tsv = obj.get('embedding_tsv')
+
 
     # print(embedding_tsv)
 
@@ -119,10 +110,6 @@ def prediction_applicability_domain():
     if test_tsv is None:
         test_tsv = request.files.get('test_tsv').read().decode('UTF-8')
 
-    if embedding_tsv is None:
-        embedding_tsv_obj = request.files.get('embedding_tsv')
-        if embedding_tsv_obj is not None:
-            embedding_tsv = embedding_tsv_obj.read().decode('UTF-8')
 
 
     if obj.get('remove_log_p'):  # Sets boolean remove_log_p from string
@@ -138,15 +125,15 @@ def prediction_applicability_domain():
     if test_tsv is None:
         abort(400, 'missing test tsv')
 
+    embedding = get_embedding(obj)
 
-    embedding = []
-    if "," in embedding_tsv:
-        embedding = embedding_tsv.split(",")
-    elif "\t" in embedding_tsv:
-        embedding = embedding_tsv.split("\t")
+    print ("embedding = ***\t",embedding,'\t***')
 
 
-    output=adu.generate_applicability_domain_with_preselected_descriptors(training_tsv=training_tsv,
+    if embedding and embedding == 'error':
+        abort(400, 'non blank embedding and dont have tab character')
+
+    output = adu.generate_applicability_domain_with_preselected_descriptors(training_tsv=training_tsv,
                                                                               test_tsv=test_tsv,
                                                                               remove_log_p=remove_log_p,
                                                                               embedding=embedding,
@@ -160,6 +147,32 @@ def prediction_applicability_domain():
     result = output.to_json(orient='records', lines=True)
     # print(result)
     return result
+
+
+def get_embedding(obj):
+
+    embedding_tsv = obj.get('embedding_tsv')
+
+    if embedding_tsv is None:
+        embedding_tsv_obj = request.files.get('embedding_tsv') # try  reading from file
+        if embedding_tsv_obj is not None:
+            embedding_tsv = embedding_tsv_obj.read().decode('UTF-8')
+
+    if embedding_tsv is None:
+        return None
+
+    if len(embedding_tsv) == 0:
+        embedding = None
+    else:
+        embedding = []
+        if "\t" in embedding_tsv:
+            embedding = embedding_tsv.split("\t")
+        else:
+            return 'error'
+
+
+    return embedding
+
 
 @app.route('/models/<string:qsar_method>/embedding', methods=['POST'])
 def train_embedding(qsar_method):
@@ -259,20 +272,13 @@ def cross_validate_fold(qsar_method):
     else:
         n_jobs = 8
 
-    embedding_tsv = obj.get('embedding_tsv')
 
-    if embedding_tsv is None:
-        embedding_tsv_obj = request.files.get('embedding_tsv')  # try reading from a file
-        if embedding_tsv_obj is not None:
-            embedding_tsv = embedding_tsv_obj.read().decode('UTF-8')
+    embedding = get_embedding(obj)
 
-    embedding = None
+    if embedding and embedding == 'error':
+        abort(400, 'non blank embedding and dont have tab character')
 
-    if embedding_tsv is not None:
-        if "\t" in embedding_tsv:
-            embedding = embedding_tsv.split("\t")
-        else:
-            abort(400, 'embedding not in tsv format')
+    print ("embedding = ***\t",embedding,'\t***')
 
     params = obj.get('params')
     params = json.loads(params)  # convert to dictionary

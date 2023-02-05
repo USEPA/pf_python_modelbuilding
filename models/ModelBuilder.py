@@ -105,7 +105,7 @@ class Model:
         self.embedding = descriptor_names
 
         # Call prepare_instances without removing correlated descriptors
-        if self.embedding:
+        if self.embedding is None:
             train_ids, train_labels, train_features, train_column_names, self.is_categorical = \
                 DFU.prepare_instances(self.df_training, "training", self.remove_log_p_descriptors, False)
             # Use columns selected by prepare_instances (in case logp descriptors were removed)
@@ -177,7 +177,7 @@ class Model:
         self.embedding = descriptor_names
 
         # Call prepare_instances without removing correlated descriptors
-        if self.embedding == None:
+        if self.embedding is None:
             train_ids, train_labels, train_features, train_column_names, self.is_categorical = \
                 DFU.prepare_instances(self.df_training, "training", self.remove_log_p_descriptors, False)
             # Use columns selected by prepare_instances (in case logp descriptors were removed)
