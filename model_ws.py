@@ -57,8 +57,8 @@ def train(qsar_method):
     else:
         remove_log_p = False
 
-    if obj.get('n_jobs'):
-        n_jobs = int(obj.get('n_jobs'))
+    if obj.get('num_jobs'):
+        n_jobs = int(obj.get('num_jobs'))
     else:
         n_jobs = 8
 
