@@ -13,7 +13,6 @@ from models import GeneticOptimizer as go
 from flask import abort
 import requests
 
-
 models = {}
 
 
@@ -43,7 +42,8 @@ def get_model_info(qsar_method):
         return qsar_method + ' not implemented'
 
 
-def call_build_model_with_preselected_descriptors(qsar_method, training_tsv, remove_log_p, descriptor_names_tsv=None, n_jobs=8):
+def call_build_model_with_preselected_descriptors(qsar_method, training_tsv, remove_log_p, descriptor_names_tsv=None,
+                                                  n_jobs=8):
     """Loads TSV training data into a pandas DF and calls the appropriate training method"""
 
     df_training = dfu.load_df(training_tsv)
@@ -59,7 +59,8 @@ def call_build_model_with_preselected_descriptors(qsar_method, training_tsv, rem
     return model
 
 
-def call_cross_validate(qsar_method, cv_training_tsv, cv_prediction_tsv, descriptor_names_tsv, remove_log_p=False, params={}, n_jobs=8):
+def call_cross_validate(qsar_method, cv_training_tsv, cv_prediction_tsv, descriptor_names_tsv, remove_log_p=False,
+                        params={}, n_jobs=8):
     """Loads TSV training data into a pandas DF and calls the appropriate training method"""
     # print(qsar_method, remove_log_p, params, n_jobs, descriptor_names_tsv)
 
@@ -94,6 +95,9 @@ def call_cross_validate(qsar_method, cv_training_tsv, cv_prediction_tsv, descrip
 
 
 def instantiateModel(df_training, n_jobs, qsar_method, remove_log_p):
+    print('Instantiating ' + qsar_method.upper() + ' model in model builder, num_jobs=' + str(n_jobs) + ', remove_log_p=' + str(
+        remove_log_p))
+
     model = None
 
     if qsar_method == 'svm':
@@ -111,10 +115,6 @@ def instantiateModel(df_training, n_jobs, qsar_method, remove_log_p):
         # 404 NOT FOUND if requested QSAR method has not been implemented
 
     return model
-
-
-
-
 
 
 def call_build_embedding_ga(qsar_method, training_tsv, prediction_tsv, remove_log_p, n_threads,
@@ -141,7 +141,6 @@ def call_build_embedding_ga(qsar_method, training_tsv, prediction_tsv, remove_lo
     #     # 404 NOT FOUND if requested QSAR method has not been implemented
     #     abort(404, qsar_method + ' not implemented')
 
-
     if qsar_method == 'knn':
         ga_model = knn.Model(df_training=df_training,
                              remove_log_p_descriptors=remove_log_p,
@@ -149,8 +148,6 @@ def call_build_embedding_ga(qsar_method, training_tsv, prediction_tsv, remove_lo
     else:
         # 404 NOT FOUND if requested QSAR method has not been implemented
         abort(404, qsar_method + ' not implemented')
-
-
 
     ga_model.is_binary = DFU.isBinary(df_training)
 
@@ -175,9 +172,8 @@ def call_build_embedding_ga(qsar_method, training_tsv, prediction_tsv, remove_lo
     return descriptor_names, timeMin
 
 
-
-
-def api_call_build_embedding_ga(qsar_method, training_tsv, prediction_tsv, remove_log_p, n_threads, num_generations, num_optimizers,
+def api_call_build_embedding_ga(qsar_method, training_tsv, prediction_tsv, remove_log_p, n_threads, num_generations,
+                                num_optimizers,
                                 num_jobs, descriptor_coefficient, max_length, threshold, urlHost):
     data = {'qsar_method': qsar_method,
             'training_tsv': training_tsv,
@@ -226,7 +222,6 @@ def api_call_build_embedding_ga(qsar_method, training_tsv, prediction_tsv, remov
 #     # Returns trained model
 #     model.build_model_with_preselected_descriptors(descriptor_names_tsv)
 #     return model
-
 
 
 def call_do_predictions(prediction_tsv, model):
