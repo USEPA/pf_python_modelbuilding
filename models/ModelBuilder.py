@@ -18,6 +18,8 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
 from sklearn.model_selection import GridSearchCV, KFold, cross_val_score
 from sklearn.metrics import balanced_accuracy_score
+from sklearn.linear_model import LogisticRegression, LinearRegression
+
 import numpy as np
 
 
@@ -47,8 +49,12 @@ def model_registry(regressor_name, is_categorical):
                 {True: Pipeline([('standardizer', StandardScaler()), ('estimator', XGBClassifier())]),
                  False: Pipeline([('standardizer', StandardScaler()), ('estimator', XGBRegressor())])
                  },
+            'reg':
+                {True: Pipeline([('standardizer', StandardScaler()), ("estimator", LogisticRegression())]),
+                 False: Pipeline([('standardizer', StandardScaler()), ('estimator', LinearRegression())])
+                 }
         }
-
+        print(regressor_name, 'iscategorical?',is_categorical)
         return registry[regressor_name][is_categorical]
     except:
         raise KeyError(
@@ -138,7 +144,7 @@ class Model:
             # Use columns selected by prepare_instances (in case logp descriptors were removed)
             self.embedding = train_column_names
         # Instantiate model from the registry
-        self.model_obj = model_registry(self.regressor_name, self.is_categorical)
+        # self.instantiate_model() # already called in mwsutility instantiatemodel
 
         # Tune hyperparameters
         # TMM: optimizer made local so won't get stored in the database
@@ -394,6 +400,15 @@ class KNN(Model):
         self.description = 'sklearn implementation of k-nearest neighbors'
         self.description_url = 'https://scikit-learn.org/stable/modules/generated/sklearn.neighbors.KNeighborsClassifier.html'
 
+class REG(Model):
+    def __init__(self, df_training, remove_log_p_descriptors, n_jobs=1):
+        Model.__init__(self, df_training, remove_log_p_descriptors, n_jobs=n_jobs)
+        self.regressor_name = 'reg'
+        self.version = '1.0'
+        self.hyperparameter_grid = {}  # keep it consistent between endpoints, match OPERA
+
+        self.description = 'python implementation of regression'
+        self.description_url = 'https://scikit-learn.org/stable/modules/classes.html#module-sklearn.linear_model'
 
 
 class XGB(Model):

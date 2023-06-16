@@ -97,8 +97,13 @@ def call_cross_validate(qsar_method, cv_training_tsv, cv_prediction_tsv, descrip
 
 
 def instantiateModel(df_training, n_jobs, qsar_method, remove_log_p):
+<<<<<<< HEAD
     print('Instantiating ' + qsar_method.upper() + ' model in model builder, num_jobs=' + str(
         n_jobs) + ', remove_log_p=' + str(
+=======
+
+    print('Instantiating ' + qsar_method.upper() + ' model in model builder, num_jobs=' + str(n_jobs) + ', remove_log_p=' + str(
+>>>>>>> origin/main
         remove_log_p))
 
     model = None
@@ -111,12 +116,15 @@ def instantiateModel(df_training, n_jobs, qsar_method, remove_log_p):
         model = mb.XGB(df_training, remove_log_p, n_jobs)
     elif qsar_method == 'knn':
         model = mb.KNN(df_training, remove_log_p, n_jobs)
+    elif qsar_method == 'reg':
+        model = mb.REG(df_training, remove_log_p, n_jobs)
     # elif qsar_method == 'dnn':
     #     model = dnn.Model(df_training, remove_log_p)
     else:
         pass
         # 404 NOT FOUND if requested QSAR method has not been implemented
-
+    model.is_categorical = DFU.isBinary(df_training)
+    model.instantiate_model()
     return model
 
 
@@ -144,15 +152,15 @@ def call_build_embedding_ga(qsar_method, training_tsv, prediction_tsv, remove_lo
     #     # 404 NOT FOUND if requested QSAR method has not been implemented
     #     abort(404, qsar_method + ' not implemented')
 
-    if qsar_method == 'knn':
-        ga_model = knn.Model(df_training=df_training,
-                             remove_log_p_descriptors=remove_log_p,
-                             modelid=model_id)  # TODO should we add threads to knn?
-    else:
-        # 404 NOT FOUND if requested QSAR method has not been implemented
-        abort(404, qsar_method + ' not implemented')
+    ga_model = instantiateModel(df_training, num_jobs, qsar_method, remove_log_p)
+    # if qsar_method == 'knn':
+    #     ga_model = knn.Model(df_training=df_training,
+    #                          remove_log_p_descriptors=remove_log_p,
+    #                          modelid=model_id)  # TODO should we add threads to knn?
+    # else:
+    #     # 404 NOT FOUND if requested QSAR method has not been implemented
+    #     abort(404, qsar_method + ' not implemented')
 
-    ga_model.is_binary = DFU.isBinary(df_training)
 
     go.NUM_GENERATIONS = num_generations
     go.NUM_OPTIMIZERS = num_optimizers
@@ -162,7 +170,7 @@ def call_build_embedding_ga(qsar_method, training_tsv, prediction_tsv, remove_lo
     go.THRESHOLD = threshold
 
     t1 = time.time()
-    descriptor_names = go.runGA(df_training, ga_model.getModel())
+    descriptor_names = go.runGA(df_training, ga_model.model_obj)
     t2 = time.time()
 
     timeMin = (t2 - t1) / 60
