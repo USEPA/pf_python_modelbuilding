@@ -71,17 +71,17 @@ def caseStudyOPERA_RunGA():
     #                   "Vapor pressure", "Water solubility", "Boiling point",
     #                   "Melting point", "Octanol water partition coefficient"]
 
-    # endpointsOPERA = ["LogBCF"]
-    endpointsOPERA = ["Octanol water partition coefficient"]
+    endpointsOPERA = ["LogBCF"]
+    # endpointsOPERA = ["Octanol water partition coefficient"]
     # endpointsOPERA = ["Melting point", "Octanol water partition coefficient"]
     # endpointsOPERA = ["Melting point"]
     # *****************************************************************************************************************
     # descriptor_software = 'T.E.S.T. 5.1'
     # descriptor_software = 'Padelpy webservice single'
-    descriptor_software = 'PaDEL-default'
+    # descriptor_software = 'PaDEL-default'
     # descriptor_software = 'PaDEL_OPERA'
     # descriptor_software = 'ToxPrints-default'
-    # descriptor_software = 'WebTEST-default'
+    descriptor_software = 'WebTEST-default'
     # *****************************************************************************************************************
 
     # output filepath:
@@ -274,11 +274,16 @@ def a_run_endpoint(ENDPOINT, f, remove_log_p, training_tsv_path, prediction_tsv_
     # Build model based on embedded descriptors: TODO use api to run this code
     embed_model = mwu.call_build_model_with_preselected_descriptors(qsar_method, training_tsv, remove_log_p,
                                                                     features, 1)
-    score_embed = embed_model.do_predictions_score(df_prediction)
+    # score_embed = embed_model.do_predictions_score(df_prediction)
+
+    score_embed = embed_model.do_predictions(df_prediction, return_score=True)
+
     # **************************************************************************************
     # Build model based on all descriptors (except correlated and constant ones) as baseline prediction:
-    full_model = mwu.call_build_model(qsar_method, training_tsv, remove_log_p, 1)
-    score = full_model.do_predictions_score(df_prediction)
+    full_model = mwu.call_build_model_with_preselected_descriptors(qsar_method, training_tsv, remove_log_p,
+                                                                   descriptor_names_tsv=None, n_jobs=1)
+    score = full_model.do_predictions(df_prediction, return_score=  True)
+
     print(ENDPOINT + '\t' + str(score) + '\t' + str(score_embed) + '\t' + str(len(features)) + '\t' + str(
         features) + '\t' + str(timeGA) + '\n')
     f.write(ENDPOINT + '\t' + str(score) + '\t' + str(score_embed) + '\t' + str(len(features)) + '\t' + str(
@@ -535,7 +540,7 @@ def bob():
 if __name__ == "__main__":
     # a_runCaseStudiesExpProp()
     # a_runCaseStudiesExpPropPFAS()
-    # caseStudyOPERA_RunGA()
+    caseStudyOPERA_RunGA()
     # caseStudyTEST_RunGA()
     # caseStudyPOD()
     # bob()

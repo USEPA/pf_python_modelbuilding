@@ -133,8 +133,8 @@ def call_build_embedding_ga(qsar_method, training_tsv, prediction_tsv, remove_lo
 
     qsar_method = qsar_method.lower()
 
-    ga_model = None
-
+    # ga_model = None
+    #
     # if qsar_method == 'rf':
     #     ga_model = rf.Model(df_training=df_training, remove_log_p_descriptors=remove_log_p, n_threads=n_threads,
     #                         modelid=model_id)
@@ -147,6 +147,9 @@ def call_build_embedding_ga(qsar_method, training_tsv, prediction_tsv, remove_lo
     #     abort(404, qsar_method + ' not implemented')
 
     ga_model = instantiateModel(df_training, num_jobs, qsar_method, remove_log_p)
+
+    # print('regressor_name',ga_model.regressor_name)
+
     # if qsar_method == 'knn':
     #     ga_model = knn.Model(df_training=df_training,
     #                          remove_log_p_descriptors=remove_log_p,
@@ -164,7 +167,7 @@ def call_build_embedding_ga(qsar_method, training_tsv, prediction_tsv, remove_lo
     go.THRESHOLD = threshold
 
     t1 = time.time()
-    descriptor_names = go.runGA(df_training, ga_model.model_obj)
+    descriptor_names = go.runGA(df_training, ga_model)
     t2 = time.time()
 
     timeMin = (t2 - t1) / 60

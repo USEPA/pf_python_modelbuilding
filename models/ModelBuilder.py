@@ -31,6 +31,8 @@ __author__ = "Nathaniel Charest, Todd Martin (modified to work with webservice, 
 
 # %%
 def model_registry(regressor_name, is_categorical):
+
+
     try:
         registry = {
             'knn':
@@ -54,7 +56,8 @@ def model_registry(regressor_name, is_categorical):
                  False: Pipeline([('standardizer', StandardScaler()), ('estimator', LinearRegression())])
                  }
         }
-        print(regressor_name, 'iscategorical?',is_categorical)
+        # print(regressor_name, 'iscategorical?',is_categorical)
+
         return registry[regressor_name][is_categorical]
     except:
         raise KeyError(

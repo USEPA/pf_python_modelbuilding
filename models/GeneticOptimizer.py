@@ -15,6 +15,9 @@ from scipy.spatial.distance import squareform
 import numpy as np
 import pandas as pd
 from collections import defaultdict
+from models import ModelBuilder
+from models import df_utilities as DFU
+
 
 NUM_GENERATIONS = 100 # kamel used 100
 NUM_OPTIMIZERS = 10 # kamel used 100
@@ -31,75 +34,87 @@ NUM_JOBS = 4  # calculation time is barely reduced by using more than 4 threads
 DESCRIPTOR_COEFFICIENT = 0.002
 
 
-def wardsMethod(df, threshold):
-    ## This method implements Ward's hierarchical clustering on the distance matrix derived from Spearman's correlations between descriptors.
-    ## Inputs: threshold (float) -- this is the cutoff t-value that determines the size and number of colinearity clusters.
-    ########## test (Boolean) -- if True then trains a RF model with default hyperparameters using Ward embedding
-    ## Output: sets self.wardsFeatures -- the list of features that have been identified as non-colinear.
-    ## Source documentation: https://scikit-learn.org/stable/auto_examples/inspection/plot_permutation_importance_multicollinear.html
+# def wardsMethod(df, threshold):
+#     ## This method implements Ward's hierarchical clustering on the distance matrix derived from Spearman's correlations between descriptors.
+#     ## Inputs: threshold (float) -- this is the cutoff t-value that determines the size and number of colinearity clusters.
+#     ########## test (Boolean) -- if True then trains a RF model with default hyperparameters using Ward embedding
+#     ## Output: sets self.wardsFeatures -- the list of features that have been identified as non-colinear.
+#     ## Source documentation: https://scikit-learn.org/stable/auto_examples/inspection/plot_permutation_importance_multicollinear.html
+#
+#     ## We standardize data
+#
+#
+#     ids = np.array(df[df.columns[0]])
+#     col_name_id = df.columns[0]
+#     col_name_property = df.columns[1]
+#
+#     # drop Property column with experimental property we are trying to correlate (# axis 1 refers to the columns):
+#     df = df.drop(col_name_property, axis=1)
+#
+#     # drop ID column:
+#     df = df.drop(col_name_id, axis=1)
+#
+#     # print(df.shape)
+#     # #drop constant columns:
+#     # df = dfu.do_remove_constant_descriptors(df)
+#     # print(df.shape)
+#
+#
+#
+#     feature_names = list(df.columns)
+#
+#     df = df.loc[:, (df != 0).any(axis=0)]
+#
+#     scaler = preprocessing.StandardScaler().fit(df)
+#
+#     ## Compute spearman's r and ensure symmetry of correlation matrix
+#     corr = spearmanr(scaler.transform(df)).correlation
+#     corr = (corr + corr.T) / 2
+#     np.fill_diagonal(corr, 1)
+#     ## Compute distance matrix and form hierarchical clusters
+#     distance_matrix = 1 - np.abs(corr)
+#     dist_linkage = hierarchy.ward(squareform(distance_matrix))
+#     cluster_ids = hierarchy.fcluster(dist_linkage, threshold, criterion="distance")
+#     clusters = cluster_ids
+#     ## Pull out one representative descriptor from each cluster
+#     cluster_id_to_feature_ids = defaultdict(list)
+#     for idx, cluster_id in enumerate(cluster_ids):
+#         cluster_id_to_feature_ids[cluster_id].append(idx)
+#     selected_features = [v[0] for v in cluster_id_to_feature_ids.values()]
+#     named_features = [feature_names[i] for i in selected_features]
+#     ## Set attribute with features that are not colinear
+#     wardsFeatures = [feature_names[i] for i in selected_features]
+#
+#     return wardsFeatures
 
-    ## We standardize data
 
-    
-    ids = np.array(df[df.columns[0]])
-    col_name_id = df.columns[0]
-    col_name_property = df.columns[1]
+def runGA(df_train, model,remove_log_p_descriptors=False):
 
-    # drop Property column with experimental property we are trying to correlate (# axis 1 refers to the columns):
-    df = df.drop(col_name_property, axis=1)
+    train_ids, train_labels, train_features, train_column_names, model.is_categorical = \
+        DFU.prepare_instances_wards(df_train, "training", remove_log_p_descriptors, 0.5) # uses wards method to remove extra descriptors
 
-    # drop ID column:
-    df = df.drop(col_name_id, axis=1)
+    # print(type(model))
 
-    # print(df.shape)
-    # #drop constant columns:
-    # df = dfu.do_remove_constant_descriptors(df)
-    # print(df.shape)
+    model.model_obj = ModelBuilder.model_registry(model.regressor_name, model.is_categorical)
 
 
-    
-    feature_names = list(df.columns)
+    if model.regressor_name == 'rf':
+        model.hyperparameter_grid = {
+            "estimator__max_features": ["sqrt"]}  # just use a single set of hyperparameters to speed up
 
-    df = df.loc[:, (df != 0).any(axis=0)]
-
-    scaler = preprocessing.StandardScaler().fit(df)
-    
-    ## Compute spearman's r and ensure symmetry of correlation matrix
-    corr = spearmanr(scaler.transform(df)).correlation
-    corr = (corr + corr.T) / 2
-    np.fill_diagonal(corr, 1)
-    ## Compute distance matrix and form hierarchical clusters
-    distance_matrix = 1 - np.abs(corr)
-    dist_linkage = hierarchy.ward(squareform(distance_matrix))
-    cluster_ids = hierarchy.fcluster(dist_linkage, threshold, criterion="distance")
-    clusters = cluster_ids
-    ## Pull out one representative descriptor from each cluster
-    cluster_id_to_feature_ids = defaultdict(list)
-    for idx, cluster_id in enumerate(cluster_ids):
-        cluster_id_to_feature_ids[cluster_id].append(idx)
-    selected_features = [v[0] for v in cluster_id_to_feature_ids.values()]
-    named_features = [feature_names[i] for i in selected_features]
-    ## Set attribute with features that are not colinear
-    wardsFeatures = [feature_names[i] for i in selected_features]
-
-    return wardsFeatures
+    model.hyperparameters = model.get_single_parameters()
+    model.model_obj.set_params(**model.hyperparameters)
 
 
-def runGA(df_train, model):
-
-    features = wardsMethod(df_train, 0.5)
-    y_internal = df_train.iloc[:,1]
-
+    # features = wardsMethod(df_train, 0.5)
+    # y_internal = df_train.iloc[:,1]
     # print(y_internal)
 
-    # print(NUM_GENERATIONS)
+    y_internal = train_labels
+    x_internal = train_features
+    descriptor_pool = train_column_names
 
-    # TODO use DFU.prepareInstances instead of IDENTIFIER and PROPERTY
-
-    descriptor_pool = features
-    x_internal = df_train[descriptor_pool]
-
-    fitness_calculator = FiveFoldFitness(X_train=x_internal, y_train=y_internal, model=model)
+    fitness_calculator = FiveFoldFitness(X_train=x_internal, y_train=y_internal, model=model.model_obj)
     go = GeneticOptimizer(descriptor_pool, fitness_calculator)
 
     ensemble_selector = GeneticSelector(descriptor_pool, fitness_calculator)
