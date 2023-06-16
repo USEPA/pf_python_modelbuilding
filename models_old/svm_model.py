@@ -37,6 +37,8 @@ class Model:
     def __init__(self, df_training, remove_log_p_descriptors, n_threads, modelid):
         """Initializes the SVM model with optimal parameters and provided data in pandas dataframe"""
         # Model description
+        self.modelid = modelid
+
         self.is_binary = None  # Set automatically when training data is processed
         self.descriptor_names = None
         self.remove_log_p_descriptors = remove_log_p_descriptors
@@ -56,19 +58,32 @@ class Model:
         self.n_feats = 0.95
 
         # Ranges for cross-validation
-        self.c_space = np.logspace(-1, 1, 50)
-        self.gamma_space = [np.power(2, i) / 1000.0 for i in range(0, 10, 2)]  # [0.01]
-        self.nu_space = [i / 100.0 for i in range(5, 100, 15)]  # nu-svr error params (0,1]
+        self.c_space = list([10 ** x for x in range(-3, 4)])
+        # self.c_space = np.logspace(-1, 1, 10)
+        print('c_space', self.c_space)
+
+
+        # print(self.c_space)
+        self.gamma_space = [np.power(2, i) / 1000.0 for i in range(0, 10, 2)]
+        self.gamma_space.append('scale')
+        self.gamma_space.append('auto')
+
+        self.hyper_parameter_grid = {"estimator__C": self.c_space, "estimator__gamma": self.gamma_space}
+
+        # self.gamma_space = ['scale','auto']
+        print('gamma_space',self.gamma_space)
+
+        # self.nu_space = [i / 100.0 for i in range(5, 100, 15)]  # nu-svr error params (0,1]
         self.kernel = "rbf"
 
         # To store transformations of whole data set
-        self.scaler_fit = None
+        # self.scaler_fit = None
 
         # To store transformations of data set by fold
-        self.pca_fit_by_fold = []
-        self.covar_x_inv_by_fold = []
-        self.training_data_by_fold = []
-        self.test_data_by_fold = []
+        # self.pca_fit_by_fold = []
+        # self.covar_x_inv_by_fold = []
+        # self.training_data_by_fold = []
+        # self.test_data_by_fold = []
 
         # To store generated model
         self.model = None
@@ -76,7 +91,7 @@ class Model:
 
     def getModel(self):
 
-        if self.is_binary == True:
+        if self.is_binary:
             self.model = Pipeline([('scaler', StandardScaler()), ('estimator', SVC())])
         else:
             self.model = Pipeline([('scaler', StandardScaler()), ('estimator', SVR())])
@@ -86,6 +101,15 @@ class Model:
     def getModel2(self):
         return  self.model
 
+
+    # def getModelNoGridSearch(self):
+    #
+    #     if self.is_binary:
+    #         self.model = SVC()
+    #     else:
+    #         self.model = SVR()
+    #
+    #     return self.model
 
 
     def build_model(self):
@@ -100,13 +124,15 @@ class Model:
 
         self.getModel()
 
-        optimizer = GridSearchCV(self.model, {'estimator__C': list([10 ** x for x in range(-3, 4)]),
-                                              'estimator__gamma': list([10 ** x for x in range(-3, 4)])},
-                                 n_jobs=self.n_threads)
+        optimizer = GridSearchCV(self.model, self.hyper_parameter_grid,n_jobs=self.n_threads)
 
         optimizer.fit(train_features, train_labels)
         best_params = optimizer.best_params_
         self.model.set_params(**best_params)
+
+        optimizer = None
+
+
         self.model.fit(train_features, train_labels)
         score = self.model.score(train_features, train_labels)
         print('Score for Training data = ', score)
@@ -132,12 +158,39 @@ class Model:
         else:
             self.model = Pipeline([('scaler', StandardScaler()), ('estimator', SVR())])
 
-        optimizer = GridSearchCV(self.model,
-                                 {'estimator__C': np.arange(-3, 4, 0.5), 'estimator__gamma': self.gamma_space})
+
+        optimizer = GridSearchCV(self.model, self.hyper_parameter_grid,
+                                 n_jobs=self.n_threads)
         optimizer.fit(train_features, train_labels)
 
         self.best_params = optimizer.best_params_
         self.model.set_params(**self.best_params)
+
+        print('best params=',self.best_params)
+
+        optimizer=None
+
+
+        self.model.fit(train_features, train_labels)
+        score = self.model.score(train_features, train_labels)
+        print('Score for Training data = ', score)
+        self.df_training = None  # Delete training data to save space in database
+        t2 = time.time()
+        self.training_time = t2 - t1
+        print('Time to train model  = ', t2 - t1, 'seconds')
+
+    def build_model_with_preselected_descriptors_no_grid_search(self, descriptor_names):
+        """Trains the RF model on provided data"""
+        t1 = time.time()
+
+        # Call prepare_instances without removing correlated descriptors
+        train_ids, train_labels, train_features, train_column_names, self.is_binary = \
+            DFU.prepare_instances_with_preselected_descriptors(self.df_training, "training", descriptor_names)
+        # Use columns selected by prepare_instances (in case logp descriptors were removed)
+        self.descriptor_names = train_column_names
+
+        self.getModel()
+
         self.model.fit(train_features, train_labels)
         score = self.model.score(train_features, train_labels)
         print('Score for Training data = ', score)

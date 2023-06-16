@@ -7,7 +7,7 @@ Created on Tue Jul  5 07:18:59 2022
 #%%
 import numpy as np
 from sklearn.model_selection import cross_val_score
-
+from models import df_utilities as dfu
 from sklearn import preprocessing
 from scipy.stats import spearmanr, pearsonr
 from scipy.cluster import hierarchy
@@ -50,6 +50,13 @@ def wardsMethod(df, threshold):
 
     # drop ID column:
     df = df.drop(col_name_id, axis=1)
+
+    # print(df.shape)
+    # #drop constant columns:
+    # df = dfu.do_remove_constant_descriptors(df)
+    # print(df.shape)
+
+
     
     feature_names = list(df.columns)
 

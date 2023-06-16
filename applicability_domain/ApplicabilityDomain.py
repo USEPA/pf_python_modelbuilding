@@ -16,6 +16,7 @@ from sklearn.neighbors import KernelDensity
 from sklearn.metrics import balanced_accuracy_score
 import pandas as pd
 
+
 class helpers:
 
     @staticmethod
@@ -46,6 +47,30 @@ class ApplicabilityDomainStrategy:
     def setResponse(self, response):
         self.response = response
 
+    def train_test_ratios(self):
+        """
+        Used to calculate coverage
+        :return:
+        """
+        try:
+            test_ratio = self.TestInner.shape[0] / (self.TestInner.shape[0] + self.TestOuter.shape[0])
+            train_ratio = self.TrainInner.shape[0] / (self.TrainInner.shape[0] + self.TrainOuter.shape[0])
+            return train_ratio, test_ratio
+        except Exception as e:
+            return -9999, -9999
+
+    def getStats(self):
+        """
+        Results for a calculation run
+        :return: Results dictionary
+        """
+        # results = {'r2_test_inner': self.scoreTestInner, 'coverage_test': self.train_test_ratios()[1],
+        #            'product': self.cp_product}
+
+        results = {'r2_test_inner': self.scoreTestInner, 'r2_test_outer': self.scoreTestOuter}
+
+        return results
+
     def computeSpreadOfResiduals(self):
         stdTrainInner = np.std(self.TrainInner['ResidualSquared'])
         stdTrainOuter = np.std(self.TrainOuter['ResidualSquared'])
@@ -58,22 +83,37 @@ class ApplicabilityDomainStrategy:
 
         try:
 
-            if self.is_categorical == False:
+            self.scoreTestOuter = 'NA'
+
+            # if len(self.TrainInner[self.response])<2 and len(self.TrainInner['Prediction']):
+            #     print('cant calculate inner outer stats')
+            #     return
+
+            if not self.is_categorical:
+
                 self.scoreTrainInner = pearsonr(self.TrainInner[self.response], self.TrainInner['Prediction'])[0] ** 2
                 self.scoreTrainOuter = pearsonr(self.TrainOuter[self.response], self.TrainOuter['Prediction'])[0] ** 2
+
                 self.scoreTestInner = pearsonr(self.TestInner[self.response], self.TestInner['Prediction'])[0] ** 2
                 self.scoreTestOuter = pearsonr(self.TestOuter[self.response], self.TestOuter['Prediction'])[0] ** 2
+
                 self.TrainInnerOuter = self.scoreTrainInner / self.scoreTrainOuter
                 self.TestInnerOuter = self.scoreTestInner / self.scoreTestOuter
-            elif self.is_categorical == True:
+
+            elif self.is_categorical:
+
+                print('here its categorical')
+
                 self.scoreTrainInner = balanced_accuracy_score(self.TrainInner[self.response],
-                                                               self.TrainInner['Prediction'])
+                                                               round(self.TrainInner['Prediction']))
                 self.scoreTrainOuter = balanced_accuracy_score(self.TrainOuter[self.response],
-                                                               self.TrainOuter['Prediction'])
+                                                               round(self.TrainOuter['Prediction']))
+
                 self.scoreTestInner = balanced_accuracy_score(self.TestInner[self.response],
-                                                              self.TestInner['Prediction'])
+                                                              round(self.TestInner['Prediction']))
                 self.scoreTestOuter = balanced_accuracy_score(self.TestOuter[self.response],
-                                                              self.TestOuter['Prediction'])
+                                                              round(self.TestOuter['Prediction']))
+
                 self.TrainInnerOuter = self.scoreTrainInner / self.scoreTrainOuter
                 self.TestInnerOuter = self.scoreTestInner / self.scoreTestOuter
             else:
@@ -82,14 +122,70 @@ class ApplicabilityDomainStrategy:
             print(e)
 
     def computeCoveragePerformanceProduct(self):
-        coverage = self.TestInner.shape[0] / (self.TestOuter.shape[0] + self.TestInner.shape[0])
-        self.coverage = coverage
-        if self.is_categorical == False:
-            self.scoreTestInner = pearsonr(self.TestInner[self.response], self.TestInner['Prediction'])[0] ** 2
-        elif self.is_categorical == True:
-            self.scoreTestInner = balanced_accuracy_score(self.TestInner[self.response], self.TestInner['Prediction'])
 
-        self.cp_product = coverage * self.scoreTestInner
+        try:
+            coverage = self.TestInner.shape[0] / (self.TestOuter.shape[0] + self.TestInner.shape[0])
+
+            self.coverage = coverage
+
+            print('coverage', coverage)
+
+            # print("Yexp", self.TestInner[self.response])
+            # print("Ypred", self.TestInner['Prediction'])
+
+            if self.is_categorical == False:
+                self.scoreTestInner = pearsonr(self.TestInner[self.response], self.TestInner['Prediction'])[0] ** 2
+            elif self.is_categorical == True:
+
+                Ypred = [round(x) for x in self.TestInner['Prediction']]
+                # print('Ypredint',Ypred)
+                self.scoreTestInner = balanced_accuracy_score(self.TestInner[self.response], Ypred)
+
+                # self.scoreTestInner = self.calcBA(self.TestInner[self.response], self.TestInner['Prediction'])
+
+            self.cp_product = coverage * self.scoreTestInner
+
+            print('self.scoreTestInner', self.scoreTestInner)
+            print('self.cp_product', self.cp_product)
+
+        except Exception as e:
+            print('***error=', e)
+
+    def calcBA(self, Yexp, Ypred):
+        # print ('enter calcBA')
+        cutOff = 0.5
+
+        countPositive = 0
+        countNegative = 0
+        countTruePositive = 0
+        countTrueNegative = 0
+
+        for index, exp in enumerate(Yexp):
+            pred = Ypred[index]
+
+            if pred >= cutOff:
+                predBinary = 1.0
+            else:
+                predBinary = 0.0
+
+            print(index, exp, pred, predBinary)
+
+            if exp == 1.0:
+                countPositive += 1
+                if predBinary == 1:
+                    countTruePositive += 1
+
+            elif exp == 0.0:
+                countNegative += 1
+                if predBinary == 0:
+                    countTrueNegative += 1
+
+        sensitivity = countTruePositive / countPositive
+        specificity = countTrueNegative / countNegative
+        balancedAccuracy = (sensitivity + specificity) / 2.0
+
+        print('BA', balancedAccuracy)
+        return balancedAccuracy
 
     def scoreMetrics(self):
         # self.predict()
@@ -98,9 +194,17 @@ class ApplicabilityDomainStrategy:
         self.computeCoveragePerformanceProduct()
 
     def predict(self, model_features):
+        print('enter predict in AD class')
 
-        train_preds = self.model.predict(self.TrainSet[model_features])
-        test_preds = self.model.predict(self.TestSet[model_features])
+        # train_preds = self.model.predict(self.TrainSet[model_features])
+        # test_preds = self.model.predict(self.TestSet[model_features])
+
+        train_preds = self.model.do_predictions(self.TrainSet)
+        test_preds = self.model.do_predictions(self.TestSet)
+
+        # print(test_preds)
+
+        # print('test_preds',test_preds)
 
         self.TrainSet['Prediction'] = train_preds
         self.TestSet['Prediction'] = test_preds
@@ -167,16 +271,22 @@ class TESTApplicabilityDomain(ApplicabilityDomainStrategy):
         self.TrainSet['TESTSimilarity'] = train_TESTSimilarity
         self.TestSet['TESTSimilarity'] = test_TESTSimilarity
         ###
-        train_TESTSimilarity.sort(key=lambda x: x)
+
+
+        # Need to sort in descending order because sklearn similarities are actually distances (1- SC)
+        train_TESTSimilarity.sort(key=lambda x: x, reverse=True)
+
         splitIndex = int(len(train_TESTSimilarity) * self.parameters['exclusionFraction'])
         splitSimilarity = train_TESTSimilarity[splitIndex]
         self.splitSimilarity = splitSimilarity
         ###
+
+        # Sklearn similarities are actually distances (1-SC), so if distance > cutoff it's outside AD:
         self.TrainSet[self.AD_Label] = True
-        self.TrainSet.loc[self.TrainSet['TESTSimilarity'] <= splitSimilarity, self.AD_Label] = False
+        self.TrainSet.loc[self.TrainSet['TESTSimilarity'] > splitSimilarity, self.AD_Label] = False
 
         self.TestSet[self.AD_Label] = True
-        self.TestSet.loc[self.TestSet['TESTSimilarity'] <= splitSimilarity, self.AD_Label] = False
+        self.TestSet.loc[self.TestSet['TESTSimilarity'] > splitSimilarity, self.AD_Label] = False
 
         # print(self.TestSet[self.AD_Label])  # array of whether or not it's in AD
 
@@ -187,11 +297,14 @@ class TESTApplicabilityDomain(ApplicabilityDomainStrategy):
         :return: returns results in dataframe with the cids of the neighbors and the applicability domain result
         """
         # print(embedding)
-        t1=time.time()
+        t1 = time.time()
 
         ###
-        self.nbrs = NearestNeighbors(n_neighbors=self.parameters['k']+1, algorithm='brute',
+        self.nbrs = NearestNeighbors(n_neighbors=self.parameters['k'] + 1, algorithm='brute',
                                      metric=self.parameters['similarity'])
+
+        print('metric', self.parameters['similarity'])
+
         nbrs = self.nbrs
         TrainSet = self.TrainSet[embedding]
         TestSet = self.TestSet[embedding]
@@ -235,16 +348,26 @@ class TESTApplicabilityDomain(ApplicabilityDomainStrategy):
         self.TrainSet['TESTSimilarity'] = train_TESTSimilarity
         self.TestSet['TESTSimilarity'] = test_TESTSimilarity
         ###
-        train_TESTSimilarity.sort(key=lambda x: x)
+
+        # Need to sort in descending order because sklearn similarities are actually distances (1- SC)
+        train_TESTSimilarity.sort(key=lambda x: x, reverse=True)
+
+        # print(train_TESTSimilarity)
+
         splitIndex = int(len(train_TESTSimilarity) * self.parameters['exclusionFraction'])
+
         splitSimilarity = train_TESTSimilarity[splitIndex]
+
+        print('splitSimilarity', splitSimilarity)
+
         self.splitSimilarity = splitSimilarity
         ###
         self.TrainSet[self.AD_Label] = True
-        self.TrainSet.loc[self.TrainSet['TESTSimilarity'] <= splitSimilarity, self.AD_Label] = False
-
         self.TestSet[self.AD_Label] = True
-        self.TestSet.loc[self.TestSet['TESTSimilarity'] <= splitSimilarity, self.AD_Label] = False
+
+        # Sklearn similarities are actually distances (1-SC), so if distance > cutoff it's outside AD:
+        self.TrainSet.loc[self.TrainSet['TESTSimilarity'] > splitSimilarity, self.AD_Label] = False
+        self.TestSet.loc[self.TestSet['TESTSimilarity'] > splitSimilarity, self.AD_Label] = False
 
         # print(self.TestSet[self.AD_Label])  # array of whether or not it's in AD
 
@@ -261,48 +384,48 @@ class TESTApplicabilityDomain(ApplicabilityDomainStrategy):
 
 
 # %%
-class AllTESTApplicabilityDomain(ApplicabilityDomainStrategy):
-    def __init__(self, TrainSet, TestSet, is_categorical):
-        ApplicabilityDomainStrategy.__init__(self, TrainSet, TestSet, is_categorical)
-        self.is_categorical = is_categorical
-        self.parameters = {'k': 3, 'exclusionFraction': 0.05, 'similarity': 'cosine'}
-        self.AD_Label = 'WITHIN_TEST_AD'
-
-    def set_parameters(self, parameters):
-        self.parameters = parameters
-
-    def evaluate(self, alternate_embedding):
-        ###
-        self.nbrs = NearestNeighbors(n_neighbors=self.parameters['k'] + 1, algorithm='brute',
-                                     metric=self.parameters['similarity'])
-        nbrs = self.nbrs
-        TrainSet = self.TrainSet[alternate_embedding]
-        TestSet = self.TestSet[alternate_embedding]
-        ###
-        scaler = StandardScaler().fit(TrainSet)
-        train_x, test_x = scaler.transform(TrainSet), scaler.transform(TestSet)
-        ###
-        nbrs.fit(train_x)
-        train_neighbors, test_neighbors = nbrs.kneighbors(train_x), nbrs.kneighbors(test_x)
-        ###
-        train_distances, test_distances = train_neighbors[0][:, 1:], test_neighbors[0][:, :-1]
-        ###
-        train_TESTSimilarity, test_TESTSimilarity = list(np.mean(train_distances, axis=1)), list(
-            np.mean(test_distances, axis=1))
-        ###
-        self.TrainSet['TESTSimilarity'] = train_TESTSimilarity
-        self.TestSet['TESTSimilarity'] = test_TESTSimilarity
-        ###
-        train_TESTSimilarity.sort(key=lambda x: x)
-        splitIndex = int(len(train_TESTSimilarity) * self.parameters['exclusionFraction'])
-        splitSimilarity = train_TESTSimilarity[splitIndex]
-        self.splitSimilarity = splitSimilarity
-        ###
-        self.TrainSet[self.AD_Label] = True
-        self.TrainSet.loc[self.TrainSet['TESTSimilarity'] <= splitSimilarity, self.AD_Label] = False
-
-        self.TestSet[self.AD_Label] = True
-        self.TestSet.loc[self.TestSet['TESTSimilarity'] <= splitSimilarity, self.AD_Label] = False
+# class AllTESTApplicabilityDomain(ApplicabilityDomainStrategy):
+#     def __init__(self, TrainSet, TestSet, is_categorical):
+#         ApplicabilityDomainStrategy.__init__(self, TrainSet, TestSet, is_categorical)
+#         self.is_categorical = is_categorical
+#         self.parameters = {'k': 3, 'exclusionFraction': 0.05, 'similarity': 'cosine'}
+#         self.AD_Label = 'WITHIN_TEST_AD'
+#
+#     def set_parameters(self, parameters):
+#         self.parameters = parameters
+#
+#     def evaluate(self, alternate_embedding):
+#         ###
+#         self.nbrs = NearestNeighbors(n_neighbors=self.parameters['k'] + 1, algorithm='brute',
+#                                      metric=self.parameters['similarity'])
+#         nbrs = self.nbrs
+#         TrainSet = self.TrainSet[alternate_embedding]
+#         TestSet = self.TestSet[alternate_embedding]
+#         ###
+#         scaler = StandardScaler().fit(TrainSet)
+#         train_x, test_x = scaler.transform(TrainSet), scaler.transform(TestSet)
+#         ###
+#         nbrs.fit(train_x)
+#         train_neighbors, test_neighbors = nbrs.kneighbors(train_x), nbrs.kneighbors(test_x)
+#         ###
+#         train_distances, test_distances = train_neighbors[0][:, 1:], test_neighbors[0][:, :-1]
+#         ###
+#         train_TESTSimilarity, test_TESTSimilarity = list(np.mean(train_distances, axis=1)), list(
+#             np.mean(test_distances, axis=1))
+#         ###
+#         self.TrainSet['TESTSimilarity'] = train_TESTSimilarity
+#         self.TestSet['TESTSimilarity'] = test_TESTSimilarity
+#         ###
+#         train_TESTSimilarity.sort(key=lambda x: x)
+#         splitIndex = int(len(train_TESTSimilarity) * self.parameters['exclusionFraction'])
+#         splitSimilarity = train_TESTSimilarity[splitIndex]
+#         self.splitSimilarity = splitSimilarity
+#         ###
+#         self.TrainSet[self.AD_Label] = True
+#         self.TrainSet.loc[self.TrainSet['TESTSimilarity'] <= splitSimilarity, self.AD_Label] = False
+#
+#         self.TestSet[self.AD_Label] = True
+#         self.TestSet.loc[self.TestSet['TESTSimilarity'] <= splitSimilarity, self.AD_Label] = False
 
 
 # %%
@@ -547,11 +670,13 @@ class OPERALocalApplicabilityDomain(ApplicabilityDomainStrategy):
         self.TrainSet[self.AD_Label] = combined_train_assignment
         self.TestSet[self.AD_Label] = combined_test_assignment
 
+
 # %% OPERA Local AD
 class OPERALocalApplicabilityDomainRevised(ApplicabilityDomainStrategy):
     """
     Revised OPERA local AD to make it consistent with other ADs (TMM)
     """
+
     def __init__(self, TrainSet, TestSet, is_categorical):
         ApplicabilityDomainStrategy.__init__(self, TrainSet, TestSet, is_categorical)
 
@@ -560,9 +685,7 @@ class OPERALocalApplicabilityDomainRevised(ApplicabilityDomainStrategy):
     def set_parameters(self, parameters):
         self.parameters = parameters
 
-
     def evaluate(self):
-
         self.nbrs = NearestNeighbors(n_neighbors=self.parameters['k'] + 1, algorithm='brute',
                                      metric=self.parameters['similarity'])
         nbrs = self.nbrs
@@ -587,15 +710,12 @@ class OPERALocalApplicabilityDomainRevised(ApplicabilityDomainStrategy):
         train_local_index.sort(key=lambda x: x)
         self.splitSimilarity = (train_local_index[index] + train_local_index[index + 1]) / 2.0
 
-
         ###
         self.TrainSet[self.AD_Label] = True
         self.TrainSet.loc[self.TrainSet['OPERALocalIndex'] <= self.splitSimilarity, self.AD_Label] = False
 
         self.TestSet[self.AD_Label] = True
         self.TestSet.loc[self.TestSet['OPERALocalIndex'] <= self.splitSimilarity, self.AD_Label] = False
-
-
 
     def evaluate2(self, embedding):
         """
@@ -647,6 +767,8 @@ class OPERALocalApplicabilityDomainRevised(ApplicabilityDomainStrategy):
         train_local_index = list(train_local_index)
         train_local_index.sort(key=lambda x: x)
         self.splitting_value = (train_local_index[index] + train_local_index[index + 1]) / 2.0
+
+        print('splitting_value', self.splitting_value)
 
         ###
         self.TrainSet[self.AD_Label] = True

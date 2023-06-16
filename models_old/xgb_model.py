@@ -21,10 +21,6 @@ class Model:
         self.modelid = modelid
 
 
-
-
-
-
     def build_model(self):
         """Trains the XGB model on provided data"""
         t1 = time.time()
@@ -87,6 +83,10 @@ class Model:
 
         # Return built model
         return self
+
+    def build_model_with_preselected_descriptors_no_grid_search(self, descriptor_names):
+        return self.build_model_with_preselected_descriptors(descriptor_names)
+
 
     def do_predictions(self, df_prediction):
         """Makes predictions using the trained model"""
