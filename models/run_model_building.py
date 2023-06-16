@@ -110,7 +110,7 @@ def caseStudyTEST_RunGA():
 def a_runCaseStudiesExpPropPFAS():
     inputFolder = '../datasets/'
 
-    useEmbeddings = True
+    useEmbeddings = False
     num_generations = 100
 
     # qsar_method = 'rf'
@@ -127,9 +127,9 @@ def a_runCaseStudiesExpPropPFAS():
 
     datasetNames = []
     datasetNames.append("HLC from exp_prop and chemprop")
-    datasetNames.append("WS from exp_prop and chemprop")
-    datasetNames.append("VP from exp_prop and chemprop")
-    datasetNames.append("LogP from exp_prop and chemprop")
+    # datasetNames.append("WS from exp_prop and chemprop")
+    # datasetNames.append("VP from exp_prop and chemprop")
+    # datasetNames.append("LogP from exp_prop and chemprop")
     # datasetNames.append("MP from exp_prop and chemprop")
     # datasetNames.append("BP from exp_prop and chemprop")
 
@@ -446,8 +446,8 @@ def assembleResults():
 
 if __name__ == "__main__":
     # assembleResults()
-    # a_runCaseStudiesExpPropPFAS()
+    a_runCaseStudiesExpPropPFAS()
     # a_runCaseStudiesExpPropPFAS_all()
-    a_runCaseStudiesExpProp()
+    # a_runCaseStudiesExpProp()
     # compare_spaces()
     # caseStudyTEST_RunGA()

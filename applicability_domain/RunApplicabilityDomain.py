@@ -219,5 +219,5 @@ def generateADs_via_API_call():
 
 
 if __name__ == "__main__":
-    # generateADs()
-    generateADs_via_API_call()
+    generateADs()
+    # generateADs_via_API_call()

@@ -181,9 +181,9 @@ def a_runCaseStudiesExpPropPFAS():
     inputFolder = '../datasets/'
     outputFolder = '../datasets/GA/'
 
-    splitting = 'T=PFAS only, P=PFAS'
+    # splitting = 'T=PFAS only, P=PFAS'
     ## splitting = 'T=all, P=PFAS'  #dont need to run
-    # splitting = 'T=all but PFAS, P=PFAS'
+    splitting = 'T=all but PFAS, P=PFAS'
 
 
     # output filepath:
@@ -191,12 +191,12 @@ def a_runCaseStudiesExpPropPFAS():
         threshold) + '_' + str(round(time.time() * 1000)) + '.json'
 
     datasetNames = []
-    # datasetNames.append("HLC from exp_prop and chemprop")
-    # datasetNames.append("WS from exp_prop and chemprop")
-    # datasetNames.append("VP from exp_prop and chemprop")
-    # datasetNames.append("LogP from exp_prop and chemprop")
+    datasetNames.append("HLC from exp_prop and chemprop")
+    datasetNames.append("WS from exp_prop and chemprop")
+    datasetNames.append("VP from exp_prop and chemprop")
+    datasetNames.append("LogP from exp_prop and chemprop")
     datasetNames.append("MP from exp_prop and chemprop")
-    datasetNames.append("BP from exp_prop and chemprop")
+    # datasetNames.append("BP from exp_prop and chemprop")
 
     # *****************************************************************************************************************
     # descriptor_software = 'PaDEL-default'
@@ -370,11 +370,12 @@ def a_run_dataset(f, training_tsv_path, prediction_tsv_path, ci):
     # Build model based on embedded descriptors: TODO use api to run this code
     embed_model = mwu.call_build_model_with_preselected_descriptors(qsar_method, training_tsv, ci.remove_log_p,
                                                                     features, 1)
-    score_embed = embed_model.do_predictions_score(df_prediction)
+    score_embed = embed_model.do_predictions(df_prediction, return_score=True)
     # **************************************************************************************
     # Build model based on all descriptors (except correlated and constant ones) as baseline prediction:
-    full_model = mwu.call_build_model(qsar_method, training_tsv, ci.remove_log_p, 1)
-    score = full_model.do_predictions_score(df_prediction)
+    full_model = mwu.call_build_model_with_preselected_descriptors(qsar_method, training_tsv, ci.remove_log_p,
+                                                                    None, 1)
+    score = full_model.do_predictions(df_prediction, return_score=True)
 
     name = ci.datasetName + "_" + ci.descriptorSetName + "_" + str(int(time.time()))
 
@@ -533,8 +534,10 @@ def bob():
 
 if __name__ == "__main__":
     # a_runCaseStudiesExpProp()
-    a_runCaseStudiesExpPropPFAS()
+    # a_runCaseStudiesExpPropPFAS()
     # caseStudyOPERA_RunGA()
     # caseStudyTEST_RunGA()
     # caseStudyPOD()
     # bob()
+
+
