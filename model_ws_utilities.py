@@ -4,6 +4,8 @@ from models import df_utilities as dfu
 from models_old import knn_model as knn, rf_model as rf
 
 from models import ModelBuilder as mb
+import model_ws_utilities as mwu
+from models import EmbeddingFromImportance as efi
 
 from models import df_utilities as DFU
 import time as time
@@ -95,7 +97,8 @@ def call_cross_validate(qsar_method, cv_training_tsv, cv_prediction_tsv, descrip
 
 
 def instantiateModel(df_training, n_jobs, qsar_method, remove_log_p):
-    print('Instantiating ' + qsar_method.upper() + ' model in model builder, num_jobs=' + str(n_jobs) + ', remove_log_p=' + str(
+    print('Instantiating ' + qsar_method.upper() + ' model in model builder, num_jobs=' + str(
+        n_jobs) + ', remove_log_p=' + str(
         remove_log_p))
 
     model = None
@@ -169,6 +172,56 @@ def call_build_embedding_ga(qsar_method, training_tsv, prediction_tsv, remove_lo
     # print('embedding='+embedding)
 
     # Returns embedding
+    return descriptor_names, timeMin
+
+
+def call_build_embedding_importance(qsar_method, training_tsv, prediction_tsv, remove_log_p_descriptors, n_threads,
+                                    num_generations, use_permutative, run_rfe, fraction_of_max_importance,
+                                    min_descriptor_count, max_descriptor_count):
+    """Generates importance based embedding"""
+
+    df_training = DFU.load_df(training_tsv)
+    df_prediction = DFU.load_df(prediction_tsv)
+    df_training = DFU.filter_columns_in_both_sets(df_training, df_prediction, remove_log_p_descriptors)
+
+    model = mwu.instantiateModel(df_training, n_threads, qsar_method, remove_log_p_descriptors)
+
+    t1 = time.time()
+
+    efi.generateEmbedding(model, df_training, df_prediction, remove_log_p_descriptors=remove_log_p_descriptors,
+                          num_generations=num_generations, n_threads=n_threads, use_permutative=use_permutative,
+                          fraction_of_max_importance=fraction_of_max_importance,
+                          min_descriptor_count=min_descriptor_count, max_descriptor_count=max_descriptor_count)
+
+    if run_rfe:
+        # efi.perform_recursive_feature_elimination(model=model, df_training=df_training, n_threads=n_threads,n_steps=1)
+        # print('After RFE, ', len(model.embedding), "descriptors", model.embedding)
+
+        embedding_old = model.embedding
+        while True:  # need to get more agressive (remove 2 at a time) since first RFE didnt remove enough
+            efi.perform_recursive_feature_elimination(model=model, df_training=df_training, n_threads=n_threads,
+                                                      n_steps=1)
+            print('After RFE iteration, ', len(model.embedding), "descriptors", model.embedding)
+            if len(model.embedding) == len(embedding_old):
+                break
+            embedding_old = model.embedding
+
+    # Fit final model using final embedding:
+    train_ids, train_labels, train_features, train_column_names = \
+        DFU.prepare_instances2(df_training, model.embedding, False)
+    model.model_obj.fit(train_features, train_labels)  # train the model
+    # model.embedding = train_column_names # just in case the order changed but shouldnt matte
+
+    # Run calcs on test set to see how well embedding did:
+    score = model.do_predictions(df_prediction, return_score=True)
+
+    t2 = time.time()
+
+    timeMin = (t2 - t1) / 60
+
+    descriptor_names = model.embedding
+
+    # Returns embedding results:
     return descriptor_names, timeMin
 
 

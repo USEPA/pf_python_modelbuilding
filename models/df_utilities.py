@@ -2,6 +2,11 @@ import numpy as np
 import pandas as pd
 from io import StringIO
 
+from sklearn import preprocessing
+from scipy.stats import spearmanr
+from scipy.cluster import hierarchy
+from scipy.spatial.distance import squareform
+from collections import defaultdict
 
 def load_df(tsv_string):
     """Loads data from TSV/CSV into a pandas dataframe"""
@@ -209,6 +214,88 @@ def prepare_instances(df, which_set, remove_logp, remove_corr):
     column_names = list(df.columns)
 
     return ids, labels, features, column_names, is_binary
+
+
+def prepare_instances_wards(df, which_set, remove_logp, threshold):
+    """Prepares a pandas df of training data by removing logp and correlated descriptors"""
+    df_labels = df[df.columns[1]]
+    if df_labels.isin([0, 1]).all():
+        is_binary = True
+    else:
+        is_binary = False
+
+    # Labels are the values we want to predict
+    labels = np.array(df_labels)
+    ids = np.array(df[df.columns[0]])
+    col_name_id = df.columns[0]
+    col_name_property = df.columns[1]
+
+    # drop Property column with experimental property we are trying to correlate (# axis 1 refers to the columns):
+    df = df.drop(col_name_property, axis=1)
+
+    # drop ID column:
+    df = df.drop(col_name_id, axis=1)
+
+    if remove_logp:
+        df = remove_log_p_descriptors(df, which_set)
+
+    df = do_remove_non_double_descriptors(df)
+
+    # Remove constant descriptors:
+    df = do_remove_constant_descriptors(df)
+    # df = df.loc[:, (df != 0).any(axis=0)] # deletes ones with all zeros but removing constant descriptors covers that
+
+    feature_names = list(df.columns)
+
+    scaler = preprocessing.StandardScaler().fit(df)
+
+    ## Compute spearman's r and ensure symmetry of correlation matrix
+    corr = spearmanr(scaler.transform(df)).correlation
+    corr = (corr + corr.T) / 2
+    np.fill_diagonal(corr, 1)
+    ## Compute distance matrix and form hierarchical clusters
+    distance_matrix = 1 - np.abs(corr)
+    dist_linkage = hierarchy.ward(squareform(distance_matrix))
+    cluster_ids = hierarchy.fcluster(dist_linkage, threshold, criterion="distance")
+    clusters = cluster_ids
+    ## Pull out one representative descriptor from each cluster
+    cluster_id_to_feature_ids = defaultdict(list)
+    for idx, cluster_id in enumerate(cluster_ids):
+        cluster_id_to_feature_ids[cluster_id].append(idx)
+    selected_features = [v[0] for v in cluster_id_to_feature_ids.values()]
+
+    # named_features = [feature_names[i] for i in selected_features]
+
+    ## Set attribute with features that are not colinear
+    wardsFeatures = [feature_names[i] for i in selected_features]
+
+    # print(list(df.columns))
+
+    features = df[wardsFeatures]
+
+    return ids, labels, features, wardsFeatures, is_binary
+
+
+def prepare_instances2(df, embedding, remove_corr):
+    """Prepares a pandas df of training data by removing logp and correlated descriptors"""
+    df_labels = df[df.columns[1]]
+
+    # Labels are the values we want to predict
+    labels = np.array(df_labels)
+
+    ids = np.array(df[df.columns[0]])
+
+    # drop ID column:
+    df = df[embedding]
+
+    if remove_corr:
+        do_remove_correlated_descriptors(df, 0.95)
+
+    features = df  # scikit learn converts it to numpy array later anyways
+
+    column_names = list(df.columns)
+
+    return ids, labels, features, column_names
 
 
 def isBinary(df):

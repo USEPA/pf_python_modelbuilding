@@ -5,7 +5,7 @@ Created on Wed Jan 25 08:14:14 2023
 @author: NCHAREST
 This is a refactored version of the python model building repo's model object, intended to better utilize OOP and more elegant design patterning.'
 """
-
+import math
 import time
 import pandas as pd
 from xgboost import XGBRegressor, XGBClassifier
@@ -98,6 +98,28 @@ class Model:
     def get_model_description(self):
         return ModelDescription(self).to_json()
 
+    def has_hyperparameter_grid(self):
+        """
+        Whether or not there are multiple hyperparameter grid options per parameter
+        :return:
+        """
+        for key in self.hyperparameter_grid:
+            if len(self.hyperparameter_grid[key]) > 1:
+                return True
+        return False
+
+    def get_single_parameters(self):
+        """
+        Get hyperparameters from a grid with a single set of options
+        :return:
+        """
+        parameters = {}
+
+        for key in self.hyperparameter_grid:
+            parameters[key] = self.hyperparameter_grid[key][0]
+        return parameters
+
+
     def build_model(self, descriptor_names=None):
         print('enter build model')
 
@@ -122,20 +144,34 @@ class Model:
         # TMM: optimizer made local so won't get stored in the database
         # self.fix_hyperparameter_grid()
 
-        print ('hyperparameter_grid',self.hyperparameter_grid)
+        if self.regressor_name == 'svm':
+            if len(train_labels) > 20000:
+                self.c_space = [100]
+                self.gamma_space = ['auto']
+                self.hyperparameter_grid = {"estimator__C": self.c_space, "estimator__gamma": self.gamma_space}
+                print('using single set of hyperparameters for SVM due to large data set')
 
+        print ('hyperparameter_grid', self.hyperparameter_grid)
 
-        kfold_splitter = KFold(n_splits=5, shuffle=True, random_state=42)
+        if self.has_hyperparameter_grid():
+            print('Hyperparameter grid has multiple sets of parameters, running grid search')
 
-        optimizer = GridSearchCV(self.model_obj, self.hyperparameter_grid, n_jobs=self.n_jobs,
+            kfold_splitter = KFold(n_splits=5, shuffle=True, random_state=42)
+
+            optimizer = GridSearchCV(self.model_obj, self.hyperparameter_grid, n_jobs=self.n_jobs,
                                      scoring=scoring_strategy_defaults(self.is_categorical), cv=kfold_splitter)
-        # optimizer = GridSearchCV(self.model_obj, self.hyperparameter_grid, n_jobs=self.n_jobs,
-        #                              scoring=scoring_strategy_defaults(self.is_categorical))
+            # optimizer = GridSearchCV(self.model_obj, self.hyperparameter_grid, n_jobs=self.n_jobs,
+            #                              scoring=scoring_strategy_defaults(self.is_categorical))
 
-        optimizer.fit(train_features, train_labels)
+            optimizer.fit(train_features, train_labels)
 
-        self.model_obj.set_params(**optimizer.best_params_)
-        self.hyperparameters = optimizer.best_params_
+            self.model_obj.set_params(**optimizer.best_params_)
+            self.hyperparameters = optimizer.best_params_
+
+        else:
+            print('Hyperparameter grid only has a single set of parameters, skipping grid search')
+            self.hyperparameters = self.get_single_parameters()
+            self.model_obj.set_params(**self.hyperparameters)
 
         # self.generate_cv_predictions(kfold_splitter,train_ids, train_features, train_labels)
 
@@ -323,6 +359,25 @@ class Model:
             return predictions
         elif return_score == True:
             return score
+
+
+    def do_predictions_RMSE(self, df_prediction):
+        """Makes predictions using the trained model"""
+        # Prepare prediction instances using columns from training data
+        pred_ids, pred_labels, pred_features = DFU.prepare_prediction_instances(df_prediction, self.embedding)
+        # print ('pred version 1.4')
+
+        predictions = self.model_obj.predict(pred_features)
+
+        RMSE=0
+        for index,pred in enumerate(predictions):
+            exp = pred_labels[index]
+            error = (exp-pred)*(exp-pred)
+            RMSE=RMSE+error
+            # print(exp,pred)
+
+        RMSE=math.sqrt(RMSE/len(predictions))
+        return RMSE
 
 
 class KNN(Model):

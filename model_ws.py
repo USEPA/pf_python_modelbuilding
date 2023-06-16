@@ -176,9 +176,9 @@ def get_embedding(obj):
 
 @app.route('/models/<string:qsar_method>/embedding', methods=['POST'])
 def train_embedding(qsar_method):
-    """Trains a model for the specified QSAR method on provided data"""
+    """Post method that trains GA embedding for the specified QSAR method on provided data"""
 
-    print('Enter train_embedding')
+    print('Enter train_embedding (method to make GA based embedding)')
 
     obj = request.form
 
@@ -216,11 +216,11 @@ def train_embedding(qsar_method):
     max_length = int(obj.get('max_length'))
     threshold = int(obj.get('threshold'))
     descriptor_coefficient = float(obj.get('descriptor_coefficient'))
+    n_threads = int(obj.get('n_threads'))
 
     # print(num_generations)
 
 
-    n_threads = obj.get('n_threads')
 
     embedding, timeMin = model_ws_utilities.call_build_embedding_ga(qsar_method=qsar_method,
                                                                     training_tsv=training_tsv,prediction_tsv=prediction_tsv,
@@ -241,6 +241,69 @@ def train_embedding(qsar_method):
     print('result_str=' + result_str)
     return result_str
 
+
+@app.route('/models/<string:qsar_method>/embedding_importance', methods=['POST'])
+def train_embedding_importance(qsar_method):
+    """Post method that trains importance based embedding for the specified QSAR method on provided data"""
+
+    print('Enter train_embedding_importance')
+
+    obj = request.form
+
+    training_tsv = obj.get('training_tsv')  # Retrieves the training data as a TSV
+    if training_tsv is None:
+        training_tsv = request.files.get('training_tsv').read().decode('UTF-8')
+    if training_tsv is None:
+        abort(400, 'missing training tsv')
+
+    prediction_tsv = obj.get('prediction_tsv')  # Retrieves the training data as a TSV
+    if prediction_tsv is None:
+        print('prediction_tsv is none!')
+        prediction_tsv = request.files.get('prediction_tsv').read().decode('UTF-8')
+    if prediction_tsv is None:
+        abort(400, 'missing prediction tsv')
+
+    # if obj.get('save_to_database'):  # Sets boolean remove_log_p from string
+    #     save_to_database = obj.get('save_to_database', '').lower() == 'true'
+    # else:
+    #     save_to_database = False
+
+
+    model_id = obj.get('model_id')  # Retrieves the model number to use for persistent storage
+    if obj.get('remove_log_p'):  # Sets boolean remove_log_p from string
+        remove_log_p = obj.get('remove_log_p', '').lower() == 'true'
+    else:
+        remove_log_p = False
+
+    # Can't train a model without data
+
+    num_generations = int(obj.get('num_generations'))
+    use_permutative = bool(obj.get('use_permutative'))
+    run_rfe = bool(obj.get('run_rfe'))
+    fraction_of_max_importance = float(obj.get('fraction_of_max_importance'))
+    min_descriptor_count = int(obj.get('min_descriptor_count'))
+    max_descriptor_count = int(obj.get('max_descriptor_count'))
+    n_threads = int(obj.get('n_threads'))
+
+    embedding, timeMin = model_ws_utilities.call_build_embedding_importance(qsar_method=qsar_method,
+                                                                            training_tsv=training_tsv,
+                                                                            prediction_tsv=prediction_tsv,
+                                                                            remove_log_p_descriptors=remove_log_p,
+                                                                            n_threads=n_threads,
+                                                                            num_generations=num_generations,
+                                                                            use_permutative=use_permutative,
+                                                                            run_rfe=run_rfe,
+                                                                            fraction_of_max_importance=fraction_of_max_importance,
+                                                                            min_descriptor_count=min_descriptor_count,
+                                                                            max_descriptor_count=max_descriptor_count)
+
+    result_obj = {}
+    result_obj['embedding'] = embedding
+    result_obj['timeMin'] = timeMin
+    result_str = json.dumps(result_obj)
+
+    print('result_str=' + result_str)
+    return result_str
 
 @app.route('/models/<string:qsar_method>/cross_validate', methods=['POST'])
 def cross_validate_fold(qsar_method):
