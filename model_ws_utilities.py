@@ -97,14 +97,8 @@ def call_cross_validate(qsar_method, cv_training_tsv, cv_prediction_tsv, descrip
 
 
 def instantiateModel(df_training, n_jobs, qsar_method, remove_log_p):
-<<<<<<< HEAD
-    print('Instantiating ' + qsar_method.upper() + ' model in model builder, num_jobs=' + str(
-        n_jobs) + ', remove_log_p=' + str(
-=======
 
-    print('Instantiating ' + qsar_method.upper() + ' model in model builder, num_jobs=' + str(n_jobs) + ', remove_log_p=' + str(
->>>>>>> origin/main
-        remove_log_p))
+    print('Instantiating ' + qsar_method.upper() + ' model in model builder, num_jobs=' + str(n_jobs) + ', remove_log_p=' + str(remove_log_p))
 
     model = None
 
