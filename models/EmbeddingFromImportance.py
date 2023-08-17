@@ -2,17 +2,19 @@ import time
 import numpy as np
 import pandas
 
+
 from models import df_utilities as DFU
 
 from sklearn.inspection import permutation_importance
 from sklearn.model_selection import KFold, StratifiedKFold
 from sklearn.feature_selection import RFECV
 from models import ModelBuilder
+import pandas as pd
 
 
 def generateEmbedding(model, df_training, df_prediction, fraction_of_max_importance,min_descriptor_count, max_descriptor_count, num_generations=5, n_threads=4,
                       remove_log_p_descriptors=False,
-                      use_permutative=False):
+                      use_permutative=False, use_wards=False):
     '''
     Generates embedding based on importance
 
@@ -30,14 +32,19 @@ def generateEmbedding(model, df_training, df_prediction, fraction_of_max_importa
 
     # TODO Make an objective function that keeps adding important descriptors until CV is maximized? rather than just using ones with high enough importance from each run?
 
-    # Create training set variables used to train model:
-    # train_ids, train_labels, train_features, train_column_names, model.is_categorical = \
-    #     DFU.prepare_instances(df_training, "training", remove_log_p_descriptors, True)  # removes descriptors which are correlated by 0.95
 
-    train_ids, train_labels, train_features, train_column_names, model.is_categorical = \
-        DFU.prepare_instances_wards(df_training, "training", remove_log_p_descriptors, 0.5) # uses wards method to remove extra descriptors
+    # print(min_descriptor_count,min_descriptor_count_2)
 
-    model.model_obj = ModelBuilder.model_registry(model.regressor_name, model.is_categorical)
+    print('use_wards = ', use_wards)
+
+    if use_wards:
+        # Using ward's method removes too descriptors for PFAS only training sets:
+        train_ids, train_labels, train_features, train_column_names, model.is_binary = \
+                DFU.prepare_instances_wards(df_training, "training", remove_log_p_descriptors, 0.5) # uses wards method to remove extra descriptors
+    else:
+        train_ids, train_labels, train_features, train_column_names, model.is_binary = \
+            DFU.prepare_instances(df_training, "training", remove_log_p_descriptors, True)  # removes descriptors which are correlated by 0.95
+
 
     if model.regressor_name == 'rf':
         model.hyperparameter_grid = {
@@ -45,6 +52,14 @@ def generateEmbedding(model, df_training, df_prediction, fraction_of_max_importa
 
     model.hyperparameters = model.get_single_parameters()
     model.model_obj.set_params(**model.hyperparameters)
+
+
+    model.model_obj.fit(train_features, train_labels)
+    model.embedding = train_column_names
+
+    print('\nprediction set results for non embedded model as benchmark:')
+    score = model.do_predictions(df_prediction,
+                                       return_score=True)  # results for non embedded model as benchmark
 
     # Loop until number of descriptors stops changing
     while True:
@@ -54,10 +69,9 @@ def generateEmbedding(model, df_training, df_prediction, fraction_of_max_importa
         for run_num in range(num_generations):
 
             print("Run number = ", run_num + 1)
+
             model.model_obj.fit(train_features, train_labels)
 
-            model.embedding = train_column_names
-            predictions = model.do_predictions(df_prediction, return_score=False) # nice to print out external predictions to make sure what final model should be getting later
 
             sorted_importances, sorted_names = get_important_descriptors(model, n_threads, train_column_names,
                                                                          train_features, train_labels, use_permutative)
@@ -66,7 +80,8 @@ def generateEmbedding(model, df_training, df_prediction, fraction_of_max_importa
                                 new_descriptors, sorted_importances, sorted_names)
 
             # print(count,fraction_of_max_importance)
-        print(new_descriptors)
+        print('len(new_descriptors)', len(new_descriptors))
+        print('new_descriptors',new_descriptors)
 
         if (len(new_descriptors) == len(train_column_names)):
             model.embedding = train_column_names # *** store final descriptors here ***
@@ -107,7 +122,7 @@ def get_important_descriptors(model, n_threads, train_column_names, train_featur
         sorted_importances = np.array(feature_importances)[sorted_idx]
         sorted_names = np.array(train_column_names)[sorted_idx]
         elapsed_time = time.time() - start_time
-        print(f"Elapsed time to compute the importances: {elapsed_time:.3f} seconds")
+        # print(f"Elapsed time to compute the importances: {elapsed_time:.3f} seconds")
 
     else:
         # Using built in feature importances:
@@ -130,19 +145,31 @@ def add_new_descriptors(fraction_of_max_importance, max_descriptor_count, min_de
         if importance > fraction_of_max_importance * max_importance:
             count = count + 1
 
+    print("count exceeding fraction:",count)
+
     if count < min_descriptor_count:  # just take the first min_descriptor_count descriptors
+        print("count < min, using min=", min_descriptor_count)
+
         for index, importance in enumerate(sorted_importances):
             descriptor = sorted_names[index]
-            new_descriptors.append(descriptor)
+
+            if descriptor not in new_descriptors:
+                new_descriptors.append(descriptor)
             if index == min_descriptor_count - 1:
                 break
     elif count > max_descriptor_count:  # just take the first max_descriptor_count descriptors
+        print("count > max, using max=", max_descriptor_count)
+
         for index, importance in enumerate(sorted_importances):
             descriptor = sorted_names[index]
-            new_descriptors.append(descriptor)
+
+            if descriptor not in new_descriptors:
+                new_descriptors.append(descriptor)
             if index == max_descriptor_count - 1:
                 break
     else:
+        print("min <= count <= max, using count=", count)
+
         for index, importance in enumerate(sorted_importances): # take the ones exceeding the fraction of the max importance
             if importance > fraction_of_max_importance * max_importance:
                 # if importance > min_importance:
@@ -167,7 +194,8 @@ def perform_recursive_feature_elimination(model, df_training, n_threads, n_steps
     train_ids, train_labels, train_features, train_column_names = \
         DFU.prepare_instances2(df_training, model.embedding,True)
 
-    if model.is_categorical:
+
+    if model.is_binary:
         scoring = 'balanced_accuracy'
         cv = StratifiedKFold(5)
     else:
@@ -176,6 +204,7 @@ def perform_recursive_feature_elimination(model, df_training, n_threads, n_steps
 
     # Recursive feature elimination using 5 fold CV:
     rfecv = RFECV(
+        # estimator=model.model_obj,
         estimator=model.model_obj.steps[1][1],
         step=n_steps,
         cv=cv,

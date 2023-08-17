@@ -7,21 +7,38 @@ This is a refactored version of the python model building repo's model object, i
 """
 import math
 import time
+
+import pypmml
+import sklearn2pmml
+from scipy import stats
+
 import pandas as pd
-from xgboost import XGBRegressor, XGBClassifier
+
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+
+from sklearn2pmml.pipeline import PMMLPipeline as PMMLPipeline
 
 from models import df_utilities as DFU
 from sklearn.neighbors import KNeighborsRegressor, KNeighborsClassifier
 from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
 from sklearn.svm import SVC, SVR
-from sklearn.preprocessing import StandardScaler
-from sklearn.pipeline import Pipeline
+from sklearn.linear_model import LogisticRegression, LinearRegression
+from xgboost import XGBRegressor, XGBClassifier
+
+from sklearn_pmml_model.ensemble import PMMLForestClassifier
+from sklearn_pmml_model.ensemble import PMMLForestRegressor
+from sklearn_pmml_model.ensemble import PMMLGradientBoostingClassifier
+from sklearn_pmml_model.ensemble import PMMLGradientBoostingRegressor
+from sklearn_pmml_model.svm import PMMLSVC
+from sklearn_pmml_model.svm import PMMLSVR
+from sklearn_pmml_model.neighbors import PMMLKNeighborsRegressor
+from sklearn_pmml_model.neighbors import PMMLKNeighborsClassifier
+
 from sklearn.model_selection import GridSearchCV, KFold, cross_val_score
 from sklearn.metrics import balanced_accuracy_score
-from sklearn.linear_model import LogisticRegression, LinearRegression
 
 import numpy as np
-
 
 from os.path import exists
 import json
@@ -29,37 +46,45 @@ import json
 __author__ = "Nathaniel Charest, Todd Martin (modified to work with webservice, added XGB)"
 
 
+# use_standardizer = True
+
 # %%
-def model_registry(regressor_name, is_categorical):
 
+def model_registry_model_obj(regressor_name, is_categorical):
+    '''
+    model registry for getting model_obj (not pipeline)
+    :param regressor_name:
+    :param is_categorical:
+    :return: model obj
+    '''
 
-    try:
-        registry = {
-            'knn':
-                {True: Pipeline([('standardizer', StandardScaler()), ('estimator', KNeighborsClassifier())]),
-                 False: Pipeline([('standardizer', StandardScaler()), ('estimator', KNeighborsRegressor())])
-                 },
-            'rf':
-                {True: Pipeline([('standardizer', StandardScaler()), ('estimator', RandomForestClassifier())]),
-                 False: Pipeline([('standardizer', StandardScaler()), ('estimator', RandomForestRegressor())])
-                 },
-            'svm':
-                {True: Pipeline([('standardizer', StandardScaler()), ('estimator', SVC(probability=True))]),
-                 False: Pipeline([('standardizer', StandardScaler()), ('estimator', SVR())])
-                 },
-            'xgb':
-                {True: Pipeline([('standardizer', StandardScaler()), ('estimator', XGBClassifier())]),
-                 False: Pipeline([('standardizer', StandardScaler()), ('estimator', XGBRegressor())])
-                 },
-            'reg':
-                {True: Pipeline([('standardizer', StandardScaler()), ("estimator", LogisticRegression())]),
-                 False: Pipeline([('standardizer', StandardScaler()), ('estimator', LinearRegression())])
-                 }
-        }
-        # print(regressor_name, 'iscategorical?',is_categorical)
+    if regressor_name == 'knn':
+        if is_categorical:
+            return KNeighborsClassifier()
+        else:
+            return KNeighborsRegressor()
+    elif regressor_name == 'rf':
+        if is_categorical:
+            return RandomForestClassifier()
+        else:
+            return RandomForestRegressor()
+    elif regressor_name == 'svm':
+        if is_categorical:
+            return SVC(probability=True)
+        else:
+            return SVR()
+    elif regressor_name == 'xgb':
+        if is_categorical:
+            return XGBClassifier()
+        else:
+            return XGBRegressor()
+    elif regressor_name == 'reg':
+        if is_categorical:
+            return LogisticRegression()
+        else:
+            return LinearRegression()
 
-        return registry[regressor_name][is_categorical]
-    except:
+    else:
         raise KeyError(
             r"Instantiating a model from the model_registry has failed. Did you remember to update the registry with your new type of fitting algorithm?")
 
@@ -70,7 +95,7 @@ def scoring_strategy_defaults(is_categorical):
     # print(sorted(sklearn.metrics.SCORERS.keys()))
 
     if is_categorical == True:
-        return 'balanced_accuracy'  #TMM: Changed to BA since "matthews_corrcoef" was not an available metric
+        return 'balanced_accuracy'  # TMM: Changed to BA since "matthews_corrcoef" was not an available metric
     elif is_categorical == False:
         return 'r2'
     else:
@@ -80,6 +105,8 @@ def scoring_strategy_defaults(is_categorical):
 class Model:
     def __init__(self, df_training, remove_log_p_descriptors, n_jobs=4):
 
+        self.training_descriptor_std_devs = None  # standard deviations of training set descriptors
+        self.training_descriptor_means = None  # means of training set descriptors
         self.df_training = df_training
         self.remove_log_p_descriptors = remove_log_p_descriptors
         self.n_jobs = n_jobs
@@ -88,7 +115,7 @@ class Model:
         self.version = '0.0.1'
         self.model_obj = None
         self.embedding = None
-        self.is_categorical = None
+        self.is_binary = None
         self.training_stats = {}
         self.seed = 11171992
 
@@ -96,13 +123,53 @@ class Model:
         self.description_url = None
         self.hyperparameter_grid = None
         self.hyperparameters = None  # best params from the hyperparameter gridsearch
+        self.use_pmml = None
+        self.use_sklearn2pmml = None
+
 
     def get_model(self):
         return self.model_obj
 
-    def instantiate_model(self):
-        self.model_obj = model_registry(self.regressor_name, self.is_categorical)
-        return self.model_obj
+    def set_model_obj_pmml_for_prediction(self, pmml_file_path, qsar_method):
+
+        # print(type(self.model_obj))
+        # print(pmml_file_path)
+        # self.model_obj = Model_pypmml.fromFile(pmml_file_path)
+        # if True:
+        #     return
+
+        if self.is_binary:
+            if qsar_method == 'rf':
+                self.model_obj = PMMLForestClassifier(pmml=pmml_file_path)
+            elif qsar_method == 'xgb':
+                self.model_obj = PMMLGradientBoostingClassifier(pmml=pmml_file_path)
+            elif qsar_method == 'svm':
+                self.model_obj = PMMLSVC(pmml=pmml_file_path)
+            elif qsar_method == 'knn':
+                self.model_obj = PMMLKNeighborsClassifier(pmml=pmml_file_path)
+        else:
+            if qsar_method == 'rf':
+                self.model_obj = PMMLForestRegressor(pmml=pmml_file_path)
+            elif qsar_method == 'xgb':
+                self.model_obj = PMMLGradientBoostingRegressor(pmml=pmml_file_path)
+            elif qsar_method == 'svm':
+                self.model_obj = PMMLSVR(pmml=pmml_file_path)
+            elif qsar_method == 'knn':
+                self.model_obj = PMMLKNeighborsRegressor(pmml=pmml_file_path)
+
+    def set_details(self, details):
+        print('\nenter set_details')
+
+        for key in details:
+            if key == 'model':
+                continue
+            print(key, type(details[key]), details[key])
+            value = details[key]
+
+            # if key =='embedding':
+            #     print(len(value))
+
+            setattr(self, key, value)
 
     def get_model_description(self):
         return ModelDescription(self).to_json()
@@ -128,24 +195,39 @@ class Model:
             parameters[key] = self.hyperparameter_grid[key][0]
         return parameters
 
-
-    def build_model(self, descriptor_names=None):
+    def build_model(self, use_pmml_pipeline, include_standardization_in_pmml, descriptor_names=None):
         print('enter build model')
 
         t1 = time.time()
         self.embedding = descriptor_names
+        self.use_pmml = use_pmml_pipeline
+        self.include_standardization_in_pmml = include_standardization_in_pmml
+
 
         # Call prepare_instances without removing correlated descriptors
         if self.embedding is None:
-            train_ids, train_labels, train_features, train_column_names, self.is_categorical = \
-                DFU.prepare_instances(self.df_training, "training", self.remove_log_p_descriptors, False)
+            train_ids, train_labels, train_features, train_column_names, self.is_binary = \
+                DFU.prepare_instances(self.df_training, "training", self.remove_log_p_descriptors, True)
             # Use columns selected by prepare_instances (in case logp descriptors were removed)
             self.embedding = train_column_names
+
+            # print(self.embedding)
+
         else:
-            train_ids, train_labels, train_features, train_column_names, self.is_categorical = \
+            train_ids, train_labels, train_features, train_column_names, self.is_binary = \
                 DFU.prepare_instances_with_preselected_descriptors(self.df_training, "training", self.embedding)
             # Use columns selected by prepare_instances (in case logp descriptors were removed)
             self.embedding = train_column_names
+
+        # print(train_features)
+        if use_pmml_pipeline and include_standardization_in_pmml is False:  # need to handle scaling outside of pipeline
+            ss = StandardScaler()
+            train_features = pd.DataFrame(ss.fit_transform(train_features), columns=train_features.columns)
+            self.training_descriptor_means = ss.mean_.tolist()
+            self.training_descriptor_std_devs = (ss.var_ ** 0.5).tolist()
+
+        # print(train_features)
+
         # Instantiate model from the registry
         # self.instantiate_model() # already called in mwsutility instantiatemodel
 
@@ -160,7 +242,7 @@ class Model:
                 self.hyperparameter_grid = {"estimator__C": self.c_space, "estimator__gamma": self.gamma_space}
                 print('using single set of hyperparameters for SVM due to large data set')
 
-        print ('hyperparameter_grid', self.hyperparameter_grid)
+        print('hyperparameter_grid', self.hyperparameter_grid)
 
         if self.has_hyperparameter_grid():
             print('Hyperparameter grid has multiple sets of parameters, running grid search')
@@ -168,7 +250,7 @@ class Model:
             kfold_splitter = KFold(n_splits=5, shuffle=True, random_state=42)
 
             optimizer = GridSearchCV(self.model_obj, self.hyperparameter_grid, n_jobs=self.n_jobs,
-                                     scoring=scoring_strategy_defaults(self.is_categorical), cv=kfold_splitter)
+                                     scoring=scoring_strategy_defaults(self.is_binary), cv=kfold_splitter)
             # optimizer = GridSearchCV(self.model_obj, self.hyperparameter_grid, n_jobs=self.n_jobs,
             #                              scoring=scoring_strategy_defaults(self.is_categorical))
 
@@ -185,6 +267,7 @@ class Model:
         # self.generate_cv_predictions(kfold_splitter,train_ids, train_features, train_labels)
 
         # Train the model on training data
+
         self.model_obj.fit(train_features, train_labels)
 
         # training_score = self.model_obj.score(train_features, train_labels)
@@ -216,32 +299,33 @@ class Model:
         self.training_stats['training_time'] = t2 - t1
         return self
 
-    def build_cv_model(self, descriptor_names=None, params={}):
+    def build_cv_model(self, use_pmml_pipeline, descriptor_names=None, params={}):
         t1 = time.time()
 
         self.embedding = descriptor_names
 
         # Call prepare_instances without removing correlated descriptors
         if self.embedding is None:
-            train_ids, train_labels, train_features, train_column_names, self.is_categorical = \
-                DFU.prepare_instances(self.df_training, "training", self.remove_log_p_descriptors, False)
+            train_ids, train_labels, train_features, train_column_names, self.is_binary = \
+                DFU.prepare_instances(self.df_training, "training", self.remove_log_p_descriptors, True)
             # Use columns selected by prepare_instances (in case logp descriptors were removed)
             self.embedding = train_column_names
         else:
-            train_ids, train_labels, train_features, train_column_names, self.is_categorical = \
+            train_ids, train_labels, train_features, train_column_names, self.is_binary = \
                 DFU.prepare_instances_with_preselected_descriptors(self.df_training, "training", self.embedding)
             # Use columns selected by prepare_instances (in case logp descriptors were removed)
             self.embedding = train_column_names
 
-        # Instantiate model from the registry
-        self.model_obj = model_registry(self.regressor_name, self.is_categorical)
-
+        if use_pmml_pipeline: # do scaling here since not part of pipeline
+            ss = StandardScaler()
+            train_features = pd.DataFrame(ss.fit_transform(train_features), columns=train_features.columns)
+            self.training_descriptor_means = ss.mean_.tolist()
+            self.training_descriptor_std_devs = (ss.var_ ** 0.5).tolist()
 
         self.model_obj.set_params(**params)
 
         # Train the model on training data
         self.model_obj.fit(train_features, train_labels)
-
 
     # def generate_cv_predictions(self, kfold_splitter, train_ids, train_features, train_labels):
     #     """
@@ -321,8 +405,7 @@ class Model:
     #     self.training_stats['training_cv_r2'] = r**2
     #     self.training_stats['training_cv_predictions'] = df_results_cv.to_dict('records')
 
-
-        # print(df_results_cv.to_csv(index=False))
+    # print(df_results_cv.to_csv(index=False))
 
     # def fix_hyperparameter_grid(self):
     #
@@ -335,40 +418,92 @@ class Model:
     #
     #     print(self.hyperparameter_grid)
 
-
     def do_predictions(self, df_prediction, return_score=False):
         """Makes predictions using the trained model"""
         # Prepare prediction instances using columns from training data
         pred_ids, pred_labels, pred_features = DFU.prepare_prediction_instances(df_prediction, self.embedding)
-        # print ('pred version 1.4')
-        if (self.is_categorical == True):
-            predictions = self.model_obj.predict_proba(pred_features)[:, 1]
-        else:
+
+        # print('pred_labels',pred_labels)
+
+        # print('Enter model.do_predictions')
+        # print('Model description = ',self.get_model_description())
+        # print('Model type = ', type(self.model_obj))
+
+        # print(len(self.training_descriptor_means), len(self.training_descriptor_stds))
+
+        # Perform scaling
+
+        if hasattr(self, 'training_descriptor_means') and self.training_descriptor_means:
+            print('normalizing prediction set using means and stdevs')
+            pred_features = pd.DataFrame(
+                (np.array(pred_features) - self.training_descriptor_means) / self.training_descriptor_std_devs,
+                columns=self.embedding)
+
+        # print('pred_features after scaling')
+        # print(pred_features)
+        # print(predictions)
+        # print('is_categorical', self.is_binary)
+
+        if self.is_binary:
+
+            if isinstance(self.model_obj, pypmml.Model):
+                predictions = self.model_obj.predict(pred_features)
+                predictions = np.array(predictions[predictions.columns[1]])  # probability of score=1 (continuous value) # TODO this might not work directly with kNN
+                preds = np.rint(predictions)  # convert to integer to allow BA calculation to work
+                # print(preds)
+                score = balanced_accuracy_score(pred_labels, preds)
+            elif isinstance(self.model_obj, Pipeline) or isinstance(self.model_obj, PMMLPipeline) or 'PMML' in type(
+                    self.model_obj).__name__:
+                predictions = self.model_obj.predict_proba(pred_features)[:,1]  # probability of score=1 (continuous value)
+
+                # preds = self.model_obj.predict(pred_features) # generate integer values to allow BA calculation to work
+                preds = np.rint(
+                    predictions)  # convert to integer to allow BA calculation to work (faster than running predict)
+                # print(preds)
+                score = balanced_accuracy_score(pred_labels, preds)
+            else:
+                print("Cant handle ", type(self.model_obj))
+
+            print(r'Balanced Accuracy for Test data = {score}'.format(score=score))
+
+        elif not self.is_binary:
+
             predictions = self.model_obj.predict(pred_features)
+            # print([predictions])
+            # print(type(self.model_obj).__name__)
 
-        if self.is_categorical == True:
-            preds = self.model_obj.predict(pred_features)
-            score = balanced_accuracy_score(preds, pred_labels)
-        elif self.is_categorical == False:
-            score = self.model_obj.score(pred_features, pred_labels)
+            if isinstance(self.model_obj, pypmml.Model):
+                predictions = np.array(predictions[predictions.columns[0]]) # TODO this might not work directly with kNN
+            elif isinstance(self.model_obj, Pipeline) or isinstance(self.model_obj, PMMLPipeline) or 'PMML' in type(
+                    self.model_obj).__name__:
+                predictions = np.array(predictions)
+            else:
+                print("Cant handle ", type(self.model_obj))
+
+            # print(predictions)
+            # print(pred_labels)
+
+            score = stats.pearsonr(predictions, pred_labels)[0]
+            score = score * score
+
+            print(r'R2 for Test data = {score}'.format(score=score))
+
         else:
+            print("is_categorical is null")  # does this happen?
             pass
-
 
         # df = pd.DataFrame()
         # df['exp'] = pred_labels
         # df['pred'] = predictions
-        # print('score',score,'\n')
         # print(df.to_csv(index=False))
 
+        # print(predictions)
 
-        print(r'Balanced Accuracy or COD for Test data = {score}'.format(score=score))
         # Return predictions
-        if return_score == False:
+        if not return_score:
             return predictions
-        elif return_score == True:
+        elif return_score:
             return score
-
 
     def do_predictions_RMSE(self, df_prediction):
         """Makes predictions using the trained model"""
@@ -378,19 +513,19 @@ class Model:
 
         predictions = self.model_obj.predict(pred_features)
 
-        RMSE=0
-        for index,pred in enumerate(predictions):
+        RMSE = 0
+        for index, pred in enumerate(predictions):
             exp = pred_labels[index]
-            error = (exp-pred)*(exp-pred)
-            RMSE=RMSE+error
+            error = (exp - pred) * (exp - pred)
+            RMSE = RMSE + error
             # print(exp,pred)
 
-        RMSE=math.sqrt(RMSE/len(predictions))
+        RMSE = math.sqrt(RMSE / len(predictions))
         return RMSE
 
 
 class KNN(Model):
-    def __init__(self, df_training, remove_log_p_descriptors, n_jobs=1):
+    def __init__(self, df_training=None, remove_log_p_descriptors=False, n_jobs=1):
         Model.__init__(self, df_training, remove_log_p_descriptors, n_jobs=n_jobs)
 
         self.regressor_name = 'knn'
@@ -398,13 +533,15 @@ class KNN(Model):
 
         # self.hyperparameter_grid = {'estimator__n_neighbors': [5],
         #                         'estimator__weights': ['uniform', 'distance']}
-        self.hyperparameter_grid = {'estimator__n_neighbors': [5],'estimator__weights': ['distance']}  # keep it consistent between endpoints, match OPERA
+        self.hyperparameter_grid = {'estimator__n_neighbors': [5], 'estimator__weights': [
+            'distance']}  # keep it consistent between endpoints, match OPERA
 
         self.description = 'sklearn implementation of k-nearest neighbors'
         self.description_url = 'https://scikit-learn.org/stable/modules/generated/sklearn.neighbors.KNeighborsClassifier.html'
 
+
 class REG(Model):
-    def __init__(self, df_training, remove_log_p_descriptors, n_jobs=1):
+    def __init__(self, df_training=None, remove_log_p_descriptors=False, n_jobs=1):
         Model.__init__(self, df_training, remove_log_p_descriptors, n_jobs=n_jobs)
         self.regressor_name = 'reg'
         self.version = '1.0'
@@ -415,7 +552,7 @@ class REG(Model):
 
 
 class XGB(Model):
-    def __init__(self, df_training, remove_log_p_descriptors, n_jobs=1):
+    def __init__(self, df_training=None, remove_log_p_descriptors=False, n_jobs=1):
         Model.__init__(self, df_training, remove_log_p_descriptors, n_jobs=n_jobs)
         self.regressor_name = 'xgb'
         self.version = '1.3'
@@ -428,7 +565,7 @@ class XGB(Model):
 
 
 class SVM(Model):
-    def __init__(self, df_training, remove_log_p_descriptors, n_jobs=20):
+    def __init__(self, df_training=None, remove_log_p_descriptors=False, n_jobs=20):
         Model.__init__(self, df_training, remove_log_p_descriptors, n_jobs=n_jobs)
         self.regressor_name = "svm"
         self.version = '1.4'
@@ -453,23 +590,26 @@ class SVM(Model):
 
 
 class RF(Model):
-    def __init__(self, df_training, remove_log_p_descriptors, n_jobs=20):
+    def __init__(self, df_training=None, remove_log_p_descriptors=False, n_jobs=20):
         Model.__init__(self, df_training, remove_log_p_descriptors, n_jobs=n_jobs)
         self.regressor_name = "rf"
-        self.version = '1.6'
 
-        #simple grid works fine:
-        self.hyperparameter_grid = {"estimator__max_features": ["sqrt", "log2"]}
-
-        #following didnt seem to help at all for predicting PFAS properties:
+        # following didnt seem to help at all for predicting PFAS properties:
         # self.hyperparameter_grid = {"estimator__max_features": ["sqrt", "log2"],
         #                         'estimator__n_estimators': [10, 100, 200, 400],
         #                         'estimator__min_samples_leaf': [1, 2, 4, 8]}
 
-
         # self.hyperparameter_grid = {'estimator__max_features': ['sqrt', 'log2', 4],
         #                         'estimator__min_impurity_decrease': [10 ** x for x in range(-5, 0)],   append 0!
         #                         'estimator__n_estimators': [10, 100, 250, 500]}
+
+        self.version = '1.6'
+        self.hyperparameter_grid = {"estimator__max_features": ["sqrt", "log2"]}
+
+        # self.version = '1.7'
+        # self.hyperparameter_grid = {"estimator__max_features": ["sqrt", "log2"], "estimator__max_depth": [1, 5, 10, 50,100,500]}
+        # self.hyperparameter_grid = {"estimator__max_features": ["sqrt", "log2"],
+        #                             "estimator__n_estimators": [10, 50, 100]}
 
         self.description = 'sklearn implementation of random forest'
         self.description_url = 'https://scikit-learn.org/stable/modules/generated/sklearn.ensemble.RandomForestClassifier.html'
@@ -479,15 +619,22 @@ class ModelDescription:
     def __init__(self, model):
         """Describes parameters of the current method"""
 
-        self.is_binary = model.is_categorical
+        self.is_binary = model.is_binary
         self.remove_log_p_descriptors = model.remove_log_p_descriptors
         self.version = model.version
         self.qsar_method = model.regressor_name
         self.description = model.description
         self.description_url = model.description_url
-        self.hyperparameter_grid = model.hyperparameters
-        self.hyperparameters = model.hyperparameters # final hyperparameters
+        self.hyperparameter_grid = model.hyperparameter_grid
+        self.hyperparameters = model.hyperparameters  # final hyperparameters
         self.training_stats = model.training_stats
+        self.embedding = model.embedding
+        self.use_pmml = model.use_pmml
+        self.include_standardization_in_pmml = model.include_standardization_in_pmml
+
+        if hasattr(model, "training_descriptor_std_devs"):
+            self.training_descriptor_std_devs = model.training_descriptor_std_devs
+            self.training_descriptor_means = model.training_descriptor_means
 
     def to_json(self):
         """Returns description as a JSON"""

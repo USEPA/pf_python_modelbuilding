@@ -8,15 +8,24 @@ import model_ws_utilities as mwu
 import json
 # from models import dnn_model as dnn
 from models_old import knn_model as knn, svm_model as svm, rf_model as rf, xgb_model as xgb
+import os
+import utils
+
 
 # Set GA hyperparameters:
-num_generations = 100
+# num_generations = 100
+# num_optimizers = 10
+
+num_generations = 10
 num_optimizers = 10
+
 qsar_method = 'knn'
 n_threads = 16  # threads to use with RF- TODO
-num_jobs = 2  # jobs to use for GA search for embedding- using 16 has marginal benefit over 4 or 8
+num_jobs = 4  # jobs to use for GA search for embedding- using 16 has marginal benefit over 4 or 8
 descriptor_coefficient = 0.002
 max_length = 24
+use_wards = False
+
 # threshold = 2  # Nate's value
 threshold = 1  # TMM attempt to get more descriptors from stage 1
 lanId = 'tmarti02'
@@ -64,7 +73,6 @@ def getModelDescription(qsar_method):
 
 
 def caseStudyOPERA_RunGA():
-    # directoryOPERA = "C:/Users/TMARTI02/OneDrive - Environmental Protection Agency (EPA)/0 java/QSAR_Model_Building/data/datasets_benchmark/"
     directoryOPERA = "../datasets_benchmark/"
 
     # endpointsOPERA = ["LogKoa", "LogKmHL", "Henry's law constant", "LogBCF", "LogOH", "LogKOC",
@@ -133,10 +141,10 @@ def a_runCaseStudiesExpProp():
         threshold) + '_' + str(round(time.time() * 1000)) + '.json'
 
     datasetNames = []
-    # datasetNames.append("HLC from exp_prop and chemprop")
+    datasetNames.append("HLC from exp_prop and chemprop")
     # datasetNames.append("WS from exp_prop and chemprop")
     # datasetNames.append("VP from exp_prop and chemprop")
-    datasetNames.append("LogP from exp_prop and chemprop")
+    # datasetNames.append("LogP from exp_prop and chemprop")
     # datasetNames.append("MP from exp_prop and chemprop")
     # datasetNames.append("BP from exp_prop and chemprop")
 
@@ -162,7 +170,7 @@ def a_runCaseStudiesExpProp():
                              n_threads=n_threads, num_optimizers=num_optimizers,
                              num_generations=num_generations, num_jobs=num_jobs, threshold=threshold,
                              datasetName=datasetName, descriptorSetName=descriptor_software, splittingName=splitting,
-                             remove_log_p=remove_log_p)
+                             remove_log_p=remove_log_p, use_wards=use_wards)
 
         print(json.dumps(ci, indent=4))
         print(datasetName)
@@ -177,13 +185,30 @@ def a_runCaseStudiesExpProp():
 
     f.close()
 
+def loadExpPropDataset(endpoint, descriptor_software, splitting):
+
+    folder = os.path.join(utils.get_project_root(), 'datasets',endpoint,'PFAS')
+
+    training_file_name = endpoint + '_'+descriptor_software +'_'+splitting+ '_training.tsv'
+    prediction_file_name = endpoint + '_'+descriptor_software +'_'+splitting+ '_prediction.tsv'
+
+    training_tsv_path = os.path.join(folder, training_file_name)
+    prediction_tsv_path = os.path.join(folder, prediction_file_name)
+
+    # print (training_tsv_path)
+    df_training = DFU.load_df_from_file(training_tsv_path, sep='\t')
+    df_prediction = DFU.load_df_from_file(prediction_tsv_path, sep='\t')
+    df_training = DFU.filter_columns_in_both_sets(df_training, df_prediction)
+    return df_training, df_prediction
+
+
 def a_runCaseStudiesExpPropPFAS():
     inputFolder = '../datasets/'
     outputFolder = '../datasets/GA/'
 
-    # splitting = 'T=PFAS only, P=PFAS'
+    splitting = 'T=PFAS only, P=PFAS'
     ## splitting = 'T=all, P=PFAS'  #dont need to run
-    splitting = 'T=all but PFAS, P=PFAS'
+    # splitting = 'T=all but PFAS, P=PFAS'
 
 
     # output filepath:
@@ -191,12 +216,15 @@ def a_runCaseStudiesExpPropPFAS():
         threshold) + '_' + str(round(time.time() * 1000)) + '.json'
 
     datasetNames = []
-    datasetNames.append("HLC from exp_prop and chemprop")
-    datasetNames.append("WS from exp_prop and chemprop")
-    datasetNames.append("VP from exp_prop and chemprop")
-    datasetNames.append("LogP from exp_prop and chemprop")
-    datasetNames.append("MP from exp_prop and chemprop")
+    # datasetNames.append("HLC from exp_prop and chemprop")
+    # datasetNames.append("WS from exp_prop and chemprop")
+    # datasetNames.append("VP from exp_prop and chemprop")
+    # datasetNames.append("LogP from exp_prop and chemprop")
+    # datasetNames.append("MP from exp_prop and chemprop")
     # datasetNames.append("BP from exp_prop and chemprop")
+    datasetNames.append("WS v1 res_qsar")
+
+
 
     # *****************************************************************************************************************
     # descriptor_software = 'PaDEL-default'
@@ -209,6 +237,7 @@ def a_runCaseStudiesExpPropPFAS():
     f.write(getModelDescription(qsar_method) + '\n')
     f.flush()
 
+
     for datasetName in datasetNames:
 
         remove_log_p = False
@@ -219,7 +248,7 @@ def a_runCaseStudiesExpPropPFAS():
                              n_threads=n_threads, num_optimizers=num_optimizers,
                              num_generations=num_generations, num_jobs=num_jobs, threshold=threshold,
                              datasetName=datasetName, descriptorSetName=descriptor_software, splittingName=splitting,
-                             remove_log_p=remove_log_p)
+                             remove_log_p=remove_log_p,use_wards=use_wards)
 
         print(json.dumps(ci, indent=4))
         print(datasetName)
@@ -267,7 +296,7 @@ def a_run_endpoint(ENDPOINT, f, remove_log_p, training_tsv_path, prediction_tsv_
                                                        num_generations=num_generations,
                                                        num_optimizers=num_optimizers, num_jobs=num_jobs,
                                                        descriptor_coefficient=descriptor_coefficient,
-                                                       max_length=max_length, threshold=threshold, model_id=1)
+                                                       max_length=max_length, threshold=threshold, use_wards=use_wards)
     print('embedding = ', features)
     print('Time to run ga  = ', timeGA, 'mins')
     # **************************************************************************************
@@ -295,14 +324,14 @@ def a_run_endpoint(ENDPOINT, f, remove_log_p, training_tsv_path, prediction_tsv_
 class CalculationInfo(dict):
 
     def __init__(self, descriptor_coefficient, max_length, n_threads, num_optimizers, num_generations, num_jobs,
-                 threshold, datasetName, descriptorSetName, splittingName, remove_log_p):
+                 threshold, datasetName, descriptorSetName, splittingName, remove_log_p,use_wards):
 
         # Add dictionary so can just output the fields we want in the correct order in the json:
         # TODO add remove_log_p to the dictionary
         dict.__init__(self, num_generations=num_generations, num_optimizers=num_optimizers,
                       num_jobs=num_jobs, n_threads=n_threads, max_length=max_length,
                       descriptor_coefficient=descriptor_coefficient,
-                      threshold=threshold)  # dont need things like datasetName in the dictionary
+                      threshold=threshold,use_wards=use_wards)  # dont need things like datasetName in the dictionary
 
         self.descriptor_coefficient = descriptor_coefficient
         self.max_length = max_length
@@ -315,6 +344,8 @@ class CalculationInfo(dict):
         self.descriptorSetName = descriptorSetName
         self.splittingName = splittingName
         self.remove_log_p = remove_log_p
+        self.use_wards = use_wards
+
 
 
 class DescriptorEmbedding(dict):
@@ -347,10 +378,11 @@ def a_run_dataset(f, training_tsv_path, prediction_tsv_path, ci):
 
     if useAPI:
         # Run from API call:
-        str_result = mwu.api_call_build_embedding_ga(qsar_method=qsar_method, training_tsv=training_tsv,
+        str_result = mwu.api_call_build_embedding_ga(qsar_method=qsar_method,
+                                                     training_tsv=training_tsv,prediction_tsv=prediction_tsv,
                                                      remove_log_p=ci.remove_log_p, n_threads=n_threads,
                                                      num_generations=num_generations, num_optimizers=num_optimizers,
-                                                     num_jobs=num_jobs,
+                                                     num_jobs=num_jobs,use_wards=use_wards,
                                                      descriptor_coefficient=descriptor_coefficient,
                                                      max_length=max_length, threshold=threshold, urlHost=urlHost)
         dict_result = json.loads(str_result)
@@ -368,7 +400,7 @@ def a_run_dataset(f, training_tsv_path, prediction_tsv_path, ci):
                                                        num_generations=num_generations,
                                                        num_optimizers=num_optimizers, num_jobs=num_jobs,
                                                        descriptor_coefficient=descriptor_coefficient,
-                                                       max_length=max_length, threshold=threshold, model_id=1)
+                                                       max_length=max_length, threshold=threshold, use_wards=use_wards)
     print('embedding = ', features)
     print('Time to run ga  = ', timeGA, 'mins')
     # **************************************************************************************
@@ -539,8 +571,8 @@ def bob():
 
 if __name__ == "__main__":
     # a_runCaseStudiesExpProp()
-    # a_runCaseStudiesExpPropPFAS()
-    caseStudyOPERA_RunGA()
+    a_runCaseStudiesExpPropPFAS()
+    # caseStudyOPERA_RunGA()
     # caseStudyTEST_RunGA()
     # caseStudyPOD()
     # bob()

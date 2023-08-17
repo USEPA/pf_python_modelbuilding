@@ -15,7 +15,19 @@ def load_df(tsv_string):
     else:
         separator = ','
 
+    # cant have these in variable names - messes up xgboost fit call:
+    # tsv_string = tsv_string.replace("[","").replace("]","").replace("<","").replace(">","")
+
     df = pd.read_csv(StringIO(tsv_string), sep=separator, na_values="null")
+
+    # Remove special chars from column names or it causes issues with pmml:
+    # df.columns = df.columns.str.replace('[', '')
+    # df.columns = df.columns.str.replace(']', '')
+    # df.columns = df.columns.str.replace('<', '')
+    # df.columns = df.columns.str.replace('>', '') # TODO need to be be careful with old embeddings
+
+    # print(df.columns)
+
 
     # Deletes rows with bad values CR 4/20/2022: descriptors with full nulls are more frequent in descriptor packages like Mordred than individual compounds with full nulls.
     # df = df[~df.isin([np.nan, np.inf, -np.inf]).any(1)]
@@ -118,8 +130,9 @@ def prepare_prediction_instances(df, train_column_names):
     """Prepares a pandas df of prediction data using descriptor set from training data
     Uses a one liner to drop all the columns: df = df[train_column_names]
     """
-    ids = np.array(df[df.columns[0]])
-    labels = np.array(df[df.columns[1]])
+    ids = df[df.columns[0]]
+    # labels = np.array(df[df.columns[1]])
+    labels = df[df.columns[1]]
 
     df = df[train_column_names]
 
@@ -130,15 +143,12 @@ def prepare_prediction_instances(df, train_column_names):
     # features = np.array(df)
     features = df  # scikit learn converts it to numpy array later anyways
 
-    # print(features)
+    # print(features.shape)
 
     # Return ids, exp vals, and descriptors as separate arrays
     return ids, labels, features
 
-def filter_columns_in_both_sets(df_training, df_prediction, remove_log_p):
-
-    if remove_log_p:
-        df_training = remove_log_p_descriptors(df_training, 'training')
+def filter_columns_in_both_sets(df_training, df_prediction):
 
     # Deletes columns with null values:
     df_training = df_training.dropna(axis=1)
@@ -182,8 +192,11 @@ def prepare_instances(df, which_set, remove_logp, remove_corr):
         is_binary = False
 
     # Labels are the values we want to predict
-    labels = np.array(df_labels)
-    ids = np.array(df[df.columns[0]])
+    # labels = np.array(df_labels)
+    labels = df_labels
+
+    ids = df[df.columns[0]]
+
     col_name_id = df.columns[0]
     col_name_property = df.columns[1]
 
@@ -225,8 +238,9 @@ def prepare_instances_wards(df, which_set, remove_logp, threshold):
         is_binary = False
 
     # Labels are the values we want to predict
-    labels = np.array(df_labels)
-    ids = np.array(df[df.columns[0]])
+    labels = df_labels
+    ids = df[df.columns[0]]
+
     col_name_id = df.columns[0]
     col_name_property = df.columns[1]
 
@@ -281,9 +295,8 @@ def prepare_instances2(df, embedding, remove_corr):
     df_labels = df[df.columns[1]]
 
     # Labels are the values we want to predict
-    labels = np.array(df_labels)
-
-    ids = np.array(df[df.columns[0]])
+    labels = df_labels
+    ids = df[df.columns[0]]
 
     # drop ID column:
     df = df[embedding]
@@ -357,14 +370,16 @@ def prepare_instances_with_preselected_descriptors(df, which_set, descriptor_nam
     Uses a one liner to drop all the columns: df = df[train_column_names]
     """
     df_labels = df[df.columns[1]]
+
     if df_labels.isin([0, 1]).all():
         is_binary = True
     else:
         is_binary = False
 
     # Labels are the values we want to predict
-    labels = np.array(df_labels)
-    ids = np.array(df[df.columns[0]])
+    labels = df_labels
+
+    ids = df[df.columns[0]]
 
     # print(descriptor_names)
     # print(df.columns)

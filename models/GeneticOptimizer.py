@@ -19,6 +19,8 @@ from models import ModelBuilder
 from models import df_utilities as DFU
 
 
+debug = True
+
 NUM_GENERATIONS = 100 # kamel used 100
 NUM_OPTIMIZERS = 10 # kamel used 100
 NUM_PARENTS = 10
@@ -88,15 +90,32 @@ DESCRIPTOR_COEFFICIENT = 0.002
 #     return wardsFeatures
 
 
-def runGA(df_train, model,remove_log_p_descriptors=False):
+def runGA(df_training, model, use_wards, remove_log_p_descriptors=False):
 
-    train_ids, train_labels, train_features, train_column_names, model.is_categorical = \
-        DFU.prepare_instances_wards(df_train, "training", remove_log_p_descriptors, 0.5) # uses wards method to remove extra descriptors
+    if use_wards:
+        # Using ward's method removes too descriptors for PFAS only training sets:
+        train_ids, train_labels, train_features, train_column_names, model.is_binary = \
+            DFU.prepare_instances_wards(df_training, "training", remove_log_p_descriptors,
+                                        0.5)  # uses wards method to remove extra descriptors
+    else:
+        train_ids, train_labels, train_features, train_column_names, model.is_binary = \
+            DFU.prepare_instances(df_training, "training", remove_log_p_descriptors,
+                                  True)  # removes descriptors which are correlated by 0.95
+
+
+    # train_ids, train_labels, train_features, train_column_names, model.is_categorical = \
+    #     DFU.prepare_instances_wards(df_train, "training", remove_log_p_descriptors, 0.5) # uses wards method to remove extra descriptors
 
     # print(type(model))
 
-    model.model_obj = ModelBuilder.model_registry(model.regressor_name, model.is_categorical)
+    print('use_wards = ',use_wards)
+    print('after initial feature selection, # features = ',len(train_column_names))
+    # print('Number of rows = ', len(train_ids))
 
+
+    model.model_obj = ModelBuilder.model_registry_pipeline(model.regressor_name, model.is_binary)
+
+    # print(model.model_obj.steps[1][1])
 
     if model.regressor_name == 'rf':
         model.hyperparameter_grid = {
@@ -105,6 +124,7 @@ def runGA(df_train, model,remove_log_p_descriptors=False):
     model.hyperparameters = model.get_single_parameters()
     model.model_obj.set_params(**model.hyperparameters)
 
+    print (model.hyperparameters)
 
     # features = wardsMethod(df_train, 0.5)
     # y_internal = df_train.iloc[:,1]
@@ -115,14 +135,18 @@ def runGA(df_train, model,remove_log_p_descriptors=False):
     descriptor_pool = train_column_names
 
     fitness_calculator = FiveFoldFitness(X_train=x_internal, y_train=y_internal, model=model.model_obj)
+
     go = GeneticOptimizer(descriptor_pool, fitness_calculator)
 
     ensemble_selector = GeneticSelector(descriptor_pool, fitness_calculator)
+
+    print('NUM_GENERATIONS',NUM_GENERATIONS)
 
     ensemble_selector.ensemble_evolution(num_optimizers=NUM_OPTIMIZERS, num_generations=NUM_GENERATIONS,
                                          num_parents=NUM_PARENTS, min_length=MINIMUM_LENGTH,
                                          max_length=MAXIMUM_LENGTH, mutation_probability=MUTATION_PROBABILITY,
                                          num_survivors=NUMBER_SURVIVORS)
+
 
     high_count_descriptors = ensemble_selector.descriptor_threshold(THRESHOLD)
     print(high_count_descriptors)
@@ -269,6 +293,7 @@ class GeneticOptimizer:
         return survivors
 
     def run_generation(self, parents, mutation_probability, num_survivors, return_prime=False):
+
         scored_parents = self.apply_fitness(parents)
     
         survivors = self.fitness_filter(scored_parents, num_survivors)
@@ -282,17 +307,26 @@ class GeneticOptimizer:
             return children
 
     def run_evolution(self, num_generations, num_parents, min_length, max_length, mutation_probability, num_survivors):
+
         self.history = {}
         self.history['prime_scores'] = []
         self.history['prime_genes'] = []
         primes = []
         self.generations = {}
+
+
         primordials = self.initialize_parents(num_parents, min_length, max_length)
         children, prime = self.run_generation(primordials, mutation_probability, num_survivors, return_prime=True)
+
         for i in range(num_generations):
+            if debug:
+                print('\tgeneration',i+1)
             children, prime = self.run_generation(children, mutation_probability, num_survivors, return_prime = True)
             self.generations[i] = children
             primes.append(prime)
+
+
+
         max_fitness = max(self.history['prime_scores'])
         for i in range(len(self.history['prime_scores'])):
             if self.history['prime_scores'][i] == max_fitness:
@@ -309,7 +343,12 @@ class GeneticSelector:
     def ensemble_evolution(self, num_optimizers, num_generations, num_parents, min_length, max_length, mutation_probability, num_survivors):
         self.genetic_optimizers = {}
         self.num_optimizers = num_optimizers
+
         for identification_number in range(num_optimizers):
+
+            if debug:
+                print ('optimizer',identification_number+1)
+
             self.genetic_optimizers[identification_number] = GeneticOptimizer(self.descriptor_pool, self.fitness_calculator)
             self.genetic_optimizers[identification_number].run_evolution(num_generations=num_generations, num_parents=num_parents, min_length=min_length, max_length=max_length, mutation_probability=mutation_probability, num_survivors=num_survivors)
         
@@ -330,10 +369,3 @@ class GeneticSelector:
             if self.descriptor_counts[desc] >= threshold:
                 high_count_descriptors.append(desc)
         return high_count_descriptors
-
-
-
-if __name__ == '__main__':
-    
-    runGA()
-
