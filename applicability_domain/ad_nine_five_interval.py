@@ -146,7 +146,7 @@ def caseStudies():
         ad.setResponse(PROPERTY)
         ad.setModel(model)
         ad.predict(embedding)
-        output = ad.evaluate2(embedding)
+        output = ad.evaluate(embedding)
         ad.createSets(ad.AD_Label)
         ad.scoreMetrics()
         # endpoint_data[endpoint]['TEST'] = {'product': ad.cp_product, 'coverage_train': train_test_ratios(ad)[0],
@@ -174,7 +174,7 @@ def caseStudies():
         # trainData.to_excel("results/trainData2.xlsx", sheet_name='sheet1')
         # print(ds_manager.feature_names)
 
-        output = ad.evaluate2(train_column_names)
+        output = ad.evaluate(train_column_names)
         ad.createSets(ad.AD_Label)
         ad.scoreMetrics()
         # endpoint_data[endpoint]['AllTEST'] = {'product': ad.cp_product, 'coverage_train': train_test_ratios(ad)[0],
@@ -200,7 +200,7 @@ def caseStudies():
         # trainData.to_excel("results/trainData2.xlsx", sheet_name='sheet1')
         # print(ds_manager.feature_names)
 
-        output = ad.evaluate2(train_column_names)
+        output = ad.evaluate(train_column_names)
         ad.createSets(ad.AD_Label)
         ad.scoreMetrics()
         # endpoint_data[endpoint]['AllTEST'] = {'product': ad.cp_product, 'coverage_train': train_test_ratios(ad)[0],
@@ -213,7 +213,7 @@ def caseStudies():
         print('*********************************************************************************************')
         print('start local index')
 
-        ad = adm.OPERALocalApplicabilityDomainRevised(trainData, testData, is_categorical)
+        ad = adm.OPERALocalApplicabilityDomain(trainData, testData, is_categorical)
         ad.set_parameters({'k': 5, 'exceptionalLocal': 0.6, 'similarity': 'euclidean',
                            'onlyLocal': 0.01, 'exclusionFraction': 0.05})
 
@@ -222,7 +222,7 @@ def caseStudies():
         ad.setModel(model)
         ad.predict(embedding)
 
-        ad.evaluate2(embedding)
+        ad.evaluate(embedding)
         ad.createSets(ad.AD_Label)
         ad.scoreMetrics()
         # endpoint_data[endpoint]['OPERALocal'] = {'product': ad.cp_product, 'coverage_train': train_test_ratios(ad)[0],

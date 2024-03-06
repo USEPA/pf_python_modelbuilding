@@ -208,7 +208,12 @@ def call_build_embedding_ga(qsar_method, training_tsv, prediction_tsv, remove_lo
     #     # 404 NOT FOUND if requested QSAR method has not been implemented
     #     abort(404, qsar_method + ' not implemented')
 
-    ga_model = instantiateModel(df_training, n_threads, qsar_method, remove_log_p)
+    # ga_model = instantiateModel(df_training, n_threads, qsar_method, remove_log_p)
+
+
+    ga_model = mwu.instantiateModel(df_training=df_training, n_jobs=n_threads, qsar_method=qsar_method,
+                                 remove_log_p=remove_log_p, use_pmml_pipeline=False)
+
 
     # print('regressor_name',ga_model.regressor_name)
 

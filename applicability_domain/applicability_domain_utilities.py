@@ -7,8 +7,11 @@ from applicability_domain import ApplicabilityDomain as adm
 
 strTESTApplicabilityDomainEmbeddingCosine = "TEST Cosine Similarity Embedding Descriptors"
 strTESTApplicabilityDomainEmbeddingEuclidean = "TEST Euclidean Distance Embedding Descriptors"
-strTESTApplicabilityDomainAlLDescriptors = "TEST Cosine Similarity All Descriptors"
+strTESTApplicabilityDomainAlLDescriptorsCosine = "TEST Cosine Similarity All Descriptors"
+strTESTApplicabilityDomainAllDescriptorsEuclideanDistance = "TEST Euclidean Distance All Descriptors"
+strOPERA_global_index = "OPERA Global Index"
 strOPERA_local_index = "OPERA Local Index"
+strKernelDensity = "Kernel Density"
 
 import requests
 
@@ -25,28 +28,45 @@ def generate_applicability_domain_with_preselected_descriptors(training_tsv, tes
 
     if applicability_domain == strTESTApplicabilityDomainEmbeddingCosine:
         ad = adm.TESTApplicabilityDomain(trainData, testData, is_binary)
-        ad.set_parameters({'k': 3, 'exclusionFraction': 0.05, 'similarity': 'cosine'})
-        output = ad.evaluate2(embedding=embedding)
+        ad.set_parameters({'k': 3, 'fractionTrainingSetInsideAD': 0.95, 'similarity': 'cosine'})
+        output = ad.evaluate(embedding=embedding)
     elif applicability_domain == strTESTApplicabilityDomainEmbeddingEuclidean:
         ad = adm.TESTApplicabilityDomain(trainData, testData, is_binary)
-        ad.set_parameters({'k': 3, 'exclusionFraction': 0.05, 'similarity': 'euclidean'})
-        output = ad.evaluate2(embedding=embedding)
-    elif applicability_domain == strTESTApplicabilityDomainAlLDescriptors or embedding is None:
+        ad.set_parameters({'k': 3, 'fractionTrainingSetInsideAD': 0.95, 'similarity': 'euclidean'})
+        output = ad.evaluate(embedding=embedding)
+    elif applicability_domain == strTESTApplicabilityDomainAlLDescriptorsCosine or embedding is None:
         ad = adm.TESTApplicabilityDomain(trainData, testData, is_binary)
-        ad.set_parameters({'k': 3, 'exclusionFraction': 0.05, 'similarity': 'cosine',
+        ad.set_parameters({'k': 3, 'fractionTrainingSetInsideAD': 0.95, 'similarity': 'cosine',
                            'train_column_names': train_column_names})
-        output = ad.evaluate2(embedding=train_column_names)
+        output = ad.evaluate(embedding=train_column_names)
+
+    elif applicability_domain == strTESTApplicabilityDomainAllDescriptorsEuclideanDistance or embedding is None:
+        ad = adm.TESTApplicabilityDomain(trainData, testData, is_binary)
+        ad.set_parameters({'k': 3, 'fractionTrainingSetInsideAD': 0.95, 'similarity': 'euclidean',
+                           'train_column_names': train_column_names})
+        output = ad.evaluate(embedding=train_column_names)
+
     elif applicability_domain == strOPERA_local_index:
-        ad = adm.OPERALocalApplicabilityDomainRevised(trainData, testData, is_binary)
+        ad = adm.OPERALocalApplicabilityDomain(trainData, testData, is_binary)
         ad.set_parameters({'k': 5, 'exceptionalLocal': 0.6, 'similarity': 'euclidean',
-                           'onlyLocal': 0.01, 'exclusionFraction': 0.05})
-        output = ad.evaluate2(embedding=embedding)
+                           'onlyLocal': 0.01, 'fractionTrainingSetInsideAD': 0.95})
+        output = ad.evaluate(embedding=embedding)
+    elif applicability_domain == strOPERA_global_index:
+        ad = adm.OPERAGlobalApplicabilityDomain(trainData, testData, is_binary)
+        ad.set_parameters({'fractionTrainingSetInsideAD': 0.95, 'train_column_names': train_column_names})
+        output = ad.evaluate(embedding=embedding)
+    elif applicability_domain == strKernelDensity:
+        ad = adm.KernelDensityApplicabilityDomain(trainData, testData, is_binary)
+        ad.set_parameters({'fractionTrainingSetInsideAD': 0.95, 'train_column_names': train_column_names})
+        output = ad.evaluate(embedding=embedding)
 
     count_inside_AD = output['AD'].value_counts()[True]
     countTest = output.shape[0]
     coverage = count_inside_AD / countTest
 
-    print('\n***', applicability_domain, coverage)
+    print('\nAD', applicability_domain)
+    print('Fraction of test set insideID', coverage)
+
     # print(output)
     return output
 

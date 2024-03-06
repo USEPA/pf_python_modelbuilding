@@ -95,9 +95,9 @@ def generateADs():
                                                                                 test_tsv=test_tsv,
                                                                                 remove_log_p=remove_log_p,
                                                                                 embedding=embedding,
-                                                                                applicability_domain=adu.strTESTApplicabilityDomainAlLDescriptors)
+                                                                                applicability_domain=adu.strTESTApplicabilityDomainAlLDescriptorsCosine)
 
-        output.to_csv('results/AD_' + endpoint + '_' + adu.strTESTApplicabilityDomainAlLDescriptors + '.csv',
+        output.to_csv('results/AD_' + endpoint + '_' + adu.strTESTApplicabilityDomainAlLDescriptorsCosine + '.csv',
                       index=False)
 
         # ###################################################################################################
@@ -200,7 +200,7 @@ def generateADs_via_API_call():
                                                                                          test_tsv=test_tsv,
                                                                                          remove_log_p=remove_log_p,
                                                                                          embedding_tsv=embedding,
-                                                                                         applicability_domain=adu.strTESTApplicabilityDomainAlLDescriptors,
+                                                                                         applicability_domain=adu.strTESTApplicabilityDomainAlLDescriptorsCosine,
                                                                                          urlHost=urlHost)
 
         # print(output)

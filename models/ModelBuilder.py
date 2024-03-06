@@ -320,7 +320,7 @@ class Model:
             ss = StandardScaler()
             train_features = pd.DataFrame(ss.fit_transform(train_features), columns=train_features.columns)
             self.training_descriptor_means = ss.mean_.tolist()
-            self.training_descriptor_std_devs = (ss.var_ ** 0.5).tolist()
+            self.training_descriptor_std_devs = (ss.var_ ** 0.5).tolist() #TODO should it instead use the overall training set stdev instead of the CV training set stdev? Sometimes the CV will have a zero stddev during CV
 
         self.model_obj.set_params(**params)
 
@@ -435,6 +435,10 @@ class Model:
 
         if hasattr(self, 'training_descriptor_means') and self.training_descriptor_means:
             print('normalizing prediction set using means and stdevs')
+
+            # print(self.training_descriptor_means)
+            # print(self.training_descriptor_std_devs)
+
             pred_features = pd.DataFrame(
                 (np.array(pred_features) - self.training_descriptor_means) / self.training_descriptor_std_devs,
                 columns=self.embedding)
@@ -630,11 +634,13 @@ class ModelDescription:
         self.training_stats = model.training_stats
         self.embedding = model.embedding
         self.use_pmml = model.use_pmml
-        self.include_standardization_in_pmml = model.include_standardization_in_pmml
 
         if hasattr(model, "training_descriptor_std_devs"):
+            self.include_standardization_in_pmml = False
             self.training_descriptor_std_devs = model.training_descriptor_std_devs
             self.training_descriptor_means = model.training_descriptor_means
+        else:
+            self.include_standardization_in_pmml = True
 
     def to_json(self):
         """Returns description as a JSON"""

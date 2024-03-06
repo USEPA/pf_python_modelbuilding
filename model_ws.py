@@ -54,6 +54,8 @@ def train(qsar_method):
     else:
         abort(400, 'missing use_pmml')
 
+    # TODO we might want to have option to not use standardization at all- not needed for RF or XGB (only need for kNN)- standardization causes interoperability problems when loading pmml
+
     if obj.get('include_standardization_in_pmml'):
         include_standardization_in_pmml = obj.get('include_standardization_in_pmml', '').lower() == 'true'
     else:
@@ -489,7 +491,8 @@ def predict():
 def initPMML():
     """Loads a model and stores it under the provided number"""
 
-    print('enter initPMML')
+    # print('enter initPMML')
+
 
     # form_obj = request.form
     # files_obj = request.files  # Retrieves the files attached to the request
@@ -498,9 +501,22 @@ def initPMML():
     model_id = form_obj.get('model_id')  # Retrieves the model number to use for persistent storage
     # print('form_obj',form_obj)
 
+    # print('model_id=',model_id)
+
     # Can't store a model unless number is specified
     if model_id is None:
         abort(400, 'missing model id')
+
+    if model_id in model_ws_utilities.models:
+        print('already have model in memory')
+        model = model_ws_utilities.models[model_id]
+        return model.get_model_description(), 201
+
+    # if model_ws_utilities.models[model_id] is not None:
+    #     model = model_ws_utilities.models[model_id]
+    #     print('Already have model loaded, description=:',model.get_model_description)
+    #     return model.get_model_description(), 201
+
 
     # Retrieves the model file from the request files
     # model_file = files_obj['model']
@@ -509,55 +525,62 @@ def initPMML():
     # print(model_file)
     # return ""
 
-    if form_obj.get('use_sklearn2pmml'):
+    print('use_sklearn2mml in form_obj:', form_obj.get('use_sklearn2pmml'))
+
+    if form_obj.get('use_sklearn2pmml') is None:
+        abort(400, 'missing use_sklearn2pmml')
+
+    if isinstance(form_obj.get('use_sklearn2pmml'), str):
         use_sklearn2pmml = form_obj.get('use_sklearn2pmml', '').lower() == 'true'
     else:
-        abort(400, 'missing use_sklearn2pmml')
+        use_sklearn2pmml = form_obj.get('use_sklearn2pmml')
+
+    print('use_sklearn2mml variable', form_obj.get('use_sklearn2pmml'))
 
     model = None
 
     # print (files_obj)
 
-    if model_file is not None:
-
-        print('have model file, type = ', type(model_file))
-        pmml_file_path = 'model_api.pmml'
-
-        # model_file.save(pmml_file_path, buffer_size=16384)  # save to hard drive so can load it
-
-        f = open(pmml_file_path, "w")
-        f.write(model_file)
-        f.close()
-
-        print('wrote pmmlfile to harddrive')
-
-        if isinstance(form_obj['is_binary'],bool):
-            is_binary = form_obj['is_binary']
-        else:
-            is_binary = form_obj['is_binary'].lower == 'true'
-
-        # print('is_categorical', is_categorical)
-        model = model_ws_utilities.instantiateModelForPrediction(qsar_method=form_obj['qsar_method'],
-                                                                 is_binary=is_binary, pmml_file_path=pmml_file_path,
-                                                                 use_sklearn2pmml=use_sklearn2pmml)  # init from model_ws should take care of this when doing from java
-        model.set_details(details=form_obj)
-
-        # print(model.model_obj)
-        # model.embedding = model.model_obj.dataDictionary.fieldNames
-        # model.embedding.remove('Property')
-
-        # Stores model under provided number
-        model_ws_utilities.models[model_id] = model
-
-        print('After init model_description =', model.get_model_description())
-
-    else:
+    if model_file is None:
+        print('Missing model bytes')
         # Can't store a model if none provided
         abort(400, 'missing model bytes')
 
 
+    print('have model file, type = ', type(model_file))
+    pmml_file_path = 'model_api.pmml'
+
+    # model_file.save(pmml_file_path, buffer_size=16384)  # save to hard drive so can load it
+
+    f = open(pmml_file_path, "w")
+    f.write(model_file)
+    f.close()
+
+    print('wrote pmmlfile to harddrive')
+
+    if isinstance(form_obj['is_binary'],bool):
+        is_binary = form_obj['is_binary']
+    else:
+        is_binary = form_obj['is_binary'].lower == 'true'
+
+    # print('is_categorical', is_categorical)
+    model = model_ws_utilities.instantiateModelForPrediction(qsar_method=form_obj['qsar_method'],
+                                                             is_binary=is_binary, pmml_file_path=pmml_file_path,
+                                                             use_sklearn2pmml=use_sklearn2pmml)  # init from model_ws should take care of this when doing from java
+    model.set_details(details=form_obj)
+
+    # print(model.model_obj)
+    # model.embedding = model.model_obj.dataDictionary.fieldNames
+    # model.embedding.remove('Property')
+
+    # Stores model under provided number
+    model_ws_utilities.models[model_id] = model
+
+    print('After init model_description =', model.get_model_description())
+
     # 400 BAD REQUEST if something is wrong with the loaded bytes
     if model is None:
+        print('Model is none')
         abort(400, 'unknown model initialization error')
 
 

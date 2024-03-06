@@ -113,7 +113,7 @@ def runGA(df_training, model, use_wards, remove_log_p_descriptors=False):
     # print('Number of rows = ', len(train_ids))
 
 
-    model.model_obj = ModelBuilder.model_registry_pipeline(model.regressor_name, model.is_binary)
+    # model.model_obj = ModelBuilder.model_registry_pipeline(model.regressor_name, model.is_binary)  #already done earlier in instantiate_model method
 
     # print(model.model_obj.steps[1][1])
 
