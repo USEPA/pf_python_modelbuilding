@@ -64,7 +64,28 @@ def call_build_model_with_preselected_descriptors(qsar_method, training_tsv, rem
     # Returns trained model:
     return model
 
+def call_build_model_with_preselected_descriptors(qsar_method, training_tsv, prediction_tsv, remove_log_p, use_pmml_pipeline,
+                                                  include_standardization_in_pmml, descriptor_names_tsv=None,
+                                                  n_jobs=8):
+    """Loads TSV training data into a pandas DF and calls the appropriate training method"""
 
+    df_training = dfu.load_df(training_tsv)
+    print('training shape=', df_training.shape)
+    df_prediction = DFU.load_df(prediction_tsv)
+    df_training = DFU.filter_columns_in_both_sets(df_training, df_prediction)
+    print('training shape after removing bad descriptors in both sets=', df_training.shape)
+
+    qsar_method = qsar_method.lower()
+
+    model = instantiateModel(df_training, n_jobs, qsar_method, remove_log_p, use_pmml_pipeline=use_pmml_pipeline, include_standardization_in_pmml=include_standardization_in_pmml)
+
+    if not model:
+        abort(404, qsar_method + ' not implemented')
+
+    model.build_model(use_pmml_pipeline=use_pmml_pipeline, include_standardization_in_pmml=include_standardization_in_pmml,
+                      descriptor_names=descriptor_names_tsv)
+    # Returns trained model:
+    return model
 def call_cross_validate(qsar_method, cv_training_tsv, cv_prediction_tsv, descriptor_names_tsv, use_pmml_pipeline,
                         remove_log_p=False, hyperparameters={}, n_jobs=8):
     """Loads TSV training data into a pandas DF and calls the appropriate training method"""
@@ -136,6 +157,7 @@ def instantiateModel(df_training, n_jobs, qsar_method, remove_log_p, use_pmml_pi
     return model
 
 
+
 def instantiateModelForPrediction(qsar_method, is_binary, pmml_file_path, use_sklearn2pmml):
     print('instantiateModel2 ' + qsar_method.upper() + ' model in model builder')
 
@@ -186,7 +208,7 @@ def instantiateModelForPrediction(qsar_method, is_binary, pmml_file_path, use_sk
 def call_build_embedding_ga(qsar_method, training_tsv, prediction_tsv, remove_log_p,
                             num_generations, num_optimizers, num_jobs, n_threads, descriptor_coefficient, max_length,
                             threshold,
-                            use_wards):
+                            use_wards,run_rfe):
     """Loads TSV training data into a pandas DF and calls the appropriate training method"""
     df_training = DFU.load_df(training_tsv)
     df_prediction = DFU.load_df(prediction_tsv)
@@ -195,35 +217,8 @@ def call_build_embedding_ga(qsar_method, training_tsv, prediction_tsv, remove_lo
 
     qsar_method = qsar_method.lower()
 
-    # ga_model = None
-    #
-    # if qsar_method == 'rf':
-    #     ga_model = rf.Model(df_training=df_training, remove_log_p_descriptors=remove_log_p, n_threads=n_threads,
-    #                         modelid=model_id)
-    # elif qsar_method == 'knn':
-    #     ga_model = knn.Model(df_training=df_training,
-    #                          remove_log_p_descriptors=remove_log_p,
-    #                          modelid=model_id)  # TODO should we add threads to knn?
-    # else:
-    #     # 404 NOT FOUND if requested QSAR method has not been implemented
-    #     abort(404, qsar_method + ' not implemented')
-
-    # ga_model = instantiateModel(df_training, n_threads, qsar_method, remove_log_p)
-
-
     ga_model = mwu.instantiateModel(df_training=df_training, n_jobs=n_threads, qsar_method=qsar_method,
                                  remove_log_p=remove_log_p, use_pmml_pipeline=False)
-
-
-    # print('regressor_name',ga_model.regressor_name)
-
-    # if qsar_method == 'knn':
-    #     ga_model = knn.Model(df_training=df_training,
-    #                          remove_log_p_descriptors=remove_log_p,
-    #                          modelid=model_id)  # TODO should we add threads to knn?
-    # else:
-    #     # 404 NOT FOUND if requested QSAR method has not been implemented
-    #     abort(404, qsar_method + ' not implemented')
 
     go.NUM_GENERATIONS = num_generations
 
@@ -236,15 +231,49 @@ def call_build_embedding_ga(qsar_method, training_tsv, prediction_tsv, remove_lo
     t1 = time.time()
     descriptor_names = go.runGA(df_training=df_training, model=ga_model, use_wards=use_wards,
                                 remove_log_p_descriptors=remove_log_p)
-    t2 = time.time()
 
-    timeMin = (t2 - t1) / 60
+
+    if run_rfe:
+        descriptor_names, time2 = remove_descriptors_rfe(qsar_method=qsar_method,df_training=df_training,
+                                   n_threads=n_threads,descriptor_names=descriptor_names)
 
     # embedding = json.dumps(descriptor_names)
-
     # print('embedding='+embedding)
 
-    # Returns embedding
+    t2 = time.time()
+    timeMin = (t2 - t1) / 60
+    return descriptor_names, timeMin
+
+
+def remove_descriptors_rfe(qsar_method, df_training, n_threads, descriptor_names):
+    """Loads TSV training data into a pandas DF and calls the appropriate training method"""
+
+    t1 = time.time()
+    qsar_method = qsar_method.lower()
+    model = mwu.instantiateModel(df_training=df_training, n_jobs=n_threads, qsar_method=qsar_method,
+                                 remove_log_p=False, use_pmml_pipeline=False)
+
+    # efi.perform_recursive_feature_elimination(model=model, df_training=df_training, n_threads=n_threads,n_steps=1)
+    # print('After RFE, ', len(model.embedding), "descriptors", model.embedding)
+    model.embedding = descriptor_names
+    embedding_old = descriptor_names
+    print('before rfe', embedding_old)
+
+    while True:  # need to get more aggressive (remove 2 at a time) since first RFE didnt remove enough
+        efi.perform_recursive_feature_elimination(model=model, df_training=df_training, n_threads=n_threads,
+                                                  n_steps=1)
+        print('After RFE iteration, ', len(model.embedding), "descriptors", model.embedding)
+        if len(model.embedding) == len(embedding_old):
+            break
+        embedding_old = model.embedding
+
+    descriptor_names = model.embedding
+
+    # embedding = json.dumps(descriptor_names)
+    # print('embedding='+embedding)
+
+    t2 = time.time()
+    timeMin = (t2 - t1) / 60
     return descriptor_names, timeMin
 
 
@@ -254,8 +283,14 @@ def call_build_embedding_importance(qsar_method, training_tsv, prediction_tsv, r
     """Generates importance based embedding"""
 
     df_training = DFU.load_df(training_tsv)
+
+    print('in call_build_embedding_importance, df_training.shape',df_training.shape)
+
+
     df_prediction = DFU.load_df(prediction_tsv)
     df_training = DFU.filter_columns_in_both_sets(df_training, df_prediction)
+
+    print(df_training.shape)
 
     model = mwu.instantiateModel(df_training=df_training, n_jobs=n_threads, qsar_method=qsar_method,
                                  remove_log_p=remove_log_p_descriptors, use_pmml_pipeline=False)
@@ -289,8 +324,9 @@ def call_build_embedding_importance(qsar_method, training_tsv, prediction_tsv, r
 
     # Run calcs on test set to see how well embedding did:
 
-    print("Final results for embedded model:")
-    score = model.do_predictions(df_prediction, return_score=True)
+    if df_prediction.shape[0] != 0:
+        print("Final results for embedded model:")
+        score = model.do_predictions(df_prediction, return_score=True)
 
     t2 = time.time()
 
@@ -450,6 +486,19 @@ def call_do_predictions(prediction_tsv, model):
     results = pd.DataFrame(np.column_stack([pred_ids, pred_labels, predictions]), columns=['id', 'exp', 'pred'])
     results_json = results.to_json(orient='records')
     return results_json
+
+
+def call_do_predictions_to_df(prediction_tsv, model):
+    """Loads TSV prediction data into a pandas DF, stores IDs and exp vals,
+    and calls the appropriate prediction method"""
+    df_prediction = dfu.load_df(prediction_tsv)
+    pred_ids = np.array(df_prediction[df_prediction.columns[0]])
+    pred_labels = np.array(df_prediction[df_prediction.columns[1]])
+    predictions = model.do_predictions(df_prediction)
+    if predictions is None:
+        return None
+    results = pd.DataFrame(np.column_stack([pred_ids, pred_labels, predictions]), columns=['id', 'exp', 'pred'])
+    return results
 
 
 def get_model_details(model):

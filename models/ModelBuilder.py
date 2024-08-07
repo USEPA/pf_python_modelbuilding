@@ -19,7 +19,8 @@ from sklearn.preprocessing import StandardScaler
 
 from sklearn2pmml.pipeline import PMMLPipeline as PMMLPipeline
 
-from models import df_utilities as DFU
+import model_ws_utilities
+from models import df_utilities as DFU, df_utilities
 from sklearn.neighbors import KNeighborsRegressor, KNeighborsClassifier
 from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
 from sklearn.svm import SVC, SVR
@@ -75,12 +76,15 @@ def model_registry_model_obj(regressor_name, is_categorical):
             return SVR()
     elif regressor_name == 'xgb':
         if is_categorical:
-            return XGBClassifier()
+            # return XGBClassifier()
+            return XGBClassifier(use_label_encoder=False, eval_metric='logloss')
+            # return XGBClassifier(use_label_encoder=False, eval_metric='auc')
         else:
             return XGBRegressor()
     elif regressor_name == 'reg':
         if is_categorical:
-            return LogisticRegression()
+            # return LogisticRegression(penalty='none')
+            return LogisticRegression(max_iter=1000)
         else:
             return LinearRegression()
 
@@ -472,6 +476,9 @@ class Model:
 
         elif not self.is_binary:
 
+            # inputFolder = 'C:/Users/TMARTI02/OneDrive - Environmental Protection Agency (EPA)/000 Papers/2024 tetko challenge/modeling/'
+            # pred_features.to_csv(inputFolder+'predfeatures.csv')
+
             predictions = self.model_obj.predict(pred_features)
             # print([predictions])
             # print(type(self.model_obj).__name__)
@@ -647,31 +654,52 @@ class ModelDescription:
         return json.dumps(self.__dict__)
 
 
+
+
 def runExamples():
     # %% Test Script
-    opera_path = r"C:\Users\ncharest\OneDrive - Environmental Protection Agency (EPA)\Profile\Documents\data_sets\OPERA_TEST_DataSetsBenchmark\DataSetsBenchmark\Water solubility OPERA\{filename}"
-    training_df = DFU.load_df_from_file(opera_path.format(filename=r"Water solubility OPERA T.E.S.T. 5.1 training.tsv"),
-                                        "\t")
-    pred_df = DFU.load_df_from_file(opera_path.format(filename=r"Water solubility OPERA T.E.S.T. 5.1 prediction.tsv"),
-                                    "\t")
+    # opera_path = r"C:\Users\ncharest\OneDrive - Environmental Protection Agency (EPA)\Profile\Documents\data_sets\OPERA_TEST_DataSetsBenchmark\DataSetsBenchmark\Water solubility OPERA\{filename}"
+    # training_df = DFU.load_df_from_file(opera_path.format(filename=r"Water solubility OPERA T.E.S.T. 5.1 training.tsv"),
+    # pred_df = DFU.load_df_from_file(opera_path.format(filename=r"Water solubility OPERA T.E.S.T. 5.1 prediction.tsv"),
+
+    # mainFolder = "C:/Users/TMARTI02/OneDrive - Environmental Protection Agency (EPA)/0 java/QSAR_Model_Building/data/DataSetsBenchmarkTEST_Toxicity/"
+    # endpoint ="LC50"
+    # training_tsv_path = mainFolder + endpoint + '/' + endpoint + '_training_set-2d.csv'
+    # prediction_tsv_path = mainFolder + endpoint + '/' + endpoint + '_prediction_set-2d.csv'
+
+
+    mainFolder="C:/Users/TMARTI02/OneDrive - Environmental Protection Agency (EPA)/0 python\modeling services/pf_python_modelbuilding/datasets_exp_prop/"
+    training_tsv_path = mainFolder + 'exp_prop_96HR_FHM_LC50_v1 modeling_WebTEST-default_RND_REPRESENTATIVE_training.tsv'
+    prediction_tsv_path = mainFolder + 'exp_prop_96HR_FHM_LC50_v1 modeling_WebTEST-default_RND_REPRESENTATIVE_prediction.tsv'
+
+    training_df = DFU.load_df_from_file(training_tsv_path, sep='\t')
+    pred_df = DFU.load_df_from_file(prediction_tsv_path, sep='\t')
+
     # Demonstrate KNN usage
     print(r"Executing KNN")
-    model = KNN(training_df, False)
-    model.build_model()  # Note we now handle using an embedding by passing a descriptor_names list. By default it is a None type -- this will use all descriptors in df
-    predictions = model.do_predictions(pred_df)
-    test_score = model.do_predictions(pred_df)
+    model = model_ws_utilities.instantiateModel(training_df, n_jobs=8, qsar_method='knn',remove_log_p=False, use_pmml_pipeline=False, include_standardization_in_pmml=False)
+    model.build_model(False, False, None)  # Note we now handle using an embedding by passing a descriptor_names list. By default it is a None type -- this will use all descriptors in df
+    test_score = model.do_predictions(pred_df,return_score=True)
+
     # Demonstrate RF usage
     print(r"Executing RF")
-    model = SVM(training_df, False)
-    model.build_model()
-    predictions = model.do_predictions(pred_df)
-    test_score = model.do_predictions(pred_df)
+    model = model_ws_utilities.instantiateModel(training_df, n_jobs=8, qsar_method='rf',remove_log_p=False, use_pmml_pipeline=False, include_standardization_in_pmml=False)
+    model.build_model(False, False, None)
+    test_score = model.do_predictions(pred_df,return_score=True)
+
     # Demonstrate SVM usage
     print(r"Executing SVM")
-    model = SVM(training_df, False)
-    model.build_model()
-    predictions = model.do_predictions(pred_df)
-    test_score = model.do_predictions(pred_df)
+    model = model_ws_utilities.instantiateModel(training_df, n_jobs=8, qsar_method='svm', remove_log_p=False,
+                                                use_pmml_pipeline=False, include_standardization_in_pmml=False)
+
+    model.build_model(False, False, None)
+    test_score = model.do_predictions(pred_df,return_score=True)
+
+    print(r"Executing XGB")
+    model = model_ws_utilities.instantiateModel(training_df, n_jobs=8, qsar_method='xgb',remove_log_p=False, use_pmml_pipeline=False, include_standardization_in_pmml=False)
+    model.build_model(False, False, None)
+    test_score = model.do_predictions(pred_df,return_score=True)
+
 
 
 if __name__ == "__main__":

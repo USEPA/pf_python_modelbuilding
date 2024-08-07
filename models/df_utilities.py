@@ -20,6 +20,10 @@ def load_df(tsv_string):
 
     df = pd.read_csv(StringIO(tsv_string), sep=separator, na_values="null")
 
+
+    # df = df.replace('null', np.nan).replace('{}', np.nan)
+
+
     # Remove special chars from column names or it causes issues with pmml:
     # df.columns = df.columns.str.replace('[', '')
     # df.columns = df.columns.str.replace(']', '')
@@ -151,14 +155,22 @@ def prepare_prediction_instances(df, train_column_names):
 def filter_columns_in_both_sets(df_training, df_prediction):
 
     # Deletes columns with null values:
+
+    df_training.replace([np.inf, -np.inf], np.nan, inplace=True)
+    # df_training.to_csv("C:/Users/TMARTI02/OneDrive - Environmental Protection Agency (EPA)/Profile/Documents/bob.csv")
     df_training = df_training.dropna(axis=1)
+
+    # print(df_training.columns[df_training.isna().any()].tolist())
+
     # df_training = do_remove_non_double_descriptors(df_training)
-    df_training = df_training[~df_training.isin([np.nan, np.inf, -np.inf]).any(1)]
+    # df_training = df_training[~df_training.isin([np.nan, np.inf, -np.inf]).any(1)]
 
     # Deletes columns with null values:
+
+    df_prediction.replace([np.inf, -np.inf], np.nan, inplace=True)
     df_prediction = df_prediction.dropna(axis=1)
     # print('shape1', df_prediction.shape)
-    df_prediction = df_prediction[~df_prediction.isin([np.nan, np.inf, -np.inf]).any(1)]
+    # df_prediction = df_prediction[~df_prediction.isin([np.nan, np.inf, -np.inf]).any(1)]
     # print('shape2', df_prediction.shape)
 
     # df_prediction = do_remove_non_double_descriptors(df_prediction)
@@ -198,6 +210,9 @@ def prepare_instances(df, which_set, remove_logp, remove_corr):
     ids = df[df.columns[0]]
 
     col_name_id = df.columns[0]
+
+    # print('col_name_id',col_name_id)
+
     col_name_property = df.columns[1]
 
     # drop Property column with experimental property we are trying to correlate (# axis 1 refers to the columns):

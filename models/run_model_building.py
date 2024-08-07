@@ -1,17 +1,12 @@
-
+import json
+import os
 import pandas as pd
 import numpy as np
 
 import model_ws_utilities as mwu
 import df_utilities as dfu
-from models.RF import run_rf_todd as run_rf_todd
 
-
-# from models_refactor import knn_model
-# from models_refactor.qsar_model import QSAR_Model
-# from models_refactor.svm_model import SVM_Model
-# from models_refactor.knn_model import KNN_Model
-
+import models.results_utilities as ru
 from models import ModelBuilder as mb
 
 num_jobs = 4
@@ -28,84 +23,13 @@ class EmbeddingImporter:
         df_and = df_and[(df_and['num_generations'] == num_generations)]
         # print(df_and)
 
-        embedding_tsv=str(df_and['embedding_tsv'].iloc[0])
+        embedding_tsv = str(df_and['embedding_tsv'].iloc[0])
 
         embedding = embedding_tsv.split('\t')
 
         return embedding
 
 
-def caseStudyTEST_RunGA():
-    """
-    Loops through TEST toxicity data sets :
-    1. Generates GA embedding using chosen QSAR method
-    2. Builds qsar model with and without embedding
-    3. Reports results for test set
-    4. Exports results to text file
-    """
-
-    # change following to folder where TEST sample sets are stored:
-    # test_directory = "C:/Users/TMARTI02/OneDrive - Environmental Protection Agency (EPA)/0 java/QSAR_Model_Building/data/DataSetsBenchmarkTEST_Toxicity/"
-    test_directory = "../datasets_benchmark_TEST/"
-
-    # endpointsTEST = ['LC50DM', 'LC50', 'LD50', 'IGC50', 'DevTox', 'LLNA', 'Mutagenicity']
-    # endpointsTEST = ['LC50DM', 'LC50', 'LD50', 'IGC50', 'LLNA', 'Mutagenicity']
-    # endpointsTEST = ['LLNA']
-    endpointsTEST = ['Mutagenicity']
-
-    # qsar_method = 'rf'
-    qsar_method = 'knn'
-    # qsar_method = 'xgb'
-    # qsar_method = 'svm'
-
-    # *****************************************************************************************************************
-    # descriptor_software = 'T.E.S.T. 5.1'
-    # descriptor_software = 'Padelpy webservice single'
-    # descriptor_software = 'PaDEL-default'
-    # descriptor_software = 'PaDEL_OPERA'
-    # descriptor_software = 'RDKit-default'
-    # descriptor_software = 'ToxPrints-default'
-    descriptor_software = 'WebTEST-default'
-    # *****************************************************************************************************************
-
-
-    for ENDPOINT in endpointsTEST:
-        remove_log_p = False
-
-        directory = test_directory + ENDPOINT + ' TEST/'
-
-        print(ENDPOINT, descriptor_software)
-
-        # training_file_name = ENDPOINT + '_training_set-2d.csv'
-        # prediction_file_name = ENDPOINT + '_prediction_set-2d.csv'
-
-        training_file_name = ENDPOINT + ' TEST ' + descriptor_software + ' training.tsv'
-        prediction_file_name = ENDPOINT + ' TEST ' + descriptor_software + ' prediction.tsv'
-
-        folder = directory
-
-        training_tsv_path = folder + training_file_name
-        prediction_tsv_path = folder + prediction_file_name
-        # print(training_tsv_path)
-
-        training_tsv = dfu.read_file_to_string(training_tsv_path)
-        prediction_tsv = dfu.read_file_to_string(prediction_tsv_path)
-
-        embedding_tsv = None
-
-
-        model = call_build_model_with_preselected_descriptors(qsar_method=qsar_method,training_tsv=training_tsv,remove_log_p=remove_log_p,
-                                                      descriptor_names_tsv=embedding_tsv,n_jobs=1)
-
-        predictions = call_do_predictions(prediction_tsv, model)
-
-        for pred in predictions:
-            print(pred)
-
-        # print(predictions)
-
-
-    # f.close()
 
 def a_runCaseStudiesExpPropPFAS():
     inputFolder = '../datasets/'
@@ -113,154 +37,101 @@ def a_runCaseStudiesExpPropPFAS():
     useEmbeddings = False
     num_generations = 100
 
-    # qsar_method = 'rf'
-    qsar_method = 'knn'
+    qsar_method = 'rf'
+    # qsar_method = 'knn'
     # qsar_method = 'xgb'
     # qsar_method = 'svm'
 
     descriptor_software = 'WebTEST-default'
 
-    splitting = 'T=PFAS only, P=PFAS'
+    splitting = 'RND_REPRESENTATIVE'
+    # splitting = 'T=PFAS only, P=PFAS'
     # splitting = 'T=all, P=PFAS'
     # splitting = 'T=all but PFAS, P=PFAS'
-
-
-    datasetNames = []
-    datasetNames.append("HLC from exp_prop and chemprop")
-    # datasetNames.append("WS from exp_prop and chemprop")
-    # datasetNames.append("VP from exp_prop and chemprop")
-    # datasetNames.append("LogP from exp_prop and chemprop")
-    # datasetNames.append("MP from exp_prop and chemprop")
-    # datasetNames.append("BP from exp_prop and chemprop")
-
-
-    ei = EmbeddingImporter('../embeddings/embeddings.xlsx')
-
-    f = open(inputFolder+'results2/'+qsar_method+'_'+splitting+'_useEmbeddings='+str(useEmbeddings)+'.txt', "w")
-    f.write('dataset\tR2\tMAE\n')
-
-    for datasetName in datasetNames:
-        run_dataset(datasetName, descriptor_software, ei, f, inputFolder, num_generations, qsar_method, splitting,
-                    useEmbeddings)
-
-
-    f.close()
-
-    def a_runCaseStudiesExpPropPFAS():
-        inputFolder = '../datasets/'
-
-        useEmbeddings = True
-
-        num_generations = 100
-        # qsar_method = 'rf'
-        qsar_method = 'knn'
-        # qsar_method = 'xgb'
-        # qsar_method = 'svm'
-
-        descriptor_software = 'WebTEST-default'
-
-        splitting = 'T=PFAS only, P=PFAS'
-        # splitting = 'T=all, P=PFAS'
-        # splitting = 'T=all but PFAS, P=PFAS'
-
-        datasetNames = []
-        # datasetNames.append("HLC from exp_prop and chemprop")
-        # datasetNames.append("WS from exp_prop and chemprop")
-        # datasetNames.append("VP from exp_prop and chemprop")
-        # datasetNames.append("LogP from exp_prop and chemprop")
-        # datasetNames.append("MP from exp_prop and chemprop")
-        datasetNames.append("BP from exp_prop and chemprop")
-
-        if useEmbeddings:
-            ei = EmbeddingImporter('../embeddings/embeddings.xlsx')
-
-        f = 'bob'  # TODO make it a filewriter
-
-        for datasetName in datasetNames:
-            training_file_name = datasetName + '_' + descriptor_software + '_' + splitting + "_training.tsv"
-            prediction_file_name = training_file_name.replace('training.tsv', 'prediction.tsv')
-
-            training_tsv_path = inputFolder + datasetName + '/PFAS/' + training_file_name
-            prediction_tsv_path = inputFolder + datasetName + '/PFAS/' + prediction_file_name
-
-            remove_log_p = False
-            if 'LogP' in datasetName:
-                remove_log_p = True
-
-            training_tsv = dfu.read_file_to_string(training_tsv_path)
-            prediction_tsv = dfu.read_file_to_string(prediction_tsv_path)
-
-            embedding_tsv=None
-
-            if useEmbeddings:
-                if splitting == 'T=PFAS only, P=PFAS':
-                    num_generations = 100
-                elif 'MP' in datasetName or splitting == 'T=all but PFAS, P=PFAS':
-                    num_generations = 10
-
-                embedding_tsv = ei.get_embedding(dataset_name=datasetName, num_generations=num_generations,
-                                                 splitting_name=splitting)
-                print(embedding_tsv)
-
-
-            model = call_build_model_with_preselected_descriptors(qsar_method=qsar_method,
-                                                                       training_tsv=training_tsv,
-                                                                       remove_log_p=remove_log_p,
-                                                                       descriptor_names_tsv=embedding_tsv,n_jobs=4)
-
-            r2,MAE=call_do_predictions(prediction_tsv, model)
-
-            print('*****',datasetName, r2, MAE)
-            # print(results_json)
-
-
-def a_runCaseStudiesExpPropPFAS_all():
-    inputFolder = '../datasets/'
-
-
-
-    num_generations = 100
-
-    # qsar_method = 'rf'
-    qsar_method = 'knn'
-    # qsar_method = 'xgb'
-    # qsar_method = 'svm'
-
-    descriptor_software = 'WebTEST-default'
-
-
-    splittings = ['T=PFAS only, P=PFAS','T=all, P=PFAS','T=all but PFAS, P=PFAS']
-    useEmbeddingsArray =[False, True]
 
     datasetNames = []
     datasetNames.append("HLC from exp_prop and chemprop")
     datasetNames.append("WS from exp_prop and chemprop")
     datasetNames.append("VP from exp_prop and chemprop")
-    datasetNames.append("LogP from exp_prop and chemprop")
+    # datasetNames.append("LogP from exp_prop and chemprop")
     # datasetNames.append("MP from exp_prop and chemprop")
     # datasetNames.append("BP from exp_prop and chemprop")
 
-    ei = EmbeddingImporter('../embeddings/embeddings.xlsx')
+    # ei = EmbeddingImporter('../embeddings/embeddings.xlsx')
+
+    fileOut = inputFolder + 'results2/' + qsar_method + '_' + splitting + '_useEmbeddings=' + str(useEmbeddings) + '.txt'
+    print('output file=', fileOut)
+
+    f = open(fileOut,"w")
+    f.write('dataset\tR2\tMAE\n')
+
+    for datasetName in datasetNames:
+
+        if 'MP' in datasetName or splitting == 'T=all but PFAS, P=PFAS':
+            num_generations = 10
+
+        run_dataset(datasetName, descriptor_software, f, inputFolder, num_generations, qsar_method, splitting,
+                    useEmbeddings)
+
+    f.close()
+
+def runTrainingPredictionExample():
+
+    descriptor_software = 'WebTEST-default'
+    datasetName = "HLC from exp_prop and chemprop"
+
+    mp = model_parameters(property_name=datasetName, property_units="N/A", descriptor_set=descriptor_software)
+
+    mp.useEmbeddings = True
+    # mp.useEmbeddings = False
+
+    # mp.qsar_method = 'rf'
+    # mp.qsar_method = 'knn'
+    # mp.qsar_method = 'xgb'
+    # mp.qsar_method = 'svm'
+    mp.qsar_method = 'reg'
+
+    mp.remove_log_p = False
+    if 'LogP' in datasetName:
+        mp.remove_log_p = True
+
+    inputFolder = '../datasets/'
+    training_file_name = datasetName+"_"+descriptor_software+"_RND_REPRESENTATIVE_training.tsv"
+    prediction_file_name = datasetName+"_"+descriptor_software+ "_RND_REPRESENTATIVE_prediction.tsv"
+
+    training_tsv_path = inputFolder + datasetName + '/' + training_file_name
+    prediction_tsv_path = inputFolder + datasetName + '/' + prediction_file_name
+
+    training_tsv = dfu.read_file_to_string(training_tsv_path)
+    prediction_tsv = dfu.read_file_to_string(prediction_tsv_path)
 
 
-    for useEmbeddings in useEmbeddingsArray:
+    if mp.useEmbeddings:
+        embedding, timeMin = getEmbedding(mp, prediction_tsv, training_tsv)
+        print('embedding', embedding)
+        print('timeMin', timeMin)
+    else:
+        embedding = None
 
-        for splitting in splittings:
+    model = buildModel(embedding, mp, training_tsv, prediction_tsv)
+    df_results = mwu.call_do_predictions_to_df(prediction_tsv, model)
 
-            f = open(inputFolder + 'results2/' + qsar_method + '_' + splitting + '_useEmbeddings=' +
-                     str(useEmbeddings) + '.txt',"w")
-            f.write('dataset\tR2\tMAE\n')
+    exp = df_results['exp'].to_numpy()
+    pred = df_results['pred'].to_numpy()
 
-            for datasetName in datasetNames:
-                run_dataset(datasetName, descriptor_software, ei, f, inputFolder, num_generations, qsar_method, splitting,
-                            useEmbeddings)
-            f.close()
+    MAE = ru.calc_MAE(pred, exp)
+    strMAE = str("{:.3f}".format(MAE))
 
+    R2 = ru.calc_pearson_r2(pred, exp)
+    strR2 = str("{:.3f}".format(R2))
 
-def run_dataset(datasetName, descriptor_software, ei, f, inputFolder, num_generations, qsar_method, splitting,
+    print('*****************************\n' + datasetName + '\tR2=' + strR2 + '\tMAE=' + strMAE + '\n')
+
+    title = descriptor_software + ' ' + mp.qsar_method + " useEmbeddings=" + str(mp.useEmbeddings)
+    ru.generatePlot(property_name=datasetName, title=title, exp=list(exp), pred=list(pred))
+
+def run_dataset(datasetName, descriptor_software, f, inputFolder, num_generations, qsar_method, splitting,
                 useEmbeddings):
-
-
     # print (splitting)
 
     training_file_name = datasetName + '_' + descriptor_software + '_' + splitting + "_training.tsv"
@@ -273,114 +144,98 @@ def run_dataset(datasetName, descriptor_software, ei, f, inputFolder, num_genera
         training_tsv_path = inputFolder + datasetName + '/' + training_file_name
         prediction_tsv_path = inputFolder + datasetName + '/' + prediction_file_name
 
-
-    remove_log_p = False
-    if 'LogP' in datasetName:
-        remove_log_p = True
     training_tsv = dfu.read_file_to_string(training_tsv_path)
     prediction_tsv = dfu.read_file_to_string(prediction_tsv_path)
-    embedding_tsv = None
 
-    if useEmbeddings:
-        if splitting == 'T=PFAS only, P=PFAS':
-            num_generations = 100
-        elif 'MP' in datasetName or splitting == 'T=all but PFAS, P=PFAS':
-            num_generations = 10
-
-        if splitting == 'RND_REPRESENTATIVE':
-            splitting ='T=all, P=PFAS'
-
-        # print (datasetName, num_generations,splitting)
+    mp = model_parameters(property_name=datasetName, property_units="N/A", descriptor_set=descriptor_software)
+    mp.useEmbeddings = useEmbeddings
+    mp.num_generations_ga = num_generations
+    mp.remove_log_p = False
+    if 'LogP' in datasetName:
+        mp.remove_log_p = True
 
 
-        embedding_tsv = ei.get_embedding(dataset_name=datasetName, num_generations=num_generations,
-                                         splitting_name=splitting)
-    model = call_build_model_with_preselected_descriptors(qsar_method=qsar_method, training_tsv=training_tsv,
-                                                          remove_log_p=remove_log_p,
-                                                          descriptor_names_tsv=embedding_tsv,
-                                                          n_jobs=num_jobs)
-    predictions = call_do_predictions(prediction_tsv, model)
+    if mp.useEmbeddings:
+        embedding, timeMin = getEmbedding(mp, prediction_tsv, training_tsv)
+        print('embedding', embedding)
+        print('timeMin', timeMin)
+    else:
+        embedding = None
 
-    # print(predictions)
+    model = buildModel(embedding, mp, training_tsv, prediction_tsv)
+    df_results = mwu.call_do_predictions_to_df(prediction_tsv, model)
 
-    df_prediction = dfu.load_df(prediction_tsv)
-    strR2, strMAE = run_rf_todd.calcStats(predictions, df_prediction, None)
+    exp = df_results['exp'].to_numpy()
+    pred = df_results['pred'].to_numpy()
+
+    MAE = ru.calc_MAE(pred,exp)
+    strMAE = str("{:.3f}".format(MAE))
+
+    R2 = ru.calc_pearson_r2(pred,exp)
+    strR2 = str("{:.3f}".format(R2))
+
+    # title = descriptor_software + ' ' + mp.qsar_method + " useEmbeddings=" + str(mp.useEmbeddings)
+    # ru.generatePlot(property_name=datasetName, title=title, exp=list(exp), pred=list(pred))
+
+
     print('*****' + datasetName + '\t' + strR2 + '\t' + strMAE + '\n')
     f.write(datasetName + '\t' + strR2 + '\t' + strMAE + '\n')
     f.flush()
 
 
-def call_do_predictions(prediction_tsv, model):
-    """Loads TSV prediction data into a pandas DF, stores IDs and exp vals,
-    and calls the appropriate prediction method"""
-    df_prediction = dfu.load_df(prediction_tsv)
-    predictions = model.do_predictions(df_prediction)
+def calcStats(predictions, df_prediction, excelPath):
+    df_preds = pd.DataFrame(predictions, columns=['Prediction'])
+    df_pred = df_prediction[['ID', 'Property']]
+    df_pred = pd.merge(df_pred, df_preds, how='left', left_index=True, right_index=True)
 
-    return predictions
+    if excelPath:
+        df_pred.to_excel(excelPath, index=False)
 
+    # a scatter plot comparing num_children and num_pets
+    # myplot=df_pred.plot(kind='scatter', x='Property', y='Prediction', color='black')
+    m, b, r_value, p_value, std_err = scipy.stats.linregress(df_pred['Property'], df_pred['Prediction'])
+    strR2 = str("{:.3f}".format(r_value ** 2))
 
-def a_runCaseStudiesExpProp():
+    y_true, predictions = np.array(df_pred['Property']), np.array(df_pred['Prediction'])
 
-    inputFolder = '../datasets/'
+    # print (y_true)
+    # print(predictions)
 
-    useEmbeddings = True
+    MAE = np.mean(np.abs(y_true - predictions))
+    strMAE = str("{:.3f}".format(MAE))
+    # print(strR2,MAE)
 
-    num_generations = 100
-
-    # qsar_method = 'rf'
-    qsar_method = 'knn'
-    # qsar_method = 'xgb'
-    # qsar_method = 'svm'
-
-    descriptor_software = 'WebTEST-default'
-    splitting = 'RND_REPRESENTATIVE'
-
-    datasetNames = []
-    datasetNames.append("HLC from exp_prop and chemprop")
-    # datasetNames.append("WS from exp_prop and chemprop")
-    # datasetNames.append("VP from exp_prop and chemprop")
-    # datasetNames.append("LogP from exp_prop and chemprop")
-    # datasetNames.append("MP from exp_prop and chemprop")
-    # datasetNames.append("BP from exp_prop and chemprop")
+    return strR2, strMAE
 
 
-    ei = EmbeddingImporter('../embeddings/embeddings.xlsx')
 
-    f = open(inputFolder+'results2/'+qsar_method+'_T=all, P=all_useEmbeddings='+str(useEmbeddings)+'.txt', "w")
-    f.write('dataset\tR2\tMAE\n')
 
-    for datasetName in datasetNames:
-        run_dataset(datasetName, descriptor_software, ei, f, inputFolder, num_generations, qsar_method, splitting,
-                    useEmbeddings)
-
-    f.close()
 
 
 
 def compare_spaces():
-
     import numpy as np
     gamma_space = [np.power(2, i) / 1000.0 for i in range(0, 10, 2)]  # [0.01]
 
-    gamma_space2=list([10 ** x for x in range(-3, 4)])
-    print('gamma_space',gamma_space)
-    print('gamma_space2',gamma_space2)
+    gamma_space2 = list([10 ** x for x in range(-3, 4)])
+    print('gamma_space', gamma_space)
+    print('gamma_space2', gamma_space2)
 
     c_space = np.arange(-3, 4, 0.5)  # wrong has negative values
     c_space2 = list([10 ** x for x in range(-3, 4)])
     c_space3 = np.logspace(-1, 1, 10)
 
     # print('c_space',c_space)
-    print('c_space2',c_space2)
-    print('c_space3',c_space3)
+    print('c_space2', c_space2)
+    print('c_space3', c_space3)
 
 
-def call_build_model_with_preselected_descriptors(qsar_method, training_tsv, remove_log_p, descriptor_names_tsv,n_jobs):
+def call_build_model_with_preselected_descriptors(qsar_method, training_tsv, remove_log_p, descriptor_names_tsv,
+                                                  n_jobs):
     """Loads TSV training data into a pandas DF and calls the appropriate training method"""
 
     df_training = dfu.load_df(training_tsv)
     qsar_method = qsar_method.lower()
-
 
     if qsar_method == 'svm':
         model = mb.SVM(df_training=df_training, remove_log_p_descriptors=remove_log_p, n_jobs=n_jobs)
@@ -397,14 +252,12 @@ def call_build_model_with_preselected_descriptors(qsar_method, training_tsv, rem
 
     # Returns trained model
 
-
     model.build_model(descriptor_names=descriptor_names_tsv)
     return model
 
 
-
 def assembleResults():
-    splittings = ['T=PFAS only, P=PFAS', 'T=all, P=PFAS', 'T=all but PFAS, P=PFAS','T=all, P=all']
+    splittings = ['T=PFAS only, P=PFAS', 'T=all, P=PFAS', 'T=all but PFAS, P=PFAS', 'T=all, P=all']
     useEmbeddingsArray = [False, True]
     # qsar_method = 'rf'
     # qsar_method = 'knn'
@@ -417,37 +270,735 @@ def assembleResults():
 
     dfnew = pd.DataFrame()
 
-
-
     for useEmbeddings in useEmbeddingsArray:
         for splitting in splittings:
-            filepath=inputFolder + resultsName+'/' + qsar_method + '_' + splitting + '_useEmbeddings='+str(useEmbeddings) + '.txt'
+            filepath = inputFolder + resultsName + '/' + qsar_method + '_' + splitting + '_useEmbeddings=' + str(
+                useEmbeddings) + '.txt'
 
             if not os.path.isfile(filepath):
-                print('missing:'+filepath)
+                print('missing:' + filepath)
                 continue
 
             df = pd.read_csv(filepath, delimiter='\t')
 
             if 'datasetName' not in dfnew:
-                dfnew['dataset']=df['dataset']
+                dfnew['dataset'] = df['dataset']
 
             newName = splitting + '_useEmbeddings=' + str(useEmbeddings)
             dfnew[newName] = df['MAE']
 
-
-
     print(dfnew)
 
-    dfnew.to_csv(inputFolder + resultsName+'/'+qsar_method+'.csv',index=False)
+    dfnew.to_csv(inputFolder + resultsName + '/' + qsar_method + '.csv', index=False)
+
+
+class model_parameters:
+    def __init__(self, property_name, property_units, descriptor_set):
+        self.property_name = property_name
+        self.property_units = property_units
+        self.descriptor_set = descriptor_set
+
+        self.qsar_method = 'rf'
+        self.useEmbeddings = True
+        # self.useEmbeddings = False
+
+        self.use_wards = False
+        self.use_pmml = False
+        self.include_standardization_in_pmml = True
+
+        # Permutative importance params:
+        self.use_permutative = True
+        self.run_rfe = True
+        self.min_descriptor_count = 20
+        self.max_descriptor_count = 30
+        self.n_threads = 20
+        self.num_generations_pi = 1
+
+        # Genetic algorithm params:
+        self.num_generations_ga = 100
+        self.num_optimizers = 10
+        self.max_length = 24
+        self.descriptor_coefficient = 0.002
+        self.threshold = 1
+        self.remove_log_p = False
+
+
+def a_runCaseStudiesRatInhalationLC50():
+    # descriptor_set = 'webtest'
+    # descriptor_set = 'padel'
+    # descriptor_set = 'webtest_opera'
+    # descriptor_set = 'mordred'
+    descriptor_set = 'mordred_opera'
+
+    # units = 'mgL'
+    units = 'ppm'
+    inputFolder = 'C:/Users/TMARTI02/OneDrive - Environmental Protection Agency (EPA)/0 java/0 model_management/hibernate_qsar_model_building/data/modeling/CoMPAIT/'
+
+    property_name = "4 hour rat inhalation LC50"
+    if units == 'ppm':
+        property_units = 'log10 ppm'
+    elif units == 'mgL':
+        property_units = 'log10 mg/L'
+
+    mp = model_parameters(property_name, property_units, descriptor_set)
+    # mp.useEmbeddings = False
+    mp.useEmbeddings = True
+
+    mp.qsar_method = 'rf'
+    # mp.qsar_method = 'xgb'
+    # mp.qsar_method = 'svm'
+    # mp.qsar_method = 'knn'
+    # mp.qsar_method = 'reg'
+
+    df_results_all = None
+    embeddings = []
+
+    for fold in range(1, 6):
+
+        print('\nfold=' + str(fold))
+        training_file_name = "LC50_tr_log10_" + units + "_" + descriptor_set + "_train_CV" + str(fold) + ".tsv";
+        prediction_file_name = "LC50_tr_log10_" + units + "_" + descriptor_set + "_test_CV" + str(fold) + ".tsv";
+        training_tsv_path = inputFolder + training_file_name
+        prediction_tsv_path = inputFolder + prediction_file_name
+        training_tsv = dfu.read_file_to_string(training_tsv_path)
+        prediction_tsv = dfu.read_file_to_string(prediction_tsv_path)
+
+        if mp.useEmbeddings:
+            embedding, timeMin = getEmbedding(mp, prediction_tsv, training_tsv)
+            embeddings.append(embedding)
+        else:
+            embedding = None
+
+        model = buildModel(embedding, mp, training_tsv, prediction_tsv)
+
+        df_results = mwu.call_do_predictions_to_df(prediction_tsv, model)
+
+        exp = df_results['exp'].to_numpy()
+        pred = df_results['pred'].to_numpy()
+        rmse = ru.calc_rmse(pred, exp)
+        print('fold=' + str(fold), 'RMSE=' + str(rmse))
+
+        if fold == 1:
+            df_results_all = df_results
+        else:
+            df_results_all = df_results_all.append(df_results, ignore_index=True)
+
+    # print(df_results_all)
+    fileOut = inputFolder + "results/LC50_" + units + "_" + descriptor_set + "_" + mp.qsar_method + "_embedding=" + str(
+        mp.useEmbeddings) + ".csv"
+    df_results_all.to_csv(fileOut, index=False)
+    save_json_file(df_results_all=df_results_all, embeddings=embeddings, fileOut=fileOut, mp=mp)
+
+
+def save_json_file(df_results_all, embeddings, fileOut, mp, r2s=None, rmses=None):
+    exp = df_results_all['exp'].to_numpy()
+    pred = df_results_all['pred'].to_numpy()
+    results = {}
+    statistics = {"rmse": ru.calc_rmse(pred, exp), "r2": ru.calc_pearson_r2(pred, exp)}
+
+    results["model_parameters"] = mp.__dict__
+    results["statistics"] = statistics
+    results["embeddings"] = embeddings
+
+    import statistics as stats
+
+    if r2s is not None:
+        statistics["r2s"] = r2s
+        statistics["rmses"] = rmses
+
+        statistics["r2_mean"] = stats.mean(r2s)
+        statistics["rmse_mean"] = stats.mean(rmses)
+
+    fileOutJson = fileOut.replace(".csv", ".json")
+    print(fileOutJson)
+    with open(fileOutJson, 'w') as myfile:
+        myfile.write(json.dumps(results))
+    print(json.dumps(results))
+    print(statistics)
+    return results
+
+
+def a_runCaseStudiesTTR_Binding_CV():
+    """
+    This code uses text files for each fold (doesnt merge splitting on the fly)
+    :return:
+    """
+    inputFolder = 'C:/Users/TMARTI02/OneDrive - Environmental Protection Agency (EPA)/0 java/0 model_management/hibernate_qsar_model_building/data/modeling/TTR_Binding_challenge/'
+
+    descriptor_set = 'webtest'
+    # descriptor_set = 'webtest_opera'
+    # descriptor_set = 'padel'
+    # descriptor_set = 'mordred'
+
+    mp = model_parameters(property_name="median TTR Binding activity", property_units='% activity',
+                          descriptor_set=descriptor_set)
+    # mp.useEmbeddings = False
+    mp.useEmbeddings = True
+
+    mp.qsar_method = 'rf'
+    # mp.qsar_method = 'xgb'
+    # mp.qsar_method = 'knn'
+    # mp.qsar_method = 'svm'
+    # mp.qsar_method = 'reg'
+
+    sort_embeddings = False
+
+    df_results_all = None
+
+    embeddings = []
+
+    for fold in range(1, 6):
+        training_file_name = "TTR_Binding_" + descriptor_set + "_train_CV" + str(fold) + ".tsv";
+        prediction_file_name = "TTR_Binding_" + descriptor_set + "_test_CV" + str(fold) + ".tsv";
+        training_tsv_path = inputFolder + training_file_name
+        prediction_tsv_path = inputFolder + prediction_file_name
+        training_tsv = dfu.read_file_to_string(training_tsv_path)
+        prediction_tsv = dfu.read_file_to_string(prediction_tsv_path)
+
+        if mp.useEmbeddings:
+            embedding, timeMin = getEmbedding(mp, prediction_tsv, training_tsv)
+
+            if sort_embeddings:
+                embedding.sort()
+
+            print('embedding', embedding)
+            print('timeMin', timeMin)
+            embeddings.append(embedding)
+        else:
+            embedding = None
+
+        model = buildModel(embedding, mp, training_tsv, prediction_tsv)
+        df_results = mwu.call_do_predictions_to_df(prediction_tsv, model)
+
+        exp = df_results['exp'].to_numpy()
+        pred = df_results['pred'].to_numpy()
+        rmse = ru.calc_rmse(pred, exp)
+        r2 = ru.calc_pearson_r2(pred, exp)
+
+        print('fold=' + str(fold), 'RMSE=' + str(rmse) + ', R2=' + str(r2))
+
+        if fold == 1:
+            df_results_all = df_results
+        else:
+            df_results_all = df_results_all.append(df_results, ignore_index=True)
+
+    # print(df_results_all)
+    fileOut = inputFolder + "results/" + "TTR_Binding_" + descriptor_set + "_" + mp.qsar_method + "_embedding=" + str(
+        mp.useEmbeddings) + ".csv"
+
+    df_results_all.to_csv(fileOut, index=False)
+
+    save_json_file(df_results_all=df_results_all, embeddings=embeddings, fileOut=fileOut, mp=mp)
+
+    resultsFolder = inputFolder + "results/"
+    lookAtResults(resultsFolder)
+
+
+def a_runCaseStudiesTTR_Binding_CV_merge_on_fly():
+
+    useMean = True
+    # useAQC = True
+    useAQC = False
+
+    inputFolder = 'C:/Users/TMARTI02/OneDrive - Environmental Protection Agency (EPA)/000 Papers/2024 tetko challenge/modeling/'
+    # descriptor_set = 'webtest'
+    # descriptor_set = 'webtest_opera'
+    # descriptor_set = 'padel'
+    descriptor_set = 'mordred'
+
+    mp = model_parameters(property_name="median TTR Binding activity", property_units='% activity',
+                          descriptor_set=descriptor_set)
+
+    mp.n_threads = 4
+
+    mp.useEmbeddings = False
+    # mp.useEmbeddings = True
+
+    # mp.qsar_method = 'rf'
+    # mp.qsar_method = 'xgb'
+    # mp.qsar_method = 'knn'
+    mp.qsar_method = 'svm'
+    # mp.qsar_method = 'reg'
+
+    sort_embeddings = False
+
+    df_results_all = None
+
+    embeddings = []
+    rmses = []
+    r2s = []
+
+    if useAQC:
+        split_file = inputFolder + 'TTR training 5 fold splitting file with AQC 0719_2024.csv'
+    else:
+        split_file = inputFolder + 'TTR training 5 fold splitting file.csv'
+
+    descriptor_file = inputFolder + 'TTR ' + descriptor_set + ' descriptors.csv'
+
+    df_splits = dfu.load_df_from_file(split_file)
+    df_descriptors = dfu.load_df_from_file(descriptor_file)
+    df_descriptors = df_descriptors.replace('null', np.nan).replace('{}', np.nan)
+
+    df_all = pd.merge(df_splits, df_descriptors, on='QsarSmiles')
+
+    # print(df_splits.shape)
+    # print(df_descriptors.shape)
+    # print(df_all.shape)
+
+    for fold in range(1, 6):
+        df_train = df_all.loc[df_all['Fold'] != 'Fold' + str(fold)]
+        df_train = df_train.drop('Fold', axis=1)
+
+        df_pred = df_all.loc[df_all['Fold'] == 'Fold' + str(fold)]
+        df_pred = df_pred.drop('Fold', axis=1)
+
+        # df_pred.to_csv(inputFolder+"pred"+str(fold)+".csv")
+
+        # df_pred.agg(['min', 'max']).to_csv(inputFolder+str(fold)+"predMinMax.csv")
+
+        # print( df_train[df_train.columns[0]])
+        # print(fold, df_train.shape, df_pred.shape)
+
+        prediction_tsv = df_pred.to_csv(sep='\t', index=False)
+        training_tsv = df_train.to_csv(sep='\t', index=False)
+
+        # fout=inputFolder+'training'+str(fold)+'.csv'
+        # df_train.to_csv(fout, sep=',')
+
+        # print(prediction_tsv)
+
+        if mp.useEmbeddings:
+            embedding, timeMin = getEmbedding(mp, prediction_tsv, training_tsv)
+
+            if sort_embeddings:
+                embedding.sort()
+
+            print('embedding', embedding)
+            print('timeMin', timeMin)
+            embeddings.append(embedding)
+        else:
+            embedding = None
+
+        model = buildModel(embedding, mp, training_tsv, prediction_tsv)
+        df_results = mwu.call_do_predictions_to_df(prediction_tsv, model)
+
+        exp = df_results['exp'].to_numpy()
+        pred = df_results['pred'].to_numpy()
+        rmse = ru.calc_rmse(pred, exp)
+        r2 = ru.calc_pearson_r2(pred, exp)
+
+        print('fold=' + str(fold), 'RMSE=' + str(rmse) + ', R2=' + str(r2))
+
+        if fold == 1:
+            df_results_all = df_results
+        else:
+            df_results_all = pd.concat([df_results_all, df_results], ignore_index=True)
+
+        r2s.append(r2)
+        rmses.append(rmse)
+
+    # print(df_results_all)
+
+    if useAQC:
+        resultsFolder = inputFolder + "resultsAQC/"
+    else:
+        resultsFolder = inputFolder + "results/"
+
+    fileOut = resultsFolder + "TTR_Binding_" + descriptor_set + "_" + mp.qsar_method + "_embedding=" + str(
+        mp.useEmbeddings) + ".csv"
+
+    df_results_all.to_csv(fileOut, index=False)
+
+    results = save_json_file(df_results_all=df_results_all, embeddings=embeddings, fileOut=fileOut, mp=mp, r2s=r2s,
+                             rmses=rmses)
+
+    lookAtResults(resultsFolder,useMean=useMean)
+
+    exp = list(df_results_all['exp'].to_numpy())
+    pred = list(df_results_all['pred'].to_numpy())
+    title = descriptor_set + ' ' + mp.qsar_method + " useEmbeddings=" + str(mp.useEmbeddings)
+    ru.generatePlot(property_name='TTR_Binding', title=title, exp=exp, pred=pred)
+
+
+def a_runCaseStudiesTTR_Binding_CV_merge_on_fly_predict_AQC_fails():
+    inputFolder = 'C:/Users/TMARTI02/OneDrive - Environmental Protection Agency (EPA)/000 Papers/2024 tetko challenge/modeling/'
+    descriptor_set = 'webtest'
+    # descriptor_set = 'webtest_opera'
+    # descriptor_set = 'padel'
+    # descriptor_set = 'mordred'
+
+    mp = model_parameters(property_name="median TTR Binding activity", property_units='% activity',
+                          descriptor_set=descriptor_set)
+    mp.useEmbeddings = False
+    # mp.useEmbeddings = True
+
+    mp.qsar_method = 'rf'
+    # mp.qsar_method = 'xgb'
+    # mp.qsar_method = 'knn'
+    # mp.qsar_method = 'svm'
+    # mp.qsar_method = 'reg'
+
+    sort_embeddings = False
+
+    embeddings = []
+
+    split_file = inputFolder + 'TTR training 5 fold splitting file with AQC.csv'
+    descriptor_file = inputFolder + 'TTR ' + descriptor_set + ' descriptors.csv'
+
+    df_splits = dfu.load_df_from_file(split_file)
+    df_descriptors = dfu.load_df_from_file(descriptor_file)
+    df_all = pd.merge(df_splits, df_descriptors, on='QsarSmiles')
+
+    df_train = df_all.drop('Fold', axis=1)
+    print('training shape', df_train.shape)
+
+    pred_file = inputFolder + 'TTR training fails AQC.csv'
+    df_pred = dfu.load_df_from_file(pred_file)
+    df_pred = pd.merge(df_pred, df_descriptors)
+    print('test shape', df_pred.shape)
+
+    prediction_tsv = df_pred.to_csv(sep='\t', index=False)
+    training_tsv = df_train.to_csv(sep='\t', index=False)
+
+    # fout=inputFolder+'training'+str(fold)+'.csv'
+    # df_train.to_csv(fout, sep=',')
+    # print(prediction_tsv)
+
+    if mp.useEmbeddings:
+        embedding, timeMin = getEmbedding(mp, prediction_tsv, training_tsv)
+
+        if sort_embeddings:
+            embedding.sort()
+
+        print('embedding', embedding)
+        print('timeMin', timeMin)
+        embeddings.append(embedding)
+    else:
+        embedding = None
+
+    model = buildModel(embedding, mp, training_tsv, prediction_tsv)
+    df_results = mwu.call_do_predictions_to_df(prediction_tsv, model)
+
+    exp = df_results['exp'].to_numpy()
+    pred = df_results['pred'].to_numpy()
+    rmse = ru.calc_rmse(pred, exp)
+    r2 = ru.calc_pearson_r2(pred, exp)
+
+    print('RMSE=' + str(rmse) + ', R2=' + str(r2))
+
+    # print(df_results_all)
+
+    resultsFolder = inputFolder + "resultsAQC/"
+
+    fileOut = resultsFolder + "TTR_Binding_" + descriptor_set + "_" + mp.qsar_method + "_embedding=" + str(
+        mp.useEmbeddings) + "_training_fails_AQC.csv"
+
+    df_results.to_csv(fileOut, index=False)
+
+    save_json_file(df_results_all=df_results, embeddings=embeddings, fileOut=fileOut, mp=mp)
+
+
+def buildModel(embedding, mp, training_tsv, prediction_tsv):
+    model = mwu.call_build_model_with_preselected_descriptors(qsar_method=mp.qsar_method,
+                                                              training_tsv=training_tsv, prediction_tsv=prediction_tsv,
+                                                              remove_log_p=mp.remove_log_p,
+                                                              use_pmml_pipeline=mp.use_pmml,
+                                                              include_standardization_in_pmml=mp.include_standardization_in_pmml,
+                                                              descriptor_names_tsv=embedding,
+                                                              n_jobs=mp.n_threads)
+    return model
+
+
+def getEmbedding(mp, prediction_tsv, training_tsv):
+    if mp.qsar_method == 'rf' or mp.qsar_method == 'xgb':
+        if mp.qsar_method == 'rf':
+            fraction_of_max_importance = 0.25;
+        elif mp.qsar_method == 'xgb':
+            fraction_of_max_importance = 0.03;
+
+        embedding, timeMin = mwu.call_build_embedding_importance(qsar_method=mp.qsar_method,
+                                                                 training_tsv=training_tsv,
+                                                                 prediction_tsv=prediction_tsv,
+                                                                 remove_log_p_descriptors=mp.remove_log_p,
+                                                                 n_threads=mp.n_threads,
+                                                                 num_generations=mp.num_generations_pi,
+                                                                 use_permutative=mp.use_permutative,
+                                                                 run_rfe=mp.run_rfe,
+                                                                 fraction_of_max_importance=fraction_of_max_importance,
+                                                                 min_descriptor_count=mp.min_descriptor_count,
+                                                                 max_descriptor_count=mp.max_descriptor_count,
+                                                                 use_wards=mp.use_wards)
+
+
+    elif mp.qsar_method == 'knn' or mp.qsar_method == 'reg':
+
+        embedding, timeMin = mwu.call_build_embedding_ga(qsar_method=mp.qsar_method,
+                                                         training_tsv=training_tsv,
+                                                         prediction_tsv=prediction_tsv,
+                                                         remove_log_p=mp.remove_log_p,
+                                                         num_generations=mp.num_generations_ga,
+                                                         num_optimizers=mp.num_optimizers,
+                                                         num_jobs=num_jobs, n_threads=mp.n_threads,
+                                                         descriptor_coefficient=mp.descriptor_coefficient,
+                                                         max_length=mp.max_length,
+                                                         threshold=mp.threshold,
+                                                         use_wards=mp.use_wards,
+                                                         run_rfe=False)
+    return embedding, timeMin
 
 
 
+
+def lookAtResults(folder, useMean=False):
+    print("\n\nproperty_units", "descriptor_set", "qsar_method", "useEmbeddings", "pearson_r2", "rmse", sep="\t")
+
+    for filename in os.listdir(folder):
+        filepath = os.path.join(folder, filename)
+        # checking if it is a file
+        if ".json" not in filename:
+            continue
+
+        f = open(filepath)
+        results = json.load(f)
+        # addMissingMetadataJsonFile(filename, filepath, results)
+        # print (filename, results)
+
+        # print (filename, results)
+        mp = results["model_parameters"]
+        stats = results["statistics"]
+
+        if useMean:
+
+            if "r2_mean" not in stats:
+                print("missing r2_mean for",mp["property_units"], mp["descriptor_set"], mp["qsar_method"], mp["useEmbeddings"])
+            else:
+                print(mp["property_units"], mp["descriptor_set"], mp["qsar_method"], mp["useEmbeddings"],
+                      round(stats["r2_mean"], 3), round(stats["rmse_mean"], 3), sep="\t")
+        else:
+            print(mp["property_units"], mp["descriptor_set"], mp["qsar_method"], mp["useEmbeddings"],
+                  round(stats["r2"], 3), round(stats["rmse"], 3), sep="\t")
+
+def lookAtEmbeddings(folder):
+    print("\n\nproperty_units", "descriptor_set", "qsar_method", "embeddingLength", sep="\t")
+
+    for filename in os.listdir(folder):
+
+        filepath = os.path.join(folder, filename)
+        # checking if it is a file
+
+        if ".json" not in filename:
+            continue
+
+        f = open(filepath)
+        results = json.load(f)
+
+        # print (filename, results)
+        mp = results["model_parameters"]
+
+        if not mp["useEmbeddings"]:
+            continue
+
+        len1 = len(results['embeddings'][0])
+        len2 = len(results['embeddings'][1])
+        len3 = len(results['embeddings'][2])
+        len4 = len(results['embeddings'][3])
+        len5 = len(results['embeddings'][4])
+        lenAvg=(len1+len2+len3+len4+len5)/5
+
+        print(mp["property_units"], mp["descriptor_set"], mp["qsar_method"], lenAvg, sep="\t")
+
+def addMissingMetadataJsonFile(filename, filepath, results):
+    mp = results["model_parameters"]
+    # Add property name and units to the json file for files that dont have them:
+    mp["property_name"] = "4 hour rat inhalation LC50"
+    if "ppm" in filename:
+        mp["property_units"] = "4 hour rat inhalation LC50"
+    if 'ppm' in filename:
+        mp["property_units"] = 'log10 ppm'
+    elif 'mgL' in filename:
+        mp["property_units"] = 'log10 mg/L'
+    if "webtest_opera" in filename:
+        mp["descriptor_set"] = "webtest_opera"
+    elif "webtest" in filename:
+        mp["descriptor_set"] = "webtest"
+    else:
+        print("missing descriptor set in " + filename)
+    with open(filepath, 'w') as myfile:
+        myfile.write(json.dumps(results))
+
+
+
+
+def a_runCaseStudiesInhalationCV_merge_on_fly():
+    units = 'ppm'
+    # units = 'mgL'
+
+    inputFolder = 'C:/Users/TMARTI02/OneDrive - Environmental Protection Agency (EPA)/0 java/0 model_management/hibernate_qsar_model_building/data/modeling/CoMPAIT/'
+
+    # descriptor_set = 'webtest'
+    # descriptor_set = 'webtest_opera'
+    # descriptor_set = 'padel'
+    # descriptor_set = 'morgan'
+    descriptor_set = 'mordred'
+
+    property_name = "4 hour rat inhalation LC50"
+
+    mp = model_parameters(property_name=property_name, property_units=units, descriptor_set=descriptor_set)
+
+    mp.n_threads = 4
+
+    mp.useEmbeddings = False
+    # mp.useEmbeddings = True
+
+    mp.qsar_method = 'rf'
+    # mp.qsar_method = 'xgb'
+    # mp.qsar_method = 'knn'
+    # mp.qsar_method = 'svm'
+    # mp.qsar_method = 'reg'
+
+    sort_embeddings = False
+
+    df_results_all = None
+
+    embeddings = []
+    rmses = []
+    r2s = []
+
+    split_file = inputFolder + 'LC50_Tr_modeling_set_all_folds.csv'
+
+    descriptor_file = inputFolder + 'LC50_tr_descriptors_' + descriptor_set + '.tsv'
+
+    df_splits = dfu.load_df_from_file(split_file)
+
+    if units == 'ppm':
+        df_splits = df_splits.drop('4_hr_value_mgL', axis=1)
+    else:
+        df_splits = df_splits.drop('4_hr_value_ppm', axis=1)
+
+    df_descriptors = dfu.load_df_from_file(descriptor_file)
+    df_descriptors = df_descriptors.replace('null', np.nan).replace('{}', np.nan)
+
+    if 'webtest' in descriptor_set:
+        df_descriptors = df_descriptors[df_descriptors.x0 != 'Error'] #remove bad rows
+
+    df_all = pd.merge(df_splits, df_descriptors, on='QSAR_READY_SMILES')
+
+    # print(df_splits.shape)
+    # print(df_descriptors.shape)
+    # print(df_all.shape)
+
+    for fold in range(1, 6):
+        df_train = df_all.loc[df_all['Fold'] != 'Fold' + str(fold)]
+        df_train = df_train.drop('Fold', axis=1)
+
+        df_pred = df_all.loc[df_all['Fold'] == 'Fold' + str(fold)]
+        df_pred = df_pred.drop('Fold', axis=1)
+
+        # df_pred.to_csv(inputFolder+"pred"+str(fold)+".csv")
+        # df_pred.agg(['min', 'max']).to_csv(inputFolder+str(fold)+"predMinMax.csv")
+
+        # print( df_train[df_train.columns[0]])
+        # print(fold, df_train.shape, df_pred.shape)
+
+        prediction_tsv = df_pred.to_csv(sep='\t', index=False)
+        training_tsv = df_train.to_csv(sep='\t', index=False)
+
+        # fout=inputFolder+'training'+str(fold)+'.csv'
+        # df_train.to_csv(fout, sep=',')
+
+        # print(prediction_tsv)
+
+        if mp.useEmbeddings:
+            embedding, timeMin = getEmbedding(mp, prediction_tsv, training_tsv)
+
+            if sort_embeddings:
+                embedding.sort()
+
+            print('embedding', embedding)
+            print('timeMin', timeMin)
+            embeddings.append(embedding)
+        else:
+            embedding = None
+
+        model = buildModel(embedding, mp, training_tsv, prediction_tsv)
+        df_results = mwu.call_do_predictions_to_df(prediction_tsv, model)
+
+        exp = df_results['exp'].to_numpy()
+        pred = df_results['pred'].to_numpy()
+
+
+
+        rmse = ru.calc_rmse(pred, exp)
+        r2 = ru.calc_pearson_r2(pred, exp)
+
+        r2s.append(r2)
+        rmses.append(rmse)
+
+        print('fold=' + str(fold), 'RMSE=' + str(rmse) + ', R2=' + str(r2))
+
+        if fold == 1:
+            df_results_all = df_results
+        else:
+            df_results_all = pd.concat([df_results_all, df_results], ignore_index=True)
+
+
+
+        r2s.append(r2)
+        rmses.append(rmse)
+
+    # print(df_results_all)
+
+    resultsFolder = inputFolder + "results/"
+
+    fileOut = inputFolder + "results/LC50_" + units + "_" + descriptor_set + "_" + mp.qsar_method + "_embedding=" + str(
+        mp.useEmbeddings) + ".csv"
+
+    df_results_all.to_csv(fileOut, index=False)
+
+    save_json_file(df_results_all=df_results_all, embeddings=embeddings, fileOut=fileOut, mp=mp, r2s=r2s, rmses=rmses)
+
+    exp = list(df_results_all['exp'].to_numpy())
+    pred = list(df_results_all['pred'].to_numpy())
+    title = descriptor_set + ' ' + mp.qsar_method + " useEmbeddings=" + str(mp.useEmbeddings)
+    ru.generatePlot(property_name='LC50', title=title, exp=exp, pred=pred)
+
+
+    lookAtResults(resultsFolder)
+
+
+def ttr_binding():
+    """
+    runs all the calculations for ttr_binding
+    :return:
+    """
+    a_runCaseStudiesTTR_Binding_CV_merge_on_fly()
+
+    # a_runCaseStudiesTTR_Binding_CV()
+    # a_runCaseStudiesTTR_Binding_CV_merge_on_fly_predict_AQC_fails()
+
+    resultsFolder = 'C:/Users/TMARTI02/OneDrive - Environmental Protection Agency (EPA)/000 Papers/2024 tetko challenge/modeling/results/'
+    # lookAtResults(resultsFolder,useMean=True)
+    # lookAtEmbeddings(resultsFolder)
+
+
+def inhalation_lc50():
+    # a_runCaseStudiesRatInhalationLC50()
+    a_runCaseStudiesInhalationCV_merge_on_fly()
+
+    # folder = 'C:/Users/TMARTI02/OneDrive - Environmental Protection Agency (EPA)/0 java/0 model_management/hibernate_qsar_model_building/data/modeling/CoMPAIT/results/'
+    # lookAtResults(folder)
 
 if __name__ == "__main__":
+
+    runTrainingPredictionExample()
+
+    # ttr_binding()
+    # inhalation_lc50()
+
     # assembleResults()
-    a_runCaseStudiesExpPropPFAS()
-    # a_runCaseStudiesExpPropPFAS_all()
-    # a_runCaseStudiesExpProp()
+
+    # a_runCaseStudiesExpPropPFAS()
+
+    # runTrainingPredictionExample()
+
     # compare_spaces()
-    # caseStudyTEST_RunGA()

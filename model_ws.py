@@ -269,7 +269,8 @@ def train_embedding_ga(qsar_method):
                                                                     descriptor_coefficient=descriptor_coefficient,
                                                                     max_length=max_length,
                                                                     threshold=threshold,
-                                                                    use_wards=use_wards)
+                                                                    use_wards=use_wards,
+                                                                    run_rfe=False)
 
     result_obj = {}
     result_obj['embedding'] = embedding
