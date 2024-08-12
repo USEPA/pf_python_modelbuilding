@@ -44,7 +44,7 @@ def calc_MAE(predictions, targets):
     return np.mean(np.abs(targets - predictions))
 
 
-def generatePlot(property_name, title, exp, pred):
+def generatePlot(fileOut, property_name, title, exp, pred):
     m, b, r_value, p_value, std_err = scipy.stats.linregress(exp, pred)
 
     r2 = r_value * r_value
@@ -66,6 +66,92 @@ def generatePlot(property_name, title, exp, pred):
 
     plt.legend(loc="lower right")
 
+    fileOutPNG = fileOut.replace(".csv", ".png")
+
+    # plt.savefig(fileOutPNG)
+
+    figure = plt.gcf()  # get current figure
+    figure.set_size_inches(6, 6)
+    # when saving, specify the DPI
+    plt.savefig(fileOutPNG, dpi=300)
+
+
     fig.show()
     # plt.show(block=False)
     plt.show()
+
+
+
+
+
+
+def generateTrainingPredictionPlot(fileOut, property_name, title, figtitle, exp_training, pred_training,exp_prediction, pred_prediction):
+
+    #    fig, ax = plt.subplots()
+    fig, (ax1, ax2) = plt.subplots(1, 2,figsize=(12, 6))
+
+#    plt.title(title)
+    fig.suptitle(title)
+
+    createSubplot(exp_training, pred_training, property_name,ax1,'Training')
+    createSubplot(exp_prediction, pred_prediction, property_name, ax2,'Prediction')
+
+    fig.show()
+    plt.show()
+    plt.close()
+
+    figtrain = fileOut.replace('.csv','_train.png')
+    generatePlot2(figtrain, property_name, title, exp_training, pred_training)
+
+    figpred = fileOut.replace('.csv','_pred.png')
+    generatePlot2(figpred,property_name,title,exp_prediction, pred_prediction)
+
+
+def createSubplot(exp, pred, property_name, ax1, set):
+
+    m, b, r_value, p_value, std_err = scipy.stats.linregress(exp, pred)
+    r2 = r_value * r_value
+    strR2 = '$r^2$=' + str("{:.2f}".format(r2))
+
+    ax1.set_xlabel('experimental ' + property_name)
+    ax1.set_ylabel('predicted ' + property_name)
+    ax1.set_title(set+' Set')
+
+    ax1.scatter(exp, pred, label='exp vs pred')
+    ax1.plot(exp, exp, label='Y=X', color="black")
+
+    yreg = [m * x + b for x in exp]
+    ax1.plot(exp, yreg, label='Regression ('+strR2+')', color='red')
+
+    ax1.legend(loc="lower right")
+
+
+def generatePlot2(fileOut, property_name, title, exp, pred):
+
+    m, b, r_value, p_value, std_err = scipy.stats.linregress(exp, pred)
+    r2 = r_value * r_value
+    strR2 = '$r^2$=' + str("{:.2f}".format(r2))
+
+    # fig, ax = plt.subplots()
+    fig, ax = plt.subplots(figsize=(6, 6), layout='constrained')
+
+    plt.xlabel('experimental ' + property_name)
+    plt.ylabel('predicted ' + property_name)
+    plt.title(title)
+
+    ax.scatter(exp, pred, label='exp vs pred')
+    ax.plot(exp, exp, label='Y=X',color="black")
+
+    yreg = [m * x + b for x in exp]
+    ax.plot(exp, yreg, label='Regression ('+strR2+')',color='red')
+
+    plt.legend(loc="lower right")
+
+    # plt.savefig(fileOutPNG)
+    figure = plt.gcf()  # get current figure
+    # figure.set_size_inches(6, 6)
+    # when saving, specify the DPI
+
+    # print(fileOut)
+    plt.savefig(fileOut, dpi=300)
+    # plt.close()
