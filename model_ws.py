@@ -48,6 +48,7 @@ def train(qsar_method):
 
     obj = request.form
     training_tsv = obj.get('training_tsv')  # Retrieves the training data as a TSV
+    prediction_tsv = obj.get('prediction_tsv')  # Retrieves the training data as a TSV
 
     if obj.get('use_pmml'):
         use_pmml = obj.get('use_pmml', '').lower() == 'true'
@@ -92,6 +93,7 @@ def train(qsar_method):
 
     model = model_ws_utilities.call_build_model_with_preselected_descriptors(qsar_method=qsar_method,
                                                                              training_tsv=training_tsv,
+                                                                             prediction_tsv=prediction_tsv,
                                                                              remove_log_p=remove_log_p,
                                                                              use_pmml_pipeline=use_pmml,
                                                                              include_standardization_in_pmml=include_standardization_in_pmml,
