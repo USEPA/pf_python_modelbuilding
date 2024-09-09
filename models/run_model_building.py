@@ -10,6 +10,10 @@ import models.results_utilities as ru
 from models import ModelBuilder as mb
 
 import pickle
+import csv
+import os
+
+import matplotlib.pyplot as plt
 
 num_jobs = 4
 
@@ -89,6 +93,7 @@ def runTrainingPredictionExample():
     mp.useEmbeddings = False
 
     mp.qsar_method = 'rf'
+    # mp.qsar_method = 'las'
     # mp.qsar_method = 'knn'
     # mp.qsar_method = 'xgb'
     # mp.qsar_method = 'svm'
@@ -120,6 +125,25 @@ def runTrainingPredictionExample():
 
     model = buildModel(embedding, mp, training_tsv, prediction_tsv)
 
+    if mp.qsar_method == 'las':
+        clf = model.model_obj.steps[1][1]
+        coef = clf.coef_
+        desc = model.model_obj.feature_names_in_
+        res = pd.DataFrame(np.column_stack([desc, coef]), columns=['desc', 'coef'])
+        res2 = res.loc[(res['coef'] != 0.0)]
+        print(res2)
+        res2_list = ', '.join(res2['desc'].astype(str))
+        embeddings.append(res2_list)
+
+        #plt.bar(res2['desc'],res2['coef'])
+        #plt.xticks(rotation=90)
+        #plt.grid()
+        #plt.title(datasetName + " Feature Selection Based on Lasso")
+        #plt.xlabel("Features")
+        #plt.ylabel("Importance")
+        #plt.ylim(0, 0.15)
+        #plt.show()
+
     df_results = mwu.call_do_predictions_to_df(prediction_tsv, model)
 
     df_results_training = mwu.call_do_predictions_to_df(training_tsv, model)
@@ -138,7 +162,7 @@ def runTrainingPredictionExample():
 
     df_results_prediction.to_csv(fileOut, index=False)
 
-    results = save_json_file(df_results_all=df_results_prediction, embeddings=embeddings, fileOut=fileOut, mp=mp)
+    results = save_json_file(df_results_all=df_results_prediction, embeddings=embeddings, fileOut=fileOut, mp=mp, hyperparameters=model.hyperparameters, hyperparameter_grid=model.hyperparameter_grid)
 
     exp = df_results['exp'].to_numpy()
     pred = df_results['pred'].to_numpy()
@@ -418,7 +442,7 @@ def a_runCaseStudiesRatInhalationLC50():
     save_json_file(df_results_all=df_results_all, embeddings=embeddings, fileOut=fileOut, mp=mp)
 
 
-def save_json_file(df_results_all, embeddings, fileOut, mp, r2s=None, rmses=None):
+def save_json_file(df_results_all, embeddings, fileOut, mp, hyperparameters=None, hyperparameter_grid=None, r2s=None, rmses=None):
     exp = df_results_all['exp'].to_numpy()
     pred = df_results_all['pred'].to_numpy()
     results = {}
@@ -427,6 +451,12 @@ def save_json_file(df_results_all, embeddings, fileOut, mp, r2s=None, rmses=None
     results["model_parameters"] = mp.__dict__
     results["statistics"] = statistics
     results["embeddings"] = embeddings
+
+    if hyperparameter_grid is not None:
+        results["hyperparameter_grid"] = hyperparameter_grid
+
+    if hyperparameters is not None:
+        results["hyperparameters"] = hyperparameters
 
     import statistics as stats
 
@@ -440,7 +470,8 @@ def save_json_file(df_results_all, embeddings, fileOut, mp, r2s=None, rmses=None
     fileOutJson = fileOut.replace(".csv", ".json")
     print(fileOutJson)
     with open(fileOutJson, 'w') as myfile:
-        myfile.write(json.dumps(results))
+        myfile.write(json.dumps(results, indent=4))
+
     print(json.dumps(results))
     print(statistics)
     return results
@@ -924,11 +955,78 @@ def getEmbedding(mp, prediction_tsv, training_tsv):
 def lookAtResults(folder, useMean=False):
     print("\n\nproperty_units", "descriptor_set", "qsar_method", "useEmbeddings", "pearson_r2", "rmse", sep="\t")
 
+    header=["property_units","descriptor_set","qsar_method","useEmbeddings","r2","rmse"]
+
+    with open(folder + '/results.csv', 'w', newline='') as csvfile:
+
+        writer = csv.writer(csvfile)
+        writer.writerow(header)
+
+        for filename in os.listdir(folder):
+            filepath = os.path.join(folder, filename)
+            # checking if it is a file
+            if ".json" not in filename:
+                continue
+
+            f = open(filepath)
+            results = json.load(f)
+            # addMissingMetadataJsonFile(filename, filepath, results)
+            # print (filename, results)
+
+            # print (filename, results)
+            mp = results["model_parameters"]
+            stats = results["statistics"]
+
+            if useMean:
+
+                if "r2_mean" not in stats:
+                    print("missing r2_mean for",mp["property_units"], mp["descriptor_set"], mp["qsar_method"], mp["useEmbeddings"])
+                else:
+
+                    print(mp["property_units"], mp["descriptor_set"], mp["qsar_method"], mp["useEmbeddings"],
+                          round(stats["r2_mean"], 3), round(stats["rmse_mean"], 3), sep="\t")
+                    csvfile.write(mp["property_units"], mp["descriptor_set"], mp["qsar_method"], mp["useEmbeddings"],
+                          round(stats["r2_mean"], 3), round(stats["rmse_mean"], 3), sep="\t")
+
+            else:
+                resultRow=[mp["property_units"], mp["descriptor_set"], mp["qsar_method"], mp["useEmbeddings"],round(stats["r2"], 3), round(stats["rmse"], 3)]
+
+                print(resultRow, sep="\t")
+
+                writer.writerow(resultRow)
+
+
+def lookAtResults2(dataset, folder):
+
+    # print (folder)
+
+    # print("\n\nproperty_units", "descriptor_set", "qsar_method", "useEmbeddings", "pearson_r2", "rmse", sep="\t")
+
+    header=["property_units","descriptor_set","qsar_method","useEmbeddings","r2","rmse"]
+
+    property_units = []
+    descriptor_set = []
+    qsar_method = []
+    useEmbeddings = []
+    r2 = []
+    rmse = []
+    datasets=[]
+    composite=[]
+
+    # print(dataset)
+
     for filename in os.listdir(folder):
-        filepath = os.path.join(folder, filename)
-        # checking if it is a file
+
+        # print(type(filename))
+        filepath = folder+'/'+filename
+
         if ".json" not in filename:
             continue
+
+        # print('\t',filename)
+
+        # print(filepath)
+        # print(str(filename))
 
         f = open(filepath)
         results = json.load(f)
@@ -939,16 +1037,29 @@ def lookAtResults(folder, useMean=False):
         mp = results["model_parameters"]
         stats = results["statistics"]
 
-        if useMean:
+        datasets.append(dataset)
+        property_units.append(mp["property_units"])
+        descriptor_set.append(mp["descriptor_set"])
+        qsar_method.append(mp["qsar_method"])
+        useEmbeddings.append(mp["useEmbeddings"])
+        r2.append(stats["r2"])
+        rmse.append(round(stats["rmse"], 3))
+        composite.append(str(mp['descriptor_set']) + '_' + str(mp['qsar_method']) + '_' + str(mp['useEmbeddings']))
 
-            if "r2_mean" not in stats:
-                print("missing r2_mean for",mp["property_units"], mp["descriptor_set"], mp["qsar_method"], mp["useEmbeddings"])
-            else:
-                print(mp["property_units"], mp["descriptor_set"], mp["qsar_method"], mp["useEmbeddings"],
-                      round(stats["r2_mean"], 3), round(stats["rmse_mean"], 3), sep="\t")
-        else:
-            print(mp["property_units"], mp["descriptor_set"], mp["qsar_method"], mp["useEmbeddings"],
-                  round(stats["r2"], 3), round(stats["rmse"], 3), sep="\t")
+        # if results["embeddings"] is not None:
+        #     print(filename, mp["qsar_method"], stats['r2'],len(results["embeddings"][0].split(',')))
+
+        if len(results["embeddings"])>0 and mp["qsar_method"]=='las':
+            print(filename, mp["qsar_method"], stats['r2'],len(results["embeddings"]))
+
+
+    dict = {'dataset': datasets, 'property_units': property_units, 'descriptor_set': descriptor_set, 'qsar_method': qsar_method,
+                'useEmbeddings': useEmbeddings, 'r2': r2, 'rmse': rmse, 'composite': composite}
+
+    df = pd.DataFrame(dict)
+    df = df[df['dataset'].str.contains('v4', regex=True)]
+
+    return df
 
 def lookAtEmbeddings(folder):
     print("\n\nproperty_units", "descriptor_set", "qsar_method", "embeddingLength", sep="\t")
@@ -1143,9 +1254,9 @@ def ttr_binding():
     runs all the calculations for ttr_binding
     :return:
     """
-    # a_runCaseStudiesTTR_Binding_CV_merge_on_fly()
+    a_runCaseStudiesTTR_Binding_CV_merge_on_fly()
     # a_runCaseStudiesTTR_Binding_training_prediction()
-    a_runCaseStudiesTTR_Binding_special_chemicals()
+    # a_runCaseStudiesTTR_Binding_special_chemicals()
 
     # a_runCaseStudiesTTR_Binding_CV()
     # a_runCaseStudiesTTR_Binding_CV_merge_on_fly_predict_AQC_fails()
@@ -1163,11 +1274,166 @@ def inhalation_lc50():
     # folder = 'C:/Users/TMARTI02/OneDrive - Environmental Protection Agency (EPA)/0 java/0 model_management/hibernate_qsar_model_building/data/modeling/CoMPAIT/results/'
     # lookAtResults(folder)
 
+def runModelOptions():
+    np.random.seed(seed=42)
+    property_name = "Vapor Pressure"
+
+    datasetName = 'VP v1 modeling'
+
+
+    units = '-log10(M)'
+
+    #descriptor_sets = ['WebTEST-default', 'Mordred-default', 'PaDel-default']
+    descriptor_sets = ['WebTEST-default']
+
+    #qsar_methods = ['rf', 'xgb']
+    qsar_methods = ['las']
+    #qsar_methods = ['rf']
+
+    useEmbeddings = ['True', 'False']
+    #useEmbeddings = ['False']
+
+    #inputFolder = 'C:/Users/lbatts/OneDrive - Environmental Protection Agency (EPA)/0 Python/pf_python_modelbuilding/datasets_exp_prop/'
+    inputFolder = 'C:/Users/lbatts/OneDrive - Environmental Protection Agency (EPA)/0 Python/pf_python_modelbuilding/datasets/'
+    # resultsFolder = inputFolder + datasetName + "/results/"
+    # resultsFolder = inputFolder + datasetName + "/results_expanded_grid/"
+    # resultsFolder = inputFolder + datasetName + "/las_results_linspace/"
+    resultsFolder = inputFolder + datasetName + "/results_expanded_las_rounded/"
+    #resultsFolder = inputFolder + datasetName + "/results_las_optimized_tol/"
+
+    if not os.path.exists(resultsFolder):
+        os.mkdir(resultsFolder)
+
+
+    for descriptor_set in descriptor_sets:
+        training_file_name = datasetName + "_" + descriptor_set + "_RND_REPRESENTATIVE_training.tsv"
+        prediction_file_name = datasetName + "_" + descriptor_set + "_RND_REPRESENTATIVE_prediction.tsv"
+
+        training_tsv_path = inputFolder + datasetName + '/' + training_file_name
+        prediction_tsv_path = inputFolder + datasetName + '/' + prediction_file_name
+
+        training_tsv = dfu.read_file_to_string(training_tsv_path)
+        prediction_tsv = dfu.read_file_to_string(prediction_tsv_path)
+
+        for qsar_method in qsar_methods:
+
+            mp = model_parameters(property_name=property_name, property_units=units, descriptor_set=descriptor_set)
+            mp.qsar_method=qsar_method
+
+            for z in useEmbeddings:
+
+                if (qsar_method == 'reg') and (z == 'False'):
+                    continue
+                if (qsar_method == 'svm') and (z == 'True'):
+                    continue
+                if (qsar_method == 'las') and (z == 'True'):
+                    continue
+
+                if z == 'True':
+                    mp.useEmbeddings=True
+                    embedding, timeMin = getEmbedding(mp, prediction_tsv, training_tsv)
+                    print('embedding', embedding)
+                    print('timeMin', timeMin)
+                    # embeddings.append(embedding)
+                else:
+                    mp.useEmbeddings=False
+                    embedding = None
+
+                model = buildModel(embedding, mp, training_tsv, prediction_tsv)
+
+                if mp.qsar_method == 'las':
+                    clf = model.model_obj.steps[1][1]
+                    coef = clf.coef_
+                    desc = model.model_obj.feature_names_in_
+                    res = pd.DataFrame(np.column_stack([desc, coef]), columns=['desc', 'coef'])
+                    res2 = res.loc[(res['coef'] != 0.0)]
+                    print(res2)
+                    # res2_list = ', '.join(res2['desc'].astype(str))
+                    # embedding=res2_list
+                    embedding = list(res2['desc'])
+
+                df_results = mwu.call_do_predictions_to_df(prediction_tsv, model)
+
+                df_results_training = mwu.call_do_predictions_to_df(training_tsv, model)
+                exp_training = df_results_training['exp'].to_numpy()
+                pred_training = df_results_training['pred'].to_numpy()
+
+                df_results_prediction = mwu.call_do_predictions_to_df(prediction_tsv, model)
+                exp_prediction = df_results_prediction['exp'].to_numpy()
+                pred_prediction = df_results_prediction['pred'].to_numpy()
+
+                exp = df_results['exp'].to_numpy()
+                pred = df_results['pred'].to_numpy()
+
+                MAE = ru.calc_MAE(pred, exp)
+                strMAE = str("{:.3f}".format(MAE))
+
+                R2 = ru.calc_pearson_r2(pred, exp)
+                strR2 = str("{:.3f}".format(R2))
+
+                fileOut = resultsFolder + datasetName + '_' + descriptor_set + "_" + qsar_method + "_embedding=" + str(z) + ".csv"
+
+                df_results.to_csv(fileOut, index=False)
+
+                results = save_json_file(df_results_all=df_results, embeddings=embedding, fileOut=fileOut, mp=mp, hyperparameters=model.hyperparameters, hyperparameter_grid=model.hyperparameter_grid)
+
+                print( datasetName + '_' + descriptor_set + '_' + qsar_method + '_' + 'embedding=' + z + '\t' + strR2 + '\t' + strMAE + '\n')
+
+                figtitle = datasetName + "_" + mp.qsar_method + " useEmbeddings=" + str(mp.useEmbeddings)
+
+                title = descriptor_set + ' ' + mp.qsar_method + " useEmbeddings=" + str(mp.useEmbeddings)
+
+                ru.generateTrainingPredictionPlot(fileOut=fileOut, property_name=datasetName, title=title,
+                                                   figtitle=figtitle,
+                                                   exp_training=list(exp_training), pred_training=list(pred_training),
+                                                   exp_prediction=list(exp_prediction),
+                                                   pred_prediction=list(pred_prediction),showPlot=False)
+
+    lookAtResults(folder = resultsFolder)
+
+def getAllResults():
+
+    folderMain="C:/Users/lbatts/OneDrive - Environmental Protection Agency (EPA)/0 Python/pf_python_modelbuilding/datasets_exp_prop"
+
+    dfResults=None
+
+    for file in os.listdir(folderMain):
+
+        if os.path.isfile(folderMain+"/"+file):
+            continue
+
+        #filepath = folderMain+"/"+file+"/results"
+        # filepath = folderMain + "/" + file + "/results_expanded_grid2"
+        #filepath = folderMain + "/" + file + "/results_expanded_grid"
+        filepath = folderMain + "/" + file + "/results_expanded_las_rounded"
+        #filepath = folderMain + "/" + file + "/results_las_optimized_tol"
+
+        # print(filepath)
+        if 'v4' in file:
+            df=lookAtResults2(file, filepath)
+
+            if dfResults is None:
+                dfResults = df
+            else:
+                dfResults = pd.concat([dfResults, df], ignore_index=True)
+
+            dfBest = dfResults.groupby(["composite"], as_index=False)["rmse"].mean()
+            dfBest = dfBest.sort_values(by="rmse", ascending=True)
+
+    # dfResults.to_csv(folderMain+"/allresults.csv",index=False)
+    with pd.ExcelWriter(folderMain + "/allresults_expanded_las_rounded.xlsx") as writer:
+        dfResults.to_excel(writer, sheet_name="all results", index=False)
+        dfBest.to_excel(writer, sheet_name="best results", index=False)
+
+
 if __name__ == "__main__":
     # ttr_binding()
     # inhalation_lc50()
-    runTrainingPredictionExample()
+    # runTrainingPredictionExample()
+    runModelOptions()
 
+    # resultsFolder= 'C:/Users/lbatts/OneDrive - Environmental Protection Agency (EPA)/0 Python/pf_python_modelbuilding/datasets/results/'
+    # lookAtResults(resultsFolder)
 
     # for v in range(1, 5):
     #     dataset="exp_prop_96HR_BG_LC50_v"+str(v)+" modeling"
@@ -1178,3 +1444,4 @@ if __name__ == "__main__":
     # a_runCaseStudiesExpPropPFAS()
     # runTrainingPredictionExample()
     # compare_spaces()
+    #getAllResults()

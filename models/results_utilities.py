@@ -85,7 +85,7 @@ def generatePlot(fileOut, property_name, title, exp, pred):
 
 
 
-def generateTrainingPredictionPlot(fileOut, property_name, title, figtitle, exp_training, pred_training,exp_prediction, pred_prediction):
+def generateTrainingPredictionPlot(fileOut, property_name, figtitle, title, exp_training, pred_training,exp_prediction, pred_prediction,showPlot=False):
 
     #    fig, ax = plt.subplots()
     fig, (ax1, ax2) = plt.subplots(1, 2,figsize=(12, 6))
@@ -96,9 +96,10 @@ def generateTrainingPredictionPlot(fileOut, property_name, title, figtitle, exp_
     createSubplot(exp_training, pred_training, property_name,ax1,'Training')
     createSubplot(exp_prediction, pred_prediction, property_name, ax2,'Prediction')
 
-    fig.show()
-    plt.show()
-    plt.close()
+    if showPlot:
+        fig.show()
+        plt.show()
+        plt.close()
 
     figtrain = fileOut.replace('.csv','_train.png')
     generatePlot2(figtrain, property_name, title, exp_training, pred_training)

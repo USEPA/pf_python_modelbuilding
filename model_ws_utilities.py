@@ -139,6 +139,8 @@ def instantiateModel(df_training, n_jobs, qsar_method, remove_log_p, use_pmml_pi
         model = mb.KNN(df_training, remove_log_p, n_jobs)
     elif qsar_method == 'reg':
         model = mb.REG(df_training, remove_log_p, n_jobs)
+    elif qsar_method == 'las':
+        model = mb.LAS(df_training, remove_log_p, n_jobs)
     # elif qsar_method == 'dnn':
     #     model = dnn.Model(df_training, remove_log_p)
     else:
