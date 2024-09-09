@@ -139,6 +139,8 @@ def instantiateModel(df_training, n_jobs, qsar_method, remove_log_p, use_pmml_pi
         model = mb.KNN(df_training, remove_log_p, n_jobs)
     elif qsar_method == 'reg':
         model = mb.REG(df_training, remove_log_p, n_jobs)
+    elif qsar_method == 'las':
+        model = mb.LAS(df_training, remove_log_p, n_jobs)
     # elif qsar_method == 'dnn':
     #     model = dnn.Model(df_training, remove_log_p)
     else:
@@ -334,6 +336,85 @@ def call_build_embedding_importance(qsar_method, training_tsv, prediction_tsv, r
 
     descriptor_names = model.embedding
 
+    # Returns embedding results:
+    return descriptor_names, timeMin
+
+def call_build_embedding_lasso(qsar_method, training_tsv, prediction_tsv, remove_log_p_descriptors, n_threads,run_rfe):
+    """Generates importance based embedding"""
+
+    print('enter call_build_embedding_lasso')
+    df_training = DFU.load_df(training_tsv)
+    print('in call_build_embedding_importance, df_training.shape',df_training.shape)
+
+    df_prediction = DFU.load_df(prediction_tsv)
+    df_training = DFU.filter_columns_in_both_sets(df_training, df_prediction)
+    # print(df_training.shape)
+
+    t1 = time.time()
+
+    model = mwu.call_build_model_with_preselected_descriptors(qsar_method=qsar_method,
+                                                              training_tsv=training_tsv, prediction_tsv=prediction_tsv,
+                                                              remove_log_p=remove_log_p_descriptors,
+                                                              use_pmml_pipeline=False,
+                                                              include_standardization_in_pmml=True,
+                                                              descriptor_names_tsv=None,
+                                                              n_jobs=n_threads)
+
+    clf = model.model_obj.steps[1][1]
+    coef = clf.coef_
+    desc = model.model_obj.feature_names_in_
+    res = pd.DataFrame(np.column_stack([desc, coef]), columns=['desc', 'coef'])
+    res2 = res.loc[(res['coef'] != 0.0)]
+
+    # print(res)
+    # print(res.shape)
+    # print('')
+    # print(res2)
+    # print(res2.shape)
+    # res2_list = ', '.join(res2['desc'].astype(str))
+    # embedding=res2_list
+    model.embedding = list(res2['desc'])
+
+    print('before rfe, embedding size=',len(model.embedding))
+
+    if run_rfe:
+        # efi.perform_recursive_feature_elimination(model=model, df_training=df_training, n_threads=n_threads,n_steps=1)
+        # print('After RFE, ', len(model.embedding), "descriptors", model.embedding)
+
+        embedding_old = model.embedding
+        while True:  # need to get more aggressive (remove 2 at a time) since first RFE didnt remove enough
+            efi.perform_recursive_feature_elimination(model=model, df_training=df_training, n_threads=n_threads,
+                                                      n_steps=1)
+            print('After RFE iteration, ', len(model.embedding), "descriptors", model.embedding)
+            if len(model.embedding) == len(embedding_old):
+                break
+            embedding_old = model.embedding
+
+
+    # Fit final model using final embedding:
+    train_ids, train_labels, train_features, train_column_names = \
+        DFU.prepare_instances2(df_training, model.embedding, False)
+    model.model_obj.fit(train_features, train_labels)  # train the model
+
+    clf = model.model_obj.steps[1][1]
+    coef = clf.coef_
+
+    desc = model.model_obj.feature_names_in_
+    res = pd.DataFrame(np.column_stack([desc, coef]), columns=['desc', 'coef'])
+    res2 = res.loc[(res['coef'] != 0.0)]
+
+    # res2_list = ', '.join(res2['desc'].astype(str))
+    # embedding=res2_list
+    model.embedding = list(res2['desc'])
+
+    # Run calcs on test set to see how well embedding did:
+    # if df_prediction.shape[0] != 0:
+    #     print("Final results for embedded model:")
+    #     score = model.do_predictions(df_prediction, return_score=True)
+
+    t2 = time.time()
+    timeMin = (t2 - t1) / 60
+    descriptor_names = model.embedding
     # Returns embedding results:
     return descriptor_names, timeMin
 

@@ -24,7 +24,7 @@ from models import df_utilities as DFU, df_utilities
 from sklearn.neighbors import KNeighborsRegressor, KNeighborsClassifier
 from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
 from sklearn.svm import SVC, SVR
-from sklearn.linear_model import LogisticRegression, LinearRegression
+from sklearn.linear_model import LogisticRegression, LinearRegression, Lasso
 from xgboost import XGBRegressor, XGBClassifier
 
 from sklearn_pmml_model.ensemble import PMMLForestClassifier
@@ -87,6 +87,12 @@ def model_registry_model_obj(regressor_name, is_categorical):
             return LogisticRegression(max_iter=1000)
         else:
             return LinearRegression()
+    elif regressor_name == 'las':
+        if is_categorical:
+            return Lasso()
+        else:
+            return Lasso()
+
 
     else:
         raise KeyError(
@@ -561,6 +567,26 @@ class REG(Model):
         self.description = 'python implementation of regression'
         self.description_url = 'https://scikit-learn.org/stable/modules/classes.html#module-sklearn.linear_model'
 
+class LAS(Model):
+    def __init__(self, df_training=None, remove_log_p_descriptors=False, n_jobs=1):
+        Model.__init__(self, df_training, remove_log_p_descriptors, n_jobs=n_jobs)
+        self.regressor_name = 'las'
+        self.version = '1.0'
+        # self.hyperparameter_grid = {'estimator__alpha': [np.round(i, 5) for i in np.logspace(-5, 0, num=26)],'estimator__max_iter': [1000000]}
+
+        self.hyperparameter_grid = {'estimator__alpha':  [np.round(i, 5) for i in np.logspace(-4, 0, num=20)], 'estimator__max_iter': [1000000]}
+
+        # self.hyperparameter_grid = {'estimator__alpha': [0.03393],'estimator__max_iter': [1000000]}
+
+        #self.hyperparameter_grid = {'estimator__alpha': [np.round(i, 4) for i in np.linspace(0,1,10000)],'estimator__max_iter': [1000000]}
+        #self.hyperparameter_grid = {'estimator__alpha': [np.round(i, 5) for i in np.logspace(-4, 0, num=50)],
+        #                            'estimator__max_iter': [1000000], 'estimator__tol': [1.0e-6, 1.0e-5, 1.0e-4, 1.0e-3]}
+        #self.hyperparameter_grid = {}
+
+        # print(self.hyperparameter_grid)
+
+        self.description = 'python implementation of lasso'
+        self.description_url = 'https://scikit-learn.org/stable/modules/classes.html#module-sklearn.linear_model'
 
 class XGB(Model):
     def __init__(self, df_training=None, remove_log_p_descriptors=False, n_jobs=1):
