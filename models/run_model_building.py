@@ -81,18 +81,23 @@ def a_runCaseStudiesExpPropPFAS():
 def runTrainingPredictionExample():
 
     descriptor_software = 'WebTEST-default'
-    datasetName = 'exp_prop_96HR_BG_LC50_v4 modeling'
+    # datasetName = 'exp_prop_96HR_RT_LC50_v4 modeling'
+    datasetName = 'exp_prop_96HR_FHM_LC50_v4 modeling'
+    # datasetName = 'exp_prop_96HR_BG_LC50_v4 modeling'
+
+    np.random.seed(seed=42)  # makes results the same each time
 
     mp = model_parameters(property_name=datasetName, property_units="N/A", descriptor_set=descriptor_software)
 
     # mp.useEmbeddings = True
     mp.useEmbeddings = False
 
-    mp.qsar_method = 'rf'
+    # mp.qsar_method = 'rf'
     # mp.qsar_method = 'knn'
     # mp.qsar_method = 'xgb'
     # mp.qsar_method = 'svm'
     # mp.qsar_method = 'reg'
+    mp.qsar_method = 'las'
 
     mp.remove_log_p = False
     if 'LogP' in datasetName:
@@ -119,6 +124,10 @@ def runTrainingPredictionExample():
         embedding = None
 
     model = buildModel(embedding, mp, training_tsv, prediction_tsv)
+
+    print('best parameters',model.hyperparameters)
+
+
 
     df_results = mwu.call_do_predictions_to_df(prediction_tsv, model)
 
@@ -156,6 +165,9 @@ def runTrainingPredictionExample():
     ru.generateTrainingPredictionPlot(fileOut=fileOut, property_name=datasetName, title=title, figtitle=figtitle,
                                       exp_training=list(exp_training),pred_training=list(pred_training),
                                       exp_prediction=list(exp_prediction), pred_prediction=list(pred_prediction))
+
+
+    lookAtResults(inputFolder + datasetName)
 
 
 def run_dataset(datasetName, descriptor_software, f, inputFolder, num_generations, qsar_method, splitting,
@@ -650,6 +662,137 @@ def a_runCaseStudiesTTR_Binding_CV_merge_on_fly():
     title = descriptor_set + ' ' + mp.qsar_method + " useEmbeddings=" + str(mp.useEmbeddings)
     ru.generatePlot(property_name='TTR_Binding', title=title, exp=exp, pred=pred)
 
+
+def a_runCaseStudiesTTR_Binding_CV_merge_on_fly_with_leaderboard():
+
+    useMean = True
+    # useAQC = True
+    useAQC = False
+
+    inputFolder = 'C:/Users/TMARTI02/OneDrive - Environmental Protection Agency (EPA)/000 Papers/2024 tetko challenge/modeling/'
+    # descriptor_set = 'webtest'
+    # descriptor_set = 'webtest_opera'
+    # descriptor_set = 'padel'
+    descriptor_set = 'mordred'
+
+    mp = model_parameters(property_name="median TTR Binding activity", property_units='% activity',
+                          descriptor_set=descriptor_set)
+
+    mp.n_threads = 4
+
+    mp.useEmbeddings = False
+    # mp.useEmbeddings = True
+
+    mp.qsar_method = 'rf'
+    # mp.qsar_method = 'xgb'
+    # mp.qsar_method = 'knn'
+    # mp.qsar_method = 'svm'
+    # mp.qsar_method = 'reg'
+
+    sort_embeddings = False
+
+    df_results_all = None
+
+    embeddings = []
+    rmses = []
+    r2s = []
+
+    if useAQC:
+        print('todo for useAQC')
+        return
+        # split_file = inputFolder + 'TTR training 5 fold splitting file with AQC 0719_2024.csv'
+    else:
+        split_file = inputFolder + 'TTR training + leaderboard 5 fold splitting file.csv'
+
+    descriptor_file = inputFolder + 'TTR ' + descriptor_set + ' descriptors.csv'
+
+    df_splits = dfu.load_df_from_file(split_file)
+    df_descriptors = dfu.load_df_from_file(descriptor_file)
+    df_descriptors = df_descriptors.replace('null', np.nan).replace('{}', np.nan)
+
+    df_all = pd.merge(df_splits, df_descriptors, on='QsarSmiles')
+
+    # print(df_splits.shape)
+    # print(df_descriptors.shape)
+    # print(df_all.shape)
+
+    for fold in range(1, 6):
+        df_train = df_all.loc[df_all['Fold'] != 'Fold' + str(fold)]
+        df_train = df_train.drop('Fold', axis=1)
+
+        df_pred = df_all.loc[df_all['Fold'] == 'Fold' + str(fold)]
+        df_pred = df_pred.drop('Fold', axis=1)
+
+        # df_pred.to_csv(inputFolder+"pred"+str(fold)+".csv")
+
+        # df_pred.agg(['min', 'max']).to_csv(inputFolder+str(fold)+"predMinMax.csv")
+
+        # print( df_train[df_train.columns[0]])
+        # print(fold, df_train.shape, df_pred.shape)
+
+        prediction_tsv = df_pred.to_csv(sep='\t', index=False)
+        training_tsv = df_train.to_csv(sep='\t', index=False)
+
+        # fout=inputFolder+'training'+str(fold)+'.csv'
+        # df_train.to_csv(fout, sep=',')
+
+        # print(prediction_tsv)
+
+        if mp.useEmbeddings:
+            embedding, timeMin = getEmbedding(mp, prediction_tsv, training_tsv)
+
+            if sort_embeddings:
+                embedding.sort()
+
+            print('embedding', embedding)
+            print('timeMin', timeMin)
+            embeddings.append(embedding)
+        else:
+            embedding = None
+
+        model = buildModel(embedding, mp, training_tsv, prediction_tsv)
+        df_results = mwu.call_do_predictions_to_df(prediction_tsv, model)
+
+        print(df_results)
+
+
+        exp = df_results['exp'].to_numpy()
+        pred = df_results['pred'].to_numpy()
+        rmse = ru.calc_rmse(pred, exp)
+        r2 = ru.calc_pearson_r2(pred, exp)
+
+        print('fold=' + str(fold), 'RMSE=' + str(rmse) + ', R2=' + str(r2))
+
+        if fold == 1:
+            df_results_all = df_results
+        else:
+            df_results_all = pd.concat([df_results_all, df_results], ignore_index=True)
+
+        r2s.append(r2)
+        rmses.append(rmse)
+
+    # print(df_results_all)
+
+    if useAQC:
+        resultsFolder = inputFolder + "resultsAQC/"
+    else:
+        resultsFolder = inputFolder + "results/"
+
+    fileOut = resultsFolder + "TTR_Binding_with_leaderboard_" + descriptor_set + "_" + mp.qsar_method + "_embedding=" + str(
+        mp.useEmbeddings) + ".csv"
+
+    df_results_all.to_csv(fileOut, index=False)
+
+    results = save_json_file(df_results_all=df_results_all, embeddings=embeddings, fileOut=fileOut, mp=mp, r2s=r2s,
+                             rmses=rmses)
+
+    lookAtResults(resultsFolder,useMean=useMean)
+
+    exp = list(df_results_all['exp'].to_numpy())
+    pred = list(df_results_all['pred'].to_numpy())
+    title = descriptor_set + ' ' + mp.qsar_method + " useEmbeddings=" + str(mp.useEmbeddings)
+    ru.generatePlot(fileOut=fileOut, property_name='TTR_Binding', title=title, exp=exp, pred=pred)
+
 def a_runCaseStudiesTTR_Binding_training_prediction():
 
     useMean = True
@@ -671,10 +814,10 @@ def a_runCaseStudiesTTR_Binding_training_prediction():
     mp.useEmbeddings = False
     # mp.useEmbeddings = True
 
-    mp.qsar_method = 'rf'
+    # mp.qsar_method = 'rf'
     # mp.qsar_method = 'xgb'
     # mp.qsar_method = 'knn'
-    # mp.qsar_method = 'svm'
+    mp.qsar_method = 'svm'
     # mp.qsar_method = 'reg'
 
     if useAQC:
@@ -719,7 +862,7 @@ def a_runCaseStudiesTTR_Binding_training_prediction():
 
     model = buildModel(embedding, mp, training_tsv, prediction_tsv)
 
-    file = open(inputFolder+'ttr_binding_full_model.p', 'wb')
+    file = open(inputFolder+'ttr_binding_full_model_'+mp.qsar_method+'_'+descriptor_set+'.p', 'wb')
     pickle.dump(model,file)
     file.close()
 
@@ -741,7 +884,7 @@ def a_runCaseStudiesTTR_Binding_training_prediction():
 
 
     fileOut = resultsFolder + "TTR_Binding_" + descriptor_set + "_" + mp.qsar_method + "_embedding=" + str(
-        mp.useEmbeddings) + "_blind_predictions.csv"
+        mp.useEmbeddings) + "_blind.csv"
 
     df_results.to_csv(fileOut,index=False)
     # print(df_results)
@@ -749,7 +892,111 @@ def a_runCaseStudiesTTR_Binding_training_prediction():
     # import pickle
     # pickle.dumps(model)
 
+def a_runCaseStudiesTTR_Binding_training_prediction_with_leaderboard():
 
+    # useAQC = True
+    useAQC = False
+
+    inputFolder = 'C:/Users/TMARTI02/OneDrive - Environmental Protection Agency (EPA)/000 Papers/2024 tetko challenge/modeling/'
+    # descriptor_set = 'webtest'
+    descriptor_set = 'mordred'
+    # descriptor_set = 'webtest_opera'
+    # descriptor_set = 'padel'
+
+
+    mp = model_parameters(property_name="median TTR Binding activity", property_units='% activity',
+                          descriptor_set=descriptor_set)
+
+    mp.n_threads = 4
+
+    mp.useEmbeddings = False
+    # mp.useEmbeddings = True
+
+    mp.qsar_method = 'rf'
+    # mp.qsar_method = 'xgb'
+    # mp.qsar_method = 'knn'
+    # mp.qsar_method = 'svm'
+    # mp.qsar_method = 'reg'
+
+    # if useAQC:
+    #     split_file = inputFolder + 'TTR training 5 fold splitting file with AQC 0719_2024.csv'
+    # else:
+    #     split_file = inputFolder + 'TTR training 5 fold splitting file.csv'
+
+    descriptor_file = inputFolder + 'TTR ' + descriptor_set + ' descriptors.csv'
+
+    training_file = inputFolder + 'TTR training with leaderboard.csv'
+    # predictions_file = inputFolder + 'TTR blind.csv'
+    predictions_file = inputFolder + 'TTR predictions.csv' #blind and leaderboard, no special chemicals (493)
+
+
+    df_training = dfu.load_df_from_file(training_file)
+
+    # df_splits = dfu.load_df_from_file(split_file)
+    df_descriptors = dfu.load_df_from_file(descriptor_file)
+    df_descriptors = df_descriptors.replace('null', np.nan).replace('{}', np.nan)
+
+    # print(df_predictions)
+
+    df_train = pd.merge(df_training, df_descriptors, on='QsarSmiles')
+    df_train.rename(columns={"QsarSmiles": "id", "median_activity_%": "Property"}, inplace=True)
+
+    print(df_train)
+
+
+    df_predictions = dfu.load_df_from_file(predictions_file)
+    df_pred = pd.merge(df_predictions, df_descriptors, on='QsarSmiles')
+    df_pred = df_pred.drop('dataset', axis=1).drop('QsarSmiles', axis=1)
+    df_pred.insert(1, "Property", -9999)
+    df_pred.rename(columns={"DTXSID": "id"}, inplace=True)
+
+    # print(df_pred)
+    # df_train.to_csv(inputFolder+'training.csv', index=False)
+    # df_pred.to_csv(inputFolder + 'prediction.csv', index=False)
+
+    prediction_tsv = df_pred.to_csv(sep='\t', index=False)
+    training_tsv = df_train.to_csv(sep='\t', index=False)
+
+    # print(training_tsv)
+
+    if mp.useEmbeddings:
+        embedding, timeMin = getEmbedding(mp, prediction_tsv, training_tsv)
+        print('embedding', embedding)
+        print('timeMin', timeMin)
+    else:
+        embedding = None
+
+    model = buildModel(embedding, mp, training_tsv, prediction_tsv)
+
+    file = open(inputFolder+'ttr_binding_full_model_w_leaderboard_'+mp.qsar_method+'_'+descriptor_set+'.p', 'wb')
+    pickle.dump(model,file)
+    file.close()
+
+    # df_results_tr = mwu.call_do_predictions_to_df(training_tsv, model)
+    # print(df_results_tr)
+
+
+    df_results = mwu.call_do_predictions_to_df(prediction_tsv, model)
+    df_results.rename(columns={"id": "DTXSID"}, inplace=True)
+    df_results.drop('exp', axis=1, inplace=True)
+    # print (df_results)
+
+    df_results = pd.merge(df_results, df_predictions, on='DTXSID')
+
+    if useAQC:
+        resultsFolder = inputFolder + "resultsAQC/"
+    else:
+        resultsFolder = inputFolder + "results/"
+
+
+    fileOut = resultsFolder + "TTR_Binding_full_model_w_leaderboard_" + descriptor_set + "_" + mp.qsar_method + "_embedding=" + str(
+        mp.useEmbeddings) + "_blind_and_leaderboard.csv"
+
+    df_results.to_csv(fileOut,index=False)
+    # print(df_results)
+
+    # import pickle
+    # pickle.dumps(model)
 
 def a_runCaseStudiesTTR_Binding_special_chemicals():
 
@@ -765,6 +1012,9 @@ def a_runCaseStudiesTTR_Binding_special_chemicals():
 
     mp.n_threads = 4
 
+    # mp.qsar_method = 'rf'
+    mp.qsar_method = 'svm'
+
     predictions_file = inputFolder + 'special chemicals.tsv'
     df_pred = dfu.load_df_from_file(predictions_file)
 
@@ -774,11 +1024,12 @@ def a_runCaseStudiesTTR_Binding_special_chemicals():
 
     # print(prediction_tsv)
 
-    with open(inputFolder+'ttr_binding_full_model.p', "rb") as input_file:
+    model_filepath = inputFolder+'ttr_binding_full_model_' + mp.qsar_method + '_' + descriptor_set + '.p'
+    with open(model_filepath, "rb") as input_file:
         model = pickle.load(input_file)
 
-
     df_results = mwu.call_do_predictions_to_df(prediction_tsv, model)
+
 
     df_results.to_csv(inputFolder+'special chemicals results.csv',index=False)
 
@@ -790,7 +1041,157 @@ def a_runCaseStudiesTTR_Binding_special_chemicals():
     #
     # df_results = pd.merge(df_results, df_predictions, on='DTXSID')
 
+def a_runCaseStudiesTTR_Binding_special_chemicals2():
 
+    set = "blind"
+    # set = "training"
+
+    inputFolder = 'C:/Users/TMARTI02/OneDrive - Environmental Protection Agency (EPA)/000 Papers/2024 tetko challenge/modeling/'
+    # descriptor_set = 'webtest'
+    descriptor_set = 'mordred'
+    # descriptor_set = 'webtest_opera'
+    # descriptor_set = 'padel'
+
+
+    mp = model_parameters(property_name="median TTR Binding activity", property_units='% activity',
+                          descriptor_set=descriptor_set)
+    mp.qsar_method = 'rf'
+    # mp.qsar_method = 'svm'
+
+    mp.useEmbeddings = False
+
+    mp.n_threads = 4
+
+    predictions_file = inputFolder + 'special chemicals '+set+'.tsv'
+    df_pred = dfu.load_df_from_file(predictions_file)
+
+    df_pred = df_pred.drop('QsarSmiles', axis=1)
+    # df_pred = df_pred.drop('dataset', axis=1).drop('QsarSmiles', axis=1)
+
+    prediction_tsv = df_pred.to_csv(sep='\t', index=False)
+
+    # print(prediction_tsv)
+
+    model_filepath = inputFolder+'ttr_binding_full_model_'+mp.qsar_method+'_'+descriptor_set+'.p'
+    with open(model_filepath, "rb") as input_file:
+        model = pickle.load(input_file)
+
+    df_results = mwu.call_do_predictions_to_df(prediction_tsv, model)
+
+    dict_results={}
+
+    for index, row in df_results.iterrows():
+        print(row['id'], row['pred'])
+
+        if row['id'] in dict_results:
+
+            vals=dict_results[row['id']]
+            vals.append(row['pred'])
+
+        else:
+            vals=[]
+            vals.append(row['pred'])
+            dict_results[row['id']]=vals
+
+    print (json.dumps(dict_results,sort_keys=False, indent=4))
+
+    dtxsids = []
+    preds = []
+    import statistics
+    for key in dict_results:
+        vals = dict_results[key]
+        mean = statistics.mean(vals)
+        dtxsids.append(key)
+        preds.append(mean)
+        # print(key,mean)
+
+    results = {"DTXSID": dtxsids, "pred": preds}
+    df_results2 = pd.DataFrame(results)
+
+    print(df_results2)
+
+    resultsFolder = inputFolder + "results/"
+
+    fileOut = resultsFolder + "TTR_Binding_" + descriptor_set + "_" + mp.qsar_method + "_embedding=" + str(
+        mp.useEmbeddings) + "_"+set+'_special.csv'
+
+    df_results2.to_csv(fileOut,index=False)
+
+def a_runCaseStudiesTTR_Binding_special_chemicals2_with_leaderboard():
+
+    set = "blind"
+    # set = "training"
+
+    inputFolder = 'C:/Users/TMARTI02/OneDrive - Environmental Protection Agency (EPA)/000 Papers/2024 tetko challenge/modeling/'
+    # descriptor_set = 'webtest'
+    descriptor_set = 'mordred'
+    # descriptor_set = 'webtest_opera'
+    # descriptor_set = 'padel'
+
+
+    mp = model_parameters(property_name="median TTR Binding activity", property_units='% activity',
+                          descriptor_set=descriptor_set)
+    mp.qsar_method = 'rf'
+    # mp.qsar_method = 'svm'
+
+    mp.useEmbeddings = False
+
+    mp.n_threads = 4
+
+    predictions_file = inputFolder + 'special chemicals '+set+'.tsv'
+    df_pred = dfu.load_df_from_file(predictions_file)
+
+    df_pred = df_pred.drop('QsarSmiles', axis=1)
+    # df_pred = df_pred.drop('dataset', axis=1).drop('QsarSmiles', axis=1)
+
+    prediction_tsv = df_pred.to_csv(sep='\t', index=False)
+
+    # print(prediction_tsv)
+
+    model_filepath = inputFolder+'ttr_binding_full_model_w_leaderboard_' + mp.qsar_method + '_' + descriptor_set + '.p'
+    with open(model_filepath, "rb") as input_file:
+        model = pickle.load(input_file)
+
+    df_results = mwu.call_do_predictions_to_df(prediction_tsv, model)
+
+    dict_results={}
+
+    for index, row in df_results.iterrows():
+        print(row['id'], row['pred'])
+
+        if row['id'] in dict_results:
+
+            vals=dict_results[row['id']]
+            vals.append(row['pred'])
+
+        else:
+            vals=[]
+            vals.append(row['pred'])
+            dict_results[row['id']]=vals
+
+    print (json.dumps(dict_results,sort_keys=False, indent=4))
+
+    dtxsids = []
+    preds = []
+    import statistics
+    for key in dict_results:
+        vals = dict_results[key]
+        mean = statistics.mean(vals)
+        dtxsids.append(key)
+        preds.append(mean)
+        # print(key,mean)
+
+    results = {"DTXSID": dtxsids, "pred": preds}
+    df_results2 = pd.DataFrame(results)
+
+    print(df_results2)
+
+    resultsFolder = inputFolder + "results/"
+
+    fileOut = resultsFolder + "TTR_Binding_full_model_w_leaderboard_" + descriptor_set + "_" + mp.qsar_method + "_embedding=" + str(
+        mp.useEmbeddings) + "_"+set+'_special.csv'
+
+    df_results2.to_csv(fileOut,index=False)
 
 def a_runCaseStudiesTTR_Binding_CV_merge_on_fly_predict_AQC_fails():
     inputFolder = 'C:/Users/TMARTI02/OneDrive - Environmental Protection Agency (EPA)/000 Papers/2024 tetko challenge/modeling/'
@@ -1009,9 +1410,9 @@ def a_runCaseStudiesInhalationCV_merge_on_fly():
 
     # descriptor_set = 'webtest'
     # descriptor_set = 'webtest_opera'
-    # descriptor_set = 'padel'
+    descriptor_set = 'padel'
     # descriptor_set = 'morgan'
-    descriptor_set = 'mordred'
+    # descriptor_set = 'mordred'
 
     property_name = "4 hour rat inhalation LC50"
 
@@ -1114,10 +1515,6 @@ def a_runCaseStudiesInhalationCV_merge_on_fly():
             df_results_all = pd.concat([df_results_all, df_results], ignore_index=True)
 
 
-
-        r2s.append(r2)
-        rmses.append(rmse)
-
     # print(df_results_all)
 
     resultsFolder = inputFolder + "results/"
@@ -1132,7 +1529,7 @@ def a_runCaseStudiesInhalationCV_merge_on_fly():
     exp = list(df_results_all['exp'].to_numpy())
     pred = list(df_results_all['pred'].to_numpy())
     title = descriptor_set + ' ' + mp.qsar_method + " useEmbeddings=" + str(mp.useEmbeddings)
-    ru.generatePlot(property_name='LC50', title=title, exp=exp, pred=pred)
+    ru.generatePlot('plot.png',property_name='LC50', title=title, exp=exp, pred=pred)
 
 
     lookAtResults(resultsFolder)
@@ -1145,7 +1542,13 @@ def ttr_binding():
     """
     # a_runCaseStudiesTTR_Binding_CV_merge_on_fly()
     # a_runCaseStudiesTTR_Binding_training_prediction()
-    a_runCaseStudiesTTR_Binding_special_chemicals()
+
+    # a_runCaseStudiesTTR_Binding_special_chemicals()
+    # a_runCaseStudiesTTR_Binding_special_chemicals2()
+
+    a_runCaseStudiesTTR_Binding_CV_merge_on_fly_with_leaderboard()
+    # a_runCaseStudiesTTR_Binding_training_prediction_with_leaderboard()
+    # a_runCaseStudiesTTR_Binding_special_chemicals2_with_leaderboard()
 
     # a_runCaseStudiesTTR_Binding_CV()
     # a_runCaseStudiesTTR_Binding_CV_merge_on_fly_predict_AQC_fails()
@@ -1167,6 +1570,8 @@ if __name__ == "__main__":
     # ttr_binding()
     # inhalation_lc50()
     runTrainingPredictionExample()
+
+    # print(np.logspace(-4, 0, num=35))
 
 
     # for v in range(1, 5):
