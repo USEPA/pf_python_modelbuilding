@@ -1276,9 +1276,9 @@ def inhalation_lc50():
 
 def runModelOptions():
     np.random.seed(seed=42)
-    property_name = "Vapor Pressure"
+    property_name = "Boiling Point"
 
-    datasetName = 'VP v1 modeling'
+    datasetName = 'BP v1 modeling'
 
 
     units = '-log10(M)'
@@ -1295,7 +1295,7 @@ def runModelOptions():
 
     #inputFolder = 'C:/Users/lbatts/OneDrive - Environmental Protection Agency (EPA)/0 Python/pf_python_modelbuilding/datasets_exp_prop/'
     inputFolder = 'C:/Users/lbatts/OneDrive - Environmental Protection Agency (EPA)/0 Python/pf_python_modelbuilding/datasets/'
-    # resultsFolder = inputFolder + datasetName + "/results/"
+    #resultsFolder = inputFolder + datasetName + "/results/"
     # resultsFolder = inputFolder + datasetName + "/results_expanded_grid/"
     # resultsFolder = inputFolder + datasetName + "/las_results_linspace/"
     resultsFolder = inputFolder + datasetName + "/results_expanded_las_rounded/"

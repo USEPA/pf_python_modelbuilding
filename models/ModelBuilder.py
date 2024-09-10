@@ -9,7 +9,7 @@ import math
 import time
 
 import pypmml
-import sklearn2pmml
+
 from scipy import stats
 
 import pandas as pd
@@ -573,7 +573,7 @@ class LAS(Model):
         self.regressor_name = 'las'
         self.version = '1.0'
         #self.hyperparameter_grid = {'estimator__alpha': [np.round(i, 5) for i in np.logspace(-5, 0, num=26)],'estimator__max_iter': [1000000]}
-        self.hyperparameter_grid = {'estimator__alpha':  [np.round(i, 5) for i in np.logspace(-4, 0, num=50)],'estimator__max_iter': [1000000]}
+        self.hyperparameter_grid = {'estimator__alpha':  [np.round(i, 5) for i in np.logspace(-4, 0, num=20)],'estimator__max_iter': [1000000]}
         #self.hyperparameter_grid = {'estimator__alpha': [np.round(i, 4) for i in np.linspace(0,1,10000)],'estimator__max_iter': [1000000]}
         #self.hyperparameter_grid = {'estimator__alpha': [np.round(i, 5) for i in np.logspace(-4, 0, num=50)],
         #                            'estimator__max_iter': [1000000], 'estimator__tol': [1.0e-6, 1.0e-5, 1.0e-4, 1.0e-3]}
@@ -591,10 +591,13 @@ class XGB(Model):
         self.version = '1.3'
 
         # self.hyperparameter_grid = {'estimator__booster':['gbtree', 'gblinear','dart']}  #other two make it run a lot slower
-        self.hyperparameter_grid = {'estimator__booster': ['gbtree']}
+        #self.hyperparameter_grid = {'estimator__booster': ['gbtree']}
+        self.hyperparameter_grid = {'estimator__n_estimators': [50,100], 'estimator__eta': [0.1,0.2,0.3],
+                                    'estimator__gamma': [0,1,10], 'estimator__max_depth': [3,6,9,12],
+                                    'estimator__min_child_weight': [1,3,5], 'estimator__subsample': [0.5,1]}
 
         self.description = 'python implementation of extreme gradient boosting'
-        self.description_url = 'https://xgboost.readthedocs.io/en/latest/get_started.html'
+        self.description_url = 'https://scikit-learn.org/stable/modules/generated/sklearn.linear_model.Lasso.html'
 
 
 class SVM(Model):
@@ -637,8 +640,10 @@ class RF(Model):
         #                         'estimator__n_estimators': [10, 100, 250, 500]}
 
         self.version = '1.6'
-        self.hyperparameter_grid = {"estimator__max_features": ["sqrt", "log2"]}
-
+        self.hyperparameter_grid = {"estimator__max_features": ["sqrt", 1], "estimator__n_estimators": [50,100,150,300], "estimator__max_depth": [50,100,200],
+                                    "estimator__min_samples_split": [2,5,10], "estimator__max_samples": [0.25,0.50,1.0]}
+        #self.hyperparameter_grid = {}
+        #self.hyperparameter_grid = {"estimator__max_features": ["sqrt", "log2"]}
         # self.version = '1.7'
         # self.hyperparameter_grid = {"estimator__max_features": ["sqrt", "log2"], "estimator__max_depth": [1, 5, 10, 50,100,500]}
         # self.hyperparameter_grid = {"estimator__max_features": ["sqrt", "log2"],
