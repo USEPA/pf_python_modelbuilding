@@ -98,7 +98,7 @@ def train(qsar_method):
                                                                              use_pmml_pipeline=use_pmml,
                                                                              include_standardization_in_pmml=include_standardization_in_pmml,
                                                                              descriptor_names_tsv=embedding,
-                                                                             n_jobs=n_jobs)
+                                                                             n_jobs=n_jobs,filterColumnsInBothSets=True)
 
     if model is None:
         abort(500, 'unknown model training error')
@@ -175,7 +175,8 @@ def prediction_applicability_domain():
                                                                             test_tsv=test_tsv,
                                                                             remove_log_p=remove_log_p,
                                                                             embedding=embedding,
-                                                                            applicability_domain=applicability_domain)
+                                                                            applicability_domain=applicability_domain,
+                                                                            filterColumnsInBothSets=True)
 
     # Sets status 200 OK
     status = 200
@@ -661,6 +662,24 @@ def details(model_id):
 
     # Return description and 200 OK
     return model_details, 200
+
+
+@app.route('/models/<string:model_id>/object', methods=['GET'])
+def model_obj(model_id):
+    """Returns model object"""
+
+    model = model_ws_utilities.models[model_id]
+
+    # 404 NOT FOUND if no model stored under provided number
+    if model is None:
+        abort(404, 'no stored model with id ' + model_id)
+
+    if model.model_obj is None:
+        # 404 NOT FOUND if model has no detail information
+        abort(404, 'no model object for id ' + model_id)
+
+    # Return model_obj
+    return model.model_obj, 200
 
 
 if __name__ == '__main__':

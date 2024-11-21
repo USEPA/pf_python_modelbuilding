@@ -66,14 +66,16 @@ def call_build_model_with_preselected_descriptors(qsar_method, training_tsv, rem
 
 def call_build_model_with_preselected_descriptors(qsar_method, training_tsv, prediction_tsv, remove_log_p, use_pmml_pipeline,
                                                   include_standardization_in_pmml, descriptor_names_tsv=None,
-                                                  n_jobs=8):
+                                                  n_jobs=8,filterColumnsInBothSets=True):
     """Loads TSV training data into a pandas DF and calls the appropriate training method"""
 
     df_training = dfu.load_df(training_tsv)
     print('training shape=', df_training.shape)
     df_prediction = DFU.load_df(prediction_tsv)
-    df_training = DFU.filter_columns_in_both_sets(df_training, df_prediction)
-    print('training shape after removing bad descriptors in both sets=', df_training.shape)
+
+    if filterColumnsInBothSets:
+        df_training = DFU.filter_columns_in_both_sets(df_training, df_prediction)
+        print('training shape after removing bad descriptors in both sets=', df_training.shape)
 
     qsar_method = qsar_method.lower()
 
@@ -285,12 +287,12 @@ def call_build_embedding_importance(qsar_method, training_tsv, prediction_tsv, r
     """Generates importance based embedding"""
 
     df_training = DFU.load_df(training_tsv)
-
     print('in call_build_embedding_importance, df_training.shape',df_training.shape)
-
-
     df_prediction = DFU.load_df(prediction_tsv)
+    print('in call_build_embedding_importance, df_prediction.shape',df_prediction.shape)
+
     df_training = DFU.filter_columns_in_both_sets(df_training, df_prediction)
+    print('in call_build_embedding_importance, df_training.shape2',df_training.shape)
 
     print(df_training.shape)
 

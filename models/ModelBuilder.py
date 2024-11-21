@@ -126,6 +126,7 @@ class Model:
         self.version = '0.0.1'
         self.model_obj = None
         self.embedding = None
+        # self.coeff = None
         self.is_binary = None
         self.training_stats = {}
         self.seed = 11171992

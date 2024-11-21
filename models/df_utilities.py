@@ -20,6 +20,13 @@ def load_df(tsv_string):
 
     df = pd.read_csv(StringIO(tsv_string), sep=separator, na_values="null")
 
+    # print('0 col:')
+    # print(df.iloc[:,0])
+    #
+    # print('1 col:')
+    # print(df.iloc[:, 1])
+    # print('')
+
 
     # df = df.replace('null', np.nan).replace('{}', np.nan)
 
@@ -402,6 +409,10 @@ def prepare_instances_with_preselected_descriptors(df, which_set, descriptor_nam
 
     # for (columnName, columnData) in df.iteritems():
     #     print('Column Name : ', columnName)
+
+    # print('columns', df.columns)
+    # print('descriptor_names', descriptor_names)
+    # df.to_csv('training set.csv',index=False)
 
     # Use one liner to drop columns:
     df = df[descriptor_names]

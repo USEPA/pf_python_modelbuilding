@@ -20,7 +20,7 @@ def generateEmbedding(model, df_training, df_prediction, fraction_of_max_importa
 
     :param model: the model we are using to build the embedding
     :param df_training: the training data frame
-    :param df_prediction: the prediciton data frame
+    :param df_prediction: the prediction data frame
     :param fraction_of_max_importance: the fraction of the maximum descriptor importance we need to have for a descriptor to be kept from a run
     :param min_descriptor_count: the minimum number of descriptors to retain from a run- fraction_of_max_importance will be slowly reduced until we have this many descriptors retained
     :param num_generations: number of runs where we build a model and check the importances of the descriptors for them to be retained
@@ -45,6 +45,9 @@ def generateEmbedding(model, df_training, df_prediction, fraction_of_max_importa
         train_ids, train_labels, train_features, train_column_names, model.is_binary = \
             DFU.prepare_instances(df_training, "training", remove_log_p_descriptors, True)  # removes descriptors which are correlated by 0.95
 
+    # print('train_labels',train_labels)
+    # print(train_features)
+
 
     if model.regressor_name == 'rf':
         model.hyperparameter_grid = {
@@ -57,9 +60,9 @@ def generateEmbedding(model, df_training, df_prediction, fraction_of_max_importa
     model.model_obj.fit(train_features, train_labels)
     model.embedding = train_column_names
 
-    print('\nprediction set results for non embedded model as benchmark:')
-    score = model.do_predictions(df_prediction,
-                                       return_score=True)  # results for non embedded model as benchmark
+    if df_prediction.shape[0] != 0:
+        print('\nprediction set results for non embedded model as benchmark:')
+        score = model.do_predictions(df_prediction, return_score=True)  # results for non embedded model as benchmark
 
     # Loop until number of descriptors stops changing
     while True:
@@ -215,6 +218,7 @@ def perform_recursive_feature_elimination(model, df_training, n_threads, n_steps
     mask = rfecv.get_support(indices=True)
 
     # print(rfecv.grid_scores_)
+    # print(rfecv.score)
 
     # print(mask)
 
