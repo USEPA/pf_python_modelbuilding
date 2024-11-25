@@ -107,7 +107,8 @@ def scoring_strategy_defaults(is_categorical):
     if is_categorical == True:
         return 'balanced_accuracy'  # TMM: Changed to BA since "matthews_corrcoef" was not an available metric
     elif is_categorical == False:
-        return 'r2'
+        #return 'r2'
+        return 'neg_root_mean_squared_error'
     else:
         raise ValueError(r"is_categorical has been set to a non-Boolean")
 

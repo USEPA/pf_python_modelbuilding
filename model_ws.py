@@ -359,6 +359,56 @@ def train_embedding_importance(qsar_method):
     return result_str
 
 
+@app.route('/models/<string:qsar_method>/embedding_lasso', methods=['POST'])
+def train_embedding_lasso(qsar_method):
+    """Post method that trains importance based embedding for the specified QSAR method on provided data"""
+
+    print('Enter train_embedding_importance')
+
+    obj = request.form
+
+    training_tsv = obj.get('training_tsv')  # Retrieves the training data as a TSV
+    if training_tsv is None:
+        training_tsv = request.files.get('training_tsv').read().decode('UTF-8')
+    if training_tsv is None:
+        abort(400, 'missing training tsv')
+
+    prediction_tsv = obj.get('prediction_tsv')  # Retrieves the training data as a TSV
+    if prediction_tsv is None:
+        print('prediction_tsv is none!')
+        prediction_tsv = request.files.get('prediction_tsv').read().decode('UTF-8')
+    if prediction_tsv is None:
+        abort(400, 'missing prediction tsv')
+
+    if obj.get('remove_log_p'):  # Sets boolean remove_log_p from string
+        remove_log_p = obj.get('remove_log_p', '').lower() == 'true'
+    else:
+        remove_log_p = False
+
+    if obj.get('run_rfe'):  # Sets boolean remove_log_p from string
+        run_rfe = obj.get('run_rfe', '').lower() == 'true'
+    else:
+        run_rfe = False
+
+
+    n_threads = int(obj.get('n_threads'))
+
+    embedding, timeMin = model_ws_utilities.call_build_embedding_lasso(qsar_method=qsar_method,
+                                                                            training_tsv=training_tsv,
+                                                                            prediction_tsv=prediction_tsv,
+                                                                            remove_log_p_descriptors=remove_log_p,
+                                                                            n_threads=n_threads,
+                                                                            run_rfe=run_rfe)
+
+    result_obj = {}
+    result_obj['embedding'] = embedding
+    result_obj['timeMin'] = timeMin
+    result_str = json.dumps(result_obj)
+
+    print('result_str=' + result_str)
+    return result_str
+
+
 @app.route('/models/<string:qsar_method>/cross_validate', methods=['POST'])
 def cross_validate_fold(qsar_method):
     """Trains a model for the specified QSAR method on provided data"""

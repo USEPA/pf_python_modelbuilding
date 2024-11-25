@@ -2,7 +2,7 @@ import json
 import os
 import pandas as pd
 import numpy as np
-
+from models import df_utilities as DFU
 import model_ws_utilities as mwu
 import df_utilities as dfu
 
@@ -12,6 +12,9 @@ from models import ModelBuilder as mb
 import pickle
 import csv
 import os
+import csv
+import os
+from models import EmbeddingFromImportance as efi
 
 import matplotlib.pyplot as plt
 
@@ -92,6 +95,7 @@ def runTrainingPredictionExample():
     # mp.useEmbeddings = True
     mp.useEmbeddings = False
 
+    mp.n_threads = 8
     mp.qsar_method = 'rf'
     # mp.qsar_method = 'las'
     # mp.qsar_method = 'knn'
@@ -947,6 +951,15 @@ def getEmbedding(mp, prediction_tsv, training_tsv):
                                                          threshold=mp.threshold,
                                                          use_wards=mp.use_wards,
                                                          run_rfe=False)
+    elif mp.qsar_method == 'las':
+
+        embedding, timeMin = mwu.call_build_embedding_lasso(qsar_method=mp.qsar_method,
+                                                            training_tsv=training_tsv,
+                                                            prediction_tsv=prediction_tsv,
+                                                            remove_log_p_descriptors=mp.remove_log_p,
+                                                            n_threads=mp.n_threads, run_rfe=True)
+
+
     return embedding, timeMin
 
 
@@ -1276,29 +1289,31 @@ def inhalation_lc50():
 
 def runModelOptions():
     np.random.seed(seed=42)
-    property_name = "Boiling Point"
+    property_name = "96 hour rainbow trout LC50"
 
-    datasetName = 'BP v1 modeling'
-
+    #datasetName = "MP v1 modeling"
+    datasetName = 'exp_prop_96HR_RT_LC50_v5 modeling'
 
     units = '-log10(M)'
+    #units = 'TBA'
 
-    #descriptor_sets = ['WebTEST-default', 'Mordred-default', 'PaDel-default']
-    descriptor_sets = ['WebTEST-default']
+    #descriptor_sets = ['WebTEST-default', 'Mordred-default', 'PaDel-default', 'ToxPrints-default']
+    descriptor_sets = ['ToxPrints-default']
 
-    #qsar_methods = ['rf', 'xgb']
+    #qsar_methods = ['knn', 'svm']
     qsar_methods = ['las']
-    #qsar_methods = ['rf']
+    #qsar_methods = ['xgb']
 
-    useEmbeddings = ['True', 'False']
-    #useEmbeddings = ['False']
+    #useEmbeddings = ['True', 'False']
+    useEmbeddings = ['False']
 
-    #inputFolder = 'C:/Users/lbatts/OneDrive - Environmental Protection Agency (EPA)/0 Python/pf_python_modelbuilding/datasets_exp_prop/'
-    inputFolder = 'C:/Users/lbatts/OneDrive - Environmental Protection Agency (EPA)/0 Python/pf_python_modelbuilding/datasets/'
+    #inputFolder = '../datasets/' #relative path should work
+    #inputFolder = '../datasets_exp_prop/'
+    inputFolder = 'C:/Users/lbatts/OneDrive - Environmental Protection Agency (EPA)/0 Python/pf_python_modelbuilding/datasets_exp_prop/'
     #resultsFolder = inputFolder + datasetName + "/results/"
-    # resultsFolder = inputFolder + datasetName + "/results_expanded_grid/"
+    resultsFolder = inputFolder + datasetName + "/results_expanded_grid/"
     # resultsFolder = inputFolder + datasetName + "/las_results_linspace/"
-    resultsFolder = inputFolder + datasetName + "/results_expanded_las_rounded/"
+    #resultsFolder = inputFolder + datasetName + "/results_expanded_las_rounded/"
     #resultsFolder = inputFolder + datasetName + "/results_las_optimized_tol/"
 
     if not os.path.exists(resultsFolder):
@@ -1319,6 +1334,7 @@ def runModelOptions():
 
             mp = model_parameters(property_name=property_name, property_units=units, descriptor_set=descriptor_set)
             mp.qsar_method=qsar_method
+            mp.n_threads = 4# lower this number if have high CPU usage
 
             for z in useEmbeddings:
 
@@ -1326,8 +1342,8 @@ def runModelOptions():
                     continue
                 if (qsar_method == 'svm') and (z == 'True'):
                     continue
-                if (qsar_method == 'las') and (z == 'True'):
-                    continue
+                #if (qsar_method == 'las') and (z == 'True'):
+                #    continue
 
                 if z == 'True':
                     mp.useEmbeddings=True
@@ -1339,18 +1355,20 @@ def runModelOptions():
                     mp.useEmbeddings=False
                     embedding = None
 
+                # print('rfe embedding=',embedding)
                 model = buildModel(embedding, mp, training_tsv, prediction_tsv)
+                # print('final embedding',model.embedding)
 
-                if mp.qsar_method == 'las':
-                    clf = model.model_obj.steps[1][1]
-                    coef = clf.coef_
-                    desc = model.model_obj.feature_names_in_
-                    res = pd.DataFrame(np.column_stack([desc, coef]), columns=['desc', 'coef'])
-                    res2 = res.loc[(res['coef'] != 0.0)]
-                    print(res2)
+                #if mp.qsar_method == 'las':
+                    #clf = model.model_obj.steps[1][1]
+                    #coef = clf.coef_
+                    #desc = model.model_obj.feature_names_in_
+                    #res = pd.DataFrame(np.column_stack([desc, coef]), columns=['desc', 'coef'])
+                    #res2 = res.loc[(res['coef'] != 0.0)]
+                    #print(res2)
                     # res2_list = ', '.join(res2['desc'].astype(str))
                     # embedding=res2_list
-                    embedding = list(res2['desc'])
+                    #embedding = list(res2['desc'])
 
                 df_results = mwu.call_do_predictions_to_df(prediction_tsv, model)
 
@@ -1377,7 +1395,7 @@ def runModelOptions():
 
                 results = save_json_file(df_results_all=df_results, embeddings=embedding, fileOut=fileOut, mp=mp, hyperparameters=model.hyperparameters, hyperparameter_grid=model.hyperparameter_grid)
 
-                print( datasetName + '_' + descriptor_set + '_' + qsar_method + '_' + 'embedding=' + z + '\t' + strR2 + '\t' + strMAE + '\n')
+                print(datasetName + '_' + descriptor_set + '_' + qsar_method + '_' + 'embedding=' + z + '\t' + strR2 + '\t' + strMAE + '\n')
 
                 figtitle = datasetName + "_" + mp.qsar_method + " useEmbeddings=" + str(mp.useEmbeddings)
 
@@ -1394,7 +1412,7 @@ def runModelOptions():
 def getAllResults():
 
     folderMain="C:/Users/lbatts/OneDrive - Environmental Protection Agency (EPA)/0 Python/pf_python_modelbuilding/datasets_exp_prop"
-
+    #folderMain = '../datasets/'
     dfResults=None
 
     for file in os.listdir(folderMain):
