@@ -254,14 +254,12 @@ class TESTApplicabilityDomain(ApplicabilityDomainStrategy):
 
         print('metric', self.parameters['similarity'])
 
+        # embedding.append('QSAR_READY_SMILES')
+
         nbrs = self.nbrs
         TrainSet = self.TrainSet[embedding]
         TestSet = self.TestSet[embedding]
 
-        # print(self.TrainSet)
-        # self.TrainSet.to_excel("bob_training.xlsx")
-
-        ###
         scaler = StandardScaler().fit(TrainSet)
         train_x, test_x = scaler.transform(TrainSet), scaler.transform(TestSet)
         ###
@@ -270,11 +268,12 @@ class TESTApplicabilityDomain(ApplicabilityDomainStrategy):
         train_distances, train_indices = nbrs.kneighbors(train_x)
         test_distances, test_indices = nbrs.kneighbors(test_x)
 
-        train_distances = train_distances[:, 1:]
-        test_distances = test_distances[:, :-1]
 
-        train_indices = train_indices[:, 1:]
-        test_indices = test_indices[:, :-1]
+        train_indices = train_indices[:, 1:]  #this omits the chemical itself from being a neighbor
+        train_distances = train_distances[:, 1:]
+
+        test_indices = test_indices[:, :-1]  #this assumes that we dont need the 4th neighbor because we arent checking for exact match like we did with training set
+        test_distances = test_distances[:, :-1]  #returns all elements [:] except the last one -1
 
         # print(TrainSet[test_indices[0][1]][0])
         col_name_id = self.TrainSet.columns[0]
@@ -298,12 +297,12 @@ class TESTApplicabilityDomain(ApplicabilityDomainStrategy):
         self.TestSet['TESTSimilarity'] = test_TESTSimilarity
         ###
 
+        # print(train_TESTSimilarity)
+
         self.splitSimilarity = helpers.find_split_value(train_TESTSimilarity, self.parameters['fractionTrainingSetInsideAD'])
 
         print('splitSimilarity', self.splitSimilarity)
 
-
-        ###
         self.TrainSet[self.AD_Label] = True
         self.TestSet[self.AD_Label] = True
 
@@ -314,6 +313,9 @@ class TESTApplicabilityDomain(ApplicabilityDomainStrategy):
         # print(self.TestSet[self.AD_Label])  # array of whether or not it's in AD
 
         AD = self.TestSet[self.AD_Label]
+        # print(AD.value_counts()[False])
+
+        # print(AD_TR.value_counts()[False])
 
         results = pd.DataFrame(np.column_stack([id, id1, id2, id3, AD]),
                                columns=['idTest', 'idNeighbor1', 'idNeighbor2', 'idNeighbor3', 'AD'])
@@ -398,6 +400,8 @@ class KernelDensityApplicabilityDomain(ApplicabilityDomainStrategy):
         self.TrainSet['KESimilarity'] = train_densities
         self.TestSet['KESimilarity'] = test_densities
         ###
+
+        # print(train_densities)
 
         self.splitting_value = helpers.find_split_value(train_densities, 1-self.parameters['fractionTrainingSetInsideAD'])
 
@@ -701,8 +705,7 @@ class OPERALocalApplicabilityDomain(ApplicabilityDomainStrategy):
         #Use 1-fraction because train_local_index is in terms of similarity instead of distance
         self.splitting_value = helpers.find_split_value(list(train_local_index), 1-self.parameters['fractionTrainingSetInsideAD'])
 
-        print('splitting value=',self.splitting_value)
-
+        # print('splitting value=',self.splitting_value)
 
         ###
         self.TrainSet[self.AD_Label] = True
@@ -754,7 +757,7 @@ class OPERAGlobalApplicabilityDomain(ApplicabilityDomainStrategy):
 
         cutoff_OPERA = 3 * train_x.shape[1]/train_x.shape[0] # 3 x p /n used by OPERA and in stats books
 
-        print(cutoff_OPERA, self.splitting_value)  #they come out pretty similar
+        print('cutoff_OPERA=',cutoff_OPERA, 'splittingValue=',self.splitting_value)  #they come out pretty similar
 
         self.TestSet[self.AD_Label] = True
         self.TestSet.loc[leverages_test > self.splitting_value, self.AD_Label] = False

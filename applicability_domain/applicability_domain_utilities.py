@@ -14,17 +14,24 @@ strOPERA_local_index = "OPERA Local Index"
 strKernelDensity = "Kernel Density"
 
 import requests
+import numpy as np
+import pandas as pd
 
 
 def generate_applicability_domain_with_preselected_descriptors(training_tsv, test_tsv, remove_log_p,
-                                                               embedding, applicability_domain):
+                                                               embedding, applicability_domain,filterColumnsInBothSets=True,
+                                                               returnTrainingAD=False):
     trainData = dfu.load_df(training_tsv)
     testData = dfu.load_df(test_tsv)
+
+    if filterColumnsInBothSets:
+        trainData = dfu.filter_columns_in_both_sets(trainData, testData)
 
     # Need to run get the training column names for alldescriptors AD:
     removeCorr = False  # remove correlated descriptors for all descriptors AD, it's faster without it but doesnt make much difference
     train_ids, train_labels, train_features, train_column_names, is_binary = \
         dfu.prepare_instances(trainData, "training", remove_log_p, removeCorr)
+
 
     if applicability_domain == strTESTApplicabilityDomainEmbeddingCosine:
         ad = adm.TESTApplicabilityDomain(trainData, testData, is_binary)
@@ -60,15 +67,29 @@ def generate_applicability_domain_with_preselected_descriptors(training_tsv, tes
         ad.set_parameters({'fractionTrainingSetInsideAD': 0.95, 'train_column_names': train_column_names})
         output = ad.evaluate(embedding=embedding)
 
-    count_inside_AD = output['AD'].value_counts()[True]
-    countTest = output.shape[0]
-    coverage = count_inside_AD / countTest
+    df_results_inside = output.loc[output['AD'] == True]
+    # print('inside shape=', df_results_inside.shape)
+    coverage = df_results_inside.shape[0] / output.shape[0]
+
+    # count_inside_AD = output['AD'].value_counts()[True]
+    # countTest = output.shape[0]
+    # coverage = count_inside_AD / countTest
 
     print('\nAD', applicability_domain)
     print('Fraction of test set insideID', coverage)
 
-    # print(output)
-    return output
+    if returnTrainingAD:
+        col_name_id = ad.TrainSet.columns[0]
+        AD_TR = ad.TrainSet[ad.AD_Label]
+        idTR = ad.TrainSet[col_name_id]
+        output = pd.DataFrame(np.column_stack([idTR, AD_TR]),columns=['idTrain', 'AD'])
+        return output
+    else:
+        # print(output)
+        return output
+
+
+
 
 
 def generate_applicability_domain_with_preselected_descriptors_api_call(training_tsv, test_tsv, remove_log_p,

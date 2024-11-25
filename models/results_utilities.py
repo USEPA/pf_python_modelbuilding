@@ -81,10 +81,6 @@ def generatePlot(fileOut, property_name, title, exp, pred):
     plt.show()
 
 
-
-
-
-
 def generateTrainingPredictionPlot(fileOut, property_name, figtitle, title, exp_training, pred_training,exp_prediction, pred_prediction,showPlot=False):
 
     #    fig, ax = plt.subplots()
@@ -153,6 +149,36 @@ def generatePlot2(fileOut, property_name, title, exp, pred):
     # figure.set_size_inches(6, 6)
     # when saving, specify the DPI
 
+    fileOutPNG = fileOut.replace(".csv", ".png")
+
     # print(fileOut)
-    plt.savefig(fileOut, dpi=300)
+    plt.savefig(fileOutPNG, dpi=300)
     # plt.close()
+
+
+def col_round(x):
+    """
+    Forces it to round 0.5 to 1
+    :param x:
+    :return:
+    """
+    # https://www.reddit.com/r/learnpython/comments/92ne2s/why_does_round05_0/
+    import math
+    frac = x - math.floor(x)
+    if frac < 0.5: return math.floor(x)
+    return math.ceil(x)
+
+def calc_BA(y_pred, y_true):
+    from sklearn.metrics import balanced_accuracy_score
+
+    # https://www.geeksforgeeks.org/how-to-convert-numpy-array-of-floats-into-integers/
+
+    # print(y_pred)
+    y_pred = np.array([col_round(i) for i in y_pred]) #other methods failed for rounding
+    # print(y_pred)
+
+    y_true = np.array([col_round(i) for i in y_true])
+
+    ba = balanced_accuracy_score(y_true, y_pred)
+    print('BA',ba)
+    return ba

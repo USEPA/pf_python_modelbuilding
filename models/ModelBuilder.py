@@ -126,6 +126,7 @@ class Model:
         self.version = '0.0.1'
         self.model_obj = None
         self.embedding = None
+        # self.coeff = None
         self.is_binary = None
         self.training_stats = {}
         self.seed = 11171992
@@ -696,7 +697,7 @@ def runExamples():
     # prediction_tsv_path = mainFolder + endpoint + '/' + endpoint + '_prediction_set-2d.csv'
 
 
-    mainFolder="C:/Users/TMARTI02/OneDrive - Environmental Protection Agency (EPA)/0 python\modeling services/pf_python_modelbuilding/datasets_exp_prop/"
+    mainFolder = "C:/Users/TMARTI02/OneDrive - Environmental Protection Agency (EPA)/0 python/modeling services/pf_python_modelbuilding/datasets_exp_prop/"
     training_tsv_path = mainFolder + 'exp_prop_96HR_FHM_LC50_v1 modeling_WebTEST-default_RND_REPRESENTATIVE_training.tsv'
     prediction_tsv_path = mainFolder + 'exp_prop_96HR_FHM_LC50_v1 modeling_WebTEST-default_RND_REPRESENTATIVE_prediction.tsv'
 
