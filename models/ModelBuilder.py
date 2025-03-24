@@ -590,10 +590,14 @@ class XGB(Model):
     def __init__(self, df_training=None, remove_log_p_descriptors=False, n_jobs=1):
         Model.__init__(self, df_training, remove_log_p_descriptors, n_jobs=n_jobs)
         self.regressor_name = 'xgb'
-        self.version = '1.3'
 
         # self.hyperparameter_grid = {'estimator__booster':['gbtree', 'gblinear','dart']}  #other two make it run a lot slower
-        #self.hyperparameter_grid = {'estimator__booster': ['gbtree']}
+
+        # self.version = '1.3'
+        # self.hyperparameter_grid = {'estimator__booster': ['gbtree']}
+
+
+        self.version = '1.4'
         self.hyperparameter_grid = {'estimator__n_estimators': [50,100], 'estimator__eta': [0.1,0.2,0.3],
                                     'estimator__gamma': [0,1,10], 'estimator__max_depth': [3,6,9,12],
                                     'estimator__min_child_weight': [1,3,5], 'estimator__subsample': [0.5,1]}
@@ -606,7 +610,6 @@ class SVM(Model):
     def __init__(self, df_training=None, remove_log_p_descriptors=False, n_jobs=20):
         Model.__init__(self, df_training, remove_log_p_descriptors, n_jobs=n_jobs)
         self.regressor_name = "svm"
-        self.version = '1.4'
 
         # Following grid takes way too long:
         # self.c_space = list([10 ** x for x in range(-3, 3)])
@@ -618,6 +621,7 @@ class SVM(Model):
         #                         "estimator__kernel": ["linear", "poly", "rbf"],
         #                         "estimator__gamma": [10 ** n for n in range(-3, 4)]}
 
+        self.version = '1.4'
         self.c_space = [1, 10, 100]
         self.gamma_space = ['scale', 'auto']
         self.hyperparameter_grid = {"estimator__C": self.c_space, "estimator__gamma": self.gamma_space}
@@ -632,6 +636,13 @@ class RF(Model):
         Model.__init__(self, df_training, remove_log_p_descriptors, n_jobs=n_jobs)
         self.regressor_name = "rf"
 
+
+        # # self.version = '1.4'
+        # self.hyper_parameter_grid = {'max_features': ['sqrt', 'log2'],
+        #                              'min_impurity_decrease': [10 ** x for x in range(-5, 0)],
+        #                              'n_estimators': [10, 100, 250, 500]}
+
+
         # following didnt seem to help at all for predicting PFAS properties:
         # self.hyperparameter_grid = {"estimator__max_features": ["sqrt", "log2"],
         #                         'estimator__n_estimators': [10, 100, 200, 400],
@@ -641,15 +652,15 @@ class RF(Model):
         #                         'estimator__min_impurity_decrease': [10 ** x for x in range(-5, 0)],   append 0!
         #                         'estimator__n_estimators': [10, 100, 250, 500]}
 
-        self.version = '1.6'
-        self.hyperparameter_grid = {"estimator__max_features": ["sqrt", 1], "estimator__n_estimators": [50,100,150,300], "estimator__max_depth": [50,100,200],
-                                    "estimator__min_samples_split": [2,5,10], "estimator__max_samples": [0.25,0.50,1.0]}
-        #self.hyperparameter_grid = {}
-        #self.hyperparameter_grid = {"estimator__max_features": ["sqrt", "log2"]}
-        # self.version = '1.7'
-        # self.hyperparameter_grid = {"estimator__max_features": ["sqrt", "log2"], "estimator__max_depth": [1, 5, 10, 50,100,500]}
-        # self.hyperparameter_grid = {"estimator__max_features": ["sqrt", "log2"],
-        #                             "estimator__n_estimators": [10, 50, 100]}
+        # self.version = '1.6'
+        # self.hyperparameter_grid = {"estimator__max_features": ["sqrt", "log2"]}
+
+        self.version = '1.7'
+        self.hyperparameter_grid = {"estimator__max_features": ["sqrt", 1],
+                                    "estimator__n_estimators": [50, 100, 150, 300],
+                                    "estimator__max_depth": [50, 100, 200],
+                                    "estimator__min_samples_split": [2, 5, 10],
+                                    "estimator__max_samples": [0.25, 0.50, 1.0]}
 
         self.description = 'sklearn implementation of random forest'
         self.description_url = 'https://scikit-learn.org/stable/modules/generated/sklearn.ensemble.RandomForestClassifier.html'

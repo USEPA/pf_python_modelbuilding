@@ -10,3 +10,20 @@ temp/
 .settings*
 .pydevproject
 .project
+datasets/
+*.txt
+*.xlsx
+*.csv
+applicability_domain/results/
+models/RF/
+models/SVM/
+datasets_benchmark/Boiling point OPERA/knn models/knn model numNeighbors=0003 numDescriptors = 0008.xml
+datasets_benchmark/
+datasets_benchmark_TEST/
+*.pickle
+*.pmml
+*.tsv
+*.png
+*.json
+*.pdf
+models/old/__init__.py

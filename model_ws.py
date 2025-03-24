@@ -1,19 +1,18 @@
 import json
 
-import pypmml
 from flask import Flask, request, abort
 import logging
 import pickle
 from dotenv import load_dotenv
 
 load_dotenv()
-import model_ws_utilities
+import model_ws_utilities as mwu
 from qsar_models import ModelByte, Model
 import model_ws_db_utilities as mwdu
 from applicability_domain import applicability_domain_utilities as adu
 
-from sklearn2pmml import make_pmml_pipeline, sklearn2pmml
-from pypmml import Model as Model_pypmml
+from sklearn2pmml import sklearn2pmml
+
 
 app = Flask(__name__)
 # Limit logging output for easier readability
@@ -37,7 +36,7 @@ Repository created 05/21/2021
 @app.route('/models/<string:qsar_method>/info', methods=['GET'])
 def info(qsar_method):
     """Returns a short, generic description of the QSAR method"""
-    return model_ws_utilities.get_model_info(qsar_method), 200
+    return mwu.get_model_info(qsar_method), 200
 
 
 @app.route('/models/<string:qsar_method>/train', methods=['POST'])
@@ -91,7 +90,7 @@ def train(qsar_method):
     if embedding and embedding == 'error':
         abort(400, 'non blank embedding and dont have tab character')
 
-    model = model_ws_utilities.call_build_model_with_preselected_descriptors(qsar_method=qsar_method,
+    model = mwu.call_build_model_with_preselected_descriptors(qsar_method=qsar_method,
                                                                              training_tsv=training_tsv,
                                                                              prediction_tsv=prediction_tsv,
                                                                              remove_log_p=remove_log_p,
@@ -108,7 +107,7 @@ def train(qsar_method):
 
     # If model number provided for storage, stores the model and sets status 201 CREATED instead
     if model_id.strip():
-        model_ws_utilities.models[model_id] = model
+        mwu.models[model_id] = model
         status = 201
 
     if save_to_database:
@@ -124,9 +123,7 @@ def train(qsar_method):
                          pmml_file)  # write pmml to harddrive temporarily- TODO will this cause problems in docker???
 
             with open(pmml_file, 'r') as file:
-                   return bytes(file.read(),'utf-8'), status  # return pmml as string, todo compress it?
-
-
+                return bytes(file.read(),'utf-8'), status  # return pmml as string, todo compress it?
 
         else:
             return pickle.dumps(model), status
@@ -179,7 +176,7 @@ def prediction_applicability_domain():
                                                                             filterColumnsInBothSets=True)
 
     # Sets status 200 OK
-    status = 200
+    # status = 200
 
     # If model number provided for storage, stores the model and sets status 201 CREATED instead
 
@@ -262,7 +259,7 @@ def train_embedding_ga(qsar_method):
     # print('use_wards2 = ', obj.get('use_wards'))
     # print(num_generations)
 
-    embedding, timeMin = model_ws_utilities.call_build_embedding_ga(qsar_method=qsar_method,
+    embedding, timeMin = mwu.call_build_embedding_ga(qsar_method=qsar_method,
                                                                     training_tsv=training_tsv,
                                                                     prediction_tsv=prediction_tsv,
                                                                     remove_log_p=remove_log_p,
@@ -310,7 +307,7 @@ def train_embedding_importance(qsar_method):
     # else:
     #     save_to_database = False
 
-    model_id = obj.get('model_id')  # Retrieves the model number to use for persistent storage
+    # model_id = obj.get('model_id')  # Retrieves the model number to use for persistent storage
 
     if obj.get('remove_log_p'):  # Sets boolean remove_log_p from string
         remove_log_p = obj.get('remove_log_p', '').lower() == 'true'
@@ -338,7 +335,7 @@ def train_embedding_importance(qsar_method):
     max_descriptor_count = int(obj.get('max_descriptor_count'))
     n_threads = int(obj.get('n_threads'))
 
-    embedding, timeMin = model_ws_utilities.call_build_embedding_importance(qsar_method=qsar_method,
+    embedding, timeMin = mwu.call_build_embedding_importance(qsar_method=qsar_method,
                                                                             training_tsv=training_tsv,
                                                                             prediction_tsv=prediction_tsv,
                                                                             remove_log_p_descriptors=remove_log_p,
@@ -394,7 +391,7 @@ def train_embedding_lasso(qsar_method):
 
     n_threads = int(obj.get('n_threads'))
 
-    embedding, timeMin = model_ws_utilities.call_build_embedding_lasso(qsar_method=qsar_method,
+    embedding, timeMin = mwu.call_build_embedding_lasso(qsar_method=qsar_method,
                                                                             training_tsv=training_tsv,
                                                                             prediction_tsv=prediction_tsv,
                                                                             remove_log_p_descriptors=remove_log_p,
@@ -459,7 +456,7 @@ def cross_validate_fold(qsar_method):
     hyperparameters = obj.get('hyperparameters')
     hyperparameters = json.loads(hyperparameters)  # convert to dictionary
 
-    return model_ws_utilities.call_cross_validate(qsar_method=qsar_method,
+    return mwu.call_cross_validate(qsar_method=qsar_method,
                                                   cv_training_tsv=training_tsv, cv_prediction_tsv=prediction_tsv,
                                                   descriptor_names_tsv=embedding,
                                                   use_pmml_pipeline=use_pmml,
@@ -487,8 +484,8 @@ def cross_validate_fold(qsar_method):
 #
 #     # Gets stored model using model number
 #     model = None
-#     if model_ws_utilities.models[model_id] is not None:
-#         model = model_ws_utilities.models[model_id]
+#     if mwu.models[model_id] is not None:
+#         model = mwu.models[model_id]
 #     else:
 #         model = loadModelFromDatabase(model_id)
 #
@@ -497,14 +494,13 @@ def cross_validate_fold(qsar_method):
 #         abort(404, 'no stored model with id ' + model_id)
 #
 #     # Calls the appropriate prediction method and returns the results
-#     return model_ws_utilities.call_do_predictions(prediction_tsv, model), 200
+#     return mwu.call_do_predictions(prediction_tsv, model), 200
 
 
 def loadModelFromDatabase(model_id):
     session = mwdu.getDatabaseSession()
     query = session.query(ModelByte).filter_by(fk_model_id=model_id).one()
-    bytes = query.bytes
-    model = pickle.loads(bytes)
+    model = pickle.loads(query.bytes)
     session.flush()  # do we need this?
     session.commit()  # do we need this?
     return model
@@ -527,9 +523,9 @@ def predict():
     if model_id is None:
         abort(400, 'missing model id')
 
-    if model_ws_utilities.models[model_id] is not None:
+    if mwu.models[model_id] is not None:
         # Gets stored model using model number
-        model = model_ws_utilities.models[model_id]
+        model = mwu.models[model_id]
     else:
         model = loadModelFromDatabase(model_id)
 
@@ -538,7 +534,7 @@ def predict():
         abort(404, 'no stored model with id ' + model_id)
 
     # Calls the appropriate prediction method and returns the results
-    return model_ws_utilities.call_do_predictions(prediction_tsv, model), 200
+    return mwu.call_do_predictions(prediction_tsv, model), 200
 
 
 @app.route('/models/initPMML', methods=['POST'])
@@ -561,13 +557,13 @@ def initPMML():
     if model_id is None:
         abort(400, 'missing model id')
 
-    if model_id in model_ws_utilities.models:
+    if model_id in mwu.models:
         print('already have model in memory')
-        model = model_ws_utilities.models[model_id]
+        model = mwu.models[model_id]
         return model.get_model_description(), 201
 
-    # if model_ws_utilities.models[model_id] is not None:
-    #     model = model_ws_utilities.models[model_id]
+    # if mwu.models[model_id] is not None:
+    #     model = mwu.models[model_id]
     #     print('Already have model loaded, description=:',model.get_model_description)
     #     return model.get_model_description(), 201
 
@@ -618,7 +614,7 @@ def initPMML():
         is_binary = form_obj['is_binary'].lower == 'true'
 
     # print('is_categorical', is_categorical)
-    model = model_ws_utilities.instantiateModelForPrediction(qsar_method=form_obj['qsar_method'],
+    model = mwu.instantiateModelForPrediction(qsar_method=form_obj['qsar_method'],
                                                              is_binary=is_binary, pmml_file_path=pmml_file_path,
                                                              use_sklearn2pmml=use_sklearn2pmml)  # init from model_ws should take care of this when doing from java
     model.set_details(details=form_obj)
@@ -628,7 +624,7 @@ def initPMML():
     # model.embedding.remove('Property')
 
     # Stores model under provided number
-    model_ws_utilities.models[model_id] = model
+    mwu.models[model_id] = model
 
     print('After init model_description =', model.get_model_description())
 
@@ -682,7 +678,7 @@ def initPickle():
             #     print(model.is_binary)
 
         # Stores model under provided number
-        model_ws_utilities.models[model_id] = model
+        mwu.models[model_id] = model
 
         print('After init model_description =',model.get_model_description())
         return model.get_model_description(), 201
@@ -696,7 +692,7 @@ def initPickle():
 @app.route('/models/<string:model_id>', methods=['GET'])
 def details(model_id):
     """Returns a detailed description of the QSAR model with version and parameter information"""
-    model = model_ws_utilities.models[model_id]
+    model = mwu.models[model_id]
 
     # print('details3', model.get_model_description())
 
@@ -705,7 +701,7 @@ def details(model_id):
         abort(404, 'no stored model with id ' + model_id)
 
     # Retrieves details from specified model
-    model_details = model_ws_utilities.get_model_details(model)
+    model_details = mwu.get_model_details(model)
     if model_details is None:
         # 404 NOT FOUND if model has no detail information
         abort(404, 'no details for stored model with id ' + model_id)
@@ -718,7 +714,7 @@ def details(model_id):
 def model_obj(model_id):
     """Returns model object"""
 
-    model = model_ws_utilities.models[model_id]
+    model = mwu.models[model_id]
 
     # 404 NOT FOUND if no model stored under provided number
     if model is None:
@@ -732,5 +728,5 @@ def model_obj(model_id):
     return model.model_obj, 200
 
 
-if __name__ == '__main__':
+if __name__ == '__main__':    
     app.run(host='0.0.0.0', port=5004, debug=True)

@@ -2,7 +2,6 @@ import pypmml
 
 from models import df_utilities as dfu
 from models import ModelBuilder as mb
-import model_ws_utilities as mwu
 from models import EmbeddingFromImportance as efi
 from models import df_utilities as DFU
 
@@ -46,23 +45,23 @@ def get_model_info(qsar_method):
         return qsar_method + ' not implemented'
 
 
-def call_build_model_with_preselected_descriptors(qsar_method, training_tsv, remove_log_p, use_pmml_pipeline,
-                                                  include_standardization_in_pmml, descriptor_names_tsv=None,
-                                                  n_jobs=8):
-    """Loads TSV training data into a pandas DF and calls the appropriate training method"""
-
-    df_training = dfu.load_df(training_tsv)
-    qsar_method = qsar_method.lower()
-
-    model = instantiateModel(df_training, n_jobs, qsar_method, remove_log_p, use_pmml_pipeline=use_pmml_pipeline, include_standardization_in_pmml=include_standardization_in_pmml)
-
-    if not model:
-        abort(404, qsar_method + ' not implemented')
-
-    model.build_model(use_pmml_pipeline=use_pmml_pipeline, include_standardization_in_pmml=include_standardization_in_pmml,
-                      descriptor_names=descriptor_names_tsv)
-    # Returns trained model:
-    return model
+# def call_build_model_with_preselected_descriptors(qsar_method, training_tsv, remove_log_p, use_pmml_pipeline,
+#                                                   include_standardization_in_pmml, descriptor_names_tsv=None,
+#                                                   n_jobs=8):
+#     """Loads TSV training data into a pandas DF and calls the appropriate training method"""
+#
+#     df_training = dfu.load_df(training_tsv)
+#     qsar_method = qsar_method.lower()
+#
+#     model = instantiateModel(df_training, n_jobs, qsar_method, remove_log_p, use_pmml_pipeline=use_pmml_pipeline, include_standardization_in_pmml=include_standardization_in_pmml)
+#
+#     if not model:
+#         abort(404, qsar_method + ' not implemented')
+#
+#     model.build_model(use_pmml_pipeline=use_pmml_pipeline, include_standardization_in_pmml=include_standardization_in_pmml,
+#                       descriptor_names=descriptor_names_tsv)
+#     # Returns trained model:
+#     return model
 
 def call_build_model_with_preselected_descriptors(qsar_method, training_tsv, prediction_tsv, remove_log_p, use_pmml_pipeline,
                                                   include_standardization_in_pmml, descriptor_names_tsv=None,
@@ -227,7 +226,7 @@ def call_build_embedding_ga(qsar_method, training_tsv, prediction_tsv, remove_lo
 
     qsar_method = qsar_method.lower()
 
-    ga_model = mwu.instantiateModel(df_training=df_training, n_jobs=n_threads, qsar_method=qsar_method,
+    ga_model = instantiateModel(df_training=df_training, n_jobs=n_threads, qsar_method=qsar_method,
                                  remove_log_p=remove_log_p, use_pmml_pipeline=False)
 
     go.NUM_GENERATIONS = num_generations
@@ -260,7 +259,7 @@ def remove_descriptors_rfe(qsar_method, df_training, n_threads, descriptor_names
 
     t1 = time.time()
     qsar_method = qsar_method.lower()
-    model = mwu.instantiateModel(df_training=df_training, n_jobs=n_threads, qsar_method=qsar_method,
+    model = instantiateModel(df_training=df_training, n_jobs=n_threads, qsar_method=qsar_method,
                                  remove_log_p=False, use_pmml_pipeline=False)
 
     # efi.perform_recursive_feature_elimination(model=model, df_training=df_training, n_threads=n_threads,n_steps=1)
@@ -302,7 +301,7 @@ def call_build_embedding_importance(qsar_method, training_tsv, prediction_tsv, r
 
     print(df_training.shape)
 
-    model = mwu.instantiateModel(df_training=df_training, n_jobs=n_threads, qsar_method=qsar_method,
+    model = instantiateModel(df_training=df_training, n_jobs=n_threads, qsar_method=qsar_method,
                                  remove_log_p=remove_log_p_descriptors, use_pmml_pipeline=False)
 
     t1 = time.time()
@@ -360,7 +359,7 @@ def call_build_embedding_lasso(qsar_method, training_tsv, prediction_tsv, remove
 
     t1 = time.time()
 
-    model = mwu.call_build_model_with_preselected_descriptors(qsar_method=qsar_method,
+    model = call_build_model_with_preselected_descriptors(qsar_method=qsar_method,
                                                               training_tsv=training_tsv, prediction_tsv=prediction_tsv,
                                                               remove_log_p=remove_log_p_descriptors,
                                                               use_pmml_pipeline=False,

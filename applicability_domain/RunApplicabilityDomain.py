@@ -3,7 +3,8 @@ Created on 1/9/23
 @author: Todd Martin
 """
 
-import applicability_domain_utilities as adu
+from applicability_domain import applicability_domain_utilities as adu
+
 from models import df_utilities as DFU
 import numpy as np
 import pandas as pd
