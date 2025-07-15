@@ -12,8 +12,8 @@ from models import ModelBuilder
 import pandas as pd
 
 
-def generateEmbedding(model, df_training, df_prediction, fraction_of_max_importance,min_descriptor_count, max_descriptor_count, num_generations=5, n_threads=4,
-                      remove_log_p_descriptors=False,
+def generateEmbedding(model, df_training, df_prediction, fraction_of_max_importance,min_descriptor_count, max_descriptor_count,
+                      num_generations=5, n_threads=4,remove_log_p_descriptors=False,
                       use_permutative=False, use_wards=False):
     '''
     Generates embedding based on importance
@@ -101,6 +101,7 @@ def generateEmbedding(model, df_training, df_prediction, fraction_of_max_importa
 
 
 def get_important_descriptors(model, n_threads, train_column_names, train_features, train_labels, use_permutative):
+
     if use_permutative:
         # https://scikit-learn.org/stable/auto_examples/ensemble/plot_forest_importances.html
         start_time = time.time()
@@ -130,10 +131,11 @@ def get_important_descriptors(model, n_threads, train_column_names, train_featur
     else:
         # Using built in feature importances:
         feature_importances = model.model_obj.steps[1][1].feature_importances_
+
         sorted_idx = feature_importances.argsort()[::-1][::]
         sorted_importances = np.array(feature_importances)[sorted_idx]
         sorted_names = np.array(train_column_names)[sorted_idx]
-        # print(sorted_importances)
+        # print('sorted importances',sorted_importances)
         # print(sorted_names)
     return sorted_importances, sorted_names
 

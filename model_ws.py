@@ -13,7 +13,6 @@ from applicability_domain import applicability_domain_utilities as adu
 
 from sklearn2pmml import sklearn2pmml
 
-
 app = Flask(__name__)
 # Limit logging output for easier readability
 log = logging.getLogger('werkzeug')
@@ -91,13 +90,13 @@ def train(qsar_method):
         abort(400, 'non blank embedding and dont have tab character')
 
     model = mwu.call_build_model_with_preselected_descriptors(qsar_method=qsar_method,
-                                                                             training_tsv=training_tsv,
-                                                                             prediction_tsv=prediction_tsv,
-                                                                             remove_log_p=remove_log_p,
-                                                                             use_pmml_pipeline=use_pmml,
-                                                                             include_standardization_in_pmml=include_standardization_in_pmml,
-                                                                             descriptor_names_tsv=embedding,
-                                                                             n_jobs=n_jobs,filterColumnsInBothSets=True)
+                                                              training_tsv=training_tsv,
+                                                              prediction_tsv=prediction_tsv,
+                                                              remove_log_p=remove_log_p,
+                                                              use_pmml_pipeline=use_pmml,
+                                                              include_standardization_in_pmml=include_standardization_in_pmml,
+                                                              descriptor_names_tsv=embedding,
+                                                              n_jobs=n_jobs, filterColumnsInBothSets=True)
 
     if model is None:
         abort(500, 'unknown model training error')
@@ -123,7 +122,7 @@ def train(qsar_method):
                          pmml_file)  # write pmml to harddrive temporarily- TODO will this cause problems in docker???
 
             with open(pmml_file, 'r') as file:
-                return bytes(file.read(),'utf-8'), status  # return pmml as string, todo compress it?
+                return bytes(file.read(), 'utf-8'), status  # return pmml as string, todo compress it?
 
         else:
             return pickle.dumps(model), status
@@ -260,17 +259,17 @@ def train_embedding_ga(qsar_method):
     # print(num_generations)
 
     embedding, timeMin = mwu.call_build_embedding_ga(qsar_method=qsar_method,
-                                                                    training_tsv=training_tsv,
-                                                                    prediction_tsv=prediction_tsv,
-                                                                    remove_log_p=remove_log_p,
-                                                                    num_generations=num_generations,
-                                                                    num_optimizers=num_optimizers,
-                                                                    num_jobs=num_jobs, n_threads=n_threads,
-                                                                    descriptor_coefficient=descriptor_coefficient,
-                                                                    max_length=max_length,
-                                                                    threshold=threshold,
-                                                                    use_wards=use_wards,
-                                                                    run_rfe=False)
+                                                     training_tsv=training_tsv,
+                                                     prediction_tsv=prediction_tsv,
+                                                     remove_log_p=remove_log_p,
+                                                     num_generations=num_generations,
+                                                     num_optimizers=num_optimizers,
+                                                     num_jobs=num_jobs, n_threads=n_threads,
+                                                     descriptor_coefficient=descriptor_coefficient,
+                                                     max_length=max_length,
+                                                     threshold=threshold,
+                                                     use_wards=use_wards,
+                                                     run_rfe=False)
 
     result_obj = {}
     result_obj['embedding'] = embedding
@@ -329,6 +328,8 @@ def train_embedding_importance(qsar_method):
     else:
         use_permutative = False
 
+    # TODO add importance_type for when not using permutative importance
+
     num_generations = int(obj.get('num_generations'))
     fraction_of_max_importance = float(obj.get('fraction_of_max_importance'))
     min_descriptor_count = int(obj.get('min_descriptor_count'))
@@ -336,17 +337,17 @@ def train_embedding_importance(qsar_method):
     n_threads = int(obj.get('n_threads'))
 
     embedding, timeMin = mwu.call_build_embedding_importance(qsar_method=qsar_method,
-                                                                            training_tsv=training_tsv,
-                                                                            prediction_tsv=prediction_tsv,
-                                                                            remove_log_p_descriptors=remove_log_p,
-                                                                            n_threads=n_threads,
-                                                                            num_generations=num_generations,
-                                                                            use_permutative=use_permutative,
-                                                                            run_rfe=run_rfe,
-                                                                            fraction_of_max_importance=fraction_of_max_importance,
-                                                                            min_descriptor_count=min_descriptor_count,
-                                                                            max_descriptor_count=max_descriptor_count,
-                                                                            use_wards=use_wards)
+                                                             training_tsv=training_tsv,
+                                                             prediction_tsv=prediction_tsv,
+                                                             remove_log_p_descriptors=remove_log_p,
+                                                             n_threads=n_threads,
+                                                             num_generations=num_generations,
+                                                             use_permutative=use_permutative,
+                                                             run_rfe=run_rfe,
+                                                             fraction_of_max_importance=fraction_of_max_importance,
+                                                             min_descriptor_count=min_descriptor_count,
+                                                             max_descriptor_count=max_descriptor_count,
+                                                             use_wards=use_wards)
 
     result_obj = {}
     result_obj['embedding'] = embedding
@@ -388,15 +389,14 @@ def train_embedding_lasso(qsar_method):
     else:
         run_rfe = False
 
-
     n_threads = int(obj.get('n_threads'))
 
     embedding, timeMin = mwu.call_build_embedding_lasso(qsar_method=qsar_method,
-                                                                            training_tsv=training_tsv,
-                                                                            prediction_tsv=prediction_tsv,
-                                                                            remove_log_p_descriptors=remove_log_p,
-                                                                            n_threads=n_threads,
-                                                                            run_rfe=run_rfe)
+                                                        training_tsv=training_tsv,
+                                                        prediction_tsv=prediction_tsv,
+                                                        remove_log_p_descriptors=remove_log_p,
+                                                        n_threads=n_threads,
+                                                        run_rfe=run_rfe)
 
     result_obj = {}
     result_obj['embedding'] = embedding
@@ -419,7 +419,6 @@ def cross_validate_fold(qsar_method):
         use_pmml = obj.get('use_pmml', '').lower() == 'true'
     else:
         abort(400, 'missing use_pmml')
-
 
     training_tsv = obj.get('training_tsv')  # Retrieves the training data as a TSV
     if training_tsv is None:
@@ -457,11 +456,11 @@ def cross_validate_fold(qsar_method):
     hyperparameters = json.loads(hyperparameters)  # convert to dictionary
 
     return mwu.call_cross_validate(qsar_method=qsar_method,
-                                                  cv_training_tsv=training_tsv, cv_prediction_tsv=prediction_tsv,
-                                                  descriptor_names_tsv=embedding,
-                                                  use_pmml_pipeline=use_pmml,
-                                                  remove_log_p=remove_log_p,
-                                                  hyperparameters=hyperparameters, n_jobs=n_jobs)
+                                   cv_training_tsv=training_tsv, cv_prediction_tsv=prediction_tsv,
+                                   descriptor_names_tsv=embedding,
+                                   use_pmml_pipeline=use_pmml,
+                                   remove_log_p=remove_log_p,
+                                   hyperparameters=hyperparameters, n_jobs=n_jobs)
 
 
 #
@@ -537,12 +536,51 @@ def predict():
     return mwu.call_do_predictions(prediction_tsv, model), 200
 
 
+
+@app.route('/models/plot', methods=['POST'])
+def generate_plot():
+    """Makes predictions for a stored model on provided data"""
+    obj = request.form
+    model_id = obj.get('model_id')  # Retrieves the model number to use
+
+    model_name = obj.get('model_name')  # Retrieves the model number to use
+
+    plot_type = obj.get('plot_type')
+
+    training_tsv = obj.get('training_tsv')  # Retrieves the prediction data as a TSV
+    if training_tsv is None:
+        training_tsv = request.files.get('prediction_tsv').read().decode('UTF-8')
+
+    prediction_tsv = obj.get('prediction_tsv')  # Retrieves the prediction data as a TSV
+    if prediction_tsv is None:
+        prediction_tsv = request.files.get('prediction_tsv').read().decode('UTF-8')
+
+    # Can't make predictions without data
+    if prediction_tsv is None:
+        abort(400, 'missing prediction tsv')
+    # Can't make predictions without a model
+    if model_id is None:
+        abort(400, 'missing model id')
+
+    if mwu.models[model_id] is not None:
+        # Gets stored model using model number
+        model = mwu.models[model_id]
+    else:
+        model = loadModelFromDatabase(model_id)
+
+    # 404 NOT FOUND if no model stored under provided number
+    if model is None:
+        abort(404, 'no stored model with id ' + model_id)
+
+    # Calls the appropriate prediction method and returns the results
+    return mwu.call_generate_plot(training_tsv,prediction_tsv, model, model_name, plot_type), 200
+
+
 @app.route('/models/initPMML', methods=['POST'])
 def initPMML():
     """Loads a model and stores it under the provided number"""
 
     # print('enter initPMML')
-
 
     # form_obj = request.form
     # files_obj = request.files  # Retrieves the files attached to the request
@@ -566,7 +604,6 @@ def initPMML():
     #     model = mwu.models[model_id]
     #     print('Already have model loaded, description=:',model.get_model_description)
     #     return model.get_model_description(), 201
-
 
     # Retrieves the model file from the request files
     # model_file = files_obj['model']
@@ -596,7 +633,6 @@ def initPMML():
         # Can't store a model if none provided
         abort(400, 'missing model bytes')
 
-
     print('have model file, type = ', type(model_file))
     pmml_file_path = 'model_api.pmml'
 
@@ -608,15 +644,15 @@ def initPMML():
 
     print('wrote pmmlfile to harddrive')
 
-    if isinstance(form_obj['is_binary'],bool):
+    if isinstance(form_obj['is_binary'], bool):
         is_binary = form_obj['is_binary']
     else:
         is_binary = form_obj['is_binary'].lower == 'true'
 
     # print('is_categorical', is_categorical)
     model = mwu.instantiateModelForPrediction(qsar_method=form_obj['qsar_method'],
-                                                             is_binary=is_binary, pmml_file_path=pmml_file_path,
-                                                             use_sklearn2pmml=use_sklearn2pmml)  # init from model_ws should take care of this when doing from java
+                                              is_binary=is_binary, pmml_file_path=pmml_file_path,
+                                              use_sklearn2pmml=use_sklearn2pmml)  # init from model_ws should take care of this when doing from java
     model.set_details(details=form_obj)
 
     # print(model.model_obj)
@@ -632,7 +668,6 @@ def initPMML():
     if model is None:
         print('Model is none')
         abort(400, 'unknown model initialization error')
-
 
     # Return storage ID and 201 CREATED
     return model.get_model_description(), 201
@@ -658,13 +693,14 @@ def initPickle():
 
     # print (files_obj)
 
-
     if model_file is not None:
 
         print('have model file, type = ', type(model_file))
 
         # print('is_categorical', is_categorical)
         model = pickle.loads(model_file.read())
+
+        # printEqn(model)
 
         if not hasattr(model, "is_binary"):
             print('model.is_binary is none, setting to false')
@@ -680,13 +716,12 @@ def initPickle():
         # Stores model under provided number
         mwu.models[model_id] = model
 
-        print('After init model_description =',model.get_model_description())
+        print('After init model_description =', model.get_model_description())
         return model.get_model_description(), 201
 
     else:
         # Can't store a model if none provided
         abort(400, 'missing model bytes')
-
 
 
 @app.route('/models/<string:model_id>', methods=['GET'])
@@ -710,6 +745,26 @@ def details(model_id):
     return model_details, 200
 
 
+def printEqn(model):
+    estimator = model.model_obj.steps[1][1]
+    coefficients = estimator.coef_
+    intercept = estimator.intercept_
+    print('coefficients', coefficients)
+    print('intercept', intercept)
+
+    # # Construct the equation string
+    # equation = "log(p/1-p) = "
+    # if intercept:
+    #     equation += f"{intercept[0]:.2f} + "
+    # for i, coef in enumerate(coefficients[0]):
+    #     equation += f"{coef:.2f} * {feature_names[i]} + "
+    #
+    # # Remove the trailing " + "
+    # equation = equation[:-3]
+    #
+    # print(equation)
+
+
 @app.route('/models/<string:model_id>/object', methods=['GET'])
 def model_obj(model_id):
     """Returns model object"""
@@ -728,5 +783,5 @@ def model_obj(model_id):
     return model.model_obj, 200
 
 
-if __name__ == '__main__':    
+if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5004, debug=True)

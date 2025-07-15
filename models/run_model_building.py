@@ -1,5 +1,7 @@
 import json
 import os
+import time
+
 import pandas as pd
 import numpy as np
 import statistics as stats
@@ -22,12 +24,13 @@ def runModelOptionsTodd():
     num_jobs=16
     np.random.seed(seed=42)
     
-    useModelFiles = True #if false will create pickle file for model, if true it will load from pickle file
+    useModelFiles = False #if false will create pickle file for model, if true it will load from pickle file
     useAD = True
     adMeasure = adu.strTESTApplicabilityDomainEmbeddingEuclidean
 
     # datasetName = 'LD50 TEST'
     datasetName = 'LC50 TEST'
+    datasetName='exp_prop_RBIODEG_RIFM_BY_CAS'
     is_binary = False
     property_name = "LC50"
     units = '-log(M)'
@@ -64,10 +67,11 @@ def runModelOptionsTodd():
     # qsar_methods = ['xgb']
     # qsar_methods = ['rf', 'xgb']
     # qsar_methods = ['las']
-    qsar_methods = ['rf']
+    qsar_methods = ['reg']
+    # qsar_methods = ['rf']
 
-    useEmbeddings = ['True', 'False']
-    # useEmbeddings = ['True']
+    # useEmbeddings = ['True', 'False']
+    useEmbeddings = ['True']
     # useEmbeddings = ['False']
 
     if not os.path.exists(resultsFolder):
@@ -115,33 +119,95 @@ def runModelOptionsTodd():
                                    useModelFiles=useModelFiles, useAD=useAD, adMeasure=adMeasure, num_jobs=num_jobs)
 
     lookAtResults(folder=resultsFolder, useMean=False, displayAD=useAD, isBinary=is_binary)
-    
 
-def runModelOptions():
-    num_jobs=16
+
+def runModelOptionsFishTox():
+    num_jobs = 16
     np.random.seed(seed=42)
-    
-    useModelFiles = False #if false will create pickle file for model, if true it will load from pickle file
-    useAD = True
-    adMeasure = adu.strTESTApplicabilityDomainEmbeddingEuclidean
 
-    # datasetName = 'exp_prop_96HR_FHM_LC50_v5 modeling'
-    # datasetName = 'BP v1 modeling'
-    # datasetName = 'HLC v1 modeling'
-    
-    # datasetName = 'exp_prop_96HR_FHM_LC50_v4 modeling'
-    # datasetName = 'exp_prop_96HR_BG_LC50_v4 modeling'
-    # datasetName = 'exp_prop_96HR_RT_LC50_v4 modeling'
-    # datasetName = 'exp_prop_48HR_DM_LC50_v4 modeling'
+    useModelFiles = False  # if false will create pickle file for model, if true it will load from pickle file
+    useAD = False
+    adMeasure = adu.strTESTApplicabilityDomainAllDescriptorsEuclideanDistance
 
-    
-    # datasetName = 'LD50 TEST'
-    datasetName = 'LC50 TEST'
+    datasetName = 'ECOTOX_2024_12_12_96HR_Fish_LC50_v3 modeling'
+
+    # subfolder = 'species_common_exposure_type_all_fish'
+    # subfolder = 'species_common_exposure_type_all_fish_no_factors'
+    # subfolder = 'exposure_type_fhm'
+    # subfolder = 'exposure_type_fhm_no_factors'
+    # subfolder='species_common_FHM_BG_RT'
+    # subfolder='species_common_all_fish'
+    subfolder = 'species_common_all_fish_no_factors'
+
+    descriptor_set = 'Mordred-default'
+    qsar_method = 'xgb'
+    useEmbeddings = False
+
     is_binary = False
     property_name = "LC50"
     units = '-log(M)'
 
+
+    inputFolder = 'C:/Users/TMARTI02/OneDrive - Environmental Protection Agency (EPA)/0 java/0 model_management/hibernate_qsar_model_building/data/modeling/'
+    inputFolder += datasetName+'/'+subfolder+'/'+descriptor_set+'/'
+    print(inputFolder)
+
+    resultsFolder = inputFolder + "/results/"
+
+    if not os.path.exists(resultsFolder):
+        os.mkdir(resultsFolder)
+
+    training_file_name = 'train.tsv'
+    prediction_file_name = 'test.tsv'
+    prediction_file_name2 = 'testFHM.tsv'
+
+    training_tsv_path = inputFolder + training_file_name
+    prediction_tsv_path = inputFolder +prediction_file_name
+    prediction_tsv_path2 = inputFolder + prediction_file_name2
+
+    training_tsv = dfu.read_file_to_string(training_tsv_path)
+    prediction_tsv = dfu.read_file_to_string(prediction_tsv_path)
+    prediction_tsv2 = dfu.read_file_to_string(prediction_tsv_path2)
+
+    mp = model_parameters(property_name=property_name, property_units=units, descriptor_set=descriptor_set)
+    mp.qsar_method = qsar_method
+    mp.n_threads = 16  # lower this number if have high CPU usage
+    mp.dataset_name = datasetName
+    mp.is_binary = is_binary
+
+    if useEmbeddings:
+        mp.useEmbeddings = True
+    else:
+        mp.useEmbeddings = False
+
+    run_set_of_options2(mp=mp, prediction_tsv=prediction_tsv,prediction_tsv2=prediction_tsv2,
+                        training_tsv=training_tsv,
+                       inputFolder=inputFolder, resultsFolder=resultsFolder,
+                       useModelFiles=useModelFiles, useAD=useAD, adMeasure=adMeasure, num_jobs=num_jobs)
+
+    lookAtResults(folder=resultsFolder, useMean=False, displayAD=useAD, isBinary=is_binary)
+
+
+def runModelOptions(datasetName=None):
+    num_jobs = 4
+    np.random.seed(seed=42)
     
+    useModelFiles = False #if false will create pickle file for model, if true it will load from pickle file
+    useAD = False
+    adMeasure = adu.strTESTApplicabilityDomainEmbeddingEuclidean
+
+    # datasetName = 'HLC v1 modeling'
+    # datasetName = 'VP v1 modeling'
+    # datasetName = 'BP v1 modeling'
+    # datasetName = 'WS v1 modeling'
+    # datasetName = 'LogP v1 modeling'
+    # datasetName = 'MP v1 modeling'
+
+    is_binary = False
+    property_name = "LC50"
+    units = '-log(M)'
+    use_permutative = True
+
     # datasetName = 'Mutagenicity TEST'
     # datasetName = 'LLNA TEST'
     # is_binary = True
@@ -151,6 +217,8 @@ def runModelOptions():
 
     if 'exp_prop' in datasetName:
         inputFolder = '../datasets_exp_prop/'  
+    elif 'v1 modeling' in datasetName:
+        inputFolder = '../datasets_v1_modeling/'
     elif 'TEST' in datasetName:
         inputFolder = '../datasets_benchmark_TEST/'  
     elif 'OPERA' in datasetName:
@@ -158,31 +226,30 @@ def runModelOptions():
     else:
         inputFolder = '../datasets/'  
 
-
-    resultsFolder = inputFolder + datasetName + "/results_setac_2024/"
+    resultsFolder = inputFolder + datasetName + "/results_paper/"
     # resultsFolder = inputFolder + datasetName + "/results/"
     # resultsFolder = inputFolder + datasetName + "/results_expanded_grid/"
     # resultsFolder = inputFolder + datasetName + "/las_results_linspace/"
     # resultsFolder = inputFolder + datasetName + "/results_expanded_las_rounded/"
     # resultsFolder = inputFolder + datasetName + "/results_las_optimized_tol/"
 
-
-    descriptor_sets = ['WebTEST-default', 'ToxPrints-default','PaDel-default']
+    # descriptor_sets = ['WebTEST-default', 'ToxPrints-default','PaDel-default']
     # descriptor_sets = ['WebTEST-default', 'Mordred-default', 'PaDel-default']
     # descriptor_sets = ['WebTEST-default', 'ToxPrints-default','RDKit-default', 'PaDel-default']
     # descriptor_sets = ['ToxPrints-default']
-    # descriptor_sets = ['WebTEST-default']
+    descriptor_sets = ['WebTEST-default']
 
 
-    qsar_methods = ['rf', 'knn']
-    # qsar_methods = ['xgb']
+    # qsar_methods = ['rf', 'knn']
+    qsar_methods = ['xgb']
+    # qsar_methods = ['lgb']
     # qsar_methods = ['rf', 'xgb']
     # qsar_methods = ['las']
     # qsar_methods = ['rf']
 
-    useEmbeddings = ['True', 'False']
+    # useEmbeddings = ['True', 'False']
     # useEmbeddings = ['True']
-    # useEmbeddings = ['False']
+    useEmbeddings = ['False']
 
     if not os.path.exists(resultsFolder):
         os.mkdir(resultsFolder)
@@ -206,6 +273,7 @@ def runModelOptions():
 
             mp = model_parameters(property_name=property_name, property_units=units, descriptor_set=descriptor_set)
             mp.qsar_method = qsar_method
+            mp.use_permutative = use_permutative
             mp.n_threads = 16  # lower this number if have high CPU usage
             mp.dataset_name = datasetName
             mp.is_binary = is_binary
@@ -228,8 +296,122 @@ def runModelOptions():
                                    inputFolder=inputFolder, resultsFolder=resultsFolder,
                                    useModelFiles=useModelFiles, useAD=useAD, adMeasure=adMeasure, num_jobs=num_jobs)
 
+
     lookAtResults(folder=resultsFolder, useMean=False, displayAD=useAD, isBinary=is_binary)
 
+
+def clean_column_names(columns):
+    import re
+    cleaned_columns = []
+    for idx, col in enumerate(columns):
+        # Remove special characters using regex
+        clean_col = re.sub(r'[^a-zA-Z0-9]', '', col)
+        # Append index number to the cleaned column name
+        clean_col_with_index = f"{clean_col}_{idx+1}"
+        cleaned_columns.append(clean_col_with_index)
+    return cleaned_columns
+
+
+
+def runLGB(abbrev):
+    num_jobs = 16
+    np.random.seed(seed=42)
+
+    useModelFiles = False  # if false will create pickle file for model, if true it will load from pickle file
+    useAD = True
+    adMeasure = adu.strTESTApplicabilityDomainEmbeddingEuclidean
+
+    # datasetName = 'HLC v1 modeling'
+    datasetName = abbrev+' v1 modeling'
+    is_binary = False
+    property_name = "LC50" #fix
+    units = '-log(M)'
+
+    inputFolder = '../datasets_v1_modeling/'
+    resultsFolder = inputFolder + datasetName + "/results_paper/"
+    descriptor_set = 'WebTEST-default'
+
+    if not os.path.exists(resultsFolder):
+        os.mkdir(resultsFolder)
+
+    training_file_name = datasetName + "_" + descriptor_set + "_RND_REPRESENTATIVE_training.tsv"
+    prediction_file_name = datasetName + "_" + descriptor_set + "_RND_REPRESENTATIVE_prediction.tsv"
+
+    training_tsv_path = inputFolder + datasetName + '/' + training_file_name
+    prediction_tsv_path = inputFolder + datasetName + '/' + prediction_file_name
+
+    training_tsv = dfu.read_file_to_string(training_tsv_path)
+    prediction_tsv = dfu.read_file_to_string(prediction_tsv_path)
+
+    mp = model_parameters(property_name=property_name, property_units=units, descriptor_set=descriptor_set)
+    mp.qsar_method = 'lgb'
+    mp.n_threads = 16  # lower this number if have high CPU usage
+    mp.dataset_name = datasetName
+    mp.is_binary = is_binary
+
+    df_training = dfu.load_df(training_tsv)
+    print('training shape=', df_training.shape)
+    df_prediction = dfu.load_df(prediction_tsv)
+
+    # Apply the cleaning function to the DataFrame's columns
+    df_training.columns = clean_column_names(df_training.columns)
+    df_prediction.columns = clean_column_names(df_prediction.columns)
+
+    # for feature in df_training.columns:
+    #     print(feature)
+
+    filterColumnsInBothSets = True
+    remove_log_p_descriptors = False
+
+    train_ids, train_labels, train_features, train_column_names, is_binary = \
+        dfu.prepare_instances(df_training, "training", remove_log_p_descriptors, True)
+
+    # for name in train_features.columns:
+    #     print (name)
+
+
+    test_ids, test_labels, test_features = dfu.prepare_prediction_instances(df_prediction,train_features.columns)
+
+    # print(train_features)
+
+    # print(test_features.columns)
+    # print(test_features)
+
+    import lightgbm as lgb
+
+    train_data = lgb.Dataset(train_features, label=train_labels)
+    test_data = lgb.Dataset(test_features, label=test_labels, reference=train_data)
+
+    params = {
+        'objective': 'regression',
+        'metric': 'rmse',
+        'boosting_type': 'gbdt',
+        'learning_rate': 0.1,
+        'num_leaves': 31,
+        'feature_fraction': 0.9,
+        'bagging_fraction': 0.8,
+        'bagging_freq': 5,
+    }
+
+    model = lgb.train(params, train_data, num_boost_round=100, valid_sets=[train_data])
+    y_pred = model.predict(test_features, num_iteration=model.best_iteration)
+    # print(y_pred)
+
+    from sklearn.metrics import mean_squared_error as mse
+    rmse = mse(test_labels, y_pred, squared=False)
+    print(f'RMSE: {rmse}')
+    # # lookAtResults(folder=resultsFolder, useMean=False, displayAD=useAD, isBinary=is_binary)
+    #
+    # cv_results = lgb.cv(
+    #     params,
+    #     train_data,
+    #     num_boost_round=100,
+    #     nfold=5,
+    # )
+    #
+    # # Extract and print the best MAE score
+    # best_mae = np.min(cv_results['l1-mean'])  # 'l1' corresponds to MAE in LightGBM
+    # print(f'Best CV MAE: {best_mae}')
 def calcStats(predictions, df_prediction, excelPath):
 
     df_preds = pd.DataFrame(predictions, columns=['Prediction'])
@@ -332,7 +514,18 @@ def save_json_file(df_results_all, embeddings, fileOut, mp, hyperparameters=None
     print(json.dumps(results))
     print(statistics)
 
-    return results    
+    import ModelBuilder
+
+    if mp.useEmbeddings:
+        if mp.use_permutative:
+            print('\n',mp.dataset_name, mp.use_permutative, "Permutative", RMSE)
+        else:
+            print('\n',mp.dataset_name, mp.use_permutative, ModelBuilder.importance_type, RMSE)
+    else:
+        print('\n', mp.dataset_name, RMSE)
+
+
+    return results
 
 
 
@@ -828,8 +1021,10 @@ def lookAtResults(folder, useMean=False, displayAD=False, isBinary=False):
             print(resultRow, sep="\t")
             writer.writerow(resultRow)
 
+
         print('\nBest:')
         print(bestRow, sep="\t")
+
 
         best = ["Best:"]
         writer.writerow([])
@@ -1081,6 +1276,56 @@ def run_set_of_options(mp, prediction_tsv, training_tsv, inputFolder, resultsFol
                             adMeasure)
 
 
+def run_set_of_options2(mp, prediction_tsv,prediction_tsv2, training_tsv, inputFolder, resultsFolder, useModelFiles, useAD, adMeasure,
+                       num_jobs):
+    if mp.useEmbeddings and not useModelFiles:
+        embedding, timeMin = getEmbedding(mp, prediction_tsv, training_tsv)
+        print('embedding', embedding)
+        print('timeMin', timeMin)
+    else:
+        embedding = None
+
+    # picklepath = 'model'+str(fold)+'.pickle'
+
+    picklepath = inputFolder + '/' + 'model' + "_" + mp.qsar_method + "_embedding=" + str(
+        mp.useEmbeddings) + ".pickle"
+    print('model path', picklepath)
+
+    if useModelFiles:
+        with open(picklepath, 'rb') as handle:
+            model = pickle.load(handle)
+    else:
+        model = buildModel(embedding, mp, training_tsv, prediction_tsv)
+        with open(picklepath, 'wb') as handle:
+            pickle.dump(model, handle, protocol=pickle.HIGHEST_PROTOCOL)
+
+    # Simpler code w/o saving model to file:
+    # if mp.useEmbeddings:
+    #     embedding, timeMin = getEmbedding(mp, prediction_tsv, training_tsv)
+    #     print('embedding', embedding)
+    #     print('timeMin', timeMin)
+    #     # embeddings.append(embedding)
+    # else:
+    #     embedding = None
+    #
+    # # print('rfe embedding=',embedding)
+    # model = buildModel(embedding, mp, training_tsv, prediction_tsv)
+
+    # print('final embedding',model.embedding)
+
+    if mp.useEmbeddings and useModelFiles:
+        print('model.Embedding', model.embedding)
+
+    save_las_coeffs(model, mp, resultsFolder)
+    save_prediction_results('training', training_tsv, training_tsv, model, mp, resultsFolder, useAD,
+                            adMeasure)
+    save_prediction_results('prediction', training_tsv, prediction_tsv, model, mp, resultsFolder, useAD,
+                            adMeasure)
+
+    save_prediction_results('prediction2', training_tsv, prediction_tsv2, model, mp, resultsFolder, useAD,
+                            adMeasure)
+
+
 
 def save_prediction_results(set, training_tsv, prediction_tsv, model, mp, resultsFolder, doAD, adMeasure):
     df_results = mwu.call_do_predictions_to_df(prediction_tsv, model)
@@ -1088,7 +1333,10 @@ def save_prediction_results(set, training_tsv, prediction_tsv, model, mp, result
     fileOut = resultsFolder + mp.dataset_name + '_' + mp.descriptor_set + "_" + mp.qsar_method + "_embedding=" + str(
         mp.useEmbeddings) + '_' + set + ".csv"
 
-    if set == 'prediction':
+    if 'prediction' in set:
+
+        statistics_AD = None
+
         if doAD:
             df_results, statistics_AD = runAD(mp.is_binary, adMeasure, df_results, model, training_tsv, prediction_tsv)
 
@@ -1101,7 +1349,7 @@ def save_prediction_results(set, training_tsv, prediction_tsv, model, mp, result
 
     if not mp.is_binary:
         title = mp.descriptor_set + ' ' + mp.qsar_method + " useEmbeddings=" + str(mp.useEmbeddings)
-        if set == 'prediction':
+        if 'prediction' in set:
             title = title + ' (P)'
         else:
             title = title + ' (T)'
@@ -1122,7 +1370,7 @@ def runAD(isBinary, adMeasure, df_results, model, training_tsv, prediction_tsv):
     df_AD.rename(columns={"idTest": "id"}, inplace=True)
     # print(df_AD.shape)
     # df_results.to_csv('adresults' + str(fold) + '.csv')
-    df_results = pd.merge(df_results, df_AD, on='id')
+    df_results = pd.merge(df_results, df_AD, on='id') # this has problems if have duplicate rows with same id but different factors
     df_results_inside = df_results.loc[df_results['AD'] == True]
     df_results_outside = df_results.loc[df_results['AD'] == False]
     # print('inside shape=', df_results_inside.shape)
@@ -1244,11 +1492,29 @@ def lookAtResultsForDatasets():
         resultsFolder = inputFolder + datasetName + "/results_setac_2024/"
         lookAtResults(resultsFolder, useMean=False, displayAD=True, isBinary=isBinary)
 
+def runDatasets():
+
+    t1 = time.time()
+    abbrevs = ['HLC', 'VP', 'BP', 'WS', 'LogP', 'MP']
+
+    for abbrev in abbrevs:
+        # runLGB(abbrev)
+        datasetName = abbrev+' v1 modeling'
+        runModelOptions(datasetName=datasetName)
+
+    t2 = time.time()
+
+    print(f"Elapsed time: {t2-t1:.4f} seconds")
 
 if __name__ == "__main__":
-    
-    runModelOptions()
+
+    runDatasets()
+    # runModelOptions()
+
+
+
     # runModelOptionsTodd()
+    # runModelOptionsFishTox()
     
     # runTrainingPredictionExample()
     

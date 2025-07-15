@@ -319,7 +319,9 @@ class TESTApplicabilityDomain(ApplicabilityDomainStrategy):
 
         results = pd.DataFrame(np.column_stack([id, id1, id2, id3, AD]),
                                columns=['idTest', 'idNeighbor1', 'idNeighbor2', 'idNeighbor3', 'AD'])
-        # print(results)
+        print(results)
+
+        # results.to_json('bob.json')
 
         t2 = time.time()
         # print((t2-t1),' secs to evaluate')
@@ -705,6 +707,11 @@ class OPERALocalApplicabilityDomain(ApplicabilityDomainStrategy):
         #Use 1-fraction because train_local_index is in terms of similarity instead of distance
         self.splitting_value = helpers.find_split_value(list(train_local_index), 1-self.parameters['fractionTrainingSetInsideAD'])
 
+        # self.splitting_value=0.065
+
+        print('cutoff opera local index=', self.splitting_value)
+
+
         # print('splitting value=',self.splitting_value)
 
         ###
@@ -756,6 +763,8 @@ class OPERAGlobalApplicabilityDomain(ApplicabilityDomainStrategy):
         self.splitting_value = helpers.find_split_value(list(leverages_train), self.parameters['fractionTrainingSetInsideAD'])
 
         cutoff_OPERA = 3 * train_x.shape[1]/train_x.shape[0] # 3 x p /n used by OPERA and in stats books
+
+        # self.splitting_value=cutoff_OPERA
 
         print('cutoff_OPERA=',cutoff_OPERA, 'splittingValue=',self.splitting_value)  #they come out pretty similar
 

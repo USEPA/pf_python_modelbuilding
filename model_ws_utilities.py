@@ -78,6 +78,7 @@ def call_build_model_with_preselected_descriptors(qsar_method, training_tsv, pre
 
     qsar_method = qsar_method.lower()
 
+
     model = instantiateModel(df_training, n_jobs, qsar_method, remove_log_p, use_pmml_pipeline=use_pmml_pipeline, include_standardization_in_pmml=include_standardization_in_pmml)
 
     if not model:
@@ -142,6 +143,9 @@ def instantiateModel(df_training, n_jobs, qsar_method, remove_log_p, use_pmml_pi
         model = mb.RF(df_training, remove_log_p, n_jobs)
     elif qsar_method == 'xgb':
         model = mb.XGB(df_training, remove_log_p, n_jobs)
+    elif qsar_method == 'lgb':
+        model = mb.LGB(df_training, remove_log_p, n_jobs)
+
     elif qsar_method == 'knn':
         model = mb.KNN(df_training, remove_log_p, n_jobs)
     elif qsar_method == 'reg':
@@ -154,6 +158,8 @@ def instantiateModel(df_training, n_jobs, qsar_method, remove_log_p, use_pmml_pi
         pass
         # 404 NOT FOUND if requested QSAR method has not been implemented
     model.is_binary = DFU.isBinary(df_training)
+
+    print('instantiateModel: model.is_binary',model.is_binary)
 
     obj = mb.model_registry_model_obj(qsar_method, model.is_binary)
 
@@ -548,6 +554,14 @@ def api_call_build_with_preselected_descriptors(qsar_method, training_tsv, remov
 #     return model
 
 
+
+def call_generate_plot(training_tsv, prediction_tsv, model, model_name, plot_type):
+    df_training = dfu.load_df(training_tsv)
+    df_prediction = dfu.load_df(prediction_tsv)
+    return model.create_plot(df_training, df_prediction, model_name, plot_type)
+
+
+
 def call_do_predictions(prediction_tsv, model):
     """Loads TSV prediction data into a pandas DF, stores IDs and exp vals,
     and calls the appropriate prediction method"""
@@ -596,3 +610,5 @@ def get_model_details(model):
     else:
         # 404 NOT FOUND if requested QSAR method has not been implemented
         abort(404, 'details for model not available')
+
+

@@ -23,6 +23,8 @@ import model_ws_utilities
 from models import df_utilities as DFU, df_utilities
 from sklearn.neighbors import KNeighborsRegressor, KNeighborsClassifier
 from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
+from lightgbm import LGBMRegressor, LGBMClassifier
+
 from sklearn.svm import SVC, SVR
 from sklearn.linear_model import LogisticRegression, LinearRegression, Lasso
 from xgboost import XGBRegressor, XGBClassifier
@@ -46,10 +48,16 @@ import json
 
 __author__ = "Nathaniel Charest, Todd Martin (modified to work with webservice, added XGB)"
 
-
 # use_standardizer = True
 
 # %%
+
+importance_type = 'weight' #default, TODO make a passable parameter to model_ws when generating embedding
+# importance_type = 'gain'
+# importance_type = 'cover'
+# importance_type = 'total_gain'
+# importance_type ='total_cover'
+
 
 def model_registry_model_obj(regressor_name, is_categorical):
     '''
@@ -57,6 +65,7 @@ def model_registry_model_obj(regressor_name, is_categorical):
     :param regressor_name:
     :param is_categorical:
     :return: model obj
+    TODO move to each model class and remove this method?
     '''
 
     if regressor_name == 'knn':
@@ -77,11 +86,21 @@ def model_registry_model_obj(regressor_name, is_categorical):
     elif regressor_name == 'xgb':
         if is_categorical:
             # return XGBClassifier()
-            return XGBClassifier(use_label_encoder=False, eval_metric='logloss')
+            # return XGBClassifier(use_label_encoder=False, eval_metric='logloss')
+            return XGBClassifier(eval_metric='logloss')
             # return XGBClassifier(use_label_encoder=False, eval_metric='auc')
         else:
-            return XGBRegressor()
+            return XGBRegressor(importance_type=importance_type)
+    elif regressor_name == 'lgb':
+        if is_categorical:
+            # return XGBClassifier()
+            # return XGBClassifier(use_label_encoder=False, eval_metric='logloss')
+            return LGBMClassifier(eval_metric='logloss')
+            # return XGBClassifier(use_label_encoder=False, eval_metric='auc')
+        else:
+            return LGBMRegressor(eval_metric='rmse')
     elif regressor_name == 'reg':
+        # return LinearRegression()
         if is_categorical:
             # return LogisticRegression(penalty='none')
             return LogisticRegression(max_iter=1000)
@@ -92,7 +111,6 @@ def model_registry_model_obj(regressor_name, is_categorical):
             return Lasso()
         else:
             return Lasso()
-
 
     else:
         raise KeyError(
@@ -107,7 +125,7 @@ def scoring_strategy_defaults(is_categorical):
     if is_categorical == True:
         return 'balanced_accuracy'  # TMM: Changed to BA since "matthews_corrcoef" was not an available metric
     elif is_categorical == False:
-        #return 'r2'
+        # return 'r2'
         return 'neg_root_mean_squared_error'
     else:
         raise ValueError(r"is_categorical has been set to a non-Boolean")
@@ -137,7 +155,6 @@ class Model:
         self.hyperparameters = None  # best params from the hyperparameter gridsearch
         self.use_pmml = None
         self.use_sklearn2pmml = None
-
 
     def get_model(self):
         return self.model_obj
@@ -215,11 +232,10 @@ class Model:
         self.use_pmml = use_pmml_pipeline
         self.include_standardization_in_pmml = include_standardization_in_pmml
 
-
         # Call prepare_instances without removing correlated descriptors
         if self.embedding is None:
             train_ids, train_labels, train_features, train_column_names, self.is_binary = \
-                DFU.prepare_instances(self.df_training, "training", self.remove_log_p_descriptors, True)
+                DFU.prepare_instances(self.df_training, "training", remove_logp=self.remove_log_p_descriptors, remove_corr=True)
             # Use columns selected by prepare_instances (in case logp descriptors were removed)
             self.embedding = train_column_names
 
@@ -328,11 +344,12 @@ class Model:
             # Use columns selected by prepare_instances (in case logp descriptors were removed)
             self.embedding = train_column_names
 
-        if use_pmml_pipeline: # do scaling here since not part of pipeline
+        if use_pmml_pipeline:  # do scaling here since not part of pipeline
             ss = StandardScaler()
             train_features = pd.DataFrame(ss.fit_transform(train_features), columns=train_features.columns)
             self.training_descriptor_means = ss.mean_.tolist()
-            self.training_descriptor_std_devs = (ss.var_ ** 0.5).tolist() #TODO should it instead use the overall training set stdev instead of the CV training set stdev? Sometimes the CV will have a zero stddev during CV
+            self.training_descriptor_std_devs = (
+                    ss.var_ ** 0.5).tolist()  # TODO should it instead use the overall training set stdev instead of the CV training set stdev? Sometimes the CV will have a zero stddev during CV
 
         self.model_obj.set_params(**params)
 
@@ -430,6 +447,139 @@ class Model:
     #
     #     print(self.hyperparameter_grid)
 
+
+
+    def create_plot(self, df_training, df_prediction, model_name, plot_type):
+
+        train_ids, train_labels, train_features = DFU.prepare_prediction_instances(df_training, self.embedding) #only uses model descriptors
+        pred_ids, pred_labels, pred_features = DFU.prepare_prediction_instances(df_prediction, self.embedding)
+
+        # train_ids, train_labels, train_features,train_columns,train_is_binary = DFU.prepare_instances(df_training, 'training', remove_logp=False, remove_corr=False, remove_constant=False)
+        # pred_ids, pred_labels, pred_features,pred_columns,pred_is_binary = DFU.prepare_instances(df_prediction, 'training', remove_logp=False, remove_corr=False, remove_constant=False)
+
+        print('running the fit...')
+
+        if plot_type == 'PCA':
+            from sklearn.decomposition import PCA
+            # Initialize PCA
+            pca = PCA(n_components=2)
+            # Fit PCA on the training data
+            X_train = pca.fit_transform(train_features)
+            # Transform the test data
+            X_test = pca.transform(pred_features)
+
+        elif plot_type == 'UMAP':
+            import umap
+            umap_model = umap.UMAP(n_components=2, random_state=42, n_neighbors=15,min_dist=0.1)
+            # Fit and transform the training data
+            X_train = umap_model.fit_transform(train_features)
+            # Transform the test data
+            X_test = umap_model.transform(pred_features)
+
+        elif plot_type =='UMAP3d':
+            # Fit UMAP to the training set
+            import umap
+            umap_3d = umap.UMAP(n_components=3, random_state=42)
+
+            X_train = umap_3d.fit_transform(train_features)
+
+            # Transform the prediction set using the fitted UMAP
+            X_test = umap_3d.transform(pred_features)
+
+
+        elif plot_type == 't-SNE':
+            from sklearn.manifold import TSNE
+
+            perplexity = 10
+            # perplexity = 30
+            # if df_prediction.shape[0] < perplexity:
+            #     perplexity = df_prediction.shape[0] / 2
+            # Initialize t-SNE
+            tsne = TSNE(n_components=2, random_state=42, perplexity=perplexity)
+
+            print('running the tsne fit')
+            # Fit and transform the data
+            X_train = tsne.fit_transform(train_features)
+
+            # Separate Transformations: t-SNE is typically not used to transform new data after fitting because
+            # it doesn't maintain an internal model for further transformations. However, for visualization, you can
+            # fit-transform separately to compare sets
+
+            X_test = tsne.fit_transform(pred_features)
+
+        print('done')
+
+        # Create a scatter plot
+        import matplotlib.pyplot as plt
+
+        plt.figure(figsize=(10, 10))
+
+        fontsize = 16
+        # Add legend, labels, and title
+        plt.legend(fontsize=fontsize)
+
+        title = plot_type + ' Plot for ' + model_name
+        plt.title(title, fontsize=fontsize)
+
+
+        useLogScale = False
+
+        if useLogScale:
+            plt.xscale('log')
+            plt.yscale('log')
+
+        if '3d' in plot_type:
+            fig = plt.figure()
+            ax = fig.add_subplot(111, projection='3d')
+
+            # Plot training data
+            ax.scatter(X_train[:, 0], X_train[:, 1], X_train[:, 2], c=train_labels, cmap='viridis', alpha=0.7,
+                        label='Training Set')
+            # Plot test data
+            ax.scatter(X_test[:, 0], X_test[:, 1], X_test[:, 2], c=pred_labels, cmap='plasma', alpha=1.0, marker='x',
+                        label='Prediction Set')
+
+        else:
+            # Plot training data
+            plt.scatter(X_train[:, 0], X_train[:, 1], c=train_labels, cmap='viridis', alpha=0.7, label='Training Set')
+
+            # Plot test data
+            plt.scatter(X_test[:, 0], X_test[:, 1], c=pred_labels, cmap='plasma', alpha=1.0, marker='x',
+                        label='Test Set')
+
+        output_folder = 'datasets_v1_modeling/plots '+plot_type
+
+        if plot_type == 'PCA':
+            plt.xlabel('Principal Component 1', fontsize=fontsize)
+            plt.ylabel('Principal Component 2', fontsize=fontsize)
+        elif plot_type == 'UMAP':
+            plt.xlabel('UMAP Component 1', fontsize=fontsize)
+            plt.ylabel('UMAP Component 2', fontsize=fontsize)
+
+        elif plot_type == 'UMAP3d':
+            ax.set_xlabel('UMAP Component 1', fontsize=fontsize)
+            ax.set_ylabel('UMAP Component 2', fontsize=fontsize)
+            ax.set_zlabel('UMAP Component 3', fontsize=fontsize)
+            ax.set_title(title, fontsize=fontsize)
+            ax.legend()
+
+        elif plot_type == 't-SNE':
+            plt.xlabel('UMAP Component 1', fontsize=fontsize)
+            plt.ylabel('UMAP Component 2', fontsize=fontsize)
+
+
+        import os
+        os.makedirs(output_folder, exist_ok=True)
+        output_path = os.path.join(output_folder, title + '.png')
+        plt.savefig(output_path, format='png', dpi=300, bbox_inches='tight')
+
+        if 'All But' in model_name:
+            plt.show()
+        # Show the plot
+
+        return "ok"
+
+
     def do_predictions(self, df_prediction, return_score=False):
         """Makes predictions using the trained model"""
         # Prepare prediction instances using columns from training data
@@ -464,13 +614,15 @@ class Model:
 
             if isinstance(self.model_obj, pypmml.Model):
                 predictions = self.model_obj.predict(pred_features)
-                predictions = np.array(predictions[predictions.columns[1]])  # probability of score=1 (continuous value) # TODO this might not work directly with kNN
+                predictions = np.array(predictions[predictions.columns[
+                    1]])  # probability of score=1 (continuous value) # TODO this might not work directly with kNN
                 preds = np.rint(predictions)  # convert to integer to allow BA calculation to work
                 # print(preds)
                 score = balanced_accuracy_score(pred_labels, preds)
             elif isinstance(self.model_obj, Pipeline) or isinstance(self.model_obj, PMMLPipeline) or 'PMML' in type(
                     self.model_obj).__name__:
-                predictions = self.model_obj.predict_proba(pred_features)[:,1]  # probability of score=1 (continuous value)
+                predictions = self.model_obj.predict_proba(pred_features)[:,
+                              1]  # probability of score=1 (continuous value)
 
                 # preds = self.model_obj.predict(pred_features) # generate integer values to allow BA calculation to work
                 preds = np.rint(
@@ -492,7 +644,8 @@ class Model:
             # print(type(self.model_obj).__name__)
 
             if isinstance(self.model_obj, pypmml.Model):
-                predictions = np.array(predictions[predictions.columns[0]]) # TODO this might not work directly with kNN
+                predictions = np.array(
+                    predictions[predictions.columns[0]])  # TODO this might not work directly with kNN
             elif isinstance(self.model_obj, Pipeline) or isinstance(self.model_obj, PMMLPipeline) or 'PMML' in type(
                     self.model_obj).__name__:
                 predictions = np.array(predictions)
@@ -502,10 +655,10 @@ class Model:
             # print(predictions)
             # print(pred_labels)
 
-            score = stats.pearsonr(predictions, pred_labels)[0]
-            score = score * score
-
-            print(r'R2 for Test data = {score}'.format(score=score))
+            if df_prediction.shape[0] > 1:
+                score = stats.pearsonr(predictions, pred_labels)[0]
+                score = score * score
+                print(r'R2 for Test data = {score}'.format(score=score))
 
         else:
             print("is_categorical is null")  # does this happen?
@@ -569,22 +722,25 @@ class REG(Model):
         self.description = 'python implementation of regression'
         self.description_url = 'https://scikit-learn.org/stable/modules/classes.html#module-sklearn.linear_model'
 
+
 class LAS(Model):
     def __init__(self, df_training=None, remove_log_p_descriptors=False, n_jobs=1):
         Model.__init__(self, df_training, remove_log_p_descriptors, n_jobs=n_jobs)
         self.regressor_name = 'las'
         self.version = '1.0'
-        #self.hyperparameter_grid = {'estimator__alpha': [np.round(i, 5) for i in np.logspace(-5, 0, num=26)],'estimator__max_iter': [1000000]}
-        self.hyperparameter_grid = {'estimator__alpha':  [np.round(i, 5) for i in np.logspace(-4, 0, num=20)],'estimator__max_iter': [1000000]}
-        #self.hyperparameter_grid = {'estimator__alpha': [np.round(i, 4) for i in np.linspace(0,1,10000)],'estimator__max_iter': [1000000]}
-        #self.hyperparameter_grid = {'estimator__alpha': [np.round(i, 5) for i in np.logspace(-4, 0, num=50)],
+        # self.hyperparameter_grid = {'estimator__alpha': [np.round(i, 5) for i in np.logspace(-5, 0, num=26)],'estimator__max_iter': [1000000]}
+        self.hyperparameter_grid = {'estimator__alpha': [np.round(i, 5) for i in np.logspace(-4, 0, num=20)],
+                                    'estimator__max_iter': [1000000]}
+        # self.hyperparameter_grid = {'estimator__alpha': [np.round(i, 4) for i in np.linspace(0,1,10000)],'estimator__max_iter': [1000000]}
+        # self.hyperparameter_grid = {'estimator__alpha': [np.round(i, 5) for i in np.logspace(-4, 0, num=50)],
         #                            'estimator__max_iter': [1000000], 'estimator__tol': [1.0e-6, 1.0e-5, 1.0e-4, 1.0e-3]}
-        #self.hyperparameter_grid = {}
+        # self.hyperparameter_grid = {}
 
         print(self.hyperparameter_grid)
 
         self.description = 'python implementation of lasso'
         self.description_url = 'https://scikit-learn.org/stable/modules/classes.html#module-sklearn.linear_model'
+
 
 class XGB(Model):
     def __init__(self, df_training=None, remove_log_p_descriptors=False, n_jobs=1):
@@ -593,17 +749,37 @@ class XGB(Model):
 
         # self.hyperparameter_grid = {'estimator__booster':['gbtree', 'gblinear','dart']}  #other two make it run a lot slower
 
-        # self.version = '1.3'
-        # self.hyperparameter_grid = {'estimator__booster': ['gbtree']}
+        self.version = '1.3'
+        self.hyperparameter_grid = {'estimator__booster': ['gbtree']}
 
-
-        self.version = '1.4'
-        self.hyperparameter_grid = {'estimator__n_estimators': [50,100], 'estimator__eta': [0.1,0.2,0.3],
-                                    'estimator__gamma': [0,1,10], 'estimator__max_depth': [3,6,9,12],
-                                    'estimator__min_child_weight': [1,3,5], 'estimator__subsample': [0.5,1]}
+        # self.version = '1.4'
+        # self.hyperparameter_grid = {'estimator__n_estimators': [50, 100], 'estimator__eta': [0.1, 0.2, 0.3],
+        #                             'estimator__gamma': [0, 1, 10], 'estimator__max_depth': [3, 6, 9, 12],
+        #                             'estimator__min_child_weight': [1, 3, 5], 'estimator__subsample': [0.5, 1]}
 
         self.description = 'python implementation of extreme gradient boosting'
-        self.description_url = 'https://scikit-learn.org/stable/modules/generated/sklearn.linear_model.Lasso.html'
+        self.description_url = 'https://xgboost.readthedocs.io/en/stable/tutorials/model.html'
+
+
+class LGB(Model):
+    def __init__(self, df_training=None, remove_log_p_descriptors=False, n_jobs=1):
+        Model.__init__(self, df_training, remove_log_p_descriptors, n_jobs=n_jobs)
+        self.regressor_name = 'lgb'
+
+        # self.hyperparameter_grid = {'estimator__booster':['gbtree', 'gblinear','dart']}  #other two make it run a lot slower
+
+        self.version = '1.0'
+
+        # 'weight': The default for , this represents the number of times a feature is used to split data across all trees.
+        # 'gain': The default for the scikit-learn API's attribute, this is the average gain across all splits where the feature is used. Gain is the improvement in accuracy from a feature on its branches.
+        # 'cover': Represents the average coverage across all splits where the feature is used. Coverage is the number of samples affected by the split.
+        # 'total_gain': The total gain across all splits where the feature is used. It's the sum of gain across all splits in all trees.
+        # 'total_cover': The total coverage across all splits where the feature is used. It's the sum of cover across all splits in all trees.
+
+        # print('importance_type',importance_type)
+        self.hyperparameter_grid = {}
+        self.description = 'python implementation of lgb'
+        self.description_url = 'https://lightgbm.readthedocs.io/en/latest/index.html'
 
 
 class SVM(Model):
@@ -636,12 +812,10 @@ class RF(Model):
         Model.__init__(self, df_training, remove_log_p_descriptors, n_jobs=n_jobs)
         self.regressor_name = "rf"
 
-
         # # self.version = '1.4'
         # self.hyper_parameter_grid = {'max_features': ['sqrt', 'log2'],
         #                              'min_impurity_decrease': [10 ** x for x in range(-5, 0)],
         #                              'n_estimators': [10, 100, 250, 500]}
-
 
         # following didnt seem to help at all for predicting PFAS properties:
         # self.hyperparameter_grid = {"estimator__max_features": ["sqrt", "log2"],
@@ -655,12 +829,22 @@ class RF(Model):
         # self.version = '1.6'
         # self.hyperparameter_grid = {"estimator__max_features": ["sqrt", "log2"]}
 
-        self.version = '1.7'
-        self.hyperparameter_grid = {"estimator__max_features": ["sqrt", 1],
+        # self.version = '1.7'
+        # self.hyperparameter_grid = {"estimator__max_features": ["sqrt", 1],
+        #                             "estimator__n_estimators": [50, 100, 150, 300],
+        #                             "estimator__max_depth": [50, 100, 200],
+        #                             "estimator__min_samples_split": [2, 5, 10],
+        #                             "estimator__max_samples": [0.25, 0.50, 1.0]}
+
+        self.version = '1.8'
+
+        min_impurity_decrease = [10 ** x for x in range(-5, 0)]
+        min_impurity_decrease.append(0)
+
+        self.hyperparameter_grid = {"estimator__max_features": ["sqrt", "log2", None],
                                     "estimator__n_estimators": [50, 100, 150, 300],
-                                    "estimator__max_depth": [50, 100, 200],
-                                    "estimator__min_samples_split": [2, 5, 10],
-                                    "estimator__max_samples": [0.25, 0.50, 1.0]}
+                                    "estimator__min_impurity_decrease": min_impurity_decrease
+                                    }
 
         self.description = 'sklearn implementation of random forest'
         self.description_url = 'https://scikit-learn.org/stable/modules/generated/sklearn.ensemble.RandomForestClassifier.html'
@@ -671,6 +855,9 @@ class ModelDescription:
         """Describes parameters of the current method"""
 
         self.is_binary = model.is_binary
+
+        print('ModelDescription: model.is_binary', model.is_binary)
+
         self.remove_log_p_descriptors = model.remove_log_p_descriptors
         self.version = model.version
         self.qsar_method = model.regressor_name
@@ -694,8 +881,6 @@ class ModelDescription:
         return json.dumps(self.__dict__)
 
 
-
-
 def runExamples():
     # %% Test Script
     # opera_path = r"C:\Users\ncharest\OneDrive - Environmental Protection Agency (EPA)\Profile\Documents\data_sets\OPERA_TEST_DataSetsBenchmark\DataSetsBenchmark\Water solubility OPERA\{filename}"
@@ -707,7 +892,6 @@ def runExamples():
     # training_tsv_path = mainFolder + endpoint + '/' + endpoint + '_training_set-2d.csv'
     # prediction_tsv_path = mainFolder + endpoint + '/' + endpoint + '_prediction_set-2d.csv'
 
-
     mainFolder = "C:/Users/TMARTI02/OneDrive - Environmental Protection Agency (EPA)/0 python/modeling services/pf_python_modelbuilding/datasets_exp_prop/"
     training_tsv_path = mainFolder + 'exp_prop_96HR_FHM_LC50_v1 modeling_WebTEST-default_RND_REPRESENTATIVE_training.tsv'
     prediction_tsv_path = mainFolder + 'exp_prop_96HR_FHM_LC50_v1 modeling_WebTEST-default_RND_REPRESENTATIVE_prediction.tsv'
@@ -717,15 +901,18 @@ def runExamples():
 
     # Demonstrate KNN usage
     print(r"Executing KNN")
-    model = model_ws_utilities.instantiateModel(training_df, n_jobs=8, qsar_method='knn',remove_log_p=False, use_pmml_pipeline=False, include_standardization_in_pmml=False)
-    model.build_model(False, False, None)  # Note we now handle using an embedding by passing a descriptor_names list. By default it is a None type -- this will use all descriptors in df
-    test_score = model.do_predictions(pred_df,return_score=True)
+    model = model_ws_utilities.instantiateModel(training_df, n_jobs=8, qsar_method='knn', remove_log_p=False,
+                                                use_pmml_pipeline=False, include_standardization_in_pmml=False)
+    model.build_model(False, False,
+                      None)  # Note we now handle using an embedding by passing a descriptor_names list. By default it is a None type -- this will use all descriptors in df
+    test_score = model.do_predictions(pred_df, return_score=True)
 
     # Demonstrate RF usage
     print(r"Executing RF")
-    model = model_ws_utilities.instantiateModel(training_df, n_jobs=8, qsar_method='rf',remove_log_p=False, use_pmml_pipeline=False, include_standardization_in_pmml=False)
+    model = model_ws_utilities.instantiateModel(training_df, n_jobs=8, qsar_method='rf', remove_log_p=False,
+                                                use_pmml_pipeline=False, include_standardization_in_pmml=False)
     model.build_model(False, False, None)
-    test_score = model.do_predictions(pred_df,return_score=True)
+    test_score = model.do_predictions(pred_df, return_score=True)
 
     # Demonstrate SVM usage
     print(r"Executing SVM")
@@ -733,13 +920,13 @@ def runExamples():
                                                 use_pmml_pipeline=False, include_standardization_in_pmml=False)
 
     model.build_model(False, False, None)
-    test_score = model.do_predictions(pred_df,return_score=True)
+    test_score = model.do_predictions(pred_df, return_score=True)
 
     print(r"Executing XGB")
-    model = model_ws_utilities.instantiateModel(training_df, n_jobs=8, qsar_method='xgb',remove_log_p=False, use_pmml_pipeline=False, include_standardization_in_pmml=False)
+    model = model_ws_utilities.instantiateModel(training_df, n_jobs=8, qsar_method='xgb', remove_log_p=False,
+                                                use_pmml_pipeline=False, include_standardization_in_pmml=False)
     model.build_model(False, False, None)
-    test_score = model.do_predictions(pred_df,return_score=True)
-
+    test_score = model.do_predictions(pred_df, return_score=True)
 
 
 if __name__ == "__main__":

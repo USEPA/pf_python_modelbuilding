@@ -12,6 +12,7 @@ def load_df(tsv_string):
     """Loads data from TSV/CSV into a pandas dataframe"""
     if "\t" in tsv_string:
         separator = '\t'
+        # print('separator=tab')
     else:
         separator = ','
 
@@ -37,7 +38,7 @@ def load_df(tsv_string):
     # df.columns = df.columns.str.replace('<', '')
     # df.columns = df.columns.str.replace('>', '') # TODO need to be be careful with old embeddings
 
-    # print(df.columns)
+    print(df.shape)
 
 
     # Deletes rows with bad values CR 4/20/2022: descriptors with full nulls are more frequent in descriptor packages like Mordred than individual compounds with full nulls.
@@ -147,6 +148,8 @@ def prepare_prediction_instances(df, train_column_names):
 
     df = df[train_column_names]
 
+    # print(train_column_names)
+
     # df.to_excel("predset.xlsx")
 
     print('The shape of prediction features is:', df.shape)
@@ -158,6 +161,9 @@ def prepare_prediction_instances(df, train_column_names):
 
     # Return ids, exp vals, and descriptors as separate arrays
     return ids, labels, features
+
+
+
 
 def filter_columns_in_both_sets(df_training, df_prediction):
 
@@ -251,6 +257,54 @@ def prepare_instances(df, which_set, remove_logp, remove_corr):
     return ids, labels, features, column_names, is_binary
 
 
+def prepare_instances(df, which_set, remove_logp=False, remove_corr=True, remove_constant=True):
+    """Prepares a pandas df of training data by removing logp and correlated descriptors"""
+    df_labels = df[df.columns[1]]
+    if df_labels.isin([0, 1]).all():
+        is_binary = True
+    else:
+        is_binary = False
+
+    # Labels are the values we want to predict
+    # labels = np.array(df_labels)
+    labels = df_labels
+
+    ids = df[df.columns[0]]
+
+    col_name_id = df.columns[0]
+
+    # print('col_name_id',col_name_id)
+
+    col_name_property = df.columns[1]
+
+    # drop Property column with experimental property we are trying to correlate (# axis 1 refers to the columns):
+    df = df.drop(col_name_property, axis=1)
+
+    # drop ID column:
+    df = df.drop(col_name_id, axis=1)
+
+    df = do_remove_non_double_descriptors(df)
+
+    # Remove constant descriptors:
+    if remove_constant:
+        df = do_remove_constant_descriptors(df)
+
+    if remove_logp:
+        df = remove_log_p_descriptors(df, which_set)
+
+    if remove_corr:
+        do_remove_correlated_descriptors(df, 0.95)
+
+    print(which_set + ': The shape of features is:', df.shape)
+
+    # Convert to numpy array
+    # features = np.array(df)
+
+    features = df  # scikit learn converts it to numpy array later anyways
+
+    column_names = list(df.columns)
+
+    return ids, labels, features, column_names, is_binary
 def prepare_instances_wards(df, which_set, remove_logp, threshold):
     """Prepares a pandas df of training data by removing logp and correlated descriptors"""
     df_labels = df[df.columns[1]]
