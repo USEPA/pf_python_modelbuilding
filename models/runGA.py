@@ -7,7 +7,7 @@ from models import df_utilities as DFU
 import model_ws_utilities as mwu
 import json
 # from models import dnn_model as dnn
-from models_old import knn_model as knn, svm_model as svm, rf_model as rf, xgb_model as xgb
+from models.old.models_old import knn_model as knn, svm_model as svm, rf_model as rf, xgb_model as xgb
 import os
 import utils
 
