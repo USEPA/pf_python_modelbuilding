@@ -13,7 +13,7 @@ class TestPredict(TestCase):
         self.model = loadModelFromDatabase(1067)
 
     def test_model_predict(self):
-        call_do_predictions(self.model, self.df_ext_pred_set)
+        call_do_predictions(self.df_ext_pred_set, self.model)
 
 
 if __name__ == '__main__':
