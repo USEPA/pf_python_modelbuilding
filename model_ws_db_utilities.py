@@ -7,7 +7,6 @@ from sqlalchemy.exc import SQLAlchemyError
 import json
 from models import df_utilities as dfu
 from models.ModelBuilder import Model
-
 from API_Utilities import QsarSmilesAPI, DescriptorsAPI
 
 debug = False
@@ -228,6 +227,22 @@ def determineApplicabilityDomain(model: Model, test_tsv):
 
     # return output.to_json(orient='records', lines=True) # gives each object on separate line
     return output.to_json(orient='records', lines=False)  # gives an array instead of each object on separate line
+
+
+def getSession():
+    connect_url = URL.create(
+        drivername='postgresql+psycopg2',
+        username=os.getenv('DEV_QSAR_USER'),
+        password=os.getenv('DEV_QSAR_PASS'),
+        host=os.getenv('DEV_QSAR_HOST'),
+        port=os.getenv('DEV_QSAR_PORT'),
+        database=os.getenv('DEV_QSAR_DATABASE')
+    )
+    # print(connect_url)
+    engine = create_engine(connect_url, echo=debug)
+    Session = sessionmaker(bind=engine)
+    session = Session()
+    return session
 
 
 def getSession():

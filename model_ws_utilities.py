@@ -569,14 +569,16 @@ def call_do_predictions(prediction_tsv, model):
 
     # print('prediction_tsv',prediction_tsv)
 
-    df_prediction = dfu.load_df(prediction_tsv)
+    if isinstance(prediction_tsv, pd.DataFrame):
+        df_prediction = prediction_tsv
+    elif isinstance(prediction_tsv, pd.DataFrame):
+        df_prediction = dfu.load_df(prediction_tsv)
+    else:
+        raise Exception('prediction_tsv must be a pandas DF or a string with TSV data')
 
     pred_ids = np.array(df_prediction[df_prediction.columns[0]])
     pred_labels = np.array(df_prediction[df_prediction.columns[1]])
     predictions = model.do_predictions(df_prediction)
-
-    # print(predictions)
-    # print(pred_labels)
 
     if predictions is None:
         return None
