@@ -7,7 +7,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 import model_ws_utilities as mwu
-from qsar_models import ModelByte, Model
 import model_ws_db_utilities as mwdu
 from applicability_domain import applicability_domain_utilities as adu
 
@@ -130,7 +129,7 @@ def train(qsar_method):
 
 @app.route('/models/prediction_applicability_domain', methods=['POST'])
 def prediction_applicability_domain():
-    """Trains a model for the specified QSAR method on provided data"""
+    """Generates applicability domain values"""
 
     obj = request.form
 
@@ -173,12 +172,6 @@ def prediction_applicability_domain():
                                                                             embedding=embedding,
                                                                             applicability_domain=applicability_domain,
                                                                             filterColumnsInBothSets=True)
-
-    # Sets status 200 OK
-    # status = 200
-
-    # If model number provided for storage, stores the model and sets status 201 CREATED instead
-
     result = output.to_json(orient='records', lines=True)
     # print(result)
     return result
@@ -496,13 +489,21 @@ def cross_validate_fold(qsar_method):
 #     return mwu.call_do_predictions(prediction_tsv, model), 200
 
 
-def loadModelFromDatabase(model_id):
-    session = mwdu.getDatabaseSession()
-    query = session.query(ModelByte).filter_by(fk_model_id=model_id).one()
-    model = pickle.loads(query.bytes)
-    session.flush()  # do we need this?
-    session.commit()  # do we need this?
-    return model
+@app.route('/models/predictDB', methods=['POST', 'GET'])
+def predictDB():
+    """Automates prediction and AD for single smiles using model in database"""
+    if request.method == 'POST':
+        obj = request.form
+        smiles = obj.get('smiles')  # Retrieves the model number to use
+        model_id = obj.get('model_id')
+    elif request.method == 'GET':
+        # Handle GET request here
+        smiles = request.args.get('smiles')  # Retrieves the model number to use
+        model_id = request.args.get('model_id')
+
+    if not smiles or not model_id:
+        return "Both smiles and model_id are required", 400
+    return mwdu.predictFromDB(model_id, smiles, mwu)
 
 
 @app.route('/models/predict', methods=['POST'])
@@ -526,7 +527,7 @@ def predict():
         # Gets stored model using model number
         model = mwu.models[model_id]
     else:
-        model = loadModelFromDatabase(model_id)
+        abort(400,'Need to init model or use predictDB API call instead')
 
     # 404 NOT FOUND if no model stored under provided number
     if model is None:
@@ -566,7 +567,7 @@ def generate_plot():
         # Gets stored model using model number
         model = mwu.models[model_id]
     else:
-        model = loadModelFromDatabase(model_id)
+        abort(400,'Need to init model first')
 
     # 404 NOT FOUND if no model stored under provided number
     if model is None:
@@ -726,8 +727,10 @@ def initPickle():
 
 @app.route('/models/<string:model_id>', methods=['GET'])
 def details(model_id):
-    """Returns a detailed description of the QSAR model with version and parameter information"""
-    model = mwu.models[model_id]
+    """Returns a detailed description of the QSAR model with version and parameter information (also inits the model if needed)"""
+
+    # model = mwu.models[model_id]
+    model = mwdu.init_model(model_id, mwu)
 
     # print('details3', model.get_model_description())
 
@@ -743,6 +746,35 @@ def details(model_id):
 
     # Return description and 200 OK
     return model_details, 200
+
+
+
+@app.route('/models', methods=['GET'])
+def available_models():
+    """Returns a detailed description of the QSAR model with version and parameter information (also inits the model if needed)"""
+
+    # model = mwu.models[model_id]
+    models = mwdu.get_available_models()
+
+    # Return description and 200 OK
+    return models, 200
+
+@app.route('/models/reg_coeff/<string:model_id>', methods=['GET'])
+def model_coeffs(model_id):
+    """Returns a detailed description of the QSAR model with version and parameter information"""
+    model = mwdu.init_model(model_id, mwu)
+
+    # print('details3', model.get_model_description())
+
+    # 404 NOT FOUND if no model stored under provided number
+    if model is None:
+        abort(404, 'no stored model with id ' + model_id)
+
+    model.getOriginalRegressionCoefficients()
+
+    # TODO add code to return the coefficients instead of just printing to python io
+
+    return "OK", 200
 
 
 def printEqn(model):
@@ -781,6 +813,8 @@ def model_obj(model_id):
 
     # Return model_obj
     return model.model_obj, 200
+
+
 
 
 if __name__ == '__main__':

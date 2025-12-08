@@ -38,9 +38,7 @@ def load_df(tsv_string):
     # df.columns = df.columns.str.replace('<', '')
     # df.columns = df.columns.str.replace('>', '') # TODO need to be be careful with old embeddings
 
-    print(df.shape)
-
-
+    # print(df.shape)
     # Deletes rows with bad values CR 4/20/2022: descriptors with full nulls are more frequent in descriptor packages like Mordred than individual compounds with full nulls.
     # df = df[~df.isin([np.nan, np.inf, -np.inf]).any(1)]
 
@@ -152,7 +150,7 @@ def prepare_prediction_instances(df, train_column_names):
 
     # df.to_excel("predset.xlsx")
 
-    print('The shape of prediction features is:', df.shape)
+    # print('The shape of prediction features is:', df.shape)
 
     # features = np.array(df)
     features = df  # scikit learn converts it to numpy array later anyways
@@ -245,7 +243,7 @@ def prepare_instances(df, which_set, remove_logp, remove_corr):
     if remove_corr:
         do_remove_correlated_descriptors(df, 0.95)
 
-    print(which_set + ': The shape of features is:', df.shape)
+    # print(which_set + ': The shape of features is:', df.shape)
 
     # Convert to numpy array
     # features = np.array(df)
@@ -295,7 +293,7 @@ def prepare_instances(df, which_set, remove_logp=False, remove_corr=True, remove
     if remove_corr:
         do_remove_correlated_descriptors(df, 0.95)
 
-    print(which_set + ': The shape of features is:', df.shape)
+    # print(which_set + ': The shape of features is:', df.shape)
 
     # Convert to numpy array
     # features = np.array(df)

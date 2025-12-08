@@ -17,53 +17,52 @@ import requests
 import numpy as np
 import pandas as pd
 
+debug = False
 
-def generate_applicability_domain_with_preselected_descriptors(training_tsv, test_tsv, remove_log_p,
+def generate_applicability_domain_with_preselected_descriptors_from_dfs(train_df, test_df, remove_log_p,
                                                                embedding, applicability_domain,filterColumnsInBothSets=True,
                                                                returnTrainingAD=False):
-    trainData = dfu.load_df(training_tsv)
-    testData = dfu.load_df(test_tsv)
 
     if filterColumnsInBothSets:
-        trainData = dfu.filter_columns_in_both_sets(trainData, testData)
+        train_df = dfu.filter_columns_in_both_sets(train_df, test_df)
 
     # Need to run get the training column names for alldescriptors AD:
     removeCorr = False  # remove correlated descriptors for all descriptors AD, it's faster without it but doesnt make much difference
     train_ids, train_labels, train_features, train_column_names, is_binary = \
-        dfu.prepare_instances(trainData, "training", remove_log_p, removeCorr)
+        dfu.prepare_instances(train_df, "training", remove_log_p, removeCorr)
 
 
     if applicability_domain == strTESTApplicabilityDomainEmbeddingCosine:
-        ad = adm.TESTApplicabilityDomain(trainData, testData, is_binary)
+        ad = adm.TESTApplicabilityDomain(train_df, test_df, is_binary)
         ad.set_parameters({'k': 3, 'fractionTrainingSetInsideAD': 0.95, 'similarity': 'cosine'})
         output = ad.evaluate(embedding=embedding)
     elif applicability_domain == strTESTApplicabilityDomainEmbeddingEuclidean:
-        ad = adm.TESTApplicabilityDomain(trainData, testData, is_binary)
+        ad = adm.TESTApplicabilityDomain(train_df, test_df, is_binary)
         ad.set_parameters({'k': 3, 'fractionTrainingSetInsideAD': 0.95, 'similarity': 'euclidean'})
         output = ad.evaluate(embedding=embedding)
     elif applicability_domain == strTESTApplicabilityDomainAlLDescriptorsCosine or embedding is None:
-        ad = adm.TESTApplicabilityDomain(trainData, testData, is_binary)
+        ad = adm.TESTApplicabilityDomain(train_df, test_df, is_binary)
         ad.set_parameters({'k': 3, 'fractionTrainingSetInsideAD': 0.95, 'similarity': 'cosine',
                            'train_column_names': train_column_names})
         output = ad.evaluate(embedding=train_column_names)
 
     elif applicability_domain == strTESTApplicabilityDomainAllDescriptorsEuclideanDistance or embedding is None:
-        ad = adm.TESTApplicabilityDomain(trainData, testData, is_binary)
+        ad = adm.TESTApplicabilityDomain(train_df, test_df, is_binary)
         ad.set_parameters({'k': 3, 'fractionTrainingSetInsideAD': 0.95, 'similarity': 'euclidean',
                            'train_column_names': train_column_names})
         output = ad.evaluate(embedding=train_column_names)
 
     elif applicability_domain == strOPERA_local_index:
-        ad = adm.OPERALocalApplicabilityDomain(trainData, testData, is_binary)
+        ad = adm.OPERALocalApplicabilityDomain(train_df, test_df, is_binary)
         ad.set_parameters({'k': 5, 'exceptionalLocal': 0.6, 'similarity': 'euclidean',
                            'onlyLocal': 0.01, 'fractionTrainingSetInsideAD': 0.95})
         output = ad.evaluate(embedding=embedding)
     elif applicability_domain == strOPERA_global_index:
-        ad = adm.OPERAGlobalApplicabilityDomain(trainData, testData, is_binary)
+        ad = adm.OPERAGlobalApplicabilityDomain(train_df, test_df, is_binary)
         ad.set_parameters({'fractionTrainingSetInsideAD': 0.95, 'train_column_names': train_column_names})
         output = ad.evaluate(embedding=embedding)
     elif applicability_domain == strKernelDensity:
-        ad = adm.KernelDensityApplicabilityDomain(trainData, testData, is_binary)
+        ad = adm.KernelDensityApplicabilityDomain(train_df, test_df, is_binary)
         ad.set_parameters({'fractionTrainingSetInsideAD': 0.95, 'train_column_names': train_column_names})
         output = ad.evaluate(embedding=embedding)
 
@@ -75,8 +74,9 @@ def generate_applicability_domain_with_preselected_descriptors(training_tsv, tes
     # countTest = output.shape[0]
     # coverage = count_inside_AD / countTest
 
-    print('\nAD', applicability_domain)
-    print('Fraction of test set insideID', coverage)
+    if debug:
+        print('\nAD', applicability_domain)
+        print('Fraction of test set insideID', coverage)
 
     if returnTrainingAD:
         col_name_id = ad.TrainSet.columns[0]
@@ -90,7 +90,14 @@ def generate_applicability_domain_with_preselected_descriptors(training_tsv, tes
 
 
 
-
+def generate_applicability_domain_with_preselected_descriptors(training_tsv, test_tsv, remove_log_p,
+                                                               embedding, applicability_domain,filterColumnsInBothSets=True,
+                                                               returnTrainingAD=False):
+    train_df = dfu.load_df(training_tsv)
+    test_df = dfu.load_df(test_tsv)
+    return generate_applicability_domain_with_preselected_descriptors_from_dfs(train_df, test_df, remove_log_p,
+                                                               embedding, applicability_domain,filterColumnsInBothSets=True,
+                                                               returnTrainingAD=False)
 
 def generate_applicability_domain_with_preselected_descriptors_api_call(training_tsv, test_tsv, remove_log_p,
                                                                         embedding_tsv, applicability_domain, urlHost):

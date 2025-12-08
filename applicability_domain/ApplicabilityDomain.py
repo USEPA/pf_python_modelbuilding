@@ -16,6 +16,7 @@ from sklearn.neighbors import KernelDensity
 from sklearn.metrics import balanced_accuracy_score
 import pandas as pd
 
+debug = False
 
 class helpers:
 
@@ -79,6 +80,28 @@ class ApplicabilityDomainStrategy:
         stdTestOuter = np.std(self.TestOuter['ResidualSquared'])
         self.spreadRatioTrain = stdTrainInner / stdTrainOuter
         self.spreadRatioTest = stdTestInner / stdTestOuter
+
+
+    def get_results_df(self, AD, col_name_id, id, test_indices):
+        """Get AD dataframe for k neighbors"""
+
+        # Recoding so that can have arbitrary number of neighbors (i.e. store as list), TODO check Java AD code for places this breaks things
+        # Extract neighbors
+        neighbors = [test_indices[:, i] for i in range(self.parameters['k'])]
+        # Retrieve IDs for each neighbor and combine them into a list
+        ids_combined = [self.TrainSet[col_name_id].loc[neighbor].tolist() for neighbor in neighbors]
+        # Transpose ids_combined to align with test_indices rows
+        ids_combined_transposed = np.array(ids_combined).T.tolist()
+        # makes results list instead of df (if want to try to add similarity/distance values later)
+        # results = [{'idTest': id[i],'ids': list(map(str, ids_combined_transposed[i])),'AD': AD[i]}
+        #     for i in range(len(id))
+        # ]
+        # Prepare the DataFrame
+        results = pd.DataFrame({'idTest': id, 'ids': ids_combined_transposed, 'AD': AD})
+        # Ensure 'ids' is stored as a list of strings instead of as comma delimited string
+        results['ids'] = results['ids'].apply(lambda x: list(map(str, x)))
+        return results
+
 
     def computeInnerOuterRatio(self):
 
@@ -252,7 +275,7 @@ class TESTApplicabilityDomain(ApplicabilityDomainStrategy):
         self.nbrs = NearestNeighbors(n_neighbors=self.parameters['k'] + 1, algorithm='brute',
                                      metric=self.parameters['similarity'])
 
-        print('metric', self.parameters['similarity'])
+        # print('metric', self.parameters['similarity'])
 
         # embedding.append('QSAR_READY_SMILES')
 
@@ -268,7 +291,7 @@ class TESTApplicabilityDomain(ApplicabilityDomainStrategy):
         train_distances, train_indices = nbrs.kneighbors(train_x)
         test_distances, test_indices = nbrs.kneighbors(test_x)
 
-
+        # following is awkward but only way it works correctly:
         train_indices = train_indices[:, 1:]  #this omits the chemical itself from being a neighbor
         train_distances = train_distances[:, 1:]
 
@@ -278,17 +301,11 @@ class TESTApplicabilityDomain(ApplicabilityDomainStrategy):
         # print(TrainSet[test_indices[0][1]][0])
         col_name_id = self.TrainSet.columns[0]
 
-        neighbor1 = test_indices[:, 0]
-        neighbor2 = test_indices[:, 1]
-        neighbor3 = test_indices[:, 2]
 
         # print(neighbor1[0],neighbor2[0],neighbor3[0])
-        # print(self.TrainSet[col_name_id].loc[219])
 
         id = self.TestSet[col_name_id]
-        id1 = self.TrainSet[col_name_id].loc[neighbor1]
-        id2 = self.TrainSet[col_name_id].loc[neighbor2]
-        id3 = self.TrainSet[col_name_id].loc[neighbor3]
+
 
         train_TESTSimilarity, test_TESTSimilarity = list(np.mean(train_distances, axis=1)), list(
             np.mean(test_distances, axis=1))
@@ -301,7 +318,8 @@ class TESTApplicabilityDomain(ApplicabilityDomainStrategy):
 
         self.splitSimilarity = helpers.find_split_value(train_TESTSimilarity, self.parameters['fractionTrainingSetInsideAD'])
 
-        print('splitSimilarity', self.splitSimilarity)
+        if debug:
+            print('splitSimilarity', self.splitSimilarity)
 
         self.TrainSet[self.AD_Label] = True
         self.TestSet[self.AD_Label] = True
@@ -317,16 +335,46 @@ class TESTApplicabilityDomain(ApplicabilityDomainStrategy):
 
         # print(AD_TR.value_counts()[False])
 
-        results = pd.DataFrame(np.column_stack([id, id1, id2, id3, AD]),
-                               columns=['idTest', 'idNeighbor1', 'idNeighbor2', 'idNeighbor3', 'AD'])
-        print(results)
+        # neighbor1 = test_indices[:, 0]
+        # neighbor2 = test_indices[:, 1]
+        # neighbor3 = test_indices[:, 2]
+        # id1 = self.TrainSet[col_name_id].loc[neighbor1]
+        # id2 = self.TrainSet[col_name_id].loc[neighbor2]
+        # id3 = self.TrainSet[col_name_id].loc[neighbor3]
+        #
+        # results = pd.DataFrame(np.column_stack([id, id1, id2, id3, AD]),
+        #                        columns=['idTest', 'idNeighbor1', 'idNeighbor2', 'idNeighbor3', 'AD'])
+
+        results = self.get_results_df(AD, col_name_id, id, test_indices)
+
+        # TODO ideally results would also store the similarity for each neighbor and the cutoff value for inside AD but more complicated...
+
+        # pd.set_option('display.max_columns', None)
+        # print(results)
+
+        # print(results)
+
+        if debug:
+            print(results)
 
         # results.to_json('bob.json')
 
         t2 = time.time()
         # print((t2-t1),' secs to evaluate')
 
+        # adResults = ADResults(AD, self.splitSimilarity, results)
+        # print(json.dumps(adResults.__dict__,indent=4))
+
         return results
+
+
+
+class ADResults:
+    def __init__(self, AD, splitSimilarity,results):
+        self.AD = AD
+        self.splitSimilarity = splitSimilarity
+        self.results = results
+
 
 
 # %%
@@ -682,20 +730,7 @@ class OPERALocalApplicabilityDomain(ApplicabilityDomainStrategy):
 
         # print(TrainSet[test_indices[0][1]][0])
         col_name_id = self.TrainSet.columns[0]
-
-        #TODO there must be a more compact way to to do this- but this works:
-        neighbor1 = test_indices[:, 0]
-        neighbor2 = test_indices[:, 1]
-        neighbor3 = test_indices[:, 2]
-        neighbor4 = test_indices[:, 3]
-        neighbor5 = test_indices[:, 4]
-
         id = self.TestSet[col_name_id]
-        id1 = self.TrainSet[col_name_id].loc[neighbor1]
-        id2 = self.TrainSet[col_name_id].loc[neighbor2]
-        id3 = self.TrainSet[col_name_id].loc[neighbor3]
-        id4 = self.TrainSet[col_name_id].loc[neighbor4]
-        id5 = self.TrainSet[col_name_id].loc[neighbor5]
 
         train_local_index, test_local_index = OPERAApplicabilityDomain.LocalIndexConversion(
             train_distances), OPERAApplicabilityDomain.LocalIndexConversion(test_distances)
@@ -723,9 +758,23 @@ class OPERALocalApplicabilityDomain(ApplicabilityDomainStrategy):
 
         AD = self.TestSet[self.AD_Label]
 
-        results = pd.DataFrame(np.column_stack([id, id1, id2, id3, id4, id5, AD]),
-                               columns=['idTest', 'idNeighbor1', 'idNeighbor2',
-                                        'idNeighbor3', 'idNeighbor4', 'idNeighbor5', 'AD'])
+        # neighbor1 = test_indices[:, 0]
+        # neighbor2 = test_indices[:, 1]
+        # neighbor3 = test_indices[:, 2]
+        # neighbor4 = test_indices[:, 3]
+        # neighbor5 = test_indices[:, 4]
+        #
+        # id1 = self.TrainSet[col_name_id].loc[neighbor1]
+        # id2 = self.TrainSet[col_name_id].loc[neighbor2]
+        # id3 = self.TrainSet[col_name_id].loc[neighbor3]
+        # id4 = self.TrainSet[col_name_id].loc[neighbor4]
+        # id5 = self.TrainSet[col_name_id].loc[neighbor5]
+        #
+        # results = pd.DataFrame(np.column_stack([id, id1, id2, id3, id4, id5, AD]),
+        #                        columns=['idTest', 'idNeighbor1', 'idNeighbor2',
+        #                                 'idNeighbor3', 'idNeighbor4', 'idNeighbor5', 'AD'])
+
+        results = self.get_results_df(AD, col_name_id, id, test_indices)
 
         # print (results)
         return results

@@ -132,7 +132,9 @@ def scoring_strategy_defaults(is_categorical):
 
 
 class Model:
-    def __init__(self, df_training, remove_log_p_descriptors, n_jobs=4):
+
+
+    def __init__(self, df_training=None, remove_log_p_descriptors=None, n_jobs=4):
 
         self.training_descriptor_std_devs = None  # standard deviations of training set descriptors
         self.training_descriptor_means = None  # means of training set descriptors
@@ -140,7 +142,7 @@ class Model:
         self.remove_log_p_descriptors = remove_log_p_descriptors
         self.n_jobs = n_jobs
 
-        self.regressor_name = ''
+        self.regressor_name = '' #TODO set to None instead?
         self.version = '0.0.1'
         self.model_obj = None
         self.embedding = None
@@ -156,8 +158,72 @@ class Model:
         self.use_pmml = None
         self.use_sklearn2pmml = None
 
+        #Extra metadata 2025-12-08
+        self.modelId = None
+        self.modelName = None
+        self.datasetId = None
+        self.datasetName = None
+        self.unitsName = None
+        self.dsstoxMappingStrategy = None
+        self.propertyName = None
+        self.descriptorSetId = None
+        self.descriptorSetName = None
+        self.descriptorService = None
+        self.headersTsv = None
+        self.splittingId = None
+        self.splittingName = None
+        self.applicabilityDomainName = None
+        self.omitSalts = None
+        self.qsarReadyRuleSet = None
+        self.df_prediction = None
+
+
     def get_model(self):
         return self.model_obj
+
+
+    def to_dict(self):
+        """Convert the object to a dictionary.
+        \nCommenting out the ones we dont need to see in ModelResults"""
+
+        return {
+            "modelId": self.modelId,
+            "modelName": self.modelName,
+            # "datasetId": self.datasetId,
+            "datasetName": self.datasetName,
+            "unitsName": self.unitsName,
+            # "dsstox_mapping_strategy": self.dsstox_mapping_strategy,
+            "propertyName": self.propertyName,
+            # "descriptorSetId": self.descriptorSetId,
+            # "descriptorSetName": self.descriptorSetName,
+            "descriptorService": self.descriptorService,
+            # "headersTsv": self.headersTsv,  #dont need to export via API
+            # "splittingId": self.splittingId,
+            "splittingName": self.splittingName,
+            "applicabilityDomainName": self.applicabilityDomainName,
+            "descriptorEmbeddingTsv": self.descriptorEmbeddingTsv,
+            "omitSalts": self.omitSalts,
+            "qsarReadyRuleSet": self.qsarReadyRuleSet,
+            # "trainingSet": self.trainingSet,
+            # "predictionSet": self.predictionSet
+
+            #TODO add following
+            # self.regressor_name = ''
+            # self.version = '0.0.1'
+            # self.model_obj = None
+            # self.embedding = None
+            # self.is_binary = None
+            # self.training_stats = {}
+            # self.description = None
+            # self.description_url = None
+            # self.hyperparameter_grid = None
+            # self.hyperparameters = None  # best params from the hyperparameter gridsearch
+            # self.use_pmml = None
+            # self.use_sklearn2pmml = None
+
+
+        }
+
 
     def set_model_obj_pmml_for_prediction(self, pmml_file_path, qsar_method):
 
@@ -201,7 +267,13 @@ class Model:
             setattr(self, key, value)
 
     def get_model_description(self):
-        return ModelDescription(self).to_json()
+        modelDescription = ModelDescription(self)
+        return json.dumps(modelDescription.__dict__)
+
+    def get_model_description_pretty(self):
+        modelDescription = ModelDescription(self)
+        return json.dumps(modelDescription.__dict__, indent=4)
+
 
     def has_hyperparameter_grid(self):
         """
@@ -722,6 +794,48 @@ class REG(Model):
         self.description = 'python implementation of regression'
         self.description_url = 'https://scikit-learn.org/stable/modules/classes.html#module-sklearn.linear_model'
 
+    def getOriginalRegressionCoefficients(self):
+
+        model_obj = self.get_model()
+        reg = model_obj.steps[1][1]
+        scale = model_obj.steps[0][1]
+        # Original_coeff = np.divide(reg.coef_, scale.scale_)
+        # Original_coeff = list(Original_coeff[0])
+        # print('Original_coeff', Original_coeff)
+        # # Following doesnt work with regularization
+        # Original_intercept = reg.intercept_
+        # coeffs = list(reg.coef_[0])
+        # for index, coefficient in enumerate(coeffs):
+        #     # print(index,coefficient)
+        #     Original_intercept = Original_intercept - scale.mean_[index] * coefficient / scale.scale_[index]
+        # print('Original intercept', Original_intercept)
+
+        # Get the scaled coefficients and intercept
+        beta_scaled = reg.coef_
+        intercept_scaled = reg.intercept_
+
+        # Get the means and standard deviations used by the StandardScaler
+        means = scale.mean_
+        stds = scale.scale_
+
+        # Transform the coefficients to the unscaled version
+        beta_unscaled = beta_scaled / stds
+
+        # Transform the intercept to the unscaled version
+        intercept_unscaled = intercept_scaled - np.sum((means * beta_scaled) / stds)
+
+        # Report the unscaled coefficients and intercept
+        print("Intercept (unscaled):", intercept_unscaled)
+        print("Coefficients (unscaled):", beta_unscaled)
+
+        # coefficients_df = pd.DataFrame({
+        #     'Feature': ['Intercept'] + list(X.columns),
+        #     'Coefficient': [intercept_unscaled] + list(beta_unscaled)
+        # })
+        # Display the DataFrame
+        # print(coefficients_df)
+
+
 
 class LAS(Model):
     def __init__(self, df_training=None, remove_log_p_descriptors=False, n_jobs=1):
@@ -854,19 +968,33 @@ class ModelDescription:
     def __init__(self, model):
         """Describes parameters of the current method"""
 
-        self.is_binary = model.is_binary
+        self.modelId = model.modelId
+        self.modelName = model.modelName
+        # self.qsar_method = model.regressor_name
 
-        print('ModelDescription: model.is_binary', model.is_binary)
+        if model.regressor_name:
+            self.qsar_method = model.regressor_name
+        elif model.qsar_method:
+            self.qsar_method = model.qsar_method
 
-        self.remove_log_p_descriptors = model.remove_log_p_descriptors
-        self.version = model.version
-        self.qsar_method = model.regressor_name
         self.description = model.description
         self.description_url = model.description_url
+        self.datasetName = model.datasetName
+        self.embedding = model.embedding
+        self.unitsName = model.unitsName
+        self.propertyName = model.propertyName
+        self.descriptorService = model.descriptorService
+        self.splittingName = model.splittingName
+        self.applicabilityDomainName = model.applicabilityDomainName
+        self.omitSalts = model.omitSalts
+        self.qsarReadyRuleSet = model.qsarReadyRuleSet
+
+        self.is_binary = model.is_binary
+        self.remove_log_p_descriptors = model.remove_log_p_descriptors
+        self.version = model.version
         self.hyperparameter_grid = model.hyperparameter_grid
         self.hyperparameters = model.hyperparameters  # final hyperparameters
         self.training_stats = model.training_stats
-        self.embedding = model.embedding
         self.use_pmml = model.use_pmml
 
         if hasattr(model, "training_descriptor_std_devs"):
@@ -878,7 +1006,7 @@ class ModelDescription:
 
     def to_json(self):
         """Returns description as a JSON"""
-        return json.dumps(self.__dict__)
+        return json.dumps(self.__dict__) # TODO make dict to put them in custom order
 
 
 def runExamples():

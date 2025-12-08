@@ -158,6 +158,7 @@ def instantiateModel(df_training, n_jobs, qsar_method, remove_log_p, use_pmml_pi
         pass
         # 404 NOT FOUND if requested QSAR method has not been implemented
     model.is_binary = DFU.isBinary(df_training)
+    model.use_pmml = use_pmml_pipeline
 
     print('instantiateModel: model.is_binary',model.is_binary)
 
@@ -588,6 +589,30 @@ def call_do_predictions(prediction_tsv, model):
     results_json = results.to_json(orient='records')
     return results_json
 
+
+def call_do_predictions_from_df(df_prediction, model):
+    """Loads TSV prediction data into a pandas DF, stores IDs and exp vals,
+    and calls the appropriate prediction method"""
+
+    # print('prediction_tsv',prediction_tsv)
+
+    pred_ids = np.array(df_prediction[df_prediction.columns[0]])
+    pred_labels = np.array(df_prediction[df_prediction.columns[1]])
+    predictions = model.do_predictions(df_prediction)
+
+    # print(predictions)
+    # print(pred_labels)
+
+    if predictions is None:
+        return None
+
+    # Pulls together IDs, exp vals, and predictions into JSON format
+
+    # print('pred_ids',pred_ids)
+
+    results = pd.DataFrame(np.column_stack([pred_ids, pred_labels, predictions]), columns=['id', 'exp', 'pred'])
+    results_json = results.to_json(orient='records')
+    return results_json
 
 def call_do_predictions_to_df(prediction_tsv, model):
     """Loads TSV prediction data into a pandas DF, stores IDs and exp vals,
