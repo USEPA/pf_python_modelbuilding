@@ -31,13 +31,13 @@ Repository created 05/21/2021
 """
 
 
-@app.route('/models/<string:qsar_method>/info', methods=['GET'])
+@app.route('/api/predictor_models/models/<string:qsar_method>/info', methods=['GET'])
 def info(qsar_method):
     """Returns a short, generic description of the QSAR method"""
     return mwu.get_model_info(qsar_method), 200
 
 
-@app.route('/models/<string:qsar_method>/train', methods=['POST'])
+@app.route('/api/predictor_models/models/<string:qsar_method>/train', methods=['POST'])
 def train(qsar_method):
     """Trains a model for the specified QSAR method on provided data"""
 
@@ -127,7 +127,7 @@ def train(qsar_method):
             return pickle.dumps(model), status
 
 
-@app.route('/models/prediction_applicability_domain', methods=['POST'])
+@app.route('/api/predictor_models/models/prediction_applicability_domain', methods=['POST'])
 def prediction_applicability_domain():
     """Generates applicability domain values"""
 
@@ -200,7 +200,7 @@ def get_embedding(obj):
     return embedding
 
 
-@app.route('/models/<string:qsar_method>/embedding', methods=['POST'])
+@app.route('/api/predictor_models/models/<string:qsar_method>/embedding', methods=['POST'])
 def train_embedding_ga(qsar_method):
     """Post method that trains GA embedding for the specified QSAR method on provided data"""
 
@@ -273,7 +273,7 @@ def train_embedding_ga(qsar_method):
     return result_str
 
 
-@app.route('/models/<string:qsar_method>/embedding_importance', methods=['POST'])
+@app.route('/api/predictor_models/models/<string:qsar_method>/embedding_importance', methods=['POST'])
 def train_embedding_importance(qsar_method):
     """Post method that trains importance based embedding for the specified QSAR method on provided data"""
 
@@ -351,7 +351,7 @@ def train_embedding_importance(qsar_method):
     return result_str
 
 
-@app.route('/models/<string:qsar_method>/embedding_lasso', methods=['POST'])
+@app.route('/api/predictor_models/models/<string:qsar_method>/embedding_lasso', methods=['POST'])
 def train_embedding_lasso(qsar_method):
     """Post method that trains importance based embedding for the specified QSAR method on provided data"""
 
@@ -400,7 +400,7 @@ def train_embedding_lasso(qsar_method):
     return result_str
 
 
-@app.route('/models/<string:qsar_method>/cross_validate', methods=['POST'])
+@app.route('/api/predictor_models/models/<string:qsar_method>/cross_validate', methods=['POST'])
 def cross_validate_fold(qsar_method):
     """Trains a model for the specified QSAR method on provided data"""
     print('\n********************************************************************************************************')
@@ -457,7 +457,7 @@ def cross_validate_fold(qsar_method):
 
 
 #
-# @app.route('/models/<string:qsar_method>/predictsa', methods=['POST'])
+# @app.route('/api/predictor_models/models/<string:qsar_method>/predictsa', methods=['POST'])
 # def predictpythonstorage(qsar_method):
 #     """Makes predictions for a stored model on provided data"""
 #     obj = request.form
@@ -489,7 +489,7 @@ def cross_validate_fold(qsar_method):
 #     return mwu.call_do_predictions(prediction_tsv, model), 200
 
 
-@app.route('/models/predictDB', methods=['POST', 'GET'])
+@app.route('/api/predictor_models/models/predictDB', methods=['POST', 'GET'])
 def predictDB():
     """Automates prediction and AD for single smiles using model in database"""
     if request.method == 'POST':
@@ -506,7 +506,7 @@ def predictDB():
     return mwdu.predictFromDB(model_id, smiles, mwu)
 
 
-@app.route('/models/predict', methods=['POST'])
+@app.route('/api/predictor_models/models/predict', methods=['POST'])
 def predict():
     """Makes predictions for a stored model on provided data"""
     obj = request.form
@@ -538,7 +538,7 @@ def predict():
 
 
 
-@app.route('/models/plot', methods=['POST'])
+@app.route('/api/predictor_models/models/plot', methods=['POST'])
 def generate_plot():
     """Makes predictions for a stored model on provided data"""
     obj = request.form
@@ -577,7 +577,7 @@ def generate_plot():
     return mwu.call_generate_plot(training_tsv,prediction_tsv, model, model_name, plot_type), 200
 
 
-@app.route('/models/initPMML', methods=['POST'])
+@app.route('/api/predictor_models/models/initPMML', methods=['POST'])
 def initPMML():
     """Loads a model and stores it under the provided number"""
 
@@ -674,7 +674,7 @@ def initPMML():
     return model.get_model_description(), 201
 
 
-@app.route('/models/initPickle', methods=['POST'])
+@app.route('/api/predictor_models/models/initPickle', methods=['POST'])
 def initPickle():
     """Loads a model and stores it under the provided number"""
     print('enter initPickle')
@@ -725,7 +725,7 @@ def initPickle():
         abort(400, 'missing model bytes')
 
 
-@app.route('/models/<string:model_id>', methods=['GET'])
+@app.route('/api/predictor_models/models/<string:model_id>', methods=['GET'])
 def details(model_id):
     """Returns a detailed description of the QSAR model with version and parameter information (also inits the model if needed)"""
 
@@ -759,7 +759,7 @@ def available_models():
     # Return description and 200 OK
     return models, 200
 
-@app.route('/models/reg_coeff/<string:model_id>', methods=['GET'])
+@app.route('/api/predictor_models/models/reg_coeff/<string:model_id>', methods=['GET'])
 def model_coeffs(model_id):
     """Returns a detailed description of the QSAR model with version and parameter information"""
     model = mwdu.init_model(model_id, mwu)
@@ -797,7 +797,7 @@ def printEqn(model):
     # print(equation)
 
 
-@app.route('/models/<string:model_id>/object', methods=['GET'])
+@app.route('/api/predictor_models/models/<string:model_id>/object', methods=['GET'])
 def model_obj(model_id):
     """Returns model object"""
 
