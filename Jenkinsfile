@@ -16,7 +16,7 @@ pipeline {
 
 		stage('SCM') {
 			steps {
-				git poll: true, branch: 'master', credentialsId: 'valery_tkachenko', url: 'https://bitbucket.org/scidataexperts/pf_python_model_building.git'
+				git poll: true, branch: 'main', credentialsId: 'valery_tkachenko', url: 'https://bitbucket.org/scidataexperts/pf_python_model_building.git'
 			}
 		}
 

@@ -1,6 +1,6 @@
-FROM python:3.12-alpine
+FROM python:3.12-slim
 
-RUN apk update && apk upgrade && apk add --update alpine-sdk
+RUN apt-get -y update && apt-get -y upgrade && apt-get -y install build-essential
 
 WORKDIR /app
 
@@ -12,4 +12,4 @@ COPY . .
 
 EXPOSE 5000
 
-CMD ["waitress-serve", "--host", "0.0.0.0", "--port", "5000", "wsgi:app"]
+CMD ["waitress-serve", "--host", "0.0.0.0", "--port", "5000", "model_ws:app"]
