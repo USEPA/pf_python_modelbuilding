@@ -1,0 +1,69 @@
+openapi: '3.0.3'
+
+info:
+  title: EPA Predictor
+  version: "0.0.1"
+  description: API gateway to EPA predictions
+
+paths:
+  /api/amnb_nate/version:
+    get:
+      operationId: app.get_version
+      responses:
+        200:
+          description: Success
+
+  /api/amnb_nate/metadata:
+    get:
+      operationId: app.get_metadata
+      responses:
+        200:
+          description: Success
+
+  /api/amnb_nate:
+    get:
+      operationId: app.get_predict
+      parameters:
+        - name: smiles
+          in: query
+          description: SMILES to generate predictions for
+          required: true
+          schema:
+            type: string
+          examples:
+            example1:
+              summary: SMILES that generates one of the 56 ARN groups
+              value: CC(C)c1ccc2sc3ccccc3c(=O)c2c1
+            example2:
+              summary: Miscellaneous chemistry
+              value: c1ccc(OP(Oc2ccccc2)Oc2ccccc2)cc1
+      responses:
+        200:
+          description: Success
+          content: { }
+    post:
+      operationId: app.post_predict
+      summary: Generate predictions for multiple molecules
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Request"
+      responses:
+        200:
+          description: Success
+          content: { }
+
+components:
+  schemas:
+    Request:
+      type: object
+      properties:
+        smiles:
+          type: array
+      required:
+        - smiles
+      example:
+        smiles:
+          - FC(C(C(C1OC(=O)C2C(=CC=CC=2)N=1)(F)F)(F)F)(F)F
+          - CCCCN

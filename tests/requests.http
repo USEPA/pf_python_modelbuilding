@@ -3,3 +3,6 @@ GET http://localhost:5000/models/rf/info
 
 ###
 GET http://localhost:5000/models/1067
+
+###
+GET http://localhost:5000/models/predictDB?smiles=c1ccccc1&model_id=1065
