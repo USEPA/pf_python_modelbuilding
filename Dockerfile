@@ -10,6 +10,6 @@ RUN pip install -r requirements.txt
 
 COPY . .
 
-EXPOSE 5000
+EXPOSE 8080
 
-CMD ["waitress-serve", "--host", "0.0.0.0", "--port", "5000", "model_ws:app"]
+CMD ["waitress-serve", "--host", "0.0.0.0", "--port", "8080", "model_ws:app"]
