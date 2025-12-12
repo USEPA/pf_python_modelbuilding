@@ -1,0 +1,13 @@
+.git
+.idea
+.venv
+__pycache__
+Additional Classes
+tests
+.env
+.gitignore
+Dockerfile
+Jenkinsfile
+make requirements.bat
+run docker.bat
+utils.py
