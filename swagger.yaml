@@ -86,9 +86,15 @@ components:
       properties:
         smiles:
           type: array
+        model_id:
+          type: integer
       required:
         - smiles
+        - model_id
       example:
+        description:
+          HLC-XGB Martin 2024
         smiles:
           - FC(C(C(C1OC(=O)C2C(=CC=CC=2)N=1)(F)F)(F)F)(F)F
           - CCCCN
+        model_id: 1065
