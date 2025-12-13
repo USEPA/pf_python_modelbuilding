@@ -6,23 +6,23 @@ info:
   description: API gateway to EPA predictions
 
 paths:
-  /api/amnb_nate/version:
+  /api/predictor_models/version:
     get:
-      operationId: app.get_version
+      operationId: model_ws.get_version
       responses:
         200:
           description: Success
 
-  /api/amnb_nate/metadata:
+  /api/predictor_models/metadata:
     get:
-      operationId: app.get_metadata
+      operationId: model_ws.get_metadata
       responses:
         200:
           description: Success
 
-  /api/amnb_nate:
+  /api/predictor_models:
     get:
-      operationId: app.get_predict
+      operationId: model_ws.predictDB
       parameters:
         - name: smiles
           in: query
@@ -37,12 +37,37 @@ paths:
             example2:
               summary: Miscellaneous chemistry
               value: c1ccc(OP(Oc2ccccc2)Oc2ccccc2)cc1
+        - name: model_id
+          in: query
+          description: Model ID to use
+          required: true
+          schema:
+            type: integer
+          examples:
+            example1:
+              summary: HLC-XGB Martin 2024
+              value: 1065
+            example2:
+              summary: WS-XGB Martin 2024
+              value: 1066
+            example3:
+              summary: VP-XGB Martin 2024
+              value: 1067
+            example4:
+              summary: BP-XGB Martin 2024
+              value: 1068
+            example5:
+              summary: LogP-XGB Martin 2024
+              value: 1069
+            example6:
+              summary: MP-XGB Martin 2024
+              value: 1070
       responses:
         200:
           description: Success
           content: { }
     post:
-      operationId: app.post_predict
+      operationId: model_ws.predictDB_POST
       summary: Generate predictions for multiple molecules
       requestBody:
         content:
