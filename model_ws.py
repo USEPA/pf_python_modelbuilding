@@ -1,9 +1,10 @@
 import json
-
-from flask import Flask, request, abort
 import logging
 import pickle
+from logging import INFO
+
 from dotenv import load_dotenv
+from flask import request, abort, Flask
 
 load_dotenv()
 import model_ws_utilities as mwu
@@ -12,10 +13,49 @@ from applicability_domain import applicability_domain_utilities as adu
 
 from sklearn2pmml import sklearn2pmml
 
-app = Flask(__name__)
-# Limit logging output for easier readability
-log = logging.getLogger('werkzeug')
-log.setLevel(logging.DEBUG)
+import coloredlogs
+import connexion
+from connexion.middleware import MiddlewarePosition
+from connexion.options import SwaggerUIOptions
+from starlette.middleware.cors import CORSMiddleware
+
+
+def get_version():
+    try:
+        from build_info import BUILD_TIMESTAMP, BUILD_NUMBER
+    except ImportError:
+        BUILD_TIMESTAMP = None
+        BUILD_NUMBER = None
+
+    return dict(name="predictor_models",
+                title="EPA/Models",
+                version="1.0.0",
+                compiled=BUILD_TIMESTAMP,
+                build_id=BUILD_NUMBER)
+
+
+def get_metadata():
+    return dict(
+        version=get_version()
+    )
+
+
+coloredlogs.install(level=INFO, milliseconds=True,
+                    fmt='%(asctime)s - %(name)s - %(levelname)s - %(message)s (%(filename)s:%(lineno)d)')
+
+options = SwaggerUIOptions(spec_path="/api/predictor_models/swagger.yaml",
+                           swagger_ui_path="/api/predictor_models/swagger")
+
+app = connexion.AsyncApp(__name__, swagger_ui_options=options)
+app.add_middleware(
+    CORSMiddleware,
+    position=MiddlewarePosition.BEFORE_EXCEPTION,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+app.add_api('swagger.yaml', swagger_ui_options=options)
 
 # use_pmml_pipeline_during_model_building = True # if true use PMMLPipeline with standardizing happening separate during model building
 # use_sklearn2pmml = True # if false uses pypmml to load the file. Note: pypmml doesnt handle knn predictions the same way...
@@ -489,21 +529,13 @@ def cross_validate_fold(qsar_method):
 #     return mwu.call_do_predictions(prediction_tsv, model), 200
 
 
-@app.route('/api/predictor_models/models/predictDB', methods=['POST', 'GET'])
-def predictDB():
-    """Automates prediction and AD for single smiles using model in database"""
-    if request.method == 'POST':
-        obj = request.form
-        smiles = obj.get('smiles')  # Retrieves the model number to use
-        model_id = obj.get('model_id')
-    elif request.method == 'GET':
-        # Handle GET request here
-        smiles = request.args.get('smiles')  # Retrieves the model number to use
-        model_id = request.args.get('model_id')
-
-    if not smiles or not model_id:
-        return "Both smiles and model_id are required", 400
+# @app.route('/api/predictor_models/models/predictDB', methods=['POST', 'GET'])
+def predictDB(smiles, model_id):
     return mwdu.predictFromDB(model_id, smiles, mwu)
+
+
+def predictDB_POST(body):
+    pass
 
 
 @app.route('/api/predictor_models/models/predict', methods=['POST'])
@@ -527,7 +559,7 @@ def predict():
         # Gets stored model using model number
         model = mwu.models[model_id]
     else:
-        abort(400,'Need to init model or use predictDB API call instead')
+        abort(400, 'Need to init model or use predictDB API call instead')
 
     # 404 NOT FOUND if no model stored under provided number
     if model is None:
@@ -535,7 +567,6 @@ def predict():
 
     # Calls the appropriate prediction method and returns the results
     return mwu.call_do_predictions(prediction_tsv, model), 200
-
 
 
 @app.route('/api/predictor_models/models/plot', methods=['POST'])
@@ -567,14 +598,14 @@ def generate_plot():
         # Gets stored model using model number
         model = mwu.models[model_id]
     else:
-        abort(400,'Need to init model first')
+        abort(400, 'Need to init model first')
 
     # 404 NOT FOUND if no model stored under provided number
     if model is None:
         abort(404, 'no stored model with id ' + model_id)
 
     # Calls the appropriate prediction method and returns the results
-    return mwu.call_generate_plot(training_tsv,prediction_tsv, model, model_name, plot_type), 200
+    return mwu.call_generate_plot(training_tsv, prediction_tsv, model, model_name, plot_type), 200
 
 
 @app.route('/api/predictor_models/models/initPMML', methods=['POST'])
@@ -748,7 +779,6 @@ def details(model_id):
     return model_details, 200
 
 
-
 @app.route('/models', methods=['GET'])
 def available_models():
     """Returns a detailed description of the QSAR model with version and parameter information (also inits the model if needed)"""
@@ -758,6 +788,7 @@ def available_models():
 
     # Return description and 200 OK
     return models, 200
+
 
 @app.route('/api/predictor_models/models/reg_coeff/<string:model_id>', methods=['GET'])
 def model_coeffs(model_id):
@@ -815,7 +846,10 @@ def model_obj(model_id):
     return model.model_obj, 200
 
 
-
-
 if __name__ == '__main__':
+    app = Flask(__name__)
+    # Limit logging output for easier readability
+    log = logging.getLogger('werkzeug')
+    log.setLevel(logging.DEBUG)
+
     app.run(host='0.0.0.0', port=5004, debug=True)
