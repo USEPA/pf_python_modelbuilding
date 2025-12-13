@@ -31,7 +31,7 @@ def standardizeStructure(serverAPIs, smiles, model: Model):
 
     if len(chemicals) == 0:
         # logging.debug('Standardization failed')
-        return f"{smiles} failed standardization", 400
+        return f"{smiles} failed standardization" if smiles else 'No Structure', 400
 
     logging.debug(chemicals)
 
