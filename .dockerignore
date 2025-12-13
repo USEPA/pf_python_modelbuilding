@@ -10,4 +10,3 @@ Dockerfile
 Jenkinsfile
 make requirements.bat
 run docker.bat
-utils.py
