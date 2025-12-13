@@ -1,6 +1,6 @@
 from unittest import TestCase, main
 
-from model_ws import loadModelFromDatabase
+from app import loadModelFromDatabase
 from model_ws_utilities import call_do_predictions
 from models.df_utilities import load_df_from_file
 

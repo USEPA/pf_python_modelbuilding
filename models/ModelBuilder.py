@@ -52,7 +52,7 @@ __author__ = "Nathaniel Charest, Todd Martin (modified to work with webservice, 
 
 # %%
 
-importance_type = 'weight' #default, TODO make a passable parameter to model_ws when generating embedding
+importance_type = 'weight' #default, TODO make a passable parameter to app when generating embedding
 # importance_type = 'gain'
 # importance_type = 'cover'
 # importance_type = 'total_gain'

@@ -8,21 +8,21 @@ info:
 paths:
   /api/predictor_models/version:
     get:
-      operationId: model_ws.get_version
+      operationId: app.get_version
       responses:
         200:
           description: Success
 
   /api/predictor_models/metadata:
     get:
-      operationId: model_ws.get_metadata
+      operationId: app.get_metadata
       responses:
         200:
           description: Success
 
   /api/predictor_models:
     get:
-      operationId: model_ws.predictDB
+      operationId: app.predictDB
       parameters:
         - name: smiles
           in: query
@@ -67,7 +67,7 @@ paths:
           description: Success
           content: { }
     post:
-      operationId: model_ws.predictDB_POST
+      operationId: app.predictDB_POST
       summary: Generate predictions for multiple molecules
       requestBody:
         content:

@@ -684,7 +684,7 @@ def initPMML():
     # print('is_categorical', is_categorical)
     model = mwu.instantiateModelForPrediction(qsar_method=form_obj['qsar_method'],
                                               is_binary=is_binary, pmml_file_path=pmml_file_path,
-                                              use_sklearn2pmml=use_sklearn2pmml)  # init from model_ws should take care of this when doing from java
+                                              use_sklearn2pmml=use_sklearn2pmml)  # init from app should take care of this when doing from java
     model.set_details(details=form_obj)
 
     # print(model.model_obj)

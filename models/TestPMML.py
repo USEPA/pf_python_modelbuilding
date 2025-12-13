@@ -212,7 +212,7 @@ def runSet(embedding, n_threads,training_tsv_path, prediction_tsv_path, qsar_met
 
 
     # print('loading model from pmml:')
-    # modelFromPMML = mwu.instantiateModel2(qsar_method=qsar_method,is_categorical=is_categorical)  # init from model_ws should take care of this when doing from java
+    # modelFromPMML = mwu.instantiateModel2(qsar_method=qsar_method,is_categorical=is_categorical)  # init from app should take care of this when doing from java
     # modelFromPMML.model_obj = Model_pypmml.fromFile(pmml_path)
     #
     # modelFromPMML.embedding = modelFromPMML.model_obj.dataDictionary.fieldNames
@@ -224,7 +224,7 @@ def runSet(embedding, n_threads,training_tsv_path, prediction_tsv_path, qsar_met
 
     # print(pmml_path)
 
-    # modelFromPMML = mwu.instantiateModel2(qsar_method=qsar_method,is_categorical=is_categorical)  # init from model_ws should take care of this when doing from java
+    # modelFromPMML = mwu.instantiateModel2(qsar_method=qsar_method,is_categorical=is_categorical)  # init from app should take care of this when doing from java
     # modelFromPMML.set_model_obj(pmml_path, qsar_method=qsar_method)
 
     # print(type(modelFromPMML))
