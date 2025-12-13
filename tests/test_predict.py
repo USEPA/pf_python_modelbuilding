@@ -19,6 +19,10 @@ class TestPredict(TestCase):
         r = predictDB('c1ccccc1', 1065)
         print(r)
 
+    def test_model_predict_1065_array(self):
+        r = predictDB(['c1ccccc1', 'CCCC'], 1065)
+        print(r)
+
     def test_descriptors_get(self):
         r = self.descriptors_api.call_descriptors_get(self.serverAPIs,
                                                       "c1ccccc1",

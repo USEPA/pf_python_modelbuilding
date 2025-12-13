@@ -8,6 +8,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
 
 from API_Utilities import QsarSmilesAPI, DescriptorsAPI
+from model_ws_utilities import call_do_predictions_from_df, models
 from models import df_utilities as dfu
 from models.ModelBuilder import Model
 
@@ -30,7 +31,6 @@ def standardizeStructure(serverAPIs, smiles, model: Model):
         # logging.debug('Standardization failed')
         return "smiles=" + smiles + " failed standardization", 400
 
-
     logging.debug(chemicals)
 
     if len(chemicals) > 1 and model.omitSalts:
@@ -44,18 +44,18 @@ def standardizeStructure(serverAPIs, smiles, model: Model):
     return qsarSmiles, 200
 
 
-def init_model(model_id, mwu):
-    if model_id in mwu.models:
+def init_model(model_id):
+    if model_id in models:
         logging.debug('have model already initialized')
-        model = mwu.models[model_id]
+        model = models[model_id]
     else:
-        model = initModel(model_id, mwu)
-        mwu.models[model_id] = model
+        model = initModel(model_id)
+        models[model_id] = model
 
     return model
 
 
-def predictFromDB(model_id, smiles, mwu):
+def predictFromDB(model_id, smiles):
     """
     Runs whole workflow: standardize, descriptors, prediction, applicability domain
     :param model_id:
@@ -64,11 +64,18 @@ def predictFromDB(model_id, smiles, mwu):
     :return:
     """
 
+    if isinstance(smiles, str):
+        return predict_model_smiles(model_id, smiles)
+    else:
+        return [predict_model_smiles(model_id, smi) for smi in smiles]
+
+
+def predict_model_smiles(model_id, smiles):
     # serverAPIs = "https://hcd.rtpnc.epa.gov" # TODO this should come from environment variable
     serverAPIs = os.getenv("CIM_API_SERVER", "https://cim-dev.sciencedataexperts.com/")
 
     # initialize model bytes and all details from db:
-    model = init_model(model_id, mwu)
+    model = init_model(model_id)
 
     # Standardize smiles:
     qsarSmiles, code = standardizeStructure(serverAPIs, smiles, model)
@@ -84,7 +91,7 @@ def predictFromDB(model_id, smiles, mwu):
     # Run model prediction:
     # df_prediction = model.model_details.predictionSet #all chemicals in the model's prediction set, for testing
     # print("for qsarSmiles="+qsarSmiles+", descriptors="+json.dumps(descriptorsResults,indent=4))
-    pred_results = json.loads(mwu.call_do_predictions_from_df(df_prediction, model))
+    pred_results = json.loads(call_do_predictions_from_df(df_prediction, model))
     pred_value = pred_results[0]['pred']
 
     # applicability domain calcs:
@@ -238,7 +245,7 @@ def getSession():
     return session
 
 
-def initModel(model_id, mwu):
+def initModel(model_id):
     session = getSession()
     model_bytes = get_model_bytes(model_id, session)
 
