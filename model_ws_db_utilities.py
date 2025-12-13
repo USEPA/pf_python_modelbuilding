@@ -90,7 +90,7 @@ def predict_model_smiles(model_id, smiles):
     # Standardize smiles:
     qsarSmiles, code = standardizeStructure(serverAPIs, smiles, model)
     if code != 200:
-        return f"smiles: {smiles}", code
+        return qsarSmiles, code
 
     # Descriptor calcs:
     descriptorAPI = DescriptorsAPI()
