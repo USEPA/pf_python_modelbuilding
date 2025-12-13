@@ -20,7 +20,7 @@ paths:
         200:
           description: Success
 
-  /api/predictor_models:
+  /api/predictor_models/predict:
     get:
       operationId: app.predictDB
       parameters:
