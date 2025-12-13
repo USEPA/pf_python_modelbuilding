@@ -31,13 +31,13 @@ def standardizeStructure(serverAPIs, smiles, model: Model):
 
     if len(chemicals) == 0:
         # logging.debug('Standardization failed')
-        return f"smiles: {smiles} failed standardization", 400
+        return f"{smiles} failed standardization", 400
 
     logging.debug(chemicals)
 
     if len(chemicals) > 1 and model.omitSalts:
         # print('qsar smiles indicates mixture')
-        return "model can't run mixtures", 400
+        return f"{smiles}: model can't run mixtures", 400
 
     qsarSmiles = chemicals[0]["canonicalSmiles"]
 
