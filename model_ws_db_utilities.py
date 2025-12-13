@@ -22,7 +22,7 @@ def standardizeStructure(serverAPIs, smiles, model: Model):
     useFullStandardize = False
     qsAPI = QsarSmilesAPI()
     chemicals = qsAPI.call_qsar_ready_standardize_post(server_host=serverAPIs, smiles=smiles, full=useFullStandardize,
-                                                       workflow=model.qsarReadyRuleSet);
+                                                       workflow=model.qsarReadyRuleSet)
     if "error" in chemicals:
         return chemicals, 400
 
@@ -77,8 +77,7 @@ def predictFromDB(model_id, smiles, mwu):
 
     # Descriptor calcs:
     descriptorAPI = DescriptorsAPI()
-    df_prediction, code = descriptorAPI.calculate_descriptors(serverAPIs, qsarSmiles,
-                                                              model.descriptorService)
+    df_prediction, code = descriptorAPI.calculate_descriptors(serverAPIs, qsarSmiles, model.descriptorService)
     if code != 200:
         return df_prediction, 400
 
