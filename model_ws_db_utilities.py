@@ -1,13 +1,15 @@
+import json
 import os
 from io import BytesIO
+
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import URL
-from sqlalchemy.orm import sessionmaker
 from sqlalchemy.exc import SQLAlchemyError
-import json
+from sqlalchemy.orm import sessionmaker
+
+from API_Utilities import QsarSmilesAPI, DescriptorsAPI
 from models import df_utilities as dfu
 from models.ModelBuilder import Model
-from API_Utilities import QsarSmilesAPI, DescriptorsAPI
 
 debug = False
 
@@ -107,9 +109,8 @@ def predictFromDB(model_id, smiles, mwu):
     model_results.predictionUnits = model.unitsName  # duplicated so displayed near prediction value
     model_results.adResults = ad_results
 
-    results_json = model_results.to_json()
-    print(results_json)
-    return results_json, 200
+    return model_results.to_dict()
+
 
 def predictSetFromDB(model_id, excel_file_path):
     """
@@ -131,7 +132,7 @@ def predictSetFromDB(model_id, excel_file_path):
 
     import pandas as pd
     df = pd.read_excel(excel_file_path, sheet_name='Test set')
-    smiles_list = df['Smiles'].tolist() # Extract the 'Smiles' column into a list
+    smiles_list = df['Smiles'].tolist()  # Extract the 'Smiles' column into a list
 
     directory = os.path.dirname(excel_file_path)
 
@@ -147,13 +148,13 @@ def predictSetFromDB(model_id, excel_file_path):
             qsarSmiles, code = standardizeStructure(serverAPIs, smiles, model)
             if code != 200:
                 print(smiles, qsarSmiles)
-                file.write(smiles+"\terror smiles")
+                file.write(smiles + "\terror smiles")
                 continue
 
             df_prediction, code = descriptorAPI.calculate_descriptors(serverAPIs, qsarSmiles, model.descriptorService)
             if code != 200:
                 print(smiles, 'error descriptors')
-                file.write(smiles+"\terror descriptors")
+                file.write(smiles + "\terror descriptors")
 
                 continue
 
@@ -164,7 +165,7 @@ def predictSetFromDB(model_id, excel_file_path):
             ad_results = json.loads(str_ad_results)
             pred_AD = ad_results[0]["AD"]
 
-            line = smiles+"\t"+qsarSmiles+"\t"+str(pred_value)+"\t"+str(pred_AD)+"\n"
+            line = smiles + "\t" + qsarSmiles + "\t" + str(pred_value) + "\t" + str(pred_AD) + "\n"
             print(line)
             file.write(line)
             file.flush()
@@ -174,14 +175,11 @@ def predictSetFromDB(model_id, excel_file_path):
 
     # Standardize smiles:
 
-
     # Descriptor calcs:
 
     # Run model prediction:
     # df_prediction = model.model_details.predictionSet #all chemicals in the model's prediction set, for testing
     # print("for qsarSmiles="+qsarSmiles+", descriptors="+json.dumps(descriptorsResults,indent=4))
-
-
 
     print(pred_results)
 
@@ -196,10 +194,9 @@ def predictSetFromDB(model_id, excel_file_path):
     # else:
     #     print('AD method for model was not set:', model_id)
 
-
-
-
     return "OK", 200
+
+
 def determineApplicabilityDomain(model: Model, test_tsv):
     """
     Calculate the applicability domain using the model's training set and the AD measure assigned to the model in the DB
@@ -223,7 +220,6 @@ def determineApplicabilityDomain(model: Model, test_tsv):
         embedding=model.embedding,
         applicability_domain=model.applicabilityDomainName,
         filterColumnsInBothSets=True)
-
 
     # return output.to_json(orient='records', lines=True) # gives each object on separate line
     return output.to_json(orient='records', lines=False)  # gives an array instead of each object on separate line
@@ -279,10 +275,7 @@ def initModel(model_id, mwu):
 
     get_model_details(model_id, model, session)
 
-    print('model_description with added metadata', model.get_model_description_pretty())
-
-    if debug:
-        print('model_description with added metadata', model.get_model_description_pretty())
+    logging.debug(model.get_model_description_pretty())
 
     # this wont be necessary if the training/test sets are in the pickled model:
     get_training_prediction_instances(session, model)
@@ -325,8 +318,8 @@ def get_model_bytes(model_id, session):
         return None
 
     # finally:
-        # Close the session - closed later
-        # print("done")
+    # Close the session - closed later
+    # print("done")
 
 
 class ModelDetails:
@@ -379,7 +372,7 @@ def get_model_details(modelId, model: Model, session):
     """
     try:
         # SQL query to retrieve model details
-        sql = text(getModelMetaDataQuery()+"\nWHERE m.id = :model_id")
+        sql = text(getModelMetaDataQuery() + "\nWHERE m.id = :model_id")
 
         # Use left joins so can still get a result if something is missing (like fk_ad_method was not set for model)
         # print(sql)
@@ -389,46 +382,44 @@ def get_model_details(modelId, model: Model, session):
 
         # Process the result
         if result:
-            print('have result for sql',sql)
+            logging.debug(sql)
             row_to_model_details(model, result)
 
     except Exception as ex:
         print(f"Exception occurred: {ex}")
     # finally:
-        # Close the session - close it later after get training/test sets
-        # print('done with details')
-        # session.close()
+    # Close the session - close it later after get training/test sets
+    # print('done with details')
+    # session.close()
 
     return None
 
+
 def getModelMetaDataQuery():
-
     return """
-    SELECT 
-            m.id, 
-            m.name_ccd,
-            m.details,
-            d.id,
-            d.name,
-            u.abbreviation_ccd,
-            d.dsstox_mapping_strategy,
-            p.name_ccd,
-            ds.id,
-            ds.name,
-            ds.descriptor_service,
-            ds.headers_tsv,
-            s.id,
-            s.name,
-            adm.name
-        FROM qsar_models.models m
-        LEFT JOIN qsar_datasets.datasets d ON d.name = m.dataset_name
-        LEFT JOIN qsar_datasets.units u ON d.fk_unit_id = u.id
-        LEFT JOIN qsar_datasets.properties p ON d.fk_property_id = p.id
-        LEFT JOIN qsar_descriptors.descriptor_sets ds ON m.descriptor_set_name = ds.name
-        LEFT JOIN qsar_datasets.splittings s ON m.splitting_name = s.name
-        LEFT JOIN qsar_models.ad_methods adm ON m.fk_ad_method = adm.id
-    """
-
+           SELECT m.id,
+                  m.name_ccd,
+                  m.details,
+                  d.id,
+                  d.name,
+                  u.abbreviation_ccd,
+                  d.dsstox_mapping_strategy,
+                  p.name_ccd,
+                  ds.id,
+                  ds.name,
+                  ds.descriptor_service,
+                  ds.headers_tsv,
+                  s.id,
+                  s.name,
+                  adm.name
+           FROM qsar_models.models m
+                    LEFT JOIN qsar_datasets.datasets d ON d.name = m.dataset_name
+                    LEFT JOIN qsar_datasets.units u ON d.fk_unit_id = u.id
+                    LEFT JOIN qsar_datasets.properties p ON d.fk_property_id = p.id
+                    LEFT JOIN qsar_descriptors.descriptor_sets ds ON m.descriptor_set_name = ds.name
+                    LEFT JOIN qsar_datasets.splittings s ON m.splitting_name = s.name
+                    LEFT JOIN qsar_models.ad_methods adm ON m.fk_ad_method = adm.id \
+           """
 
 
 def get_available_models():
@@ -439,7 +430,7 @@ def get_available_models():
         session = getSession()
 
         # SQL query to retrieve model details
-        sql = text(getModelMetaDataQuery()+"\nWHERE m.fk_source_id = 3 and m.is_public=true;")
+        sql = text(getModelMetaDataQuery() + "\nWHERE m.fk_source_id = 3 and m.is_public=true;")
 
         # Use left joins so can still get a result if something is missing (like fk_ad_method was not set for model)
         # print(sql)
@@ -460,7 +451,7 @@ def get_available_models():
     except Exception as ex:
         print(f"Exception occurred: {ex}")
     finally:
-    # Close the session - close it later after get training/test sets
+        # Close the session - close it later after get training/test sets
         session.close()
 
     return None
@@ -473,31 +464,31 @@ def get_available_models():
         try:
             # SQL query to retrieve model details
             sql = text("""
-            SELECT 
-                m.name_ccd,
-                d.id,
-                d.name,
-                u.abbreviation_ccd,
-                d.dsstox_mapping_strategy,
-                p.name_ccd,
-                ds.id,
-                ds.name,
-                ds.descriptor_service,
-                ds.headers_tsv,
-                s.id,
-                s.name,
-                adm.name,
-                de.embedding_tsv
-            FROM qsar_models.models m
-            LEFT JOIN qsar_datasets.datasets d ON d.name = m.dataset_name
-            LEFT JOIN qsar_datasets.units u ON d.fk_unit_id = u.id
-            LEFT JOIN qsar_datasets.properties p ON d.fk_property_id = p.id
-            LEFT JOIN qsar_descriptors.descriptor_sets ds ON m.descriptor_set_name = ds.name
-            LEFT JOIN qsar_datasets.splittings s ON m.splitting_name = s.name
-            LEFT JOIN qsar_models.ad_methods adm ON m.fk_ad_method = adm.id
-            LEFT JOIN qsar_models.descriptor_embeddings de ON m.fk_descriptor_embedding_id = de.id
-            WHERE fk_source_id=3 and is_public=true
-            """)
+                       SELECT m.name_ccd,
+                              d.id,
+                              d.name,
+                              u.abbreviation_ccd,
+                              d.dsstox_mapping_strategy,
+                              p.name_ccd,
+                              ds.id,
+                              ds.name,
+                              ds.descriptor_service,
+                              ds.headers_tsv,
+                              s.id,
+                              s.name,
+                              adm.name,
+                              de.embedding_tsv
+                       FROM qsar_models.models m
+                                LEFT JOIN qsar_datasets.datasets d ON d.name = m.dataset_name
+                                LEFT JOIN qsar_datasets.units u ON d.fk_unit_id = u.id
+                                LEFT JOIN qsar_datasets.properties p ON d.fk_property_id = p.id
+                                LEFT JOIN qsar_descriptors.descriptor_sets ds ON m.descriptor_set_name = ds.name
+                                LEFT JOIN qsar_datasets.splittings s ON m.splitting_name = s.name
+                                LEFT JOIN qsar_models.ad_methods adm ON m.fk_ad_method = adm.id
+                                LEFT JOIN qsar_models.descriptor_embeddings de ON m.fk_descriptor_embedding_id = de.id
+                       WHERE fk_source_id = 3
+                         and is_public = true
+                       """)
 
             # Use left joins so can still get a result if something is missing (like fk_ad_method was not set for model)
             # print(sql)
@@ -527,7 +518,7 @@ def get_available_models():
 def row_to_model_details(model: Model, result):
     model.modelId = result[0]
     model.modelName = result[1]
-    details = json.loads(result[2].tobytes().decode('utf-8')) #it's stored as a file object in database for now
+    details = json.loads(result[2].tobytes().decode('utf-8'))  # it's stored as a file object in database for now
     model.datasetId = result[3]
     model.datasetName = result[4]
     model.unitsName = result[5]
@@ -573,7 +564,6 @@ def row_to_model_details(model: Model, result):
         model.qsarReadyRuleSet = "qsar-ready"
 
 
-
 def generate_instance(id, qsar_property_value, descriptors):
     # Implement this function based on your requirements
     return f"{id}\t{qsar_property_value}\t{descriptors}\n"
@@ -585,15 +575,15 @@ def get_training_prediction_instances(session, model):
 
     instance_header = f"ID\tProperty\t{model.headersTsv}\r\n"
     sql = text("""
-        SELECT dp.canon_qsar_smiles, dp.qsar_property_value, dv.values_tsv, dpis.split_num
-        FROM qsar_datasets.data_points dp
-        JOIN qsar_descriptors.descriptor_values dv ON dp.canon_qsar_smiles = dv.canon_qsar_smiles
-        JOIN qsar_datasets.data_points_in_splittings dpis ON dpis.fk_data_point_id = dp.id
-        WHERE dp.fk_dataset_id = :datasetId
-        AND dv.fk_descriptor_set_id = :descriptorSetId
-        AND dpis.fk_splitting_id = :splittingId
-        ORDER BY dp.canon_qsar_smiles;
-        """)
+               SELECT dp.canon_qsar_smiles, dp.qsar_property_value, dv.values_tsv, dpis.split_num
+               FROM qsar_datasets.data_points dp
+                        JOIN qsar_descriptors.descriptor_values dv ON dp.canon_qsar_smiles = dv.canon_qsar_smiles
+                        JOIN qsar_datasets.data_points_in_splittings dpis ON dpis.fk_data_point_id = dp.id
+               WHERE dp.fk_dataset_id = :datasetId
+                 AND dv.fk_descriptor_set_id = :descriptorSetId
+                 AND dpis.fk_splitting_id = :splittingId
+               ORDER BY dp.canon_qsar_smiles;
+               """)
 
     sb_training = [instance_header]
     sb_prediction = [instance_header]
@@ -638,4 +628,4 @@ def get_training_prediction_instances(session, model):
 
 if __name__ == '__main__':
     excel_file_path = r"C:\Users\TMARTI02\OneDrive - Environmental Protection Agency (EPA)\0 java\0 model_management\hibernate_qsar_model_building\data\reports\prediction reports upload\WebTEST2.1\HLC v1 modeling_RND_REPRESENTATIVE.xlsx"
-    predictSetFromDB(1065,excel_file_path)
+    predictSetFromDB(1065, excel_file_path)
