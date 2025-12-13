@@ -11,6 +11,7 @@ from API_Utilities import QsarSmilesAPI, DescriptorsAPI
 from model_ws_utilities import call_do_predictions_from_df, models
 from models import df_utilities as dfu
 from models.ModelBuilder import Model
+from utils import timer
 
 debug = False
 
@@ -19,6 +20,7 @@ import logging
 logging.getLogger('sqlalchemy').setLevel(logging.ERROR)
 
 
+@timer
 def standardizeStructure(serverAPIs, smiles, model: Model):
     useFullStandardize = False
     qsAPI = QsarSmilesAPI()
@@ -39,7 +41,7 @@ def standardizeStructure(serverAPIs, smiles, model: Model):
 
     qsarSmiles = chemicals[0]["canonicalSmiles"]
 
-    logging.debug('qsarSmiles', qsarSmiles)
+    logging.debug(f"qsarSmiles: {qsarSmiles}")
 
     return qsarSmiles, 200
 
@@ -55,6 +57,7 @@ def init_model(model_id):
     return model
 
 
+@timer
 def predictFromDB(model_id, smiles):
     """
     Runs whole workflow: standardize, descriptors, prediction, applicability domain
@@ -70,6 +73,7 @@ def predictFromDB(model_id, smiles):
         return [predict_model_smiles(model_id, smi) for smi in smiles]
 
 
+@timer
 def predict_model_smiles(model_id, smiles):
     # serverAPIs = "https://hcd.rtpnc.epa.gov" # TODO this should come from environment variable
     serverAPIs = os.getenv("CIM_API_SERVER", "https://cim-dev.sciencedataexperts.com/")
@@ -201,6 +205,7 @@ def predictSetFromDB(model_id, excel_file_path):
     return "OK", 200
 
 
+@timer
 def determineApplicabilityDomain(model: Model, test_tsv):
     """
     Calculate the applicability domain using the model's training set and the AD measure assigned to the model in the DB
@@ -245,6 +250,7 @@ def getSession():
     return session
 
 
+@timer
 def initModel(model_id):
     session = getSession()
     model_bytes = get_model_bytes(model_id, session)

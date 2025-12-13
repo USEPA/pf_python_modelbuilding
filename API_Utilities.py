@@ -3,6 +3,8 @@ import json
 import requests
 from indigo import Indigo
 
+from utils import timer
+
 
 class DescriptorsAPI:
 
@@ -48,6 +50,7 @@ class DescriptorsAPI:
 
         return False
 
+    @timer
     def calculate_descriptors(self, serverAPIs, qsarSmiles, descriptorService):
 
         if "test" in descriptorService.lower():

@@ -18,6 +18,8 @@ from sklearn2pmml.pipeline import PMMLPipeline as PMMLPipeline
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
+from utils import timer
+
 models = {}
 
 
@@ -594,6 +596,7 @@ def call_do_predictions(prediction_tsv, model):
     return results_json
 
 
+@timer
 def call_do_predictions_from_df(df_prediction, model):
     """Loads TSV prediction data into a pandas DF, stores IDs and exp vals,
     and calls the appropriate prediction method"""
