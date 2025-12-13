@@ -64,6 +64,9 @@ def init_model(model_id):
     return model
 
 
+cache = {}
+
+
 @timer
 def predictFromDB(model_id, smiles):
     """
@@ -80,28 +83,31 @@ def predictFromDB(model_id, smiles):
     if isinstance(smiles, str):
         return predict_model_smiles(model_id, smiles)
     else:
-        result = []
+        result, missing = [], []
+
+        key = f"{model_id}-{smiles}"
+        if key in cache:
+            result.append(cache[key])
+        else:
+            missing.append(smiles)
+
         with concurrent.futures.ProcessPoolExecutor() as executor:
-            results = executor.map(predict_model_smiles, (model_id for smi in smiles), (smi for smi in smiles))
+            results = executor.map(predict_model_smiles, (model_id for _ in missing), (_ for _ in missing))
 
         for (r, code, smi) in results:
             if code != 200:
-                result.append(dict(smiles=smi, error=r))
+                r = dict(smiles=smi, error=r)
+                result.append(r)
             else:
                 result.append(r)
+
+            cache[key] = r
 
         return result
 
 
-cache = {}
-
-
 @timer
 def predict_model_smiles(model_id, smiles):
-    if f"{model_id}-{smiles}" in cache:
-        logging.debug(f"cache hit for {model_id}-{smiles}")
-        return cache[f"{model_id}-{smiles}"]
-
     # serverAPIs = "https://hcd.rtpnc.epa.gov" # TODO this should come from environment variable
     serverAPIs = os.getenv("CIM_API_SERVER", "https://cim-dev.sciencedataexperts.com/")
 
@@ -144,10 +150,7 @@ def predict_model_smiles(model_id, smiles):
     model_results.predictionUnits = model.unitsName  # duplicated so displayed near prediction value
     model_results.adResults = ad_results
 
-    result = model_results.to_dict(), 200, smiles
-
-    cache[f"{model_id}-{smiles}"] = result
-    return result
+    return model_results.to_dict(), 200, smiles
 
 
 def predictSetFromDB(model_id, excel_file_path):
