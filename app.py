@@ -1,7 +1,7 @@
 import json
 import logging
 import pickle
-from logging import INFO
+from logging import INFO, DEBUG
 
 from dotenv import load_dotenv
 from flask import request, abort, Flask
@@ -43,7 +43,7 @@ def get_metadata():
     )
 
 
-coloredlogs.install(level=INFO, milliseconds=True,
+coloredlogs.install(level=DEBUG, milliseconds=True,
                     fmt='%(asctime)s - %(name)s - %(levelname)s - %(message)s (%(filename)s:%(lineno)d)')
 
 options = SwaggerUIOptions(spec_path="/api/predictor_models/swagger.yaml",
