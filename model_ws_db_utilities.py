@@ -31,7 +31,7 @@ def standardizeStructure(serverAPIs, smiles, model: Model):
 
     if len(chemicals) == 0:
         # logging.debug('Standardization failed')
-        return "smiles=" + smiles + " failed standardization", 400
+        return f"smiles: {smiles} failed standardization", 400
 
     logging.debug(chemicals)
 
@@ -70,7 +70,13 @@ def predictFromDB(model_id, smiles):
     if isinstance(smiles, str):
         return predict_model_smiles(model_id, smiles)
     else:
-        return [predict_model_smiles(model_id, smi) for smi in smiles]
+        result = []
+        for smi in smiles:
+            r, code = predict_model_smiles(model_id, smi)
+            if code != 200:
+                r = dict(smiles=smi, error=r)
+            result.append(r)
+        return result
 
 
 @timer
@@ -84,7 +90,7 @@ def predict_model_smiles(model_id, smiles):
     # Standardize smiles:
     qsarSmiles, code = standardizeStructure(serverAPIs, smiles, model)
     if code != 200:
-        return "error: " + qsarSmiles, code
+        return f"smiles: {smiles}", code
 
     # Descriptor calcs:
     descriptorAPI = DescriptorsAPI()
@@ -117,7 +123,7 @@ def predict_model_smiles(model_id, smiles):
     model_results.predictionUnits = model.unitsName  # duplicated so displayed near prediction value
     model_results.adResults = ad_results
 
-    return model_results.to_dict()
+    return model_results.to_dict(), 200
 
 
 def predictSetFromDB(model_id, excel_file_path):
