@@ -1,6 +1,8 @@
 import json
+
 import requests
 from indigo import Indigo
+
 
 class DescriptorsAPI:
 
@@ -15,7 +17,7 @@ class DescriptorsAPI:
             return "Number of atoms equals zero", 400
         if not self.contains_carbon(molecule):
             return "Molecule does not contain carbon", 400
-        return "ok",200
+        return "ok", 200
 
     def contains_carbon(self, molecule):
 
@@ -54,15 +56,14 @@ class DescriptorsAPI:
                 return check_results, code
 
         descriptorsResults = self.call_descriptors_get(server_host=serverAPIs, qsar_smiles=qsarSmiles,
-                                                                descriptor_name=descriptorService)
+                                                       descriptor_name=descriptorService)
         if "error" in descriptorsResults:
             return descriptorsResults, 400
 
         df_prediction = self.response_to_df(descriptorsResults, qsarSmiles)
         return df_prediction, 200
 
-
-    def call_descriptors_get(self, server_host, qsar_smiles, descriptor_name):
+    def call_descriptors_get(self, server_host: str, qsar_smiles: str, descriptor_name: str):
         # Construct the URL
         url = f"{server_host}/api/descriptors"
 
@@ -70,7 +71,8 @@ class DescriptorsAPI:
         params = {
             "type": descriptor_name,
             "smiles": qsar_smiles,
-            "headers": "true"  # some descriptors dont have header option? Should be fixed so this doesnt cause issue if must be false
+            "headers": "true"
+            # some descriptors dont have header option? Should be fixed so this doesnt cause issue if must be false
         }
 
         response = requests.get(url, params=params)
@@ -82,6 +84,26 @@ class DescriptorsAPI:
             # Handle the error appropriately
             return response.text
 
+    def call_descriptors_post(self, server_host: str, qsar_smiles: list[str], descriptor_name: str):
+        # Construct the URL
+        url = f"{server_host}/api/descriptors"
+
+        # Set up query parameters
+        params = {
+            "type": descriptor_name,
+            "chemicals": qsar_smiles,
+            "headers": "true"
+            # some descriptors dont have header option? Should be fixed so this doesnt cause issue if must be false
+        }
+
+        response = requests.post(url, json=params)
+
+        if response.status_code == 200:
+            # Parse the response JSON and convert it to a list of Chemical objects
+            return response.json()
+        else:
+            # Handle the error appropriately
+            return response.text
 
     def response_to_df(self, descriptor_dict, qsarSmiles):
         headers = descriptor_dict['headers']
@@ -100,6 +122,7 @@ class DescriptorsAPI:
         df = pd.DataFrame([descriptors], columns=headers)
         # print(df.shape)
         return df
+
 
 class QsarSmilesAPI:
 
@@ -126,4 +149,3 @@ class QsarSmilesAPI:
         else:
             # Handle the error appropriately
             return response.text
-
