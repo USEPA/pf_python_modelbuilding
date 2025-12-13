@@ -12,4 +12,4 @@ COPY . .
 
 EXPOSE 8080
 
-CMD ["waitress-serve", "--host", "0.0.0.0", "--port", "8080", "model_ws:app"]
+CMD ["uvicorn", "--host", "0.0.0.0", "--port", "8080", "model_ws:app"]
