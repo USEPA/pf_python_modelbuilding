@@ -1,5 +1,8 @@
+import concurrent
+import concurrent.futures
 import json
 import os
+import threading
 from io import BytesIO
 
 from sqlalchemy import create_engine, text
@@ -46,13 +49,17 @@ def standardizeStructure(serverAPIs, smiles, model: Model):
     return qsarSmiles, 200
 
 
+lock = threading.Lock()
+
+
 def init_model(model_id):
-    if model_id in models:
-        logging.debug('have model already initialized')
-        model = models[model_id]
-    else:
-        model = initModel(model_id)
-        models[model_id] = model
+    with lock:
+        if model_id in models:
+            logging.debug('have model already initialized')
+            model = models[model_id]
+        else:
+            model = initModel(model_id)
+            models[model_id] = model
 
     return model
 
@@ -67,19 +74,25 @@ def predictFromDB(model_id, smiles):
     :return:
     """
 
+    # Make sure the model is loaded before the concurrency
+    init_model(model_id)
+
     if isinstance(smiles, str):
         return predict_model_smiles(model_id, smiles)
     else:
         result = []
-        for smi in smiles:
-            r, code = predict_model_smiles(model_id, smi)
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            results = executor.map(predict_model_smiles, (model_id for smi in smiles), (smi for smi in smiles))
+
+        for (r, code, smi) in results:
             if code != 200:
-                r = dict(smiles=smi, error=r)
-            result.append(r)
+                result.append(dict(smiles=smi, error=r))
+            else:
+                result.append(r)
+
         return result
 
 
-@timer
 def predict_model_smiles(model_id, smiles):
     # serverAPIs = "https://hcd.rtpnc.epa.gov" # TODO this should come from environment variable
     serverAPIs = os.getenv("CIM_API_SERVER", "https://cim-dev.sciencedataexperts.com/")
@@ -90,13 +103,13 @@ def predict_model_smiles(model_id, smiles):
     # Standardize smiles:
     qsarSmiles, code = standardizeStructure(serverAPIs, smiles, model)
     if code != 200:
-        return qsarSmiles, code
+        return qsarSmiles, code, smiles
 
     # Descriptor calcs:
     descriptorAPI = DescriptorsAPI()
     df_prediction, code = descriptorAPI.calculate_descriptors(serverAPIs, qsarSmiles, model.descriptorService)
     if code != 200:
-        return df_prediction, 400
+        return df_prediction, 400, smiles
 
     # Run model prediction:
     # df_prediction = model.model_details.predictionSet #all chemicals in the model's prediction set, for testing
@@ -123,7 +136,7 @@ def predict_model_smiles(model_id, smiles):
     model_results.predictionUnits = model.unitsName  # duplicated so displayed near prediction value
     model_results.adResults = ad_results
 
-    return model_results.to_dict(), 200
+    return model_results.to_dict(), 200, smiles
 
 
 def predictSetFromDB(model_id, excel_file_path):
