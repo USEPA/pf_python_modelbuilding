@@ -81,7 +81,7 @@ def predictFromDB(model_id, smiles):
         return predict_model_smiles(model_id, smiles)
     else:
         result = []
-        with concurrent.futures.ThreadPoolExecutor() as executor:
+        with concurrent.futures.ProcessPoolExecutor() as executor:
             results = executor.map(predict_model_smiles, (model_id for smi in smiles), (smi for smi in smiles))
 
         for (r, code, smi) in results:
@@ -93,8 +93,15 @@ def predictFromDB(model_id, smiles):
         return result
 
 
+cache = {}
+
+
 @timer
 def predict_model_smiles(model_id, smiles):
+    if f"{model_id}-{smiles}" in cache:
+        logging.debug(f"cache hit for {model_id}-{smiles}")
+        return cache[f"{model_id}-{smiles}"]
+
     # serverAPIs = "https://hcd.rtpnc.epa.gov" # TODO this should come from environment variable
     serverAPIs = os.getenv("CIM_API_SERVER", "https://cim-dev.sciencedataexperts.com/")
 
@@ -137,7 +144,10 @@ def predict_model_smiles(model_id, smiles):
     model_results.predictionUnits = model.unitsName  # duplicated so displayed near prediction value
     model_results.adResults = ad_results
 
-    return model_results.to_dict(), 200, smiles
+    result = model_results.to_dict(), 200, smiles
+
+    cache[f"{model_id}-{smiles}"] = result
+    return result
 
 
 def predictSetFromDB(model_id, excel_file_path):
@@ -149,14 +159,13 @@ def predictSetFromDB(model_id, excel_file_path):
     :return:
     """
 
-    import model_ws_utilities as mwu
     descriptorAPI = DescriptorsAPI()
 
     # serverAPIs = "https://hcd.rtpnc.epa.gov" # TODO this should come from environment variable
     serverAPIs = os.getenv("CIM_API_SERVER", "https://cim-dev.sciencedataexperts.com/")
 
     # initialize model bytes and all details from db:
-    model = init_model(model_id, mwu)
+    model = init_model(model_id)
 
     import pandas as pd
     df = pd.read_excel(excel_file_path, sheet_name='Test set')
@@ -186,7 +195,7 @@ def predictSetFromDB(model_id, excel_file_path):
 
                 continue
 
-            pred_results = json.loads(mwu.call_do_predictions_from_df(df_prediction, model))
+            pred_results = json.loads(call_do_predictions_from_df(df_prediction, model))
             pred_value = pred_results[0]['pred']
 
             str_ad_results = determineApplicabilityDomain(model, df_prediction)
