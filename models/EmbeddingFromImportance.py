@@ -1,3 +1,4 @@
+import logging
 import time
 import numpy as np
 import pandas
@@ -35,7 +36,7 @@ def generateEmbedding(model, df_training, df_prediction, fraction_of_max_importa
 
     # print(min_descriptor_count,min_descriptor_count_2)
 
-    print('use_wards = ', use_wards)
+    logging.debug('use_wards = ', use_wards)
 
     if use_wards:
         # Using ward's method removes too descriptors for PFAS only training sets:
@@ -61,7 +62,7 @@ def generateEmbedding(model, df_training, df_prediction, fraction_of_max_importa
     model.embedding = train_column_names
 
     if df_prediction.shape[0] != 0:
-        print('\nprediction set results for non embedded model as benchmark:')
+        logging.debug('\nprediction set results for non embedded model as benchmark:')
         score = model.do_predictions(df_prediction, return_score=True)  # results for non embedded model as benchmark
 
     # Loop until number of descriptors stops changing
@@ -71,7 +72,7 @@ def generateEmbedding(model, df_training, df_prediction, fraction_of_max_importa
 
         for run_num in range(num_generations):
 
-            print("Run number = ", run_num + 1)
+            logging.debug("Run number = ", run_num + 1)
 
             model.model_obj.fit(train_features, train_labels)
 
@@ -83,12 +84,12 @@ def generateEmbedding(model, df_training, df_prediction, fraction_of_max_importa
                                 new_descriptors, sorted_importances, sorted_names)
 
             # print(count,fraction_of_max_importance)
-        print('len(new_descriptors)', len(new_descriptors))
-        print('new_descriptors',new_descriptors)
+        logging.debug('len(new_descriptors)', len(new_descriptors))
+        logging.debug('new_descriptors',new_descriptors)
 
         if (len(new_descriptors) == len(train_column_names)):
             model.embedding = train_column_names # *** store final descriptors here ***
-            print("Number of descriptors didnt change, stopping")
+            logging.debug("Number of descriptors didnt change, stopping")
             break
 
         train_ids, train_labels, train_features, = \

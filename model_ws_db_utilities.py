@@ -27,11 +27,11 @@ def standardizeStructure(serverAPIs, smiles, model: Model):
         return chemicals, 400
 
     if len(chemicals) == 0:
-        # print('Standardization failed')
+        # logging.debug('Standardization failed')
         return "smiles=" + smiles + " failed standardization", 400
 
-    if debug:
-        print(chemicals)
+
+    logging.debug(chemicals)
 
     if len(chemicals) > 1 and model.omitSalts:
         # print('qsar smiles indicates mixture')
@@ -39,16 +39,14 @@ def standardizeStructure(serverAPIs, smiles, model: Model):
 
     qsarSmiles = chemicals[0]["canonicalSmiles"]
 
-    if debug:
-        print('qsarSmiles', qsarSmiles)
+    logging.debug('qsarSmiles', qsarSmiles)
 
     return qsarSmiles, 200
 
 
 def init_model(model_id, mwu):
     if model_id in mwu.models:
-        if debug:
-            print('have model already initialized')
+        logging.debug('have model already initialized')
         model = mwu.models[model_id]
     else:
         model = initModel(model_id, mwu)
@@ -99,7 +97,7 @@ def predictFromDB(model_id, smiles, mwu):
         ad_results = json.loads(str_ad_results)[0]  # TODO check len first?
         # print(ad_results)
     else:
-        print('AD method for model was not set:', model_id)
+        logging.debug('AD method for model was not set:', model_id)
 
     # store everything in results:
     model_results = ModelResults(model, ad_results)
@@ -138,7 +136,7 @@ def predictSetFromDB(model_id, excel_file_path):
 
     # Create a text file path in the same directory
     text_file_path = os.path.join(directory, "output.txt")
-    print(text_file_path)
+    logging.debug(text_file_path)
 
     with open(text_file_path, 'w') as file:
         file.write("smiles\tqsarSmiles\tpred_value\tpred_AD\n")
@@ -147,13 +145,13 @@ def predictSetFromDB(model_id, excel_file_path):
         for smiles in smiles_list:
             qsarSmiles, code = standardizeStructure(serverAPIs, smiles, model)
             if code != 200:
-                print(smiles, qsarSmiles)
+                logging.warn(smiles, qsarSmiles)
                 file.write(smiles + "\terror smiles")
                 continue
 
             df_prediction, code = descriptorAPI.calculate_descriptors(serverAPIs, qsarSmiles, model.descriptorService)
             if code != 200:
-                print(smiles, 'error descriptors')
+                logging.warn(smiles, 'error descriptors')
                 file.write(smiles + "\terror descriptors")
 
                 continue
@@ -181,7 +179,7 @@ def predictSetFromDB(model_id, excel_file_path):
     # df_prediction = model.model_details.predictionSet #all chemicals in the model's prediction set, for testing
     # print("for qsarSmiles="+qsarSmiles+", descriptors="+json.dumps(descriptorsResults,indent=4))
 
-    print(pred_results)
+    logging.debug(pred_results)
 
     # # applicability domain calcs:
     # ad_results = None

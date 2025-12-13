@@ -81,7 +81,7 @@ def info(qsar_method):
 def train(qsar_method):
     """Trains a model for the specified QSAR method on provided data"""
 
-    print('enter train')
+    logging.debug('enter train')
 
     obj = request.form
     training_tsv = obj.get('training_tsv')  # Retrieves the training data as a TSV
@@ -123,7 +123,7 @@ def train(qsar_method):
         n_jobs = 8
 
     embedding = get_embedding(obj)
-    print("embedding = ***\t", embedding, '\t***')
+    logging.debug("embedding = ***\t", embedding, '\t***')
 
     if embedding and embedding == 'error':
         abort(400, 'non blank embedding and dont have tab character')
@@ -201,7 +201,7 @@ def prediction_applicability_domain():
 
     embedding = get_embedding(obj)
 
-    print("embedding = ***\t", embedding, '\t***')
+    logging.debug("embedding = ***\t", embedding, '\t***')
 
     if embedding and embedding == 'error':
         abort(400, 'non blank embedding and dont have tab character')
@@ -244,7 +244,7 @@ def get_embedding(obj):
 def train_embedding_ga(qsar_method):
     """Post method that trains GA embedding for the specified QSAR method on provided data"""
 
-    print('Enter train_embedding (method to make GA based embedding)')
+    logging.debug('Enter train_embedding (method to make GA based embedding)')
 
     obj = request.form
 
@@ -256,7 +256,7 @@ def train_embedding_ga(qsar_method):
 
     prediction_tsv = obj.get('prediction_tsv')  # Retrieves the training data as a TSV
     if prediction_tsv is None:
-        print('prediction_tsv is none!')
+        logging.debug('prediction_tsv is none!')
         prediction_tsv = request.files.get('prediction_tsv').read().decode('UTF-8')
     if prediction_tsv is None:
         abort(400, 'missing prediction tsv')
@@ -309,7 +309,7 @@ def train_embedding_ga(qsar_method):
     result_obj['timeMin'] = timeMin
     result_str = json.dumps(result_obj)
 
-    print('result_str=' + result_str)
+    logging.debug('result_str=' + result_str)
     return result_str
 
 
@@ -317,7 +317,7 @@ def train_embedding_ga(qsar_method):
 def train_embedding_importance(qsar_method):
     """Post method that trains importance based embedding for the specified QSAR method on provided data"""
 
-    print('Enter train_embedding_importance')
+    logging.debug('Enter train_embedding_importance')
 
     obj = request.form
 
@@ -329,7 +329,7 @@ def train_embedding_importance(qsar_method):
 
     prediction_tsv = obj.get('prediction_tsv')  # Retrieves the training data as a TSV
     if prediction_tsv is None:
-        print('prediction_tsv is none!')
+        logging.debug('prediction_tsv is none!')
         prediction_tsv = request.files.get('prediction_tsv').read().decode('UTF-8')
     if prediction_tsv is None:
         abort(400, 'missing prediction tsv')
@@ -387,7 +387,7 @@ def train_embedding_importance(qsar_method):
     result_obj['timeMin'] = timeMin
     result_str = json.dumps(result_obj)
 
-    print('result_str=' + result_str)
+    logging.debug('result_str=' + result_str)
     return result_str
 
 
@@ -395,7 +395,7 @@ def train_embedding_importance(qsar_method):
 def train_embedding_lasso(qsar_method):
     """Post method that trains importance based embedding for the specified QSAR method on provided data"""
 
-    print('Enter train_embedding_importance')
+    logging.debug('Enter train_embedding_importance')
 
     obj = request.form
 

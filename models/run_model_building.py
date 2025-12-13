@@ -150,7 +150,7 @@ def runModelOptionsFishTox():
 
     inputFolder = 'C:/Users/TMARTI02/OneDrive - Environmental Protection Agency (EPA)/0 java/0 model_management/hibernate_qsar_model_building/data/modeling/'
     inputFolder += datasetName+'/'+subfolder+'/'+descriptor_set+'/'
-    print(inputFolder)
+    logging.debug(inputFolder)
 
     resultsFolder = inputFolder + "/results/"
 
@@ -350,7 +350,7 @@ def runLGB(abbrev):
     mp.is_binary = is_binary
 
     df_training = dfu.load_df(training_tsv)
-    print('training shape=', df_training.shape)
+    logging.debug('training shape=', df_training.shape)
     df_prediction = dfu.load_df(prediction_tsv)
 
     # Apply the cleaning function to the DataFrame's columns
@@ -399,7 +399,7 @@ def runLGB(abbrev):
 
     from sklearn.metrics import mean_squared_error as mse
     rmse = mse(test_labels, y_pred, squared=False)
-    print(f'RMSE: {rmse}')
+    logging.debug(f'RMSE: {rmse}')
     # # lookAtResults(folder=resultsFolder, useMean=False, displayAD=useAD, isBinary=is_binary)
     #
     # cv_results = lgb.cv(

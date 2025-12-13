@@ -4,6 +4,8 @@ Created on Tue Jul  5 07:18:59 2022
 
 @author: NCHAREST
 """
+import logging
+
 #%%
 import numpy as np
 from sklearn.model_selection import cross_val_score
@@ -108,8 +110,8 @@ def runGA(df_training, model, use_wards, remove_log_p_descriptors=False):
 
     # print(type(model))
 
-    print('use_wards = ',use_wards)
-    print('after initial feature selection, # features = ',len(train_column_names))
+    logging.debug('use_wards = ',use_wards)
+    logging.debug('after initial feature selection, # features = ',len(train_column_names))
     # print('Number of rows = ', len(train_ids))
 
 
@@ -124,7 +126,7 @@ def runGA(df_training, model, use_wards, remove_log_p_descriptors=False):
     model.hyperparameters = model.get_single_parameters()
     model.model_obj.set_params(**model.hyperparameters)
 
-    print (model.hyperparameters)
+    logging.debug(model.hyperparameters)
 
     # features = wardsMethod(df_train, 0.5)
     # y_internal = df_train.iloc[:,1]
@@ -140,7 +142,7 @@ def runGA(df_training, model, use_wards, remove_log_p_descriptors=False):
 
     ensemble_selector = GeneticSelector(descriptor_pool, fitness_calculator)
 
-    print('NUM_GENERATIONS',NUM_GENERATIONS)
+    logging.debug('NUM_GENERATIONS',NUM_GENERATIONS)
 
     ensemble_selector.ensemble_evolution(num_optimizers=NUM_OPTIMIZERS, num_generations=NUM_GENERATIONS,
                                          num_parents=NUM_PARENTS, min_length=MINIMUM_LENGTH,
@@ -149,7 +151,7 @@ def runGA(df_training, model, use_wards, remove_log_p_descriptors=False):
 
 
     high_count_descriptors = ensemble_selector.descriptor_threshold(THRESHOLD)
-    print(high_count_descriptors)
+    logging.debug(high_count_descriptors)
     go2 = GeneticOptimizer(high_count_descriptors, fitness_calculator)
     go2.run_evolution(num_generations=NUM_GENERATIONS, num_parents=NUM_PARENTS,
                                   min_length=MINIMUM_LENGTH,
@@ -289,7 +291,7 @@ class GeneticOptimizer:
         self.history['prime_genes'].append(scored_generation[0][0])
         survivors = [i[0] for i in scored_generation[:num_survivors]]
         if len(survivors) < num_survivors:
-            print("Too few survivors | only {num_survivers} re:fitness_filter".format(num_survivers=len(survivors)))
+            logging.warn("Too few survivors | only {num_survivers} re:fitness_filter".format(num_survivers=len(survivors)))
         return survivors
 
     def run_generation(self, parents, mutation_probability, num_survivors, return_prime=False):

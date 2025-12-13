@@ -101,7 +101,7 @@ def remove_log_p_descriptors(df, which_set):
 
     df = df.drop(drop_column_names, axis=1)
 
-    print(which_set + ': The shape of our features after removing logp descriptors is:', df.shape)
+    logging.debug(which_set + ': The shape of our features after removing logp descriptors is:', df.shape)
     return df
 
 

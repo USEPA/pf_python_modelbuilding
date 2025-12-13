@@ -44,8 +44,8 @@ def a_runCaseStudiesInhalationCV_merge_on_fly(adMeasure=adu.strTESTApplicability
     # adMeasure = adu.strOPERA_local_index
     # adMeasure = adu.strKernelDensity
 
-    print('adMeasure=', adMeasure)
-    print('doAD=', doAD)
+    logging.debug('adMeasure=', adMeasure)
+    logging.debug('doAD=', doAD)
 
     inputFolder = 'C:/Users/TMARTI02/OneDrive - Environmental Protection Agency (EPA)/0 java/0 model_management/hibernate_qsar_model_building/data/modeling/CoMPAIT/'
 
@@ -118,10 +118,10 @@ def a_runCaseStudiesInhalationCV_merge_on_fly(adMeasure=adu.strTESTApplicability
 
     df_all = pd.merge(df_splits, df_descriptors, on='QSAR_READY_SMILES')
 
-    print('number rows all=', df_all.shape[0])
+    logging.debug('number rows all=', df_all.shape[0])
 
     df_all.drop_duplicates(inplace=True)
-    print('number rows all,remove duplicates=', df_all.shape[0])
+    logging.debug('number rows all,remove duplicates=', df_all.shape[0])
 
     # print(df_splits.shape)
     # print(df_descriptors.shape)
