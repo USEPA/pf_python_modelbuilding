@@ -67,7 +67,7 @@ def predictFromDB(model_id, smiles, mwu):
     """
 
     # serverAPIs = "https://hcd.rtpnc.epa.gov" # TODO this should come from environment variable
-    serverAPIs = "https://cim-dev.sciencedataexperts.com/"
+    serverAPIs = os.getenv("CIM_API_SERVER", "https://cim-dev.sciencedataexperts.com/")
 
     # initialize model bytes and all details from db:
     model = init_model(model_id, mwu)
@@ -125,7 +125,7 @@ def predictSetFromDB(model_id, excel_file_path):
     descriptorAPI = DescriptorsAPI()
 
     # serverAPIs = "https://hcd.rtpnc.epa.gov" # TODO this should come from environment variable
-    serverAPIs = "https://cim-dev.sciencedataexperts.com/"
+    serverAPIs = os.getenv("CIM_API_SERVER", "https://cim-dev.sciencedataexperts.com/")
 
     # initialize model bytes and all details from db:
     model = init_model(model_id, mwu)
@@ -230,24 +230,8 @@ def getSession():
         drivername='postgresql+psycopg2',
         username=os.getenv('DEV_QSAR_USER'),
         password=os.getenv('DEV_QSAR_PASS'),
-        host=os.getenv('DEV_QSAR_HOST'),
-        port=os.getenv('DEV_QSAR_PORT'),
-        database=os.getenv('DEV_QSAR_DATABASE')
-    )
-    # print(connect_url)
-    engine = create_engine(connect_url, echo=debug)
-    Session = sessionmaker(bind=engine)
-    session = Session()
-    return session
-
-
-def getSession():
-    connect_url = URL.create(
-        drivername='postgresql+psycopg2',
-        username=os.getenv('DEV_QSAR_USER'),
-        password=os.getenv('DEV_QSAR_PASS'),
-        host=os.getenv('DEV_QSAR_HOST'),
-        port=os.getenv('DEV_QSAR_PORT'),
+        host=os.getenv('DEV_QSAR_HOST', 'localhost'),
+        port=os.getenv('DEV_QSAR_PORT', 5432),
         database=os.getenv('DEV_QSAR_DATABASE')
     )
     # print(connect_url)
