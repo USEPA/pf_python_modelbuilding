@@ -93,6 +93,7 @@ def predictFromDB(model_id, smiles):
         return result
 
 
+@timer
 def predict_model_smiles(model_id, smiles):
     # serverAPIs = "https://hcd.rtpnc.epa.gov" # TODO this should come from environment variable
     serverAPIs = os.getenv("CIM_API_SERVER", "https://cim-dev.sciencedataexperts.com/")
