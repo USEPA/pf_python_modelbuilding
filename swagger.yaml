@@ -32,10 +32,10 @@ paths:
             type: string
           examples:
             example1:
-              summary: SMILES that generates one of the 56 ARN groups
+              summary: 2-Isopropylthioxanthone
               value: CC(C)c1ccc2sc3ccccc3c(=O)c2c1
             example2:
-              summary: Miscellaneous chemistry
+              summary: Triphenyl phosphite
               value: c1ccc(OP(Oc2ccccc2)Oc2ccccc2)cc1
         - name: model_id
           in: query
