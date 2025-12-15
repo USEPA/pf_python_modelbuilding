@@ -81,27 +81,33 @@ def predictFromDB(model_id, smiles):
     init_model(model_id)
 
     if isinstance(smiles, str):
-        return predict_model_smiles(model_id, smiles)
-    else:
-        result, missing = [], []
-
         key = f"{model_id}-{smiles}"
         if key in cache:
-            result.append(cache[key])
+            return cache[key], 200
         else:
-            missing.append(smiles)
-
-        with concurrent.futures.ProcessPoolExecutor() as executor:
-            results = executor.map(predict_model_smiles, (model_id for _ in missing), (_ for _ in missing))
-
-        for (r, code, smi) in results:
-            if code != 200:
-                r = dict(smiles=smi, error=r)
-                result.append(r)
+            cache[key], code = predict_model_smiles(model_id, smiles)
+            return cache[key], code
+    else:
+        result, missing = [], []
+        for smi in smiles:
+            key = f"{model_id}-{smi}"
+            if key in cache:
+                result.append(cache[key])
             else:
-                result.append(r)
+                missing.append(smi)
 
-            cache[key] = r
+        with concurrent.futures.ThreadPoolExecutor() as pool:
+            results = pool.map(predict_model_smiles, [model_id for _ in missing], missing)
+
+            for (r, code, smi) in results:
+                if code != 200:
+                    r = dict(smiles=smi, error=r)
+                    result.append(r)
+                else:
+                    result.append(r)
+
+                key = f"{model_id}-{smi}"
+                cache[key] = r
 
         return result
 
