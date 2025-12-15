@@ -1049,6 +1049,7 @@ class ModelPredictor:
         mi.init_model(model_id)
     
         if isinstance(smiles, str):
+
             key = f"{model_id}-{smiles}--{report_format}"
             if key in cache:
                 return cache[key]
@@ -1057,6 +1058,7 @@ class ModelPredictor:
                 return cache[key]
         else:
             result, missing = [], []
+            
             for smi in smiles:
                 key = f"{model_id}-{smi}--{report_format}"
                 if key in cache:
@@ -1250,7 +1252,7 @@ class ModelPredictor:
         :param mwu:
         :return:
         """
-    
+        
         serverAPIs = os.getenv("CIM_API_SERVER", "https://cim-dev.sciencedataexperts.com/")
     
         # initialize model bytes and all details from db:
@@ -1291,6 +1293,7 @@ class ModelPredictor:
         # Run model prediction:
         # df_prediction = model.model_details.predictionSet #all chemicals in the model's prediction set, for testing
         # print("for qsarSmiles="+qsarSmiles+", descriptors="+json.dumps(descriptorsResults,indent=4))
+                
                 
         json_predictions = call_do_predictions_from_df(df_prediction, model)        
         # print(json_predictions)
@@ -1339,7 +1342,7 @@ class ModelPredictor:
         modelResults.adResults["analogs"] = self.setExpPredValuesForADAnalogs(model, modelResults.adResults["analogs"])
         
         # print("modelResults", modelResults.to_json)
-    
+        
         if generate_report:
             
             self.addNeighborsFromSets(model, modelResults, df_prediction)

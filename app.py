@@ -29,12 +29,9 @@ from sklearn2pmml import sklearn2pmml
 from dotenv import load_dotenv
 load_dotenv()
 
-
-USE_CONNEXION = False
+USE_CONNEXION = True
 
 if USE_CONNEXION:
-    
-    print("HERE")
     
     import coloredlogs
     import connexion
@@ -567,9 +564,15 @@ def cross_validate_fold(qsar_method):
 #     return predictFromDB(model_id, smiles)
 
 
+def predictDB_POST(body):
+    mp = ModelPredictor()
+    return mp.predictFromDB(body['model_id'], body['smiles'],body['generate_report'], body['report_format'])
+
 @app.route('/api/predictor_models/models/predictDB', methods=['POST', 'GET'])
 def predictDB():
     """Automates prediction and AD for single smiles using model in database"""
+
+    # TODO: make this method work whether using simple flask app or connexion based one
 
     if request.method == 'POST':
         obj = request.form
@@ -583,7 +586,7 @@ def predictDB():
     report_format = obj.get('report_format', 'json').lower()
     if report_format not in ['json', 'html']:
         report_format = 'json'
-
+        
     # generate_report = generate_report.lower() in ['true', '1', 'yes']
     # report_format = report_format.lower()
     # if report_format not in ['json', 'html']:
@@ -892,7 +895,10 @@ def model_obj(model_id):
 
 if __name__ == '__main__':
     # Limit logging output for easier readability
-    log = logging.getLogger('werkzeug')
-    log.setLevel(logging.DEBUG)
-    app.run(host='0.0.0.0', port=5004, debug=True)
-
+    
+    if not USE_CONNEXION:
+        log = logging.getLogger('werkzeug')
+        log.setLevel(logging.DEBUG)
+        app.run(host='0.0.0.0', port=5004, debug=True)
+    else:
+        app.run(host='0.0.0.0', port=5004)
