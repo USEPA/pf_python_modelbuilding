@@ -18,6 +18,7 @@ from predict_constants import PredictConstants as pc
 # from fastjsonschema import indent
 # import json
 
+urlChemicalDetails = "https://comptox.epa.gov/dashboard/chemical/details/"
 imgURLCid = "https://comptox.epa.gov/dashboard-api/ccdapp1/chemical-files/image/by-dtxcid/";
 model_file_api = "https://ctx-api-dev.ccte.epa.gov/chemical/property/model/file/search/"
 import numpy as np           
@@ -26,78 +27,98 @@ import base64, io
 class ReportCreator:
 
 
-    def addApplicabilityDomain(self, modelResults, my_td):
-        my_td += b("Applicability domain:"), br()
-    
-        # Determine AD status for the first table
-        if modelResults.modelDetails.applicabilityDomainName == pc.Applicability_Domain_TEST_Embedding_Euclidean:
-            if modelResults.adResults["AD"]:  # TODO make this clearer
-                ad_status = span("Inside AD", style="color: green;")
-                strAD = span()
-                strAD.add(ad_status)
-                strAD += ": average distance to the training set analogs < cutoff distance"
-            else:
-                ad_status = span("Outside AD", style="color: red;")
-                strAD = span()
-                strAD.add(ad_status)
-                strAD += ": average distance to the training set analogs > cutoff distance"
+    def addFragmentADTable(self, ad, modelResults:ModelResults, my_td):
+                
+        with table(cellspacing="0", cellpadding="5", border="1"):
+            
+            cap = caption()
         
-        # Table 1: Analogs from Training Set
-        with my_td.add(table(style="float: left; width: 48%; border-collapse: collapse; margin-right: 2%;")):
-            cap = caption()
-            cap.add(strAD)
-            cap += br()
-            cap += f"Analogs from Training Set (values in {modelResults.unitsModel}, CV predictions)"
-            
-            with tbody():
-                tr()
-                analogs = modelResults.adResults["analogs"]
-                for i in range(len(analogs)):
-                    self.createAnalogTile(analogs[i], i, modelResults, "left")
-    
-        # Table 2: Fragment Counts for Test Chemical
-        outside_ad = False
-        with my_td.add(table(style="float: right; width: 48%; border: 1px solid black; border-collapse: collapse;")):
-            cap = caption()
-            
             with tr(style="background-color: #d3d3d3"):
-                th("Fragment", style="border: 1px solid black;") 
-                th("Test Chemical", style="border: 1px solid black;")
-                th("Training Min", style="border: 1px solid black;")
-                th("Training Max", style="border: 1px solid black;")
+                th("Fragment") 
+                th("Test Chemical")
+                th("Training Min")
+                th("Training Max")
             with tbody():
-                for col_name in modelResults.adResultsFrag["fragmentTable"]["test_chemical"].keys():
+                for col_name in ad["fragmentTable"]["test_chemical"].keys():
                     # Retrieve values
-                    
-                    test_value = int(modelResults.adResultsFrag["fragmentTable"]["test_chemical"][col_name])
-                    training_min = int(modelResults.adResultsFrag["fragmentTable"]["training_min"][col_name])
-                    training_max = int(modelResults.adResultsFrag["fragmentTable"]["training_max"][col_name])
-                    
+        
+                    test_value = int(ad["fragmentTable"]["test_chemical"][col_name])
+                    training_min = int(ad["fragmentTable"]["training_min"][col_name])
+                    training_max = int(ad["fragmentTable"]["training_max"][col_name])
+        
                     # Determine if the row should be highlighted
                     if test_value < training_min or test_value > training_max:
                         row_style = "background-color: pink;"
                     else:
                         row_style = ""
-                    
+        
                     with tr(style=row_style):
-                        td(col_name, style="border: 1px solid black;")
-                        td(test_value, align="center", style="border: 1px solid black;")
-                        td(training_min, align="center", style="border: 1px solid black;")
-                        td(training_max, align="center", style="border: 1px solid black;")
-            
+                        td(col_name)
+                        td(test_value, align="center")
+                        td(training_min, align="center")
+                        td(training_max, align="center")
+        
             # Add AD status to the caption based on the flag
             ad_status_text = span()
-            
-            if modelResults.adResultsFrag["AD"]:
+        
+            if ad["AD"]:
                 ad_status_text.add(span("Inside AD", style="color: green;"))
                 ad_status_text += ": fragment count(s) were within the training set range"
             else:
                 ad_status_text.add(span("Outside AD", style="color: red;"))
                 ad_status_text += ": fragment count(s) were outside the training set range"
-            
+
             cap.add(ad_status_text)
             cap += br()
             cap += "Fragment counts for test chemical"
+        
+
+
+    def addAnalogADTable(self, ad, modelResults:ModelResults, my_td):
+    
+        strAD = None
+        
+        if ad["AD"]:  # TODO make this clearer
+            ad_status = span("Inside AD", style="color: green;")
+            strAD = span()
+            strAD.add(ad_status)
+            strAD += ": average distance to the training set analogs < cutoff distance"
+        else:
+            ad_status = span("Outside AD", style="color: red;")
+            strAD = span()
+            strAD.add(ad_status)
+            strAD += ": average distance to the training set analogs > cutoff distance"
+    
+        # Table 1: Analogs from Training Set
+        with table():
+            cap = caption()
+            cap.add(strAD)
+            cap += br()
+            cap += f"Analogs from Training Set (values in {modelResults.unitsModel}, CV predictions)"
+        
+            with tbody():
+                tr()
+                analogs = ad["analogs"]
+                for i in range(len(analogs)):
+                    self.createAnalogTile(analogs[i], i, modelResults, "left")
+                
+                
+
+    def addApplicabilityDomains(self, modelResults, my_td):
+        
+        my_td += b("Applicability domain:"), br()
+        
+        with my_td:
+            with table(cellpadding = "10"):
+                with tr():
+                    for ad in modelResults.applicabilityDomains:
+                        with td(style="vertical-align: top;"):
+                            if ad["method"] == pc.Applicability_Domain_TEST_Embedding_Euclidean:
+                                self.addAnalogADTable(ad, modelResults, my_td)
+                            elif ad["method"] == pc.TEST_FRAGMENTS:
+                                self.addFragmentADTable(ad, modelResults, my_td)
+
+
         
         
     def getArraysOmitNullPreds(self, mps):
@@ -241,7 +262,7 @@ class ReportCreator:
                         str_pred_display_units = self.get_formatted_value(modelResults.modelDetails.is_binary, modelResults.predictionValueUnitsDisplay, 3)
                         my_td += " = " + str_pred_display_units + " " + modelResults.unitsDisplay, br()
                     
-                    self.addApplicabilityDomain(modelResults, my_td)
+                    self.addApplicabilityDomains(modelResults, my_td)
                     
                     # TODO add fragment count table as second AD measure
     
@@ -300,28 +321,32 @@ class ReportCreator:
     def createAnalogTile(self, analog, i, modelResults:ModelResults,align):
         
         # print(set, i)
-                
+        
         analog_td = td(align=align, width="10%")
-        analog_td += b("Neighbor:"), " " + str(i+1), br()
+                
+        analog_td+= b("Neighbor:"), " " + str(i+1), br()
         
         if modelResults.modelDetails.is_binary:
             exp = self.get_formatted_value(True, analog["exp"], -1)
-            analog_td += b("Measured:"), exp, br()    
+            analog_td+= b("Measured: "),exp, br()    
         else:
             exp = self.get_formatted_value(False, analog["exp"], 3)
-            analog_td += b("Measured:"), " " + exp, br()
+            analog_td+= b("Measured: "), exp, br()
         
 
         if modelResults.modelDetails.is_binary:
             pred = self.get_formatted_value(True, analog["pred"], -1)
-            analog_td += b("Predicted:"), pred, br()    
+            analog_td+= b("Predicted: "), pred, br()    
         else:
             pred = self.get_formatted_value(False, analog["pred"], 3)
-            analog_td += b("Predicted:"), " " + pred, br()
+            analog_td+= b("Predicted: "), pred, br()
 
         
-        analog_td += img(src=imgURLCid + analog["cid"], border="1", alt="Analog Image for " + analog["name"], width="150", height="150"), br()
-        analog_td += analog["sid"]  # Adjust the image path and attributes as needed
+        analog_td+= img(src=imgURLCid + analog["cid"], border="1", alt="Analog Image for " + analog["name"], width="150", height="150"), br()
+        
+        analog_td+= a(analog["sid"], href=urlChemicalDetails+analog["sid"], title=analog["sid"]+' on the Chemicals Dashboard', target="_blank")
+            
+            # analog["sid"]  # Adjust the image path and attributes as needed
 
 
     def addNeighborTileTable(self, modelResults, neighbors):
@@ -339,15 +364,9 @@ class ReportCreator:
                     analog = neighbors[i]
                     self.createAnalogTile(analog, i, modelResults, "left")
 
-    def write_neighbors(self, modelResults:ModelResults, set):
+    def write_neighbors(self, modelResults:ModelResults, neighborsInSet):
         
         md = modelResults.modelDetails
-                        
-        if set == "Test Set":
-            neighbors = modelResults.neighborsTest
-        else:
-            neighbors = modelResults.neighborsTraining
-             
         
         with table(border="0", width="100%"):
                                     
@@ -357,7 +376,8 @@ class ReportCreator:
                 
                     with td(colspan="3"):
                         
-                        if set == "Test Set":
+                        set = neighborsInSet["set"] 
+                        if set == "Test":
                             font("Nearest Neighbors from " + set+" (External Predictions)", color="white")
                         else:
                             font("Nearest Neighbors from " + set+" (Cross Validation Predictions)", color="white")    
@@ -366,23 +386,15 @@ class ReportCreator:
                     
                     with td():                    
                         plotTitle= "Nearest neighbors from "+set
-                        plot_base64 = self.generateScatterPlot(neighbors, md.unitsModel, plotTitle, "Exp. vs Pred.")        
+                        plot_base64 = self.generateScatterPlot(neighborsInSet["neighbors"], md.unitsModel, plotTitle, "Exp. vs Pred.")        
                         img_tag = img(src=f'data:image/png;base64,{plot_base64}', alt='Plot of experimental vs. predicted for '+set+" set", height="400")
                     
                     with td():                                                        
-                        self.addMaeTable(set, modelResults)
+                        self.addMaeTable(modelResults, neighborsInSet)
                                             
                     with td():
-                        self.addNeighborTileTable(modelResults, neighbors)
+                        self.addNeighborTileTable(modelResults, neighborsInSet["neighbors"])
 
-
-                            # with tr():
-                            #     for i in range(5, 10):
-                            #         self.createAnalogTile(modelResults, set, i)
-                        
-                # with tr():
-                #     with td():
-                #         self.addPlotsTable(modelDetails)
     
     def create_html_report(self, modelResults:ModelResults):
     
@@ -410,13 +422,13 @@ class ReportCreator:
                         with td():
                             self.write_model_performance(md)
 
-                    with tr():
-                        with td():
-                            self.write_neighbors(modelResults, "Test Set")
+                    
+                    for neighborsInSet in modelResults.neighborsForSets:
 
-                    with tr():
-                        with td():
-                            self.write_neighbors(modelResults, "Training Set")
+                        with tr():
+                            with td():
+                                self.write_neighbors(modelResults, neighborsInSet)
+
     
                     # with tr():
                     #     td("Cell 3")
@@ -456,7 +468,7 @@ class ReportCreator:
                         img(src=modelDetails.imgSrcPlotHistogram, alt="Histogram plot for " + modelDetails.modelName, height=400)
     
     
-    def addMaeTable(self,set,modelResults:ModelResults):
+    def addMaeTable(self, modelResults:ModelResults, neighborsInSet):
         
         with table(border=1, cellpadding="5", cellspacing="0"):
             caption("Results for neighbors compared with entire set")
@@ -469,16 +481,12 @@ class ReportCreator:
                 
                 with tr():
                     td("Analogs from set")
-                    
-                    if "train" in set.lower():
-                        td(self.get_formatted_value(False,modelResults.neighborsTrainingMAE, 3))    
-                    else:
-                        td(self.get_formatted_value(False,modelResults.neighborsTestMAE, 3))
+                    td(self.get_formatted_value(False,neighborsInSet["MAE"], 3))
 
                 with tr():
                     td("Entire set")
                     
-                    if "train" in set.lower():
+                    if "train" in neighborsInSet["set"].lower():
                         td(self.get_formatted_value(False,modelResults.modelDetails.modelStatistics["MAE_CV_Training"],3))    
                     else:
                         td(self.get_formatted_value(False,modelResults.modelDetails.modelStatistics["MAE_Test"], 3))

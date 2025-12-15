@@ -144,6 +144,7 @@ class Model:
         self.n_jobs = n_jobs
 
         self.regressor_name = '' #TODO set to None instead?
+        self.qsar_method = None
         self.qsar_method_version = None
 
         self.model_obj = None
@@ -182,6 +183,7 @@ class Model:
         self.splittingId = None
         self.splittingName = None
         self.applicabilityDomainName = None
+        self.applicabilityDomainDescription = None
         self.omitSalts = None
         self.qsarReadyRuleSet = None
                 
@@ -189,6 +191,9 @@ class Model:
         self.df_dsstoxRecords = None
         self.df_training = df_training
         self.df_prediction = None
+        
+        self.num_training = None
+        self.num_prediction = None
                 
         self.df_preds_test = None # external predictions for test set
         self.df_preds_training_cv = None #cross validation predictions for training set
@@ -1091,4 +1096,5 @@ def runExamples():
 
 if __name__ == "__main__":
     runExamples()
+
 

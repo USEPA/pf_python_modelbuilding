@@ -5,6 +5,8 @@ class PredictConstants:
     """Numerical constants for processing and modeling"""
     
     # TODO: move to separate script
+    
+    TEST_FRAGMENTS = "TEST Fragments"
         
     SOURCE_CHEMINFORMATICS_MODULES = "Cheminformatics Modules"
 

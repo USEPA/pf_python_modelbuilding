@@ -32,6 +32,7 @@ from predict_constants import PredictConstants as pc
 from numba.core.types import none
 
 from utils import timer
+from networkx.classes.function import neighbors
 
 
 debug = False
@@ -41,6 +42,14 @@ fk_dsstox_snapshot_id = 3
 
 
 """
+Not completed:
+TODO: add qsarMethod and qsarMethodVersion
+TODO: add similarities and colors
+TODO: Add plot/ histo for overall sets (Use cross validation for plot for training)
+TODO: make a batch mode
+TODO: Add experimental tab with raw data
+
+Completed:
 X TODO Add display units
 X TODO Add exp, pred values for neighbors
 X TODO Move ad code to that class
@@ -55,13 +64,8 @@ X TODO in report mention that the AD checks if distance is less than cutoff...
 X TODO run for smiles not in DSSTOX and fix code to still work 
 X TODO Fragment table for ocspp
 X TODO fix axis limits on neighbor plots
+X TODO Add size of training sets
 
-TODO: add qsarMethod and qsarMethodVersion
-TODO: add similarities and colors
-TODO: Add plot/ histo for overall sets (Use cross validation for plot for training)
-TODO: Add size of training sets
-TODO: make a batch mode
-TODO: Add experimental tab with raw data
 
 """
 
@@ -455,6 +459,10 @@ class ModelInitializer:
             model.df_training = dfu.load_df(''.join(sb_training))
             model.df_prediction = dfu.load_df(''.join(sb_prediction))
             
+            model.num_training = model.df_training.shape[0] 
+            model.num_prediction = model.df_prediction.shape[0]
+            
+            
                     # Replace IDs in df_set
     
             if debug:
@@ -490,6 +498,7 @@ class ModelInitializer:
                 s.id,
                 s.name,
                 adm.name,
+                adm.description,
                 s2.name
             FROM qsar_models.models m
             LEFT JOIN qsar_datasets.datasets d ON d.name = m.dataset_name
@@ -554,6 +563,7 @@ class ModelInitializer:
         m.splittingId,
         m.splittingName,
         m.applicabilityDomainName,
+        m.applicabilityDomainDescription,
         m.modelSource) = row
         
         # model_details.descriptorEmbeddingTsv = row[13]  #dont need already have in pickled m
@@ -567,10 +577,11 @@ class ModelInitializer:
         m.embedding = details['embedding']
         m.description = details['description']
         m.description_url = details['description_url']
+        
         m.qsar_method = details['qsar_method']
+
         m.hyperparameters = details['hyperparameters']
-        m.hyperparameter_grid = details['hyperparameter_grid']
-        m.qsar_method = details['qsar_method']
+        m.hyperparameter_grid = details['hyperparameter_grid']        
         m.use_pmml = details['use_pmml']        
         
         m.detailsFile = None
@@ -606,8 +617,8 @@ class ModelDetails:
         self.modelSource = model.modelSource
         self.modelStatistics = model.modelStatistics
         
-        
-        
+        self.qsarMethod = model.qsar_method
+        # self.regressor_name = model.regressor_name                
 
         if hasattr(model, 'modelSource'):  # TODO: add to model object
             self.modelSource = model.modelSource
@@ -622,12 +633,15 @@ class ModelDetails:
         else:
             self.propertyDescription = None
 
-        self.regressor_name = model.regressor_name
         # self.version = '0.0.1'
         self.is_binary = model.is_binary
         # self.description = model.description # TODO: in database
         # self.description_url = model.description_url #TODO in database
         self.datasetName = model.datasetName
+        
+        self.num_training = model.num_training
+        self.num_prediction = model.num_prediction
+
         
         self.unitsModel = model.unitsModel
         self.unitsDisplay = model.unitsDisplay
@@ -639,6 +653,7 @@ class ModelDetails:
 
         self.descriptorService = model.descriptorService
         self.applicabilityDomainName = model.applicabilityDomainName
+        self.applicabilityDomainDescription = model.applicabilityDomainDescription
         self.qsarReadyRuleSet = model.qsarReadyRuleSet
         self.embedding = model.embedding
         
@@ -647,7 +662,7 @@ class ModelDetails:
 
 class ModelResults:
 
-    def __init__(self, chemical=None, modelDetails: ModelDetails=None, adResults=None):
+    def __init__(self, chemical=None, modelDetails: ModelDetails=None):
         
         self.chemical = chemical
         
@@ -663,16 +678,11 @@ class ModelResults:
 
         self.predictionError = None
 
-        self.adResults = adResults
-        self.adResultsFrag = None
-
+        self.applicabilityDomains = []
         self.modelDetails = modelDetails
+                
+        self.neighborsForSets = []
         
-        self.neighborsTraining = None
-        self.neighborsTrainingMAE = None
-        
-        self.neighborsTest = None
-        self.neighborsTestMAE = None
         
         
         
@@ -690,13 +700,8 @@ class ModelResults:
             "unitsDisplay": self.unitsDisplay,
             "predictionError": self.predictionError,
             "modelDetails": self.modelDetails.__dict__ if self.modelDetails else None,
-            "adResults": self.adResults,
-            "adResultsFrag": self.adResultsFrag if self.adResults else None,
-            "neighborsTraining": self.neighborsTraining if self.neighborsTraining is not None else None,
-            "neighborsTest": self.neighborsTest if self.neighborsTest is not None else None,
-            "neighborsTrainingMAE": self.neighborsTrainingMAE if self.neighborsTrainingMAE is not None else None,
-            "neighborsTestMAE": self.neighborsTestMAE if self.neighborsTestMAE is not None else None,
-            "adResultsFrag": self.adResultsFrag if self.adResultsFrag is not None else None
+            "applicabilityDomains": self.applicabilityDomains if self.applicabilityDomains is not None else None,
+            "neighborsForSets": self.neighborsForSets if self.neighborsForSets is not None else None,
 
         }
 
@@ -1151,26 +1156,30 @@ class ModelPredictor:
                 
         return neighbors2
 
+
+    @timer
     def addNeighborsFromSets(self, model:Model, modelResults: ModelResults, df_test_chemicals):
 
         ng = NeighborGetter()
         # import time 
         # t1 = time.time()
         
-        modelResults.neighborsTest = ng.find_neighbors_in_set(model=model, df_set=model.df_prediction, df_test_chemicals=df_test_chemicals)
-        modelResults.neighborsTraining = ng.find_neighbors_in_set(model=model, df_set=model.df_training, df_test_chemicals=df_test_chemicals)
+        neighborsTest = ng.find_neighbors_in_set(model=model, df_set=model.df_prediction, df_test_chemicals=df_test_chemicals)
+        neighborsTraining = ng.find_neighbors_in_set(model=model, df_set=model.df_training, df_test_chemicals=df_test_chemicals)
 
-        modelResults.neighborsTraining=self.setExpPredValuesForNeighbors(model.df_preds_training_cv,modelResults.neighborsTraining,model.df_dsstoxRecords)
-        modelResults.neighborsTest=self.setExpPredValuesForNeighbors(model.df_preds_test,modelResults.neighborsTest,model.df_dsstoxRecords)
-        
-        
-        df_neighborsTest=pd.DataFrame(modelResults.neighborsTest)
+        neighborsTraining=self.setExpPredValuesForNeighbors(model.df_preds_training_cv,neighborsTraining,model.df_dsstoxRecords)
+        neighborsTest=self.setExpPredValuesForNeighbors(model.df_preds_test,neighborsTest,model.df_dsstoxRecords)
+                
+        df_neighborsTest=pd.DataFrame(neighborsTest)
         stats_test = stats.calculate_continuous_statistics(df_neighborsTest, 0, PredictConstants.TAG_TEST)
-        modelResults.neighborsTestMAE=stats_test[pc.MAE+pc.TAG_TEST]
+        neighborsTestMAE=stats_test[pc.MAE+pc.TAG_TEST]
                     
-        df_neighborsTraining=pd.DataFrame(modelResults.neighborsTraining)
+        df_neighborsTraining=pd.DataFrame(neighborsTraining)
         stats_training = stats.calculate_continuous_statistics(df_neighborsTraining, 0, PredictConstants.TAG_TRAINING)
-        modelResults.neighborsTrainingMAE= stats_training[pc.MAE+pc.TAG_TRAINING]
+        neighborsTrainingMAE= stats_training[pc.MAE+pc.TAG_TRAINING]
+    
+        modelResults.neighborsForSets.append({"set": "Test","neighbors":neighborsTest,"MAE":neighborsTestMAE})
+        modelResults.neighborsForSets.append({"set": "Training","neighbors":neighborsTraining,"MAE":neighborsTrainingMAE})
         
         # print(len(modelResults.neighborsTest),len(modelResults.neighborsTraining))
                 
@@ -1211,36 +1220,11 @@ class ModelPredictor:
             if test_value < training_min or test_value > training_max:
                 outside_ad = True
                         
-                        
-        
-        modelResults.adResultsFrag={}
-        modelResults.adResultsFrag["AD"] = not outside_ad
-        
-                    
-        modelResults.adResultsFrag["fragmentTable"] = results
-        
-        # Convert the dictionary to a JSON string with indentation for readability
-        # json_output = json.dumps(results, indent=4)
-        
-        # Display the JSON
-        # print(json_output)
-        
-        # self.printFirstRowDF(new_df)
-        # print(new_df.columns)
-        
-        
-        # self.printFirstRowDF(df_prediction)
-        # self.printFirstRowDF(df_new)
-        # print(new_df["As [+5 valence, one double bond]"])
-        
-        # df_new = df_new.loc[:, non_zero_columns]
-        # print(new_df.shape)
-        # print(df_prediction.shape)
-        
-        
-        
-        # print(self.printFirstRowDF(df_prediction))
-        # print(self.printFirstRowDF(new_df))
+        adResultsFrag={}
+        adResultsFrag["AD"] = not outside_ad
+        adResultsFrag["fragmentTable"] = results     
+        adResultsFrag["method"] = pc.TEST_FRAGMENTS
+        modelResults.applicabilityDomains.append(adResultsFrag)
         
     
     @timer
@@ -1310,7 +1294,7 @@ class ModelPredictor:
             print('AD method for model was not set:', model_id)
     
         # store everything in results:
-        modelResults = ModelResults(chemical, modelDetails, ad_results)
+        modelResults = ModelResults(chemical, modelDetails)
         modelResults.chemical = chemical
         
         # TODO add values in display units here: 
@@ -1337,9 +1321,10 @@ class ModelPredictor:
         modelResults.unitsDisplay = model.unitsDisplay
                 
         # print("modelResults.predictionValueUnitsDisplay", modelResults.predictionValueUnitsDisplay)
-            
-        modelResults.adResults = ad_results
-        modelResults.adResults["analogs"] = self.setExpPredValuesForADAnalogs(model, modelResults.adResults["analogs"])
+        
+        ad_results["method"] = modelDetails.applicabilityDomainName    
+        ad_results["analogs"] = self.setExpPredValuesForADAnalogs(model, ad_results["analogs"])
+        modelResults.applicabilityDomains.append(ad_results)
         
         # print("modelResults", modelResults.to_json)
         
@@ -1709,8 +1694,8 @@ def test_say_hello():
 
 if __name__ == '__main__':
     
-    # runExample()
-    test_say_hello()
+    runExample()
+    # test_say_hello()
     
     # excel_file_path = r"C:\Users\TMARTI02\OneDrive - Environmental Protection Agency (EPA)\0 java\0 model_management\hibernate_qsar_model_building\data\reports\prediction reports upload\WebTEST2.1\HLC v1 modeling_RND_REPRESENTATIVE.xlsx"
     # mp=ModelPredictor()
