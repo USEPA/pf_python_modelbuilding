@@ -83,10 +83,10 @@ def predictFromDB(model_id, smiles):
     if isinstance(smiles, str):
         key = f"{model_id}-{smiles}"
         if key in cache:
-            return cache[key], 200
+            return cache[key]
         else:
             cache[key], code = predict_model_smiles(model_id, smiles)
-            return cache[key], code
+            return cache[key]
     else:
         result, missing = [], []
         for smi in smiles:
