@@ -64,6 +64,9 @@ def init_model(model_id):
     return model
 
 
+cache = {}
+
+
 @timer
 def predictFromDB(model_id, smiles):
     """
@@ -78,30 +81,39 @@ def predictFromDB(model_id, smiles):
     init_model(model_id)
 
     if isinstance(smiles, str):
-        return predict_model_smiles(model_id, smiles)
+        key = f"{model_id}-{smiles}"
+        if key in cache:
+            return cache[key], 200
+        else:
+            cache[key], code = predict_model_smiles(model_id, smiles)
+            return cache[key], code
     else:
-        result = []
-        with concurrent.futures.ProcessPoolExecutor() as executor:
-            results = executor.map(predict_model_smiles, (model_id for smi in smiles), (smi for smi in smiles))
-
-        for (r, code, smi) in results:
-            if code != 200:
-                result.append(dict(smiles=smi, error=r))
+        result, missing = [], []
+        for smi in smiles:
+            key = f"{model_id}-{smi}"
+            if key in cache:
+                result.append(cache[key])
             else:
-                result.append(r)
+                missing.append(smi)
+
+        with concurrent.futures.ThreadPoolExecutor() as pool:
+            results = pool.map(predict_model_smiles, [model_id for _ in missing], missing)
+
+            for (r, code, smi) in results:
+                if code != 200:
+                    r = dict(smiles=smi, error=r)
+                    result.append(r)
+                else:
+                    result.append(r)
+
+                key = f"{model_id}-{smi}"
+                cache[key] = r
 
         return result
 
 
-cache = {}
-
-
 @timer
 def predict_model_smiles(model_id, smiles):
-    if f"{model_id}-{smiles}" in cache:
-        logging.debug(f"cache hit for {model_id}-{smiles}")
-        return cache[f"{model_id}-{smiles}"]
-
     # serverAPIs = "https://hcd.rtpnc.epa.gov" # TODO this should come from environment variable
     serverAPIs = os.getenv("CIM_API_SERVER", "https://cim-dev.sciencedataexperts.com/")
 
@@ -144,10 +156,7 @@ def predict_model_smiles(model_id, smiles):
     model_results.predictionUnits = model.unitsName  # duplicated so displayed near prediction value
     model_results.adResults = ad_results
 
-    result = model_results.to_dict(), 200, smiles
-
-    cache[f"{model_id}-{smiles}"] = result
-    return result
+    return model_results.to_dict(), 200, smiles
 
 
 def predictSetFromDB(model_id, excel_file_path):
