@@ -137,7 +137,7 @@ class ModelDescription:
         self.n_estimators = model.n_estimators
         self.min_impurity_decrease = model.min_impurity_decrease
         self.remove_log_p_descriptors = model.remove_log_p_descriptors
-        self.version = model.version
+        self.version = model.qsar_method_version
         self.qsar_method = model.qsar_method
         self.description = model.description
 

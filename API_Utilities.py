@@ -53,12 +53,15 @@ class DescriptorsAPI:
             if code != 200:
                 return check_results, code
 
-        descriptorsResults = self.call_descriptors_get(server_host=serverAPIs, qsar_smiles=qsarSmiles,
+        response = self.call_descriptors_get(server_host=serverAPIs, qsar_smiles=qsarSmiles,
                                                                 descriptor_name=descriptorService)
-        if "error" in descriptorsResults:
-            return descriptorsResults, 400
-
-        df_prediction = self.response_to_df(descriptorsResults, qsarSmiles)
+        
+        if response.status_code != 200:
+            return response.text,response.status_code 
+        
+        
+        df_prediction = self.response_to_df(response, qsarSmiles)
+                
         return df_prediction, 200
 
 
@@ -75,15 +78,14 @@ class DescriptorsAPI:
 
         response = requests.get(url, params=params)
 
-        if response.status_code == 200:
-            # Parse the response JSON and convert it to a list of Chemical objects
-            return response.json()
-        else:
-            # Handle the error appropriately
-            return response.text
+        return response 
 
 
-    def response_to_df(self, descriptor_dict, qsarSmiles):
+    def response_to_df(self, response, qsarSmiles):
+        
+        descriptor_dict = response.json()
+        
+        
         headers = descriptor_dict['headers']
         headers.insert(0, "Property")
         headers.insert(0, "ID")
@@ -91,6 +93,14 @@ class DescriptorsAPI:
         chemicals = descriptor_dict['chemicals']
         chemical = chemicals[0]
         descriptors = chemical['descriptors']
+        
+        descriptors = [float(descriptor) for descriptor in chemical['descriptors']]  # for some reason they were getting stored as strings
+        
+        # for descriptor in descriptors:
+        #     print(type(descriptor), descriptor)
+                
+        # print(descriptors)
+        
         descriptors.insert(0, None)
         descriptors.insert(0, qsarSmiles)
 

@@ -68,7 +68,7 @@ def runBiodeg():
     # printModelVariables(descriptor_names, model)
     predictions = model.do_predictions(df_prediction,return_score=False)
     # print(predictions)
-    # getOriginalRegressionCoefficients(model)
+    # model.getOriginalRegressionCoefficients()
     # redoRegression(descriptor_names, pred_df, training_df)
     plot_results(df_prediction, predictions)
 
@@ -97,19 +97,35 @@ def printModelVariables(descriptor_names, model):
     print(df)
 
 
-def getOriginalRegressionCoefficients(model):
-    reg = model.model_obj.steps[1][1]
-    scale = model.model_obj.steps[0][1]
-    Original_coeff = np.divide(reg.coef_, scale.scale_)
-    Original_coeff = list(Original_coeff[0])
-    print('Original_coeff', Original_coeff)
-    # Following doesnt work with regularization
-    Original_intercept = reg.intercept_
-    coeffs = list(reg.coef_[0])
-    for index, coefficient in enumerate(coeffs):
-        # print(index,coefficient)
-        Original_intercept = Original_intercept - scale.mean_[index] * coefficient / scale.scale_[index]
-    print('Original intercept', Original_intercept)
+# def getOriginalRegressionCoefficients(model):
+#
+#     reg = model.model_obj.steps[1][1]
+#     scale = model.model_obj.steps[0][1]
+#
+#     # Get the scaled coefficients and intercept
+#     beta_scaled = reg.coef_
+#     intercept_scaled = reg.intercept_
+#
+#     # Get the means and standard deviations used by the StandardScaler
+#     means = scale.mean_
+#     stds = scale.scale_
+#
+#     # Transform the coefficients to the unscaled version
+#     beta_unscaled = beta_scaled / stds
+#
+#     # Transform the intercept to the unscaled version
+#     intercept_unscaled = intercept_scaled - np.sum((means * beta_scaled) / stds)
+#
+#     # Report the unscaled coefficients and intercept
+#     # print("Intercept (unscaled):", intercept_unscaled)
+#     # print("Coefficients (unscaled):", beta_unscaled)
+#
+#     coefficients_dict = dict(zip(model['embedding'], beta_unscaled))
+#
+#     # Add the intercept to the dictionary
+#     coefficients_dict['Intercept'] = intercept_unscaled
+#
+#     return coefficients_dict
 
 
 def redoRegression(descriptor_names, pred_df, training_df):

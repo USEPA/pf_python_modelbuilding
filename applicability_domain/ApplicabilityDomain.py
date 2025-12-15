@@ -314,8 +314,6 @@ class TESTApplicabilityDomain(ApplicabilityDomainStrategy):
         self.TestSet['TESTSimilarity'] = test_TESTSimilarity
         ###
 
-        # print(train_TESTSimilarity)
-
         self.splitSimilarity = helpers.find_split_value(train_TESTSimilarity, self.parameters['fractionTrainingSetInsideAD'])
 
         if debug:

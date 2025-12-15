@@ -1,0 +1,656 @@
+from model_ws_db_utilities import ModelResults, ModelDetails
+from dominate import document
+from dominate.tags import meta, title, h3, table, tbody, tfoot, tr, td, th, img, font, b, br, caption, sup, a, p, span, em
+
+import matplotlib
+matplotlib.use('Agg')  # Use a non-interactive backend
+import matplotlib.pyplot as plt
+
+
+from decimal import Decimal, getcontext, ROUND_HALF_UP, InvalidOperation
+
+from indigo import Indigo
+from indigo.renderer import IndigoRenderer
+from predict_constants import PredictConstants as pc
+# import tempfile
+
+
+# from fastjsonschema import indent
+# import json
+
+imgURLCid = "https://comptox.epa.gov/dashboard-api/ccdapp1/chemical-files/image/by-dtxcid/";
+model_file_api = "https://ctx-api-dev.ccte.epa.gov/chemical/property/model/file/search/"
+import numpy as np           
+import base64, io
+
+class ReportCreator:
+
+
+    def addApplicabilityDomain(self, modelResults, my_td):
+        my_td += b("Applicability domain:"), br()
+    
+        # Determine AD status for the first table
+        if modelResults.modelDetails.applicabilityDomainName == pc.Applicability_Domain_TEST_Embedding_Euclidean:
+            if modelResults.adResults["AD"]:  # TODO make this clearer
+                ad_status = span("Inside AD", style="color: green;")
+                strAD = span()
+                strAD.add(ad_status)
+                strAD += ": average distance to the training set analogs < cutoff distance"
+            else:
+                ad_status = span("Outside AD", style="color: red;")
+                strAD = span()
+                strAD.add(ad_status)
+                strAD += ": average distance to the training set analogs > cutoff distance"
+        
+        # Table 1: Analogs from Training Set
+        with my_td.add(table(style="float: left; width: 48%; border-collapse: collapse; margin-right: 2%;")):
+            cap = caption()
+            cap.add(strAD)
+            cap += br()
+            cap += f"Analogs from Training Set (values in {modelResults.unitsModel}, CV predictions)"
+            
+            with tbody():
+                tr()
+                analogs = modelResults.adResults["analogs"]
+                for i in range(len(analogs)):
+                    self.createAnalogTile(analogs[i], i, modelResults, "left")
+    
+        # Table 2: Fragment Counts for Test Chemical
+        outside_ad = False
+        with my_td.add(table(style="float: right; width: 48%; border: 1px solid black; border-collapse: collapse;")):
+            cap = caption()
+            
+            with tr(style="background-color: #d3d3d3"):
+                th("Fragment", style="border: 1px solid black;") 
+                th("Test Chemical", style="border: 1px solid black;")
+                th("Training Min", style="border: 1px solid black;")
+                th("Training Max", style="border: 1px solid black;")
+            with tbody():
+                for col_name in modelResults.adResultsFrag["fragmentTable"]["test_chemical"].keys():
+                    # Retrieve values
+                    
+                    test_value = int(modelResults.adResultsFrag["fragmentTable"]["test_chemical"][col_name])
+                    training_min = int(modelResults.adResultsFrag["fragmentTable"]["training_min"][col_name])
+                    training_max = int(modelResults.adResultsFrag["fragmentTable"]["training_max"][col_name])
+                    
+                    # Determine if the row should be highlighted
+                    if test_value < training_min or test_value > training_max:
+                        row_style = "background-color: pink;"
+                    else:
+                        row_style = ""
+                    
+                    with tr(style=row_style):
+                        td(col_name, style="border: 1px solid black;")
+                        td(test_value, align="center", style="border: 1px solid black;")
+                        td(training_min, align="center", style="border: 1px solid black;")
+                        td(training_max, align="center", style="border: 1px solid black;")
+            
+            # Add AD status to the caption based on the flag
+            ad_status_text = span()
+            
+            if modelResults.adResultsFrag["AD"]:
+                ad_status_text.add(span("Inside AD", style="color: green;"))
+                ad_status_text += ": fragment count(s) were within the training set range"
+            else:
+                ad_status_text.add(span("Outside AD", style="color: red;"))
+                ad_status_text += ": fragment count(s) were outside the training set range"
+            
+            cap.add(ad_status_text)
+            cap += br()
+            cap += "Fragment counts for test chemical"
+        
+        
+    def getArraysOmitNullPreds(self, mps):
+        exps = []
+        preds = []
+    
+        for mp in mps:
+            if 'pred' not in mp:
+                continue
+            exps.append(mp['exp'])
+            preds.append(mp['pred'])
+    
+        exps = np.array(exps)
+        preds = np.array(preds)
+        return exps, preds
+
+    
+    def generateScatterPlot(self, modelPredictions, unitName, plotTitle, seriesName):
+        
+        x, y = self.getArraysOmitNullPreds(modelPredictions)
+        if len(x) == 0 and len(y) == 0:
+            return
+    
+        fig, ax = plt.subplots(figsize=(5, 5), layout='constrained',dpi=150)
+    
+        plt.xlabel('Experimental ' + unitName)
+        plt.ylabel('Predicted  '+ unitName)
+        plt.title(plotTitle)
+    
+        ax.scatter(x, y, label=seriesName, color="red", edgecolor='black')
+        ax.plot(x, x, label='Y=X', color="black")
+        
+        # Determine the range for the axes
+        min_value = min(min(x), min(y))
+        max_value = max(max(x), max(y))
+    
+        # Check if "log" is in unitName
+        if "log" in unitName.lower():
+        
+            min_int = int(np.floor(min_value))
+            max_int = int(np.ceil(max_value))
+    
+            # Determine if padding is needed
+            if (min_value - min_int) < 0.25:
+                min_value = min_int - 1
+            else:
+                min_value = min_int
+    
+            if (max_int - max_value) < 0.25:
+                max_value = max_int + 1
+            else:
+                max_value = max_int
+    
+            ax.set_xticks(range(min_value, max_value + 1))
+            ax.set_yticks(range(min_value, max_value + 1))        
+
+        elif unitName == "°C":
+            min_value = (np.floor(min_value / 50) * 50) - 50
+            max_value = (np.ceil(max_value / 50) * 50) + 50
+        else:
+            padding = (max_value - min_value) * 0.05
+            min_value -= padding
+            max_value += padding
+    
+        ax.set_xlim(min_value, max_value)
+        ax.set_ylim(min_value, max_value)
+        
+        
+        plt.legend(loc="lower right")
+        # plt.savefig(fileOutPNG)
+        figure = plt.gcf()  # get current figure
+        
+        # plt.show()
+        buf = io.BytesIO()
+        plt.savefig(buf, format='png')
+        plt.close()  # Close the plot to free memory
+        buf.seek(0)  # Rewind the buffer
+        image_base64 = base64.b64encode(buf.read()).decode('utf-8')
+        return image_base64
+    
+                    
+
+    def create_model_results_table(self, modelResults: ModelResults):
+        
+        # print(modelResults.to_json())
+        
+        md = modelResults.modelDetails
+    
+        with table(border="0", width="100%"):
+            with tbody():
+                with tr(bgcolor="black"):
+                    with td():
+                        font("Chemical Identifiers", color="white")
+                with tr():
+                    my_td = td()
+
+                    # my_td += b("Model name:"), " " + md.modelName, br()
+                    
+                    my_td += b("Model name:"), " " + md.modelName, 
+                    
+                    # link_qmrf = model_file_api + "?modelId="+modelResults.modelDetails.modelId+"&typeId=1"
+                    # link_excel = model_file_api + "?modelId="+modelResults.modelDetails.modelId+"&typeId=2"
+                    link_qmrf = modelResults.modelDetails.urlQMRF
+                    link_excel = modelResults.modelDetails.urlExcelSummary
+                    
+                    
+                    my_td +=" ("
+                    my_td+=a('QMRF', href=link_qmrf, title='Model summary in QSAR Model Reporting Format', target="_blank")
+                    my_td+=", "
+                    my_td+=a('Excel summary', href=link_excel, title='All model details in Excel format', target="_blank")
+                    my_td +=")",br()
+
+                    
+                    my_td += b("Model source:"), " " + md.modelSource, br()
+                                        
+                    
+                    my_td += b("Property name:"), " " + md.propertyName, br()
+                    my_td += b("Property description:"), " " + md.propertyDescription, br()
+    
+                    if modelResults.experimentalValueUnitsModel:
+                        
+                        str_exp_model_units = self.get_formatted_value(modelResults.modelDetails.is_binary, modelResults.experimentalValueUnitsModel, 3)
+                        my_td += b("Experimental value:"), " " + str_exp_model_units + " " + modelResults.unitsModel
+                    
+                        if modelResults.unitsDisplay != modelResults.unitsModel:
+                            str_exp_display_units = self.get_formatted_value(modelResults.modelDetails.is_binary, modelResults.experimentalValueUnitsDisplay, 3)
+                            my_td += " = " + str_exp_display_units + " " + modelResults.unitsDisplay
+
+                        my_td += em(" (in "+modelResults.experimentalValueSet.lower()+" set)"), br()
+
+
+                    else:
+                        my_td += b("Experimental value:"), " N/A", br()
+    
+                    # print(modelResults.modelDetails.is_binary, modelResults.predictionValue, modelResults.predictionUnits)
+    
+                    str_pred_model_units = self.get_formatted_value(modelResults.modelDetails.is_binary, modelResults.predictionValueUnitsModel, 3)
+                    my_td += b("Predicted value:"), " " + str_pred_model_units + " " + modelResults.unitsModel
+
+                    if modelResults.unitsDisplay != modelResults.unitsModel:
+                        str_pred_display_units = self.get_formatted_value(modelResults.modelDetails.is_binary, modelResults.predictionValueUnitsDisplay, 3)
+                        my_td += " = " + str_pred_display_units + " " + modelResults.unitsDisplay, br()
+                    
+                    self.addApplicabilityDomain(modelResults, my_td)
+                    
+                    # TODO add fragment count table as second AD measure
+    
+    def get_formatted_value(self, format_as_integer: bool, dvalue: float, nsig: int):
+
+        if dvalue is None:
+            return "N/A"
+    
+        try:
+            if format_as_integer:
+                return format(dvalue, ".0f")
+    
+            # If dvalue is outside the range for scientific notation
+            if dvalue != 0 and (abs(dvalue) < 0.01 or abs(dvalue) > 1e3):
+                return format(dvalue, ".2E")
+    
+            return self.set_significant_digits(dvalue, nsig)
+    
+        except Exception as ex:
+            import traceback
+            traceback.print_exc()  # This will print the traceback to the console
+            return None
+    
+    def set_significant_digits(self, value, significant_digits):
+        if significant_digits < 0:
+            raise ValueError("Significant digits must be non-negative")
+    
+        # Set precision for decimal operations
+        getcontext().prec = significant_digits
+    
+        # Convert value to Decimal and round to significant digits
+                    
+        try:
+            
+            if isinstance(value, float):
+                value = format(value, '.10g')  # Use a general format to avoid excessive precision
+
+            # Set the precision context to handle larger numbers
+            getcontext().prec = significant_digits + 5  # Add some buffer to the precision
+    
+            # Convert the value to a Decimal
+            decimal_value = Decimal(value)
+    
+            # Quantize the Decimal to the specified number of significant digits
+            quantized_value = decimal_value.quantize(Decimal('1e-{0}'.format(significant_digits - 1)), rounding=ROUND_HALF_UP)
+                        
+            return str(quantized_value)
+        except (InvalidOperation, ValueError) as e:
+            # Handle exceptions related to invalid operations or value conversion
+            print(e)
+            return "error:"+str(value)
+    
+    
+        
+
+    def createAnalogTile(self, analog, i, modelResults:ModelResults,align):
+        
+        # print(set, i)
+                
+        analog_td = td(align=align, width="10%")
+        analog_td += b("Neighbor:"), " " + str(i+1), br()
+        
+        if modelResults.modelDetails.is_binary:
+            exp = self.get_formatted_value(True, analog["exp"], -1)
+            analog_td += b("Measured:"), exp, br()    
+        else:
+            exp = self.get_formatted_value(False, analog["exp"], 3)
+            analog_td += b("Measured:"), " " + exp, br()
+        
+
+        if modelResults.modelDetails.is_binary:
+            pred = self.get_formatted_value(True, analog["pred"], -1)
+            analog_td += b("Predicted:"), pred, br()    
+        else:
+            pred = self.get_formatted_value(False, analog["pred"], 3)
+            analog_td += b("Predicted:"), " " + pred, br()
+
+        
+        analog_td += img(src=imgURLCid + analog["cid"], border="1", alt="Analog Image for " + analog["name"], width="150", height="150"), br()
+        analog_td += analog["sid"]  # Adjust the image path and attributes as needed
+
+
+    def addNeighborTileTable(self, modelResults, neighbors):
+
+        with table(border="0", width="100%", cellpadding=10):
+            caption("Neighbor values in " + modelResults.unitsModel)
+            # following is hardcoded to use top 10 analogs but could be made to only have the analogs that are similar enough
+            with tr():
+                for i in range(0, 5):
+                    analog = neighbors[i]
+                    self.createAnalogTile(analog, i, modelResults, "left")
+            
+            with tr():
+                for i in range(5, 10):
+                    analog = neighbors[i]
+                    self.createAnalogTile(analog, i, modelResults, "left")
+
+    def write_neighbors(self, modelResults:ModelResults, set):
+        
+        md = modelResults.modelDetails
+                        
+        if set == "Test Set":
+            neighbors = modelResults.neighborsTest
+        else:
+            neighbors = modelResults.neighborsTraining
+             
+        
+        with table(border="0", width="100%"):
+                                    
+            with tbody():
+                
+                with tr(bgcolor="black"):
+                
+                    with td(colspan="3"):
+                        
+                        if set == "Test Set":
+                            font("Nearest Neighbors from " + set+" (External Predictions)", color="white")
+                        else:
+                            font("Nearest Neighbors from " + set+" (Cross Validation Predictions)", color="white")    
+                        
+                with tr(): 
+                    
+                    with td():                    
+                        plotTitle= "Nearest neighbors from "+set
+                        plot_base64 = self.generateScatterPlot(neighbors, md.unitsModel, plotTitle, "Exp. vs Pred.")        
+                        img_tag = img(src=f'data:image/png;base64,{plot_base64}', alt='Plot of experimental vs. predicted for '+set+" set", height="400")
+                    
+                    with td():                                                        
+                        self.addMaeTable(set, modelResults)
+                                            
+                    with td():
+                        self.addNeighborTileTable(modelResults, neighbors)
+
+
+                            # with tr():
+                            #     for i in range(5, 10):
+                            #         self.createAnalogTile(modelResults, set, i)
+                        
+                # with tr():
+                #     with td():
+                #         self.addPlotsTable(modelDetails)
+    
+    def create_html_report(self, modelResults:ModelResults):
+    
+        # print(chemical)
+        md = modelResults.modelDetails
+        
+        # print("sid", chemical["sid"])
+    
+        page_title = md.modelName + " Model Calculation Details: " + md.propertyName
+        doc = document(lang='en', title=page_title)  # title has to be set here, the title object in the head doesnt work
+    
+        with doc.head:
+            meta(charset="UTF-8")
+            meta(name="viewport", content="width=device-width, initial-scale=1.0")
+    
+        with doc:
+            h3(page_title)
+    
+            with table(border="0", width="100%"):  # main table
+                with tbody():
+                    with tr():
+                        with td():
+                            self.write_first_row(modelResults)
+                    with tr():
+                        with td():
+                            self.write_model_performance(md)
+
+                    with tr():
+                        with td():
+                            self.write_neighbors(modelResults, "Test Set")
+
+                    with tr():
+                        with td():
+                            self.write_neighbors(modelResults, "Training Set")
+    
+                    # with tr():
+                    #     td("Cell 3")
+                    #     td("Cell 4")
+    
+        # with tempfile.NamedTemporaryFile('w', delete=False, suffix='.html') as f:
+        #     f.write(str(doc))
+        #     temp_file_path = f.name
+        # webbrowser.open(f'file://{temp_file_path}')
+    
+        # print(doc)
+        
+        return str(doc)
+    
+    def write_model_performance(self, modelDetails: ModelDetails):
+    
+        with table(border="0", width="100%"):
+            with tbody():
+                with tr(bgcolor="black"):
+                    with td():
+                        font("Model performance", color="white")
+                with tr():
+                    with td():
+                        self.addPlotsTable(modelDetails)
+    
+                with tr():
+                    with td():
+                        self.addStatsTable(modelDetails)
+    
+    def addPlotsTable(self, modelDetails: ModelDetails):
+        with table(border="0", width="100%"):
+            with tbody():
+                with tr():
+                    with td():                        
+                        img(src=modelDetails.imgSrcPlotScatter, alt="Scatter plot for " + modelDetails.modelName, height=400)
+                    with td():
+                        img(src=modelDetails.imgSrcPlotHistogram, alt="Histogram plot for " + modelDetails.modelName, height=400)
+    
+    
+    def addMaeTable(self,set,modelResults:ModelResults):
+        
+        with table(border=1, cellpadding="5", cellspacing="0"):
+            caption("Results for neighbors compared with entire set")
+                
+            with tbody():
+                
+                with tr(style="background-color: #d3d3d3"):
+                    th("Chemicals")
+                    th("MAE*")
+                
+                with tr():
+                    td("Analogs from set")
+                    
+                    if "train" in set.lower():
+                        td(self.get_formatted_value(False,modelResults.neighborsTrainingMAE, 3))    
+                    else:
+                        td(self.get_formatted_value(False,modelResults.neighborsTestMAE, 3))
+
+                with tr():
+                    td("Entire set")
+                    
+                    if "train" in set.lower():
+                        td(self.get_formatted_value(False,modelResults.modelDetails.modelStatistics["MAE_CV_Training"],3))    
+                    else:
+                        td(self.get_formatted_value(False,modelResults.modelDetails.modelStatistics["MAE_Test"], 3))
+                    
+    
+        p('* Mean absolute error in '+modelResults.modelDetails.unitsModel) 
+    
+    def addStatsTable(self, modelDetails: ModelDetails):
+    
+        # metrics = [
+        #     "PearsonRSQ_CV_Training",
+        #     "R2_Test",
+        #     "Q2_Test",
+        #     "RMSE_Test",
+        #     "MAE_CV_Training",
+        #     "MAE_Test",
+        #     "MAE_Test_inside_AD",
+        #     "MAE_Test_outside_AD",
+        #     "Coverage_Test"
+        # ]
+    
+        with table(border=1, cellpadding="0", cellspacing="0", width="100%"):
+            caption("Model Statistics")
+            # with tbody():
+            #     with tr():
+            #         for metric in metrics:
+            #             td(metric, align="center")
+            #     with tr():
+            #         for metric in metrics:
+            #             if metric in modelDetails.modelStatistics:
+            #                 td("{:.2f}".format(modelDetails.modelStatistics[metric]), align="center")
+            #             else:
+            #                 td("TODO", align="center")
+    
+            with tbody():
+                with tr():
+                    # Row for "Training" and "Test" headers
+                    td("Training (80%)", colspan="3", align="center", style="background-color: #d3d3d3; width: 25%;")
+                    td("5-fold CV (80%)", colspan="3", align="center", style="background-color: #ccffcc; width: 25%;")
+                    td("Test (20%)", colspan="3", align="center", style="background-color: #ccccff; width: 25%;")
+                    td("Test Set Applicability Domain Statistics", colspan="3", align="center",
+                       style="background-color: #ffffcc; width: 25%;")
+    
+                with tr():
+                    # Header row for metrics
+    
+                    for i in range(1, 4):
+                        td(["R", sup("2")], align="center")
+                        td("RMSE", align="center")
+                        td("MAE", align="center")
+    
+                    td("MAE Test inside AD", align="center")
+                    td("MAE Test outside AD", align="center")
+                    td("Fraction Inside AD", align="center")
+    
+                with tr():
+                    # Training set stats
+                    td(self.format2(modelDetails.modelStatistics["PearsonRSQ_Training"]), align="center")
+                    td(self.format2(modelDetails.modelStatistics["RMSE_Training"]), align="center")
+                    td(self.format2(modelDetails.modelStatistics["MAE_Training"]), align="center")
+    
+                    # CV stats
+                    td(self.format2(modelDetails.modelStatistics["PearsonRSQ_CV_Training"]), align="center")
+                    td(self.format2(modelDetails.modelStatistics["RMSE_CV_Training"]), align="center")
+                    td(self.format2(modelDetails.modelStatistics["MAE_CV_Training"]), align="center")
+    
+                    # Test set stats
+                    td(self.format2(modelDetails.modelStatistics["PearsonRSQ_Test"]), align="center")
+                    td(self.format2(modelDetails.modelStatistics["RMSE_Test"]), align="center")
+                    td(self.format2(modelDetails.modelStatistics["MAE_Test"]), align="center")
+    
+                    # AD stats
+                    td(self.format2(modelDetails.modelStatistics["MAE_Test_inside_AD"]), align="center")
+                    td(self.format2(modelDetails.modelStatistics["MAE_Test_outside_AD"]), align="center")
+                    td(self.format2(modelDetails.modelStatistics["Coverage_Test"]), align="center")
+    
+    # MAE_Test_inside_AD	MAE_Test_outside_AD	Coverage_Test
+    
+    #     TODO add a footer to the table that describes the metrics
+    
+    
+    def smiles_to_base64(self, smiles_string):
+        
+        indigo = Indigo()
+        renderer = IndigoRenderer(indigo)
+        
+        mol = indigo.loadMolecule(smiles_string)
+        # 1. Set the output format (this sets the context to 2D molecule rendering implicitly in most cases)
+        indigo.setOption("render-output-format", "png") 
+        
+        # 2. (Optional but Recommended) Set a default image size
+        # The renderer often needs dimensions defined.
+        indigo.setOption("render-image-width", 400)
+        indigo.setOption("render-image-height", 400)
+        
+        # Use renderToBuffer() to get the image data as bytes
+        img_bytes = renderer.renderToBuffer(mol)
+        
+        # Encode the bytes to a base64 string
+        base64_string = base64.b64encode(img_bytes).decode('utf-8')
+        
+        # print(base64_string)
+        
+        return base64_string
+    
+    def write_first_row(self, modelResults):
+    
+        with table(border="0", width="100%"):
+            with tbody():
+                with tr():  # first row of main table
+                    with td(valign="top", width="150px"):
+                        
+                        if modelResults.chemical["cid"]=="N/A":
+                            img_base64=self.smiles_to_base64(modelResults.chemical["smiles"])
+                            # img(src=img_src, alt='Plot of experimental vs. predicted for '+set+" set", height="150")
+                            img(src=f'data:image/png;base64,{img_base64}', alt='Structure image for '+modelResults.chemical["smiles"], height="150", border="2")
+                            
+                        else:
+                            imgURL = imgURLCid + modelResults.chemical["cid"]
+                            img(src=imgURL, alt="Structural image of " + modelResults.chemical["name"], height=150,
+                                width=150, border="2")
+    
+                    with td(valign="top"):
+                        self.create_chemical_identifiers_table(modelResults.chemical)
+    
+                    with td(valign="top"):
+                        self.create_model_results_table(modelResults)
+    
+    def create_chemical_identifiers_table(self, chemical):
+        with table(border="0", width="100%"):
+            with tbody():
+                with tr(bgcolor="black"):
+                    with td():
+                        font("Chemical Identifiers", color="white")
+                with tr():
+                    my_td = td()
+                    my_td += b("Preferred name:"), " " + chemical.get("name", "N/A"), br()
+                    my_td += b("DTXSID:"), " " + chemical.get("sid", "N/A"), br()
+                    my_td += b("DTXCID:"), " " + chemical.get("cid", "N/A"), br()
+                    my_td += b("CASRN:"), " " + chemical.get("casrn", "N/A"), br()
+    
+                    if "averageMass" in chemical:
+                        my_td += b("Molecular weight:"), " ", "{:.2f}".format(chemical.get("averageMass")), br()
+                    else:
+                        my_td += b("Molecular weight:"), " N/A", br()
+    
+    # def create_report(self, model: Model, modelResults: ModelResults):
+    #     print('enter create_json_report')
+    #     report = Report(model,modelResults)
+    #     return report
+    
+    def format2(self, value):
+        return format(value, ".2f")
+
+# may not be needed since chemical comes from standardizer API
+# class Chemical:
+#     def __init__(self):
+#         chemID = None  # can be sid, inchiKey etc
+#         sid = None
+#         cid = None
+#         casrn = None
+#         name = None
+#         smiles = None
+#         canonicalSmiles = None
+#         inchi = None
+#         inchiKey = None
+#         mol = None
+#         molFormula = None
+#         averageMass = None
+#         monisotopicMass = None
+
+
+if __name__ == '__main__':
+    pass
+

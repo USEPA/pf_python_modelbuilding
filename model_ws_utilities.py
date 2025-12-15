@@ -16,7 +16,10 @@ from sklearn2pmml.pipeline import PMMLPipeline as PMMLPipeline
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
-models = {}
+# from models.ModelBuilder import Model
+
+# models: dict[int, Model] = {}  #allows one to use code completion
+models = {}  #allows one to use code completion
 
 
 def get_model_info(qsar_method):
@@ -629,13 +632,13 @@ def call_do_predictions_to_df(prediction_tsv, model):
     return results
 
 
-def get_model_details(model):
+def get_model_details(m):
     """Returns detailed description of models, with version and parameter info, for each QSAR method"""
-    description = model.get_model_description()
+    description = m.get_model_description()
     if description:
         return description
     else:
         # 404 NOT FOUND if requested QSAR method has not been implemented
-        abort(404, 'details for model not available')
+        abort(404, 'details for m not available')
 
 

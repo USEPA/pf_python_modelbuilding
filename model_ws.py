@@ -20,11 +20,10 @@ log.setLevel(logging.DEBUG)
 # use_pmml_pipeline_during_model_building = True # if true use PMMLPipeline with standardizing happening separate during model building
 # use_sklearn2pmml = True # if false uses pypmml to load the file. Note: pypmml doesnt handle knn predictions the same way...
 
-
 """
 Flask webservice to build QSAR models with a variety of modeling strategies (RF, SVM, DNN, XGB...more to come?)
 Run with Python 3.9 to avoid problems with parallelizing RF (bug in older versions of joblib backing sklearn)
-@author: TMARTI02 (Todd Martin) - RF, base webservice code
+@author: TMARTI02 (Todd Martin) - RF, base webservice code, predictions for new chemicals and reports
 @author: GSincl01 (Gabriel Sinclair) - SVM (based on work by CRupakhe), XGB, refactored webservice code
 @author: cramslan (Christian Ramsland) - DNN
 Repository created 05/21/2021
@@ -109,8 +108,11 @@ def train(qsar_method):
         status = 201
 
     if save_to_database:
-        mwdu.saveModelToDatabase(model, model_id)
-        return 'model bytes saved to database', 202
+        # mwdu.saveModelToDatabase(model, model_id)
+        # return 'model bytes saved to database', 202
+        print('need to implement method to save to database using sql')
+        return 'need to implement method to save to database using sql', 400
+        
     else:
         # Returns model bytes
         if use_pmml:
@@ -455,7 +457,6 @@ def cross_validate_fold(qsar_method):
                                    remove_log_p=remove_log_p,
                                    hyperparameters=hyperparameters, n_jobs=n_jobs)
 
-
 #
 # @app.route('/models/<string:qsar_method>/predictsa', methods=['POST'])
 # def predictpythonstorage(qsar_method):
@@ -489,23 +490,6 @@ def cross_validate_fold(qsar_method):
 #     return mwu.call_do_predictions(prediction_tsv, model), 200
 
 
-@app.route('/models/predictDB', methods=['POST', 'GET'])
-def predictDB():
-    """Automates prediction and AD for single smiles using model in database"""
-    if request.method == 'POST':
-        obj = request.form
-        smiles = obj.get('smiles')  # Retrieves the model number to use
-        model_id = obj.get('model_id')
-    elif request.method == 'GET':
-        # Handle GET request here
-        smiles = request.args.get('smiles')  # Retrieves the model number to use
-        model_id = request.args.get('model_id')
-
-    if not smiles or not model_id:
-        return "Both smiles and model_id are required", 400
-    return mwdu.predictFromDB(model_id, smiles, mwu)
-
-
 @app.route('/models/predict', methods=['POST'])
 def predict():
     """Makes predictions for a stored model on provided data"""
@@ -527,7 +511,7 @@ def predict():
         # Gets stored model using model number
         model = mwu.models[model_id]
     else:
-        abort(400,'Need to init model or use predictDB API call instead')
+        abort(400, 'Need to init model or use predictDB API call instead')
 
     # 404 NOT FOUND if no model stored under provided number
     if model is None:
@@ -535,7 +519,6 @@ def predict():
 
     # Calls the appropriate prediction method and returns the results
     return mwu.call_do_predictions(prediction_tsv, model), 200
-
 
 
 @app.route('/models/plot', methods=['POST'])
@@ -567,14 +550,14 @@ def generate_plot():
         # Gets stored model using model number
         model = mwu.models[model_id]
     else:
-        abort(400,'Need to init model first')
+        abort(400, 'Need to init model first')
 
     # 404 NOT FOUND if no model stored under provided number
     if model is None:
         abort(404, 'no stored model with id ' + model_id)
 
     # Calls the appropriate prediction method and returns the results
-    return mwu.call_generate_plot(training_tsv,prediction_tsv, model, model_name, plot_type), 200
+    return mwu.call_generate_plot(training_tsv, prediction_tsv, model, model_name, plot_type), 200
 
 
 @app.route('/models/initPMML', methods=['POST'])
@@ -725,12 +708,15 @@ def initPickle():
         abort(400, 'missing model bytes')
 
 
-@app.route('/models/<string:model_id>', methods=['GET'])
+@app.route('/models/details/<string:model_id>', methods=['GET'])  # changed api call because predictDB was calling details when ran from web browser
 def details(model_id):
     """Returns a detailed description of the QSAR model with version and parameter information (also inits the model if needed)"""
 
-    # model = mwu.models[model_id]
-    model = mwdu.init_model(model_id, mwu)
+    if model_id is None:
+        abort(404, 'no model id')
+
+    modelInitializer = mwdu.ModelInitializer()
+    model = modelInitializer.init_model(model_id, mwu.models)
 
     # print('details3', model.get_model_description())
 
@@ -748,21 +734,46 @@ def details(model_id):
     return model_details, 200
 
 
+@app.route('/models/predictDB', methods=['POST', 'GET'])
+def predictDB():
+    """Automates prediction and AD for single smiles using model in database"""
+ 
+    if request.method == 'POST':
+        obj = request.form
+    elif request.method == 'GET':
+        obj = request.args
+        
+    smiles = obj.get('smiles')  # Retrieves the model number to use
+    model_id = obj.get('model_id')
+    generate_report = obj.get('generate_report', 'false').lower() in ['true', '1', 'yes']
+    report_format = obj.get('report_format', 'json').lower()
+    if report_format not in ['json', 'html']:
+        report_format = 'json'
+            
+    # print(model_id, smiles, generate_report,report_format)
+
+    mp = mwdu.ModelPredictor()
+    return mp.predictFromDB(model_id, smiles, mwu.models, generate_report, report_format)
+
 
 @app.route('/models', methods=['GET'])
 def available_models():
     """Returns a detailed description of the QSAR model with version and parameter information (also inits the model if needed)"""
 
     # model = mwu.models[model_id]
-    models = mwdu.get_available_models()
+    modelInitializer = mwdu.ModelInitializer()
+    models = modelInitializer.get_available_models()
 
     # Return description and 200 OK
     return models, 200
 
+
 @app.route('/models/reg_coeff/<string:model_id>', methods=['GET'])
 def model_coeffs(model_id):
     """Returns a detailed description of the QSAR model with version and parameter information"""
-    model = mwdu.init_model(model_id, mwu)
+
+    modelInitializer = mwdu.ModelInitializer()
+    model = modelInitializer.init_model(model_id, mwu.models)
 
     # print('details3', model.get_model_description())
 
@@ -770,19 +781,19 @@ def model_coeffs(model_id):
     if model is None:
         abort(404, 'no stored model with id ' + model_id)
 
-    model.getOriginalRegressionCoefficients()
+    coeff_dict = model.getOriginalRegressionCoefficients()
 
     # TODO add code to return the coefficients instead of just printing to python io
 
-    return "OK", 200
+    return coeff_dict, 200
 
 
-def printEqn(model):
-    estimator = model.model_obj.steps[1][1]
-    coefficients = estimator.coef_
-    intercept = estimator.intercept_
-    print('coefficients', coefficients)
-    print('intercept', intercept)
+# def printEqn(model):
+#     estimator = model.model_obj.steps[1][1]
+#     coefficients = estimator.coef_
+#     intercept = estimator.intercept_
+#     print('coefficients', coefficients)
+#     print('intercept', intercept)
 
     # # Construct the equation string
     # equation = "log(p/1-p) = "
@@ -813,8 +824,6 @@ def model_obj(model_id):
 
     # Return model_obj
     return model.model_obj, 200
-
-
 
 
 if __name__ == '__main__':

@@ -45,6 +45,7 @@ import numpy as np
 
 from os.path import exists
 import json
+from fastjsonschema import indent
 
 __author__ = "Nathaniel Charest, Todd Martin (modified to work with webservice, added XGB)"
 
@@ -138,12 +139,12 @@ class Model:
 
         self.training_descriptor_std_devs = None  # standard deviations of training set descriptors
         self.training_descriptor_means = None  # means of training set descriptors
-        self.df_training = df_training
         self.remove_log_p_descriptors = remove_log_p_descriptors
         self.n_jobs = n_jobs
 
         self.regressor_name = '' #TODO set to None instead?
-        self.version = '0.0.1'
+        self.qsar_method_version = None
+
         self.model_obj = None
         self.embedding = None
         # self.coeff = None
@@ -161,11 +162,18 @@ class Model:
         #Extra metadata 2025-12-08
         self.modelId = None
         self.modelName = None
+        self.modelSource = None
+        self.modelStatistics = None
+        
         self.datasetId = None
         self.datasetName = None
-        self.unitsName = None
+        self.unitsModel = None
+        self.unitsDisplay = None
         self.dsstoxMappingStrategy = None
+        
         self.propertyName = None
+        self.propertyDescription = None
+
         self.descriptorSetId = None
         self.descriptorSetName = None
         self.descriptorService = None
@@ -175,7 +183,16 @@ class Model:
         self.applicabilityDomainName = None
         self.omitSalts = None
         self.qsarReadyRuleSet = None
+                
+
+        self.df_dsstoxRecords = None
+        self.df_training = df_training
         self.df_prediction = None
+                
+        self.df_preds_test = None # external predictions for test set
+        self.df_preds_training_cv = None #cross validation predictions for training set
+        
+        self.detailsFile = None
 
 
     def get_model(self):
@@ -773,7 +790,7 @@ class KNN(Model):
         Model.__init__(self, df_training, remove_log_p_descriptors, n_jobs=n_jobs)
 
         self.regressor_name = 'knn'
-        self.version = '1.2'
+        self.qsar_method_version = '1.2'
 
         # self.hyperparameter_grid = {'estimator__n_neighbors': [5],
         #                         'estimator__weights': ['uniform', 'distance']}
@@ -796,20 +813,12 @@ class REG(Model):
 
     def getOriginalRegressionCoefficients(self):
 
+        # print('enter getOriginalRegressionCoefficients')
+
         model_obj = self.get_model()
         reg = model_obj.steps[1][1]
         scale = model_obj.steps[0][1]
-        # Original_coeff = np.divide(reg.coef_, scale.scale_)
-        # Original_coeff = list(Original_coeff[0])
-        # print('Original_coeff', Original_coeff)
-        # # Following doesnt work with regularization
-        # Original_intercept = reg.intercept_
-        # coeffs = list(reg.coef_[0])
-        # for index, coefficient in enumerate(coeffs):
-        #     # print(index,coefficient)
-        #     Original_intercept = Original_intercept - scale.mean_[index] * coefficient / scale.scale_[index]
-        # print('Original intercept', Original_intercept)
-
+        
         # Get the scaled coefficients and intercept
         beta_scaled = reg.coef_
         intercept_scaled = reg.intercept_
@@ -825,23 +834,28 @@ class REG(Model):
         intercept_unscaled = intercept_scaled - np.sum((means * beta_scaled) / stds)
 
         # Report the unscaled coefficients and intercept
-        print("Intercept (unscaled):", intercept_unscaled)
-        print("Coefficients (unscaled):", beta_unscaled)
+        # print("Intercept (unscaled):", intercept_unscaled)
+        # print("Coefficients (unscaled):", beta_unscaled)
+        # print(self.embedding)
 
-        # coefficients_df = pd.DataFrame({
-        #     'Feature': ['Intercept'] + list(X.columns),
-        #     'Coefficient': [intercept_unscaled] + list(beta_unscaled)
-        # })
-        # Display the DataFrame
-        # print(coefficients_df)
+        from collections import OrderedDict
+        coefficients_dict = OrderedDict()
 
+        # Create a dictionary for the coefficients, starting with the intercept
+        coefficients_dict['Intercept'] = intercept_unscaled
+        
+        # Add the coefficients in the order of embedding
+        coefficients_dict.update(dict(zip(self.embedding, beta_unscaled)))        
+        # print(coefficients_dict)
+        # return coefficients_dict
+        return json.dumps(coefficients_dict,indent=4)
 
 
 class LAS(Model):
     def __init__(self, df_training=None, remove_log_p_descriptors=False, n_jobs=1):
         Model.__init__(self, df_training, remove_log_p_descriptors, n_jobs=n_jobs)
         self.regressor_name = 'las'
-        self.version = '1.0'
+        self.qsar_method_version = '1.0'
         # self.hyperparameter_grid = {'estimator__alpha': [np.round(i, 5) for i in np.logspace(-5, 0, num=26)],'estimator__max_iter': [1000000]}
         self.hyperparameter_grid = {'estimator__alpha': [np.round(i, 5) for i in np.logspace(-4, 0, num=20)],
                                     'estimator__max_iter': [1000000]}
@@ -882,7 +896,7 @@ class LGB(Model):
 
         # self.hyperparameter_grid = {'estimator__booster':['gbtree', 'gblinear','dart']}  #other two make it run a lot slower
 
-        self.version = '1.0'
+        self.self.qsar_method_version = '1.0'
 
         # 'weight': The default for , this represents the number of times a feature is used to split data across all trees.
         # 'gain': The default for the scikit-learn API's attribute, this is the average gain across all splits where the feature is used. Gain is the improvement in accuracy from a feature on its branches.
@@ -911,7 +925,7 @@ class SVM(Model):
         #                         "estimator__kernel": ["linear", "poly", "rbf"],
         #                         "estimator__gamma": [10 ** n for n in range(-3, 4)]}
 
-        self.version = '1.4'
+        self.self.qsar_method_version = '1.4'
         self.c_space = [1, 10, 100]
         self.gamma_space = ['scale', 'auto']
         self.hyperparameter_grid = {"estimator__C": self.c_space, "estimator__gamma": self.gamma_space}
@@ -965,11 +979,14 @@ class RF(Model):
 
 
 class ModelDescription:
-    def __init__(self, model):
+    def __init__(self, model: Model):
         """Describes parameters of the current method"""
 
         self.modelId = model.modelId
         self.modelName = model.modelName
+        self.modelSource = model.modelSource
+        
+        
         # self.qsar_method = model.regressor_name
 
         if model.regressor_name:
@@ -977,21 +994,35 @@ class ModelDescription:
         elif model.qsar_method:
             self.qsar_method = model.qsar_method
 
+        if hasattr(model, "version"):
+            self.qsar_method_version = model.version
+        if hasattr(model, "qsar_method_version"):
+            self.qsar_method_version = model.qsar_method_version
+
+
+        if model.modelStatistics:
+            self.modelStatistics = model.modelStatistics
+
         self.description = model.description
         self.description_url = model.description_url
         self.datasetName = model.datasetName
+        
         self.embedding = model.embedding
-        self.unitsName = model.unitsName
+        
+        self.unitsModel = model.unitsModel
+        self.unitsDisplay = model.unitsDisplay
+        
         self.propertyName = model.propertyName
+        self.propertyDescription = model.propertyDescription
+        
         self.descriptorService = model.descriptorService
         self.splittingName = model.splittingName
         self.applicabilityDomainName = model.applicabilityDomainName
+        
         self.omitSalts = model.omitSalts
         self.qsarReadyRuleSet = model.qsarReadyRuleSet
-
         self.is_binary = model.is_binary
         self.remove_log_p_descriptors = model.remove_log_p_descriptors
-        self.version = model.version
         self.hyperparameter_grid = model.hyperparameter_grid
         self.hyperparameters = model.hyperparameters  # final hyperparameters
         self.training_stats = model.training_stats
@@ -1059,3 +1090,4 @@ def runExamples():
 
 if __name__ == "__main__":
     runExamples()
+
