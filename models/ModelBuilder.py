@@ -5,6 +5,7 @@ Created on Wed Jan 25 08:14:14 2023
 @author: NCHAREST
 This is a refactored version of the python model building repo's model object, intended to better utilize OOP and more elegant design patterning.'
 """
+import logging
 import math
 import time
 
@@ -53,7 +54,7 @@ __author__ = "Nathaniel Charest, Todd Martin (modified to work with webservice, 
 
 # %%
 
-importance_type = 'weight' #default, TODO make a passable parameter to model_ws when generating embedding
+importance_type = 'weight' #default, TODO make a passable parameter to app when generating embedding
 # importance_type = 'gain'
 # importance_type = 'cover'
 # importance_type = 'total_gain'
@@ -270,7 +271,7 @@ class Model:
                 self.model_obj = PMMLKNeighborsRegressor(pmml=pmml_file_path)
 
     def set_details(self, details):
-        print('\nenter set_details')
+        logging.debug('\nenter set_details')
 
         for key in details:
             if key == 'model':
@@ -314,7 +315,7 @@ class Model:
         return parameters
 
     def build_model(self, use_pmml_pipeline, include_standardization_in_pmml, descriptor_names=None):
-        print('enter build model')
+        logging.debug('enter build model')
 
         t1 = time.time()
         self.embedding = descriptor_names

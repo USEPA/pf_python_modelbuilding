@@ -2,6 +2,7 @@
 @author: Todd Martin
 2022
 """
+import logging
 import time
 from models import df_utilities as DFU
 import model_ws_utilities as mwu
@@ -104,7 +105,7 @@ def caseStudyOPERA_RunGA():
                                 n_threads=n_threads, num_optimizers=num_optimizers,
                                 num_generations=num_generations, num_jobs=num_jobs,
                                 qsar_method=qsar_method, threshold=threshold)
-    print(json.dumps(dictGA) + '\n')
+    logging.debug(json.dumps(dictGA) + '\n')
     f.write(json.dumps(dictGA) + '\n')
 
     f.write('ENDPOINT\tscore\tscore_embed\tlen(features)\tfeatures\tTime(min)\n')
@@ -116,7 +117,7 @@ def caseStudyOPERA_RunGA():
         else:
             remove_log_p = False
 
-        print(ENDPOINT, descriptor_software)
+        logging.debug(ENDPOINT, descriptor_software)
         directory = directoryOPERA + ENDPOINT + ' OPERA/'
 
         training_file_name = ENDPOINT + ' OPERA ' + descriptor_software + ' training.tsv'
@@ -172,8 +173,8 @@ def a_runCaseStudiesExpProp():
                              datasetName=datasetName, descriptorSetName=descriptor_software, splittingName=splitting,
                              remove_log_p=remove_log_p, use_wards=use_wards)
 
-        print(json.dumps(ci, indent=4))
-        print(datasetName)
+        logging.debug(json.dumps(ci, indent=4))
+        logging.debug(datasetName)
 
         training_file_name = datasetName + '_' + descriptor_software + '_' + splitting + "_training.tsv"
         prediction_file_name = training_file_name.replace('training.tsv', 'prediction.tsv')
@@ -250,8 +251,8 @@ def a_runCaseStudiesExpPropPFAS():
                              datasetName=datasetName, descriptorSetName=descriptor_software, splittingName=splitting,
                              remove_log_p=remove_log_p,use_wards=use_wards)
 
-        print(json.dumps(ci, indent=4))
-        print(datasetName)
+        logging.debug(json.dumps(ci, indent=4))
+        logging.debug(datasetName)
 
         training_file_name = datasetName + '_' + descriptor_software + '_' + splitting + "_training.tsv"
         prediction_file_name = training_file_name.replace('training.tsv', 'prediction.tsv')
@@ -297,8 +298,8 @@ def a_run_endpoint(ENDPOINT, f, remove_log_p, training_tsv_path, prediction_tsv_
                                                        num_optimizers=num_optimizers, num_jobs=num_jobs,
                                                        descriptor_coefficient=descriptor_coefficient,
                                                        max_length=max_length, threshold=threshold, use_wards=use_wards)
-    print('embedding = ', features)
-    print('Time to run ga  = ', timeGA, 'mins')
+    logging.debug('embedding = ', features)
+    logging.debug('Time to run ga  = ', timeGA, 'mins')
     # **************************************************************************************
     # Build model based on embedded descriptors: TODO use api to run this code
     embed_model = mwu.call_build_model_with_preselected_descriptors(qsar_method, training_tsv, remove_log_p,
@@ -313,7 +314,7 @@ def a_run_endpoint(ENDPOINT, f, remove_log_p, training_tsv_path, prediction_tsv_
                                                                    descriptor_names_tsv=None, n_jobs=1)
     score = full_model.do_predictions(df_prediction, return_score=  True)
 
-    print(ENDPOINT + '\t' + str(score) + '\t' + str(score_embed) + '\t' + str(len(features)) + '\t' + str(
+    logging.debug(ENDPOINT + '\t' + str(score) + '\t' + str(score_embed) + '\t' + str(len(features)) + '\t' + str(
         features) + '\t' + str(timeGA) + '\n')
     f.write(ENDPOINT + '\t' + str(score) + '\t' + str(score_embed) + '\t' + str(len(features)) + '\t' + str(
         features) + '\t' + str(timeGA) + '\n')
@@ -401,8 +402,8 @@ def a_run_dataset(f, training_tsv_path, prediction_tsv_path, ci):
                                                        num_optimizers=num_optimizers, num_jobs=num_jobs,
                                                        descriptor_coefficient=descriptor_coefficient,
                                                        max_length=max_length, threshold=threshold, use_wards=use_wards)
-    print('embedding = ', features)
-    print('Time to run ga  = ', timeGA, 'mins')
+    logging.debug('embedding = ', features)
+    logging.debug('Time to run ga  = ', timeGA, 'mins')
     # **************************************************************************************
     # Build model based on embedded descriptors: TODO use api to run this code
     embed_model = mwu.call_build_model_with_preselected_descriptors(qsar_method, training_tsv, ci.remove_log_p,
@@ -425,7 +426,7 @@ def a_run_dataset(f, training_tsv_path, prediction_tsv_path, ci):
                              scoreEmbed=score_embed,
                              timeGA=timeGA)
 
-    print(json.dumps(de, indent=4))
+    logging.debug(json.dumps(de, indent=4))
     f.write(json.dumps(de)+'\n')
     f.flush()
 
@@ -469,7 +470,7 @@ def caseStudyTEST_RunGA():
                                 n_threads=n_threads, num_optimizers=num_optimizers,
                                 num_generations=num_generations, num_jobs=num_jobs,
                                 qsar_method=qsar_method, threshold=threshold)
-    print(json.dumps(dictGA) + '\n')
+    logging.debug(json.dumps(dictGA) + '\n')
     f.write(json.dumps(dictGA) + '\n')
 
     f.write('ENDPOINT\tscore\tscore_embed\tlen(features)\tfeatures\tTime(min)\n')
@@ -480,7 +481,7 @@ def caseStudyTEST_RunGA():
 
         directory = test_directory + ENDPOINT + ' TEST/'
 
-        print(ENDPOINT, descriptor_software)
+        logging.debug(ENDPOINT, descriptor_software)
 
         # training_file_name = ENDPOINT + '_training_set-2d.csv'
         # prediction_file_name = ENDPOINT + '_prediction_set-2d.csv'

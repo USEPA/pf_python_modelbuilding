@@ -3,3 +3,72 @@ GET http://localhost:5000/models/rf/info
 
 ###
 GET http://localhost:5000/models/1067
+
+###
+GET http://localhost:8080/api/predictor_models/predict?smiles=c1ccccc1&model_id=1065
+
+###
+GET http://localhost:8080/api/predictor_models/predict?smiles=c1ccccc1&model_id=1065
+
+###
+POST http://localhost:8080/api/predictor_models/predict
+Content-Type: application/json
+
+{
+  "smiles": [
+    "C1C=CC=CC=1",
+    "CC1C=CC=CC=1",
+    "CCNC1N=C(Cl)N=C(NC(C)C)N=1"
+  ],
+  "model_id": 1069
+}
+
+###
+POST http://localhost:8080/api/predictor_models/predict
+Content-Type: application/json
+
+{
+  "smiles": [
+    "[NH4+].[Cl-]",
+    "[O-2].[O-2].[O-2].[As+3].[As+3]",
+    "ClCC1C=CC=CC=1",
+    "OC(COC1C=CC(Cl)=CC=1Cl)=O",
+    "C*.CCCCCCCOC(COC1C(Cl)=CC(Cl)=CC=1)=O |$;A;;;;;;;;;;;;;;;;;;;;$|",
+    "CN(C(NC1C=CC(Cl)=C(Cl)C=1)=O)C",
+    "OC1C=CC([N+](=O)[O-])=CC=1[N+](=O)[O-]",
+    "[Na+].[O-]N=O",
+    "ClC=C(Cl)Cl",
+    "CC(C(=O)O)OC1C=C(Cl)C(Cl)=CC=1Cl",
+    "COP(C(C(Cl)(Cl)Cl)O)(OC)=O",
+    "[Zr+4].[O-]S(=O)(=O)[O-].[O-]S(=O)(=O)[O-]",
+    "CCOP(SCCSCC)(OCC)=S",
+    "N",
+    "ClC(=O)Cl",
+    "[K+].[C-]#N",
+    "CC(OC(=O)C)=O",
+    "[Ca+2].[O-][Cr](=O)(=O)[O-]",
+    "[Cu+2].[Cu+2].[Cu+2].[Cu+2].[O-][As]=O.[O-][As]=O.[O-][As]=O.[O-][As]=O.[O-][As]=O.[O-][As]=O.CC(=O)[O-].CC(=O)[O-]",
+    "[S-2].[Pb+2]",
+    "[Pb+2].CCCCCCCCCCCCCCCCCC(=O)[O-].CCCCCCCCCCCCCCCCCC(=O)[O-]",
+    "[OH-].[Na+]",
+    "[Fe+2].[O-]S(=O)(=O)[O-]",
+    "[Na+].[Na+].[O-][Se](=O)[O-]",
+    "Cl*.ClC1C=CC=CC=1 |$;A;;;;;;;$|",
+    null,
+    "O.O.O.O.O.O.O.O.O.O.O.O.[Na+].[Na+].[Na+].[O-]P(=O)([O-])[O-]",
+    "S=P12SP3(SP(SP(S3)(S1)=S)(=S)S2)=S",
+    null,
+    "O.[Na+].[Na+].OP(=O)([O-])[O-]",
+    "[Hg+].[O-][N+](=O)[O-]",
+    "OC1C=CC=CC=1.Cl*.Cl*.Cl* |$;;;;;;;;A;;A;;A$|",
+    "[Cu+2].O[C@@H](C(=O)[O-])[C@H](C(=O)[O-])O",
+    null,
+    "[K+].[K+].F[Zr-2](F)(F)(F)(F)F",
+    "[Zn+2].[O-]S(S(=O)[O-])=O",
+    "CC(CN)O.OC(COC1C=C(Cl)C(Cl)=CC=1Cl)=O",
+    "[I-].[I-].[Pb+2]",
+    null,
+    null
+  ],
+  "model_id": 1065
+}

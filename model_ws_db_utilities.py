@@ -1,13 +1,20 @@
+import concurrent
+import concurrent.futures
+import json
 import os
+import threading
 from io import BytesIO
+
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import URL
-from sqlalchemy.orm import sessionmaker
 from sqlalchemy.exc import SQLAlchemyError
-import json
+from sqlalchemy.orm import sessionmaker
+
+from API_Utilities import QsarSmilesAPI, DescriptorsAPI
+from model_ws_utilities import call_do_predictions_from_df, models
 from models import df_utilities as dfu
 from models.ModelBuilder import Model
-from API_Utilities import QsarSmilesAPI, DescriptorsAPI
+
 import StatsCalculator as stats
 import pandas as pd            
 from datetime import datetime, timezone
@@ -24,13 +31,14 @@ from predict_constants import UnitsConverter
 from predict_constants import PredictConstants as pc
 from numba.core.types import none
 
+from utils import timer
+
+
 debug = False
-
 import logging
-
 logging.getLogger('sqlalchemy').setLevel(logging.ERROR)
-
 fk_dsstox_snapshot_id = 3
+
 
 """
 X TODO Add display units
@@ -58,13 +66,20 @@ TODO: Add experimental tab with raw data
 """
 
 
+
+
+
+lock = threading.Lock()
+cache = {}
+
+
 def getSession():
     connect_url = URL.create(
         drivername='postgresql+psycopg2',
         username=os.getenv('DEV_QSAR_USER'),
         password=os.getenv('DEV_QSAR_PASS'),
-        host=os.getenv('DEV_QSAR_HOST'),
-        port=os.getenv('DEV_QSAR_PORT'),
+        host=os.getenv('DEV_QSAR_HOST', 'localhost'),
+        port=os.getenv('DEV_QSAR_PORT', 5432),
         database=os.getenv('DEV_QSAR_DATABASE')
     )
     # print(connect_url)
@@ -73,9 +88,83 @@ def getSession():
     session = Session()
     return session
 
-
 class ModelInitializer:
     
+    def init_model(self, model_id):
+    
+        with lock:
+            if model_id in models:
+                logging.debug('have model already initialized')
+                model = models[model_id]
+            else:
+                model = self.initModel(model_id)
+                models[model_id] = model
+    
+        return model
+
+    
+    # @timer
+    # def initModel(self, model_id):
+    #     session = getSession()
+    #     model_bytes = self.get_model_bytes(model_id, session)
+    #
+    #     import pickle
+    #     model = pickle.loads(model_bytes)
+    #
+    #     if debug:
+    #         print('model_description from pickled model:', model.get_model_description())
+    #
+    #     if not hasattr(model, "is_binary"):
+    #         print('model.is_binary is none, setting to false')
+    #         model.is_binary = False
+    #
+    #     # Stores model under provided number
+    #
+    #     self.get_model_details(model_id, model, session)
+    #
+    #     logging.debug(model.get_model_description_pretty())
+    #
+    #     # this wont be necessary if the training/test sets are in the pickled model:
+    #     self.get_training_prediction_instances(session, model)
+    #
+    #     # TODO: for the training/prediction instances, could also query the descriptor api but it would take longer and
+    #     #  sometimes the descriptors will come out different due to the fact that the descriptors will be pulled from the
+    #     #  cache by inchi key (TEST descriptors come out differently sometimes for two different structures with the same inchi key but different smiles
+    #
+    #     return model
+
+    
+    def get_model_bytes(self, model_id, session):
+        """
+        This method allows for the fact that model bytes might be stored as separate rows for very large models
+        :rtype: bytearray
+        """
+        # Database connection parameters
+        try:
+            # Get a connection from the session
+            connection = session.connection()
+    
+            # SQL query to retrieve bytes
+            sql = text("SELECT bytes FROM qsar_models.model_bytes WHERE fk_model_id = :model_id ORDER BY id")
+    
+            # Execute the query with the parameter
+            result = connection.execute(sql, {"model_id": model_id})
+    
+            # Use BytesIO to collect the byte data
+            output_stream = BytesIO()
+    
+            # Fetch and write byte data to the output stream
+            for record in result:
+                output_stream.write(record.bytes)  # Assuming the column name is 'bytes'
+    
+            # Return the combined byte array
+            return output_stream.getvalue()
+    
+        except Exception as e:
+            print(f"Exception occurred: {e}")
+            return None
+
+
     def get_model_statistics(self, model: Model, session):
 
         sql = text("""
@@ -185,53 +274,7 @@ class ModelInitializer:
             # print('done with details')
             # session.close()
     
-        return None
 
-    def get_available_models(self):
-        """
-        Gets  list of available models with meta data
-        """
-        try:
-            session = getSession()
-    
-            # SQL query to retrieve model details
-            sql = text(self.getModelMetaDataQuery() + "\nWHERE m.fk_source_id = 3 and m.is_public=true;")  # fk_source_id=3 => cheminformatics modules
-    
-            # Use left joins so can still get a result if something is missing (like fk_ad_method was not set for model)
-            # print(sql)
-    
-            # Execute the query
-            results = session.execute(sql).fetchall()
-    
-            models = []
-            # Process the result
-            for row in results:
-                model = Model()
-                self.row_to_model_details(model, row)
-                models.append(json.loads(model.get_model_description()))
-    
-            return models
-    
-        except Exception as ex:
-            print(f"Exception occurred: {ex}")
-        finally:
-        # Close the session - close it later after get training/test sets
-            session.close()
-    
-        return None
-    
-    def init_model(self, model_id, models):
-        if model_id in models:
-            if debug:
-                print('have model already initialized')
-            model = models[model_id]
-        else:
-            model = self.initModel(model_id)
-            models[model_id] = model
-            print(model_id, "init complete")
-    
-        return model
-    
     def replace_id_with_dsstox_record(self, df_set, df_dsstoxRecords):
         
         # Create a dictionary for fast lookup by canonicalSmiles
@@ -254,11 +297,17 @@ class ModelInitializer:
     
         return df_set
     
+    
+    @timer
     def initModel(self, model_id):
 
         session = getSession()
         
         model_bytes = self.get_model_bytes(model_id, session)
+        
+        if not model_bytes:
+            print("Couldnt load " + model_id + " from model bytes")
+            return        
     
         import pickle
         model = pickle.loads(model_bytes)
@@ -276,7 +325,7 @@ class ModelInitializer:
     
         # Stores model under provided number
         
-        model.modelId = model_id
+        model.modelId = model_id 
         
         self.get_model_details(model, session)
 
@@ -357,39 +406,8 @@ class ModelInitializer:
             print(f"Exception occurred: {e}")
             return None
     
-    def get_model_bytes(self, model_id, session):
-        """
-        This method allows for the fact that model bytes might be stored as separate rows for very large models
-        :rtype: bytearray
-        """
-        # Database connection parameters
-        try:
-            # Get a connection from the session
-            connection = session.connection()
     
-            # SQL query to retrieve bytes
-            sql = text("SELECT bytes FROM qsar_models.model_bytes WHERE fk_model_id = :model_id ORDER BY id")
-    
-            # Execute the query with the parameter
-            result = connection.execute(sql, {"model_id": model_id})
-    
-            # Use BytesIO to collect the byte data
-            output_stream = BytesIO()
-    
-            # Fetch and write byte data to the output stream
-            for record in result:
-                output_stream.write(record.bytes)  # Assuming the column name is 'bytes'
-    
-            # Return the combined byte array
-            return output_stream.getvalue()
-    
-        except Exception as e:
-            print(f"Exception occurred: {e}")
-            return None
 
-    # finally:
-        # Close the session - closed later
-        # print("done")
     
     def get_training_prediction_instances(self, session, model:Model):
         if debug:
@@ -483,7 +501,41 @@ class ModelInitializer:
             LEFT JOIN qsar_models.ad_methods adm ON m.fk_ad_method = adm.id
             LEFT JOIN qsar_models.sources s2 ON m.fk_source_id = s2.id
         """
-        
+    
+    
+    def get_available_models(self):
+        """
+        Gets  list of available models with meta data
+        """
+        try:
+            session = getSession()
+    
+            # SQL query to retrieve model details
+            sql = text(self.getModelMetaDataQuery() + "\nWHERE m.fk_source_id = 3 and m.is_public=true;")
+    
+            # Use left joins so can still get a result if something is missing (like fk_ad_method was not set for model)
+            # print(sql)
+    
+            # Execute the query
+            results = session.execute(sql).fetchall()
+    
+            models = []
+            # Process the result
+            for row in results:
+                model = Model()
+                self.row_to_model_details(model, row)
+                models.append(json.loads(model.get_model_description()))
+    
+            return models
+    
+        except Exception as ex:
+            print(f"Exception occurred: {ex}")
+        finally:
+            # Close the session - close it later after get training/test sets
+            session.close()
+    
+        return None
+    
     def row_to_model_details(self, m: Model, row):
         
         (m.modelName,
@@ -651,6 +703,15 @@ class ModelResults:
     def to_json(self):
         return json.dumps(self.to_dict(), indent=4)
 
+
+
+
+
+
+
+
+
+
     def get_model_list(self, session):
         """Gets model meta data (except training and test set tsvs).
         TODO Should this info be stored directly in model object and then for new models we won't need to query the db since will be already in the pickled object?
@@ -658,31 +719,31 @@ class ModelResults:
         try:
             # SQL query to retrieve model details
             sql = text("""
-            SELECT 
-                m.name_ccd,
-                d.id,
-                d.name,
-                u.abbreviation_ccd,
-                d.dsstox_mapping_strategy,
-                p.name_ccd,
-                ds.id,
-                ds.name,
-                ds.descriptor_service,
-                ds.headers_tsv,
-                s.id,
-                s.name,
-                adm.name,
-                de.embedding_tsv
-            FROM qsar_models.models m
-            LEFT JOIN qsar_datasets.datasets d ON d.name = m.dataset_name
-            LEFT JOIN qsar_datasets.units u ON d.fk_unit_id = u.id
-            LEFT JOIN qsar_datasets.properties p ON d.fk_property_id = p.id
-            LEFT JOIN qsar_descriptors.descriptor_sets ds ON m.descriptor_set_name = ds.name
-            LEFT JOIN qsar_datasets.splittings s ON m.splitting_name = s.name
-            LEFT JOIN qsar_models.ad_methods adm ON m.fk_ad_method = adm.id
-            LEFT JOIN qsar_models.descriptor_embeddings de ON m.fk_descriptor_embedding_id = de.id
-            WHERE fk_source_id=3 and is_public=true
-            """)
+                       SELECT m.name_ccd,
+                              d.id,
+                              d.name,
+                              u.abbreviation_ccd,
+                              d.dsstox_mapping_strategy,
+                              p.name_ccd,
+                              ds.id,
+                              ds.name,
+                              ds.descriptor_service,
+                              ds.headers_tsv,
+                              s.id,
+                              s.name,
+                              adm.name,
+                              de.embedding_tsv
+                       FROM qsar_models.models m
+                                LEFT JOIN qsar_datasets.datasets d ON d.name = m.dataset_name
+                                LEFT JOIN qsar_datasets.units u ON d.fk_unit_id = u.id
+                                LEFT JOIN qsar_datasets.properties p ON d.fk_property_id = p.id
+                                LEFT JOIN qsar_descriptors.descriptor_sets ds ON m.descriptor_set_name = ds.name
+                                LEFT JOIN qsar_datasets.splittings s ON m.splitting_name = s.name
+                                LEFT JOIN qsar_models.ad_methods adm ON m.fk_ad_method = adm.id
+                                LEFT JOIN qsar_models.descriptor_embeddings de ON m.fk_descriptor_embedding_id = de.id
+                       WHERE fk_source_id = 3
+                         and is_public = true
+                       """)
 
             # Use left joins so can still get a result if something is missing (like fk_ad_method was not set for model)
             # print(sql)
@@ -709,6 +770,7 @@ class ModelResults:
     
 
 class ModelStatistics:
+    
     
     def redo_cv_stats(self, session, model: Model):
         
@@ -738,6 +800,7 @@ class ModelStatistics:
             stats.PredictConstants.TAG_TEST)
         
         self.compare_stats(model, stats_test_set)
+        
 
     def calculate_ad_stats(self, session, model:Model):
         
@@ -752,8 +815,6 @@ class ModelStatistics:
         df_ad = pd.DataFrame(ad_results)  # convert to dataframe
         
         self.calculate_AD_stats(df_ad, df_preds_test, PredictConstants.TAG_TEST, model.modelId, session)
-        
-        # MAE_Test_inside_AD    MAE_Test_outside_AD    Coverage_Test
 
     def updateStatsPredictModuleModels(self):
 
@@ -821,9 +882,7 @@ class ModelStatistics:
         # print(dict_stats)
         
         return MAE_inside_AD, MAE_outside_AD, coverage
-
     
-
     def update_statistic_value(self, session, model_id: int, statistic_name: str, new_statistic_value: float, user_id: str):
         try:
             # Query to find the statistic ID
@@ -900,7 +959,8 @@ class ModelStatistics:
             e.with_traceback()
             session.rollback()
             raise e
-
+    
+    
     def compare_stats(self, model, stats_new):
         
         data = []
@@ -977,6 +1037,48 @@ class NeighborGetter:
 
 class ModelPredictor:
     
+    
+    @timer
+    def predictFromDB(self, model_id, smiles, generate_report, report_format):
+        """
+        Runs whole workflow: standardize, descriptors, prediction, applicability domain
+        """
+    
+        # Make sure the model is loaded before the concurrency
+        mi=ModelInitializer()
+        mi.init_model(model_id)
+    
+        if isinstance(smiles, str):
+            key = f"{model_id}-{smiles}--{report_format}"
+            if key in cache:
+                return cache[key]
+            else:
+                cache[key], code = self.predict_model_smiles(model_id, smiles, generate_report=generate_report, report_format=report_format)
+                return cache[key]
+        else:
+            result, missing = [], []
+            for smi in smiles:
+                key = f"{model_id}-{smi}--{report_format}"
+                if key in cache:
+                    result.append(cache[key])
+                else:
+                    missing.append(smi)
+    
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                results = pool.map(self.predict_model_smiles, [model_id for _ in missing], missing)
+    
+                for (r, code, smi) in results:
+                    if code != 200:
+                        r = dict(smiles=smi, error=r)
+                        result.append(r)
+                    else:
+                        result.append(r)
+    
+                    key = f"{model_id}-{smi}--{report_format}"
+                    cache[key] = r
+    
+            return result
+
     
     def setExpValue(self, model, modelResults:ModelResults):
         
@@ -1138,11 +1240,9 @@ class ModelPredictor:
         # print(self.printFirstRowDF(df_prediction))
         # print(self.printFirstRowDF(new_df))
         
-        
-        
-        
-
-    def predictFromDB(self, model_id, smiles, models, generate_report=False, report_format=None, useFileAPI=True):
+    
+    @timer
+    def predict_model_smiles(self, model_id, smiles, generate_report=False, report_format=None, useFileAPI=True):
         """
         Runs whole workflow: standardize, descriptors, prediction, applicability domain
         :param model_id:
@@ -1151,13 +1251,12 @@ class ModelPredictor:
         :return:
         """
     
-        # serverAPIs = "https://hcd.rtpnc.epa.gov" # TODO this should come from environment variable
-        serverAPIs = "https://cim-dev.sciencedataexperts.com/"
+        serverAPIs = os.getenv("CIM_API_SERVER", "https://cim-dev.sciencedataexperts.com/")
     
         # initialize model bytes and all details from db:
         
         mi = ModelInitializer()
-        model = mi.init_model(model_id, models)
+        model = mi.init_model(model_id)
         
         modelDetails=ModelDetails(model)
     
@@ -1193,7 +1292,7 @@ class ModelPredictor:
         # df_prediction = model.model_details.predictionSet #all chemicals in the model's prediction set, for testing
         # print("for qsarSmiles="+qsarSmiles+", descriptors="+json.dumps(descriptorsResults,indent=4))
                 
-        json_predictions = mwu.call_do_predictions_from_df(df_prediction, model)        
+        json_predictions = call_do_predictions_from_df(df_prediction, model)        
         # print(json_predictions)
         
         pred_results = json.loads(json_predictions)
@@ -1280,34 +1379,33 @@ class ModelPredictor:
     
         results_json = modelResults.to_json()
         # print(results_json)
-        return results_json, 200
+        return results_json, 200, smiles
     
+    @timer
     def standardizeStructure(self, serverAPIs, smiles, model: Model):
         useFullStandardize = False
         qsAPI = QsarSmilesAPI()
         chemicals = qsAPI.call_qsar_ready_standardize_post(server_host=serverAPIs, smiles=smiles, full=useFullStandardize,
-                                                           workflow=model.qsarReadyRuleSet);
+                                                           workflow=model.qsarReadyRuleSet)
         if "error" in chemicals:
             return chemicals, 400
     
         if len(chemicals) == 0:
-            # print('Standardization failed')
-            return "smiles=" + smiles + " failed standardization", 400
+            # logging.debug('Standardization failed')
+            return f"{smiles} failed standardization" if smiles else 'No Structure', 400
     
-        if debug:
-            print(chemicals)
+        logging.debug(chemicals)
     
         if len(chemicals) > 1 and model.omitSalts:
             # print('qsar smiles indicates mixture')
-            return "model can't run mixtures", 400
+            return f"{smiles}: model can't run mixtures", 400
     
-        qsarSmiles = chemicals[0]["canonicalSmiles"]
         chemical = chemicals[0]
-    
-        if debug:
-            print('qsarSmiles', qsarSmiles)
-    
+        qsarSmiles = chemical["canonicalSmiles"]
+        logging.debug(f"qsarSmiles: {qsarSmiles}")
         return chemical, 200
+
+
 
     def predictSetFromDB_SmilesFromExcel(self, model_id, excel_file_path, sheetName):
         """
@@ -1383,7 +1481,7 @@ class ModelPredictor:
         # df_prediction = model.model_details.predictionSet #all chemicals in the model's prediction set, for testing
         # print("for qsarSmiles="+qsarSmiles+", descriptors="+json.dumps(descriptorsResults,indent=4))
     
-        print(pred_results)
+        logging.debug(pred_results)
     
         # # applicability domain calcs:
         # ad_results = None
@@ -1403,6 +1501,8 @@ class ModelPredictor:
         print(json.dumps(first_row_dict, indent=4))
         return first_row_dict  
 
+
+    @timer
     def determineApplicabilityDomain(self, model: Model, df_prediction):
         """
         Calculate the applicability domain using the model's training set and the AD measure assigned to the model in the DB
@@ -1447,46 +1547,46 @@ class ModelPredictor:
         # print(json.dumps(dicts,indent=4))
 
         return results  # gives an array instead of each object on separate line
-
-
-
-def createHmtlReportFromJson():
     
-    # model_id = str(1065)  # HLC, smallest dataset
-    # model_id = str(1066)  # WS
-    # model_id = str(1067)  # VP
-    # model_id = str(1068)  # BP
-    # model_id = str(1069)  # LogKow  
-    model_id = str(1070) # MP, biggest dataset
-    smiles = "c1ccccc1"
-                    
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    file_path = os.path.join(script_dir, model_id + "_report.json")
-    with open(file_path, 'r') as file:
-        modelResults = json.load(file)
-        
-    modelResults=ModelResults(**modelResults)
-        
-    print(json.dumps(modelResults.modelDetails,indent=4))
-    
-    from report_creator import ReportCreator
-    rc = ReportCreator()                   
-    html=rc.create_html_report(modelResults)
+      
 
-    file_path = os.path.join(script_dir, model_id + "_report.html")
-    
-    # Write the HTML to the specified file path
-    with open(file_path, 'w') as f:
-        f.write(html)
-
-    # mi=ModelInitializer()
-    # models=mi.get_available_models()
-    # session=getSession()
-    # for model in models:
-    #     print(model['modelId'])
-    #     mi.get_dsstox_records_for_dataset(model['modelId'], session)
-    
-    webbrowser.open(f'file://{file_path}')
+# def createHmtlReportFromJson():
+#
+#     # model_id = str(1065)  # HLC, smallest dataset
+#     # model_id = str(1066)  # WS
+#     # model_id = str(1067)  # VP
+#     # model_id = str(1068)  # BP
+#     # model_id = str(1069)  # LogKow  
+#     model_id = str(1070) # MP, biggest dataset
+#     smiles = "c1ccccc1"
+#
+#     script_dir = os.path.dirname(os.path.abspath(__file__))
+#     file_path = os.path.join(script_dir, model_id + "_report.json")
+#     with open(file_path, 'r') as file:
+#         modelResults = json.load(file)
+#
+#     modelResults=ModelResults(**modelResults)
+#
+#     print(json.dumps(modelResults.modelDetails,indent=4))
+#
+#     from report_creator import ReportCreator
+#     rc = ReportCreator()                   
+#     html=rc.create_html_report(modelResults)
+#
+#     file_path = os.path.join(script_dir, model_id + "_report.html")
+#
+#     # Write the HTML to the specified file path
+#     with open(file_path, 'w') as f:
+#         f.write(html)
+#
+#     # mi=ModelInitializer()
+#     # models=mi.get_available_models()
+#     # session=getSession()
+#     # for model in models:
+#     #     print(model['modelId'])
+#     #     mi.get_dsstox_records_for_dataset(model['modelId'], session)
+#
+#     webbrowser.open(f'file://{file_path}')
 
 def runExample():
     
@@ -1509,7 +1609,7 @@ def runExample():
     # file_format = "json"
             
     mp = ModelPredictor()    
-    output, code = mp.predictFromDB(model_id, smiles, mwu.models, generate_report=generate_report, report_format=file_format,
+    output, code = mp.predict_model_smiles(model_id, smiles, generate_report=generate_report, report_format=file_format,
                                      useFileAPI=True)
         
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -1589,7 +1689,26 @@ def runExampleFromService():
     webbrowser.open(f'file://{file_path}')
     
 
+    
+def test_say_hello():
+    
+    import requests
+    
+    # Define the name to test
+    test_name = "World"
+    
+    # Send a GET request to the /hello/<name> endpoint on localhost
+    response = requests.get(f'http://localhost:5004/hello/{test_name}')
+    
+    print(response.text)
+    
+
+
 if __name__ == '__main__':
+    
+    # runExample()
+    test_say_hello()
+    
     # excel_file_path = r"C:\Users\TMARTI02\OneDrive - Environmental Protection Agency (EPA)\0 java\0 model_management\hibernate_qsar_model_building\data\reports\prediction reports upload\WebTEST2.1\HLC v1 modeling_RND_REPRESENTATIVE.xlsx"
     # mp=ModelPredictor()
     # mp.predictSetFromDB_SmilesFromExcel(1065,excel_file_path,'Test set')
@@ -1597,9 +1716,10 @@ if __name__ == '__main__':
     # modelStatistics = ModelStatistics()
     # modelStatistics.updateStatsPredictModuleModels()
 
-    runExample()
+    # runExample()
     # createHmtlReportFromJson()
     
     # runExampleFromService()
 
-
+    # excel_file_path = r"C:\Users\TMARTI02\OneDrive - Environmental Protection Agency (EPA)\0 java\0 model_management\hibernate_qsar_model_building\data\reports\prediction reports upload\WebTEST2.1\HLC v1 modeling_RND_REPRESENTATIVE.xlsx"
+    # predictSetFromDB(1065, excel_file_path)

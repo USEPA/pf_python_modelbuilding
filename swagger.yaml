@@ -1,0 +1,100 @@
+openapi: '3.0.3'
+
+info:
+  title: EPA Predictor
+  version: "0.0.1"
+  description: API gateway to EPA predictions
+
+paths:
+  /api/predictor_models/version:
+    get:
+      operationId: app.get_version
+      responses:
+        200:
+          description: Success
+
+  /api/predictor_models/metadata:
+    get:
+      operationId: app.get_metadata
+      responses:
+        200:
+          description: Success
+
+  /api/predictor_models/predict:
+    get:
+      operationId: app.predictDB
+      parameters:
+        - name: smiles
+          in: query
+          description: SMILES to generate predictions for
+          required: true
+          schema:
+            type: string
+          examples:
+            example1:
+              summary: 2-Isopropylthioxanthone
+              value: CC(C)c1ccc2sc3ccccc3c(=O)c2c1
+            example2:
+              summary: Triphenyl phosphite
+              value: c1ccc(OP(Oc2ccccc2)Oc2ccccc2)cc1
+        - name: model_id
+          in: query
+          description: Model ID to use
+          required: true
+          schema:
+            type: integer
+          examples:
+            example1:
+              summary: HLC-XGB Martin 2024
+              value: 1065
+            example2:
+              summary: WS-XGB Martin 2024
+              value: 1066
+            example3:
+              summary: VP-XGB Martin 2024
+              value: 1067
+            example4:
+              summary: BP-XGB Martin 2024
+              value: 1068
+            example5:
+              summary: LogP-XGB Martin 2024
+              value: 1069
+            example6:
+              summary: MP-XGB Martin 2024
+              value: 1070
+      responses:
+        200:
+          description: Success
+          content: { }
+    post:
+      operationId: app.predictDB_POST
+      summary: Generate predictions for multiple molecules
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Request"
+      responses:
+        200:
+          description: Success
+          content: { }
+
+components:
+  schemas:
+    Request:
+      type: object
+      properties:
+        smiles:
+          type: array
+        model_id:
+          type: integer
+      required:
+        - smiles
+        - model_id
+      example:
+        description:
+          HLC-XGB Martin 2024
+        smiles:
+          - FC(C(C(C1OC(=O)C2C(=CC=CC=2)N=1)(F)F)(F)F)(F)F
+          - CCCCN
+        model_id: 1065

@@ -1,24 +1,3 @@
-import json
-
-from flask import Flask, request, abort
-import logging
-import pickle
-from dotenv import load_dotenv
-
-load_dotenv()
-import model_ws_utilities as mwu
-import model_ws_db_utilities as mwdu
-from applicability_domain import applicability_domain_utilities as adu
-
-from sklearn2pmml import sklearn2pmml
-
-app = Flask(__name__)
-# Limit logging output for easier readability
-log = logging.getLogger('werkzeug')
-log.setLevel(logging.DEBUG)
-
-# use_pmml_pipeline_during_model_building = True # if true use PMMLPipeline with standardizing happening separate during model building
-# use_sklearn2pmml = True # if false uses pypmml to load the file. Note: pypmml doesnt handle knn predictions the same way...
 
 """
 Flask webservice to build QSAR models with a variety of modeling strategies (RF, SVM, DNN, XGB...more to come?)
@@ -29,18 +8,109 @@ Run with Python 3.9 to avoid problems with parallelizing RF (bug in older versio
 Repository created 05/21/2021
 """
 
+from flask import request, abort, Flask
 
-@app.route('/models/<string:qsar_method>/info', methods=['GET'])
+import json
+import logging
+import pickle
+
+from logging import INFO, DEBUG
+from model_ws_db_utilities import ModelPredictor, ModelInitializer
+
+# why not make the following methods part of a Utility class then call methods from instance of it?
+from model_ws_utilities import get_model_info, call_build_model_with_preselected_descriptors, models, \
+    call_build_embedding_ga, call_build_embedding_importance, call_build_embedding_lasso, call_cross_validate, \
+    call_do_predictions, instantiateModelForPrediction, get_model_details, call_generate_plot
+
+from applicability_domain import applicability_domain_utilities as adu
+
+from sklearn2pmml import sklearn2pmml
+
+from dotenv import load_dotenv
+load_dotenv()
+
+
+USE_CONNEXION = False
+
+if USE_CONNEXION:
+    
+    print("HERE")
+    
+    import coloredlogs
+    import connexion
+    from connexion.middleware import MiddlewarePosition
+    from connexion.options import SwaggerUIOptions
+    from starlette.middleware.cors import CORSMiddleware
+    coloredlogs.install(level=DEBUG, milliseconds=True,
+                        fmt='%(asctime)s - %(name)s - %(levelname)s - %(message)s (%(filename)s:%(lineno)d)')
+    
+    options = SwaggerUIOptions(spec_path="/api/predictor_models/swagger.yaml",
+                               swagger_ui_path="/api/predictor_models/swagger")
+    app = connexion.AsyncApp(__name__, swagger_ui_options=options)
+    app.add_middleware(
+        CORSMiddleware,
+        position=MiddlewarePosition.BEFORE_EXCEPTION,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+    app.add_api('swagger.yaml', swagger_ui_options=options)
+else:
+    app = Flask(__name__)
+    
+
+def get_version():
+    try:
+        from build_info import BUILD_TIMESTAMP, BUILD_NUMBER
+    except ImportError:
+        BUILD_TIMESTAMP = None
+        BUILD_NUMBER = None
+
+    return dict(name="predictor_models",
+                title="EPA/Models",
+                version="1.0.0",
+                compiled=BUILD_TIMESTAMP,
+                build_id=BUILD_NUMBER)
+
+
+def get_metadata():
+    return dict(
+        version=get_version()
+    )
+    
+
+# app = Flask(__name__)
+# log = logging.getLogger('werkzeug')
+# log.setLevel(logging.DEBUG)
+
+
+@app.route('/hello/<name>', methods=['GET'])
+def say_hello(name):
+    """
+    API endpoint that returns a greeting for the given name.
+    The name is extracted from the URL path parameter.
+    """
+    return "Hello, " + name
+
+
+
+# # use_pmml_pipeline_during_model_building = True # if true use PMMLPipeline with standardizing happening separate during model building
+# # use_sklearn2pmml = True # if false uses pypmml to load the file. Note: pypmml doesnt handle knn predictions the same way...
+
+
+
+@app.route('/api/predictor_models/models/<string:qsar_method>/info', methods=['GET'])
 def info(qsar_method):
     """Returns a short, generic description of the QSAR method"""
-    return mwu.get_model_info(qsar_method), 200
+    return get_model_info(qsar_method), 200
 
 
-@app.route('/models/<string:qsar_method>/train', methods=['POST'])
+@app.route('/api/predictor_models/models/<string:qsar_method>/train', methods=['POST'])
 def train(qsar_method):
     """Trains a model for the specified QSAR method on provided data"""
 
-    print('enter train')
+    logging.debug('enter train')
 
     obj = request.form
     training_tsv = obj.get('training_tsv')  # Retrieves the training data as a TSV
@@ -82,19 +152,19 @@ def train(qsar_method):
         n_jobs = 8
 
     embedding = get_embedding(obj)
-    print("embedding = ***\t", embedding, '\t***')
+    logging.debug("embedding = ***\t", embedding, '\t***')
 
     if embedding and embedding == 'error':
         abort(400, 'non blank embedding and dont have tab character')
 
-    model = mwu.call_build_model_with_preselected_descriptors(qsar_method=qsar_method,
-                                                              training_tsv=training_tsv,
-                                                              prediction_tsv=prediction_tsv,
-                                                              remove_log_p=remove_log_p,
-                                                              use_pmml_pipeline=use_pmml,
-                                                              include_standardization_in_pmml=include_standardization_in_pmml,
-                                                              descriptor_names_tsv=embedding,
-                                                              n_jobs=n_jobs, filterColumnsInBothSets=True)
+    model = call_build_model_with_preselected_descriptors(qsar_method=qsar_method,
+                                                          training_tsv=training_tsv,
+                                                          prediction_tsv=prediction_tsv,
+                                                          remove_log_p=remove_log_p,
+                                                          use_pmml_pipeline=use_pmml,
+                                                          include_standardization_in_pmml=include_standardization_in_pmml,
+                                                          descriptor_names_tsv=embedding,
+                                                          n_jobs=n_jobs, filterColumnsInBothSets=True)
 
     if model is None:
         abort(500, 'unknown model training error')
@@ -104,15 +174,16 @@ def train(qsar_method):
 
     # If model number provided for storage, stores the model and sets status 201 CREATED instead
     if model_id.strip():
-        mwu.models[model_id] = model
+        models[model_id] = model
         status = 201
 
     if save_to_database:
         # mwdu.saveModelToDatabase(model, model_id)
         # return 'model bytes saved to database', 202
-        print('need to implement method to save to database using sql')
-        return 'need to implement method to save to database using sql', 400
-        
+        # TMM: the code that was in there doesnt work anymore
+        print('need to implement working method to save to database using sql')
+        return 'need to implement working method to save to database using sql', 400
+
     else:
         # Returns model bytes
         if use_pmml:
@@ -129,7 +200,7 @@ def train(qsar_method):
             return pickle.dumps(model), status
 
 
-@app.route('/models/prediction_applicability_domain', methods=['POST'])
+@app.route('/api/predictor_models/models/prediction_applicability_domain', methods=['POST'])
 def prediction_applicability_domain():
     """Generates applicability domain values"""
 
@@ -163,7 +234,7 @@ def prediction_applicability_domain():
 
     embedding = get_embedding(obj)
 
-    print("embedding = ***\t", embedding, '\t***')
+    logging.debug("embedding = ***\t", embedding, '\t***')
 
     if embedding and embedding == 'error':
         abort(400, 'non blank embedding and dont have tab character')
@@ -202,11 +273,11 @@ def get_embedding(obj):
     return embedding
 
 
-@app.route('/models/<string:qsar_method>/embedding', methods=['POST'])
+@app.route('/api/predictor_models/models/<string:qsar_method>/embedding', methods=['POST'])
 def train_embedding_ga(qsar_method):
     """Post method that trains GA embedding for the specified QSAR method on provided data"""
 
-    print('Enter train_embedding (method to make GA based embedding)')
+    logging.debug('Enter train_embedding (method to make GA based embedding)')
 
     obj = request.form
 
@@ -218,7 +289,7 @@ def train_embedding_ga(qsar_method):
 
     prediction_tsv = obj.get('prediction_tsv')  # Retrieves the training data as a TSV
     if prediction_tsv is None:
-        print('prediction_tsv is none!')
+        logging.debug('prediction_tsv is none!')
         prediction_tsv = request.files.get('prediction_tsv').read().decode('UTF-8')
     if prediction_tsv is None:
         abort(400, 'missing prediction tsv')
@@ -253,33 +324,33 @@ def train_embedding_ga(qsar_method):
     # print('use_wards2 = ', obj.get('use_wards'))
     # print(num_generations)
 
-    embedding, timeMin = mwu.call_build_embedding_ga(qsar_method=qsar_method,
-                                                     training_tsv=training_tsv,
-                                                     prediction_tsv=prediction_tsv,
-                                                     remove_log_p=remove_log_p,
-                                                     num_generations=num_generations,
-                                                     num_optimizers=num_optimizers,
-                                                     num_jobs=num_jobs, n_threads=n_threads,
-                                                     descriptor_coefficient=descriptor_coefficient,
-                                                     max_length=max_length,
-                                                     threshold=threshold,
-                                                     use_wards=use_wards,
-                                                     run_rfe=False)
+    embedding, timeMin = call_build_embedding_ga(qsar_method=qsar_method,
+                                                 training_tsv=training_tsv,
+                                                 prediction_tsv=prediction_tsv,
+                                                 remove_log_p=remove_log_p,
+                                                 num_generations=num_generations,
+                                                 num_optimizers=num_optimizers,
+                                                 num_jobs=num_jobs, n_threads=n_threads,
+                                                 descriptor_coefficient=descriptor_coefficient,
+                                                 max_length=max_length,
+                                                 threshold=threshold,
+                                                 use_wards=use_wards,
+                                                 run_rfe=False)
 
     result_obj = {}
     result_obj['embedding'] = embedding
     result_obj['timeMin'] = timeMin
     result_str = json.dumps(result_obj)
 
-    print('result_str=' + result_str)
+    logging.debug('result_str=' + result_str)
     return result_str
 
 
-@app.route('/models/<string:qsar_method>/embedding_importance', methods=['POST'])
+@app.route('/api/predictor_models/models/<string:qsar_method>/embedding_importance', methods=['POST'])
 def train_embedding_importance(qsar_method):
     """Post method that trains importance based embedding for the specified QSAR method on provided data"""
 
-    print('Enter train_embedding_importance')
+    logging.debug('Enter train_embedding_importance')
 
     obj = request.form
 
@@ -291,7 +362,7 @@ def train_embedding_importance(qsar_method):
 
     prediction_tsv = obj.get('prediction_tsv')  # Retrieves the training data as a TSV
     if prediction_tsv is None:
-        print('prediction_tsv is none!')
+        logging.debug('prediction_tsv is none!')
         prediction_tsv = request.files.get('prediction_tsv').read().decode('UTF-8')
     if prediction_tsv is None:
         abort(400, 'missing prediction tsv')
@@ -331,33 +402,33 @@ def train_embedding_importance(qsar_method):
     max_descriptor_count = int(obj.get('max_descriptor_count'))
     n_threads = int(obj.get('n_threads'))
 
-    embedding, timeMin = mwu.call_build_embedding_importance(qsar_method=qsar_method,
-                                                             training_tsv=training_tsv,
-                                                             prediction_tsv=prediction_tsv,
-                                                             remove_log_p_descriptors=remove_log_p,
-                                                             n_threads=n_threads,
-                                                             num_generations=num_generations,
-                                                             use_permutative=use_permutative,
-                                                             run_rfe=run_rfe,
-                                                             fraction_of_max_importance=fraction_of_max_importance,
-                                                             min_descriptor_count=min_descriptor_count,
-                                                             max_descriptor_count=max_descriptor_count,
-                                                             use_wards=use_wards)
+    embedding, timeMin = call_build_embedding_importance(qsar_method=qsar_method,
+                                                         training_tsv=training_tsv,
+                                                         prediction_tsv=prediction_tsv,
+                                                         remove_log_p_descriptors=remove_log_p,
+                                                         n_threads=n_threads,
+                                                         num_generations=num_generations,
+                                                         use_permutative=use_permutative,
+                                                         run_rfe=run_rfe,
+                                                         fraction_of_max_importance=fraction_of_max_importance,
+                                                         min_descriptor_count=min_descriptor_count,
+                                                         max_descriptor_count=max_descriptor_count,
+                                                         use_wards=use_wards)
 
     result_obj = {}
     result_obj['embedding'] = embedding
     result_obj['timeMin'] = timeMin
     result_str = json.dumps(result_obj)
 
-    print('result_str=' + result_str)
+    logging.debug('result_str=' + result_str)
     return result_str
 
 
-@app.route('/models/<string:qsar_method>/embedding_lasso', methods=['POST'])
+@app.route('/api/predictor_models/models/<string:qsar_method>/embedding_lasso', methods=['POST'])
 def train_embedding_lasso(qsar_method):
     """Post method that trains importance based embedding for the specified QSAR method on provided data"""
 
-    print('Enter train_embedding_importance')
+    logging.debug('Enter train_embedding_importance')
 
     obj = request.form
 
@@ -386,12 +457,12 @@ def train_embedding_lasso(qsar_method):
 
     n_threads = int(obj.get('n_threads'))
 
-    embedding, timeMin = mwu.call_build_embedding_lasso(qsar_method=qsar_method,
-                                                        training_tsv=training_tsv,
-                                                        prediction_tsv=prediction_tsv,
-                                                        remove_log_p_descriptors=remove_log_p,
-                                                        n_threads=n_threads,
-                                                        run_rfe=run_rfe)
+    embedding, timeMin = call_build_embedding_lasso(qsar_method=qsar_method,
+                                                    training_tsv=training_tsv,
+                                                    prediction_tsv=prediction_tsv,
+                                                    remove_log_p_descriptors=remove_log_p,
+                                                    n_threads=n_threads,
+                                                    run_rfe=run_rfe)
 
     result_obj = {}
     result_obj['embedding'] = embedding
@@ -402,7 +473,7 @@ def train_embedding_lasso(qsar_method):
     return result_str
 
 
-@app.route('/models/<string:qsar_method>/cross_validate', methods=['POST'])
+@app.route('/api/predictor_models/models/<string:qsar_method>/cross_validate', methods=['POST'])
 def cross_validate_fold(qsar_method):
     """Trains a model for the specified QSAR method on provided data"""
     print('\n********************************************************************************************************')
@@ -450,15 +521,15 @@ def cross_validate_fold(qsar_method):
     hyperparameters = obj.get('hyperparameters')
     hyperparameters = json.loads(hyperparameters)  # convert to dictionary
 
-    return mwu.call_cross_validate(qsar_method=qsar_method,
-                                   cv_training_tsv=training_tsv, cv_prediction_tsv=prediction_tsv,
-                                   descriptor_names_tsv=embedding,
-                                   use_pmml_pipeline=use_pmml,
-                                   remove_log_p=remove_log_p,
-                                   hyperparameters=hyperparameters, n_jobs=n_jobs)
+    return call_cross_validate(qsar_method=qsar_method,
+                               cv_training_tsv=training_tsv, cv_prediction_tsv=prediction_tsv,
+                               descriptor_names_tsv=embedding,
+                               use_pmml_pipeline=use_pmml,
+                               remove_log_p=remove_log_p,
+                               hyperparameters=hyperparameters, n_jobs=n_jobs)
 
 #
-# @app.route('/models/<string:qsar_method>/predictsa', methods=['POST'])
+# @app.route('/api/predictor_models/models/<string:qsar_method>/predictsa', methods=['POST'])
 # def predictpythonstorage(qsar_method):
 #     """Makes predictions for a stored model on provided data"""
 #     obj = request.form
@@ -490,7 +561,40 @@ def cross_validate_fold(qsar_method):
 #     return mwu.call_do_predictions(prediction_tsv, model), 200
 
 
-@app.route('/models/predict', methods=['POST'])
+# following didnt work for me when I used simple flask app:
+# @app.route('/api/predictor_models/models/predictDB', methods=['POST', 'GET'])
+# def predictDB(smiles, model_id):
+#     return predictFromDB(model_id, smiles)
+
+
+@app.route('/api/predictor_models/models/predictDB', methods=['POST', 'GET'])
+def predictDB():
+    """Automates prediction and AD for single smiles using model in database"""
+
+    if request.method == 'POST':
+        obj = request.form
+    elif request.method == 'GET':
+        obj = request.args
+    
+    smiles = obj.get('smiles')  # Retrieves the model number to use
+    model_id = obj.get('model_id')
+
+    generate_report = obj.get('generate_report', 'false').lower() in ['true', '1', 'yes']
+    report_format = obj.get('report_format', 'json').lower()
+    if report_format not in ['json', 'html']:
+        report_format = 'json'
+
+    # generate_report = generate_report.lower() in ['true', '1', 'yes']
+    # report_format = report_format.lower()
+    # if report_format not in ['json', 'html']:
+    #     report_format = 'json'
+    # print(model_id, smiles, generate_report,report_format)
+    
+    mp = ModelPredictor()
+    return mp.predictFromDB(model_id, smiles, generate_report, report_format)
+
+
+@app.route('/api/predictor_models/models/predict', methods=['POST'])
 def predict():
     """Makes predictions for a stored model on provided data"""
     obj = request.form
@@ -507,9 +611,9 @@ def predict():
     if model_id is None:
         abort(400, 'missing model id')
 
-    if mwu.models[model_id] is not None:
+    if models[model_id] is not None:
         # Gets stored model using model number
-        model = mwu.models[model_id]
+        model = models[model_id]
     else:
         abort(400, 'Need to init model or use predictDB API call instead')
 
@@ -518,10 +622,10 @@ def predict():
         abort(404, 'no stored model with id ' + model_id)
 
     # Calls the appropriate prediction method and returns the results
-    return mwu.call_do_predictions(prediction_tsv, model), 200
+    return call_do_predictions(prediction_tsv, model), 200
 
 
-@app.route('/models/plot', methods=['POST'])
+@app.route('/api/predictor_models/models/plot', methods=['POST'])
 def generate_plot():
     """Makes predictions for a stored model on provided data"""
     obj = request.form
@@ -546,9 +650,9 @@ def generate_plot():
     if model_id is None:
         abort(400, 'missing model id')
 
-    if mwu.models[model_id] is not None:
+    if models[model_id] is not None:
         # Gets stored model using model number
-        model = mwu.models[model_id]
+        model = models[model_id]
     else:
         abort(400, 'Need to init model first')
 
@@ -557,10 +661,10 @@ def generate_plot():
         abort(404, 'no stored model with id ' + model_id)
 
     # Calls the appropriate prediction method and returns the results
-    return mwu.call_generate_plot(training_tsv, prediction_tsv, model, model_name, plot_type), 200
+    return call_generate_plot(training_tsv, prediction_tsv, model, model_name, plot_type), 200
 
 
-@app.route('/models/initPMML', methods=['POST'])
+@app.route('/api/predictor_models/models/initPMML', methods=['POST'])
 def initPMML():
     """Loads a model and stores it under the provided number"""
 
@@ -579,9 +683,9 @@ def initPMML():
     if model_id is None:
         abort(400, 'missing model id')
 
-    if model_id in mwu.models:
+    if model_id in models:
         print('already have model in memory')
-        model = mwu.models[model_id]
+        model = models[model_id]
         return model.get_model_description(), 201
 
     # if mwu.models[model_id] is not None:
@@ -634,9 +738,9 @@ def initPMML():
         is_binary = form_obj['is_binary'].lower == 'true'
 
     # print('is_categorical', is_categorical)
-    model = mwu.instantiateModelForPrediction(qsar_method=form_obj['qsar_method'],
-                                              is_binary=is_binary, pmml_file_path=pmml_file_path,
-                                              use_sklearn2pmml=use_sklearn2pmml)  # init from model_ws should take care of this when doing from java
+    model = instantiateModelForPrediction(qsar_method=form_obj['qsar_method'],
+                                          is_binary=is_binary, pmml_file_path=pmml_file_path,
+                                          use_sklearn2pmml=use_sklearn2pmml)  # init from app should take care of this when doing from java
     model.set_details(details=form_obj)
 
     # print(model.model_obj)
@@ -644,7 +748,7 @@ def initPMML():
     # model.embedding.remove('Property')
 
     # Stores model under provided number
-    mwu.models[model_id] = model
+    models[model_id] = model
 
     print('After init model_description =', model.get_model_description())
 
@@ -657,7 +761,7 @@ def initPMML():
     return model.get_model_description(), 201
 
 
-@app.route('/models/initPickle', methods=['POST'])
+@app.route('/api/predictor_models/models/initPickle', methods=['POST'])
 def initPickle():
     """Loads a model and stores it under the provided number"""
     print('enter initPickle')
@@ -698,7 +802,7 @@ def initPickle():
             #     print(model.is_binary)
 
         # Stores model under provided number
-        mwu.models[model_id] = model
+        models[model_id] = model
 
         print('After init model_description =', model.get_model_description())
         return model.get_model_description(), 201
@@ -708,15 +812,14 @@ def initPickle():
         abort(400, 'missing model bytes')
 
 
-@app.route('/models/details/<string:model_id>', methods=['GET'])  # changed api call because predictDB was calling details when ran from web browser
+
+@app.route('/api/predictor_models/models/<string:model_id>', methods=['GET'])
 def details(model_id):
     """Returns a detailed description of the QSAR model with version and parameter information (also inits the model if needed)"""
 
-    if model_id is None:
-        abort(404, 'no model id')
-
-    modelInitializer = mwdu.ModelInitializer()
-    model = modelInitializer.init_model(model_id, mwu.models)
+    mi=ModelInitializer()
+    # model = mwu.models[model_id]
+    model = mi.init_model(model_id)
 
     # print('details3', model.get_model_description())
 
@@ -725,94 +828,55 @@ def details(model_id):
         abort(404, 'no stored model with id ' + model_id)
 
     # Retrieves details from specified model
-    model_details = mwu.get_model_details(model)
+    model_details = get_model_details(model)
     if model_details is None:
         # 404 NOT FOUND if model has no detail information
         abort(404, 'no details for stored model with id ' + model_id)
 
     # Return description and 200 OK
     return model_details, 200
-
-
-@app.route('/models/predictDB', methods=['POST', 'GET'])
-def predictDB():
-    """Automates prediction and AD for single smiles using model in database"""
- 
-    if request.method == 'POST':
-        obj = request.form
-    elif request.method == 'GET':
-        obj = request.args
-        
-    smiles = obj.get('smiles')  # Retrieves the model number to use
-    model_id = obj.get('model_id')
-    generate_report = obj.get('generate_report', 'false').lower() in ['true', '1', 'yes']
-    report_format = obj.get('report_format', 'json').lower()
-    if report_format not in ['json', 'html']:
-        report_format = 'json'
-            
-    # print(model_id, smiles, generate_report,report_format)
-
-    mp = mwdu.ModelPredictor()
-    return mp.predictFromDB(model_id, smiles, mwu.models, generate_report, report_format)
-
-
-@app.route('/models', methods=['GET'])
+#
+#
+#
+@app.route('/api/predictor_models/models', methods=['GET'])
 def available_models():
-    """Returns a detailed description of the QSAR model with version and parameter information (also inits the model if needed)"""
+    """Returns a detailed description of the QSAR model with version and parameter information"""
 
     # model = mwu.models[model_id]
-    modelInitializer = mwdu.ModelInitializer()
-    models = modelInitializer.get_available_models()
+    mi=ModelInitializer()
+    models = mi.get_available_models()
 
     # Return description and 200 OK
     return models, 200
+#
+#
 
-
-@app.route('/models/reg_coeff/<string:model_id>', methods=['GET'])
+@app.route('/api/predictor_models/models/reg_coeff/<string:model_id>', methods=['GET'])
 def model_coeffs(model_id):
     """Returns a detailed description of the QSAR model with version and parameter information"""
 
-    modelInitializer = mwdu.ModelInitializer()
-    model = modelInitializer.init_model(model_id, mwu.models)
+    mi=ModelInitializer()
+    model = mi.init_model(model_id)
 
     # print('details3', model.get_model_description())
 
     # 404 NOT FOUND if no model stored under provided number
     if model is None:
         abort(404, 'no stored model with id ' + model_id)
-
-    coeff_dict = model.getOriginalRegressionCoefficients()
-
-    # TODO add code to return the coefficients instead of just printing to python io
-
-    return coeff_dict, 200
-
-
-# def printEqn(model):
-#     estimator = model.model_obj.steps[1][1]
-#     coefficients = estimator.coef_
-#     intercept = estimator.intercept_
-#     print('coefficients', coefficients)
-#     print('intercept', intercept)
-
-    # # Construct the equation string
-    # equation = "log(p/1-p) = "
-    # if intercept:
-    #     equation += f"{intercept[0]:.2f} + "
-    # for i, coef in enumerate(coefficients[0]):
-    #     equation += f"{coef:.2f} * {feature_names[i]} + "
-    #
-    # # Remove the trailing " + "
-    # equation = equation[:-3]
-    #
-    # print(equation)
+        
+        
+    if hasattr(model, 'getOriginalRegressionCoefficients') and callable(getattr(model, 'getOriginalRegressionCoefficients')):
+        coeff_dict = model.getOriginalRegressionCoefficients()
+        return coeff_dict, 200
+    else:
+        return "Cant return coefficients for "+model.qsar_method
 
 
-@app.route('/models/<string:model_id>/object', methods=['GET'])
+@app.route('/api/predictor_models/models/<string:model_id>/object', methods=['GET'])
 def model_obj(model_id):
     """Returns model object"""
 
-    model = mwu.models[model_id]
+    model = models[model_id]
 
     # 404 NOT FOUND if no model stored under provided number
     if model is None:
@@ -827,4 +891,8 @@ def model_obj(model_id):
 
 
 if __name__ == '__main__':
+    # Limit logging output for easier readability
+    log = logging.getLogger('werkzeug')
+    log.setLevel(logging.DEBUG)
     app.run(host='0.0.0.0', port=5004, debug=True)
+

@@ -1,3 +1,5 @@
+import logging
+
 import pypmml
 
 from models import df_utilities as dfu
@@ -16,10 +18,9 @@ from sklearn2pmml.pipeline import PMMLPipeline as PMMLPipeline
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
-# from models.ModelBuilder import Model
+models = {}  
+from utils import timer
 
-# models: dict[int, Model] = {}  #allows one to use code completion
-models = {}  #allows one to use code completion
 
 
 def get_model_info(qsar_method):
@@ -72,12 +73,12 @@ def call_build_model_with_preselected_descriptors(qsar_method, training_tsv, pre
     """Loads TSV training data into a pandas DF and calls the appropriate training method"""
 
     df_training = dfu.load_df(training_tsv)
-    print('training shape=', df_training.shape)
+    logging.debug('training shape=', df_training.shape)
     df_prediction = DFU.load_df(prediction_tsv)
 
     if filterColumnsInBothSets:
         df_training = DFU.filter_columns_in_both_sets(df_training, df_prediction)
-        print('training shape after removing bad descriptors in both sets=', df_training.shape)
+        logging.debug('training shape after removing bad descriptors in both sets=', df_training.shape)
 
     qsar_method = qsar_method.lower()
 
@@ -102,7 +103,7 @@ def call_cross_validate(qsar_method, cv_training_tsv, cv_prediction_tsv, descrip
 
 
     df_training = dfu.load_df(cv_training_tsv)
-    print('training shape=', df_training.shape)
+    logging.debug('training shape=', df_training.shape)
     df_prediction = DFU.load_df(cv_prediction_tsv)
     df_training = DFU.filter_columns_in_both_sets(df_training, df_prediction)
 
@@ -135,7 +136,7 @@ def call_cross_validate(qsar_method, cv_training_tsv, cv_prediction_tsv, descrip
 
 def instantiateModel(df_training, n_jobs, qsar_method, remove_log_p, use_pmml_pipeline=False,
                      include_standardization_in_pmml=True):
-    print('Instantiating ' + qsar_method.upper() + ' model in model builder, num_jobs=' + str(
+    logging.debug('Instantiating ' + qsar_method.upper() + ' model in model builder, num_jobs=' + str(
         n_jobs) + ', remove_log_p=' + str(remove_log_p))
 
     model = None
@@ -163,7 +164,7 @@ def instantiateModel(df_training, n_jobs, qsar_method, remove_log_p, use_pmml_pi
     model.is_binary = DFU.isBinary(df_training)
     model.use_pmml = use_pmml_pipeline
 
-    print('instantiateModel: model.is_binary',model.is_binary)
+    logging.debug('instantiateModel: model.is_binary',model.is_binary)
 
     obj = mb.model_registry_model_obj(qsar_method, model.is_binary)
 
@@ -178,7 +179,7 @@ def instantiateModel(df_training, n_jobs, qsar_method, remove_log_p, use_pmml_pi
 
 
 def instantiateModelForPrediction(qsar_method, is_binary, pmml_file_path, use_sklearn2pmml):
-    print('instantiateModel2 ' + qsar_method.upper() + ' model in model builder')
+    logging.debug('instantiateModel2 ' + qsar_method.upper() + ' model in model builder')
 
     model = None
 
@@ -595,6 +596,7 @@ def call_do_predictions(prediction_tsv, model):
     return results_json
 
 
+@timer
 def call_do_predictions_from_df(df_prediction, model):
     """Loads TSV prediction data into a pandas DF, stores IDs and exp vals,
     and calls the appropriate prediction method"""
