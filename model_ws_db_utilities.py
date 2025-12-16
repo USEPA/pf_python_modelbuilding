@@ -1197,7 +1197,7 @@ class ModelPredictor:
         common_columns = df_new.columns.intersection(df_training.columns)
         
         # # Calculate min and max for each common column in df_training
-        min_values = df_training[common_columns].min()
+        min_values = df_training[common_columns].apply(lambda col: col[col > 0].min())
         max_values = df_training[common_columns].max()
         
         results = {
@@ -1523,11 +1523,6 @@ class ModelPredictor:
                 
         # TODO: following code will have to be revised for batch model calculations (have more than one row in df_predictio
         analogsAD = output['ids'].tolist()[0]  # only use first one for singleton prediction
-        
-        # print(json.dumps(analogsAD,indent=4))
-        
-        
-        # dictsAnalogs = [ast.literal_eval(item) for item in analogsAD]
         
         AD = output['AD'].tolist()[0]
         results = {"AD":AD, "analogs": analogsAD}
