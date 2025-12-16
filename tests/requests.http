@@ -11,7 +11,7 @@ GET http://localhost:8080/api/predictor_models/predict?smiles=c1ccccc1&model_id=
 GET http://localhost:8080/api/predictor_models/predict?smiles=c1ccccc1&model_id=1065
 
 ###
-POST http://localhost:8080/api/predictor_models/predict
+POST http://localhost:5000/api/predictor_models/predict
 Content-Type: application/json
 
 {

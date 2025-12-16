@@ -11,6 +11,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
 
 from API_Utilities import QsarSmilesAPI, DescriptorsAPI
+from db.mongo_cache import get_cached_prediction, cache_prediction
 from model_ws_utilities import call_do_predictions_from_df, models
 from models import df_utilities as dfu
 from models.ModelBuilder import Model
@@ -64,9 +65,6 @@ def init_model(model_id):
     return model
 
 
-cache = {}
-
-
 @timer
 def predictFromDB(model_id, smiles):
     """
@@ -81,33 +79,36 @@ def predictFromDB(model_id, smiles):
     init_model(model_id)
 
     if isinstance(smiles, str):
-        key = f"{model_id}-{smiles}"
-        if key in cache:
-            return cache[key]
+        key = f"{smiles}-{model_id}"
+        prediction = get_cached_prediction(key)
+        if prediction:
+            return prediction
         else:
-            cache[key], code = predict_model_smiles(model_id, smiles)
-            return cache[key]
+            prediction = predict_model_smiles(model_id, smiles)
+            cache_prediction(key, prediction)
+            return prediction
     else:
         result, missing = [], []
         for smi in smiles:
-            key = f"{model_id}-{smi}"
-            if key in cache:
-                result.append(cache[key])
+            key = f"{smi}-{model_id}"
+            prediction = get_cached_prediction(key)
+            if prediction:
+                result.append(prediction)
             else:
                 missing.append(smi)
 
         with concurrent.futures.ThreadPoolExecutor() as pool:
             results = pool.map(predict_model_smiles, [model_id for _ in missing], missing)
 
-            for (r, code, smi) in results:
+            for (prediction, code, smi) in results:
                 if code != 200:
-                    r = dict(smiles=smi, error=r)
-                    result.append(r)
+                    prediction = dict(smiles=smi, error=prediction)
+                    result.append(prediction)
                 else:
-                    result.append(r)
+                    result.append(prediction)
 
-                key = f"{model_id}-{smi}"
-                cache[key] = r
+                key = f"{smi}-{model_id}"
+                cache_prediction(key, prediction)
 
         return result
 
