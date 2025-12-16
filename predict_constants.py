@@ -495,8 +495,10 @@ class UnitsConverter:
                     return -math.log10(value / molecular_weight)
                 elif value == 0:
                     print(f"{chemical_id}: value=0 for {chemical_id}, so can't convert to {final_unit_name}")
+                    return NaN
                 elif molecular_weight is None:
                     print(f"{chemical_id}: missing MW for {chemical_id}, so can't convert to {final_unit_name}")
+                    return NaN
         elif final_unit_name == PredictConstants.MOLAR and unit_name == PredictConstants.NEG_LOG_M:
             return math.pow(10, -value)
         else:

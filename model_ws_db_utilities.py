@@ -30,10 +30,8 @@ import numpy as np
 import webbrowser
 from predict_constants import UnitsConverter
 from predict_constants import PredictConstants as pc
-from numba.core.types import none
 
 from utils import timer
-from networkx.classes.function import neighbors
 
 
 debug = False
@@ -66,13 +64,7 @@ X TODO run for smiles not in DSSTOX and fix code to still work
 X TODO Fragment table for ocspp
 X TODO fix axis limits on neighbor plots
 X TODO Add size of training sets
-
-
 """
-
-
-
-
 
 lock = threading.Lock()
 
@@ -83,7 +75,8 @@ def init_model(model_id):
             logging.debug('have model already initialized')
             model = models[model_id]
         else:
-            model = initModel(model_id)
+            mi=ModelInitializer()
+            model = mi.initModel(model_id)
             models[model_id] = model
 
     return model
@@ -143,19 +136,30 @@ def predict_model_smiles(model_id, smiles):
     serverAPIs = os.getenv("CIM_API_SERVER", "https://cim-dev.sciencedataexperts.com/")
 
     # initialize model bytes and all details from db:
-    model = init_model(model_id)
+    model = init_model(model_id)    
+    
+    model_details=ModelDetails(model)
+    
+    # dont need following for simple report (delete these if you want them): 
+    model_details.modelStatistics = None
+    model_details.embedding = None
+    
+    
+    mp = ModelPredictor()
 
     # Standardize smiles:
-    qsarSmiles, code = standardizeStructure(serverAPIs, smiles, model)
+    chemical, code = mp.standardizeStructure(serverAPIs, smiles, model)
     if code != 200:
-        return qsarSmiles, code, smiles
+        return chemical, code, smiles
+
+    qsarSmiles = chemical["canonicalSmiles"]
 
     # Descriptor calcs:
     descriptorAPI = DescriptorsAPI()
     df_prediction, code = descriptorAPI.calculate_descriptors(serverAPIs, qsarSmiles, model.descriptorService)
     if code != 200:
         return df_prediction, 400, smiles
-
+    
     # Run model prediction:
     # df_prediction = model.model_details.predictionSet #all chemicals in the model's prediction set, for testing
     # print("for qsarSmiles="+qsarSmiles+", descriptors="+json.dumps(descriptorsResults,indent=4))
@@ -165,136 +169,151 @@ def predict_model_smiles(model_id, smiles):
     # applicability domain calcs:
     ad_results = None
     if model.applicabilityDomainName:
-        str_ad_results = determineApplicabilityDomain(model, df_prediction)
-        # str_ad_results = determineApplicabilityDomain(model, model.df_prediction) #testing AD method using multiple chemicals in df
-
-        ad_results = json.loads(str_ad_results)[0]  # TODO check len first?
-        # print(ad_results)
+        ad_results =mp.determineApplicabilityDomain(model, df_prediction)
     else:
         logging.debug('AD method for model was not set:', model_id)
 
     # store everything in results:
-    model_results = ModelResults(model, ad_results)
+    model_results = ModelResults(chemical=chemical, modelDetails=model_details,adResults=ad_results)
     model_results.smiles = smiles
-    model_results.qsarSmiles = qsarSmiles
-    model_results.predictionValue = pred_value
-    model_results.predictionUnits = model.unitsName  # duplicated so displayed near prediction value
+    
+    # model_results.qsarSmiles = qsarSmiles
+
+    model_results.unitsDisplay = model.unitsDisplay
+    model_results.unitsModel = model.unitsModel  # duplicated so displayed near prediction value
+
+    uc = UnitsConverter()
+    model_results.predictionValueUnitsModel = pred_value
+    model_results.predictionValueUnitsDisplay = uc.convert_units(model.propertyName, pred_value, model.unitsModel, 
+                                                                 model.unitsDisplay, chemical["sid"], chemical["averageMass"])
+    
+    mp.setExpValue(model, model_results)
+    
+    if model_results.experimentalValueUnitsModel:
+        model_results.experimentalValueUnitsDisplay=uc.convert_units(model.propertyName, model_results.experimentalValueUnitsModel, 
+                                                                     model.unitsModel, model.unitsDisplay, 
+                                                                     chemical["sid"], chemical["averageMass"])
+    
+    
     model_results.adResults = ad_results
+    
+    results_json = model_results.to_json()
 
-    return model_results.to_dict(), 200, smiles
+    return results_json, 200, smiles
 
-
-def predictSetFromDB(model_id, excel_file_path):
-    """
-    Runs whole workflow: standardize, descriptors, prediction, applicability domain
-    :param model_id:
-    :param smiles:
-    :param mwu:
-    :return:
-    """
-
-    descriptorAPI = DescriptorsAPI()
-
-    # serverAPIs = "https://hcd.rtpnc.epa.gov" # TODO this should come from environment variable
-    serverAPIs = os.getenv("CIM_API_SERVER", "https://cim-dev.sciencedataexperts.com/")
-
-    # initialize model bytes and all details from db:
-    model = init_model(model_id)
-
-    import pandas as pd
-    df = pd.read_excel(excel_file_path, sheet_name='Test set')
-    smiles_list = df['Smiles'].tolist()  # Extract the 'Smiles' column into a list
-
-    directory = os.path.dirname(excel_file_path)
-
-    # Create a text file path in the same directory
-    text_file_path = os.path.join(directory, "output.txt")
-    logging.debug(text_file_path)
-
-    with open(text_file_path, 'w') as file:
-        file.write("smiles\tqsarSmiles\tpred_value\tpred_AD\n")
-
-        # for smiles, predOld in zip(smiles_list, pred_list):
-        for smiles in smiles_list:
-            qsarSmiles, code = standardizeStructure(serverAPIs, smiles, model)
-            if code != 200:
-                logging.warn(smiles, qsarSmiles)
-                file.write(smiles + "\terror smiles")
-                continue
-
-            df_prediction, code = descriptorAPI.calculate_descriptors(serverAPIs, qsarSmiles, model.descriptorService)
-            if code != 200:
-                logging.warn(smiles, 'error descriptors')
-                file.write(smiles + "\terror descriptors")
-
-                continue
-
-            pred_results = json.loads(call_do_predictions_from_df(df_prediction, model))
-            pred_value = pred_results[0]['pred']
-
-            str_ad_results = determineApplicabilityDomain(model, df_prediction)
-            ad_results = json.loads(str_ad_results)
-            pred_AD = ad_results[0]["AD"]
-
-            line = smiles + "\t" + qsarSmiles + "\t" + str(pred_value) + "\t" + str(pred_AD) + "\n"
-            print(line)
-            file.write(line)
-            file.flush()
-
-    if True:
-        return
-
-    # Standardize smiles:
-
-    # Descriptor calcs:
-
-    # Run model prediction:
-    # df_prediction = model.model_details.predictionSet #all chemicals in the model's prediction set, for testing
-    # print("for qsarSmiles="+qsarSmiles+", descriptors="+json.dumps(descriptorsResults,indent=4))
-
-    logging.debug(pred_results)
-
-    # # applicability domain calcs:
-    # ad_results = None
-    # if model.applicabilityDomainName:
-    #     str_ad_results = determineApplicabilityDomain(model, df_prediction)
-    #     # str_ad_results = determineApplicabilityDomain(model, model.df_prediction) #testing AD method using multiple chemicals in df
-    #
-    #     ad_results = json.loads(str_ad_results)[0]  # TODO check len first?
-    #     print(ad_results)
-    # else:
-    #     print('AD method for model was not set:', model_id)
-
-    return "OK", 200
-
-
-@timer
-def determineApplicabilityDomain(model: Model, test_tsv):
-    """
-    Calculate the applicability domain using the model's training set and the AD measure assigned to the model in the DB
-    TODO make sure this works when a model doesnt have a set embedding object
-    :param model:
-    :param test_tsv:
-    :return:
-    """
-    json_model_description = model.get_model_description()
-    model_description = json.loads(json_model_description)
-    remove_log_p = model_description["remove_log_p_descriptors"]  # just set to False instead?
-    # print("remove_log_p", remove_log_p)
-
-    from applicability_domain import applicability_domain_utilities as adu
-    # model.applicabilityDomainName = adu.strOPERA_local_index  # for testing diff number of neighbors
-
-    output = adu.generate_applicability_domain_with_preselected_descriptors_from_dfs(
-        train_df=model.df_training,
-        test_df=test_tsv,
-        remove_log_p=remove_log_p,
-        embedding=model.embedding,
-        applicability_domain=model.applicabilityDomainName,
-        filterColumnsInBothSets=True)
-
-    # return output.to_json(orient='records', lines=True) # gives each object on separate line
-    return output.to_json(orient='records', lines=False)  # gives an array instead of each object on separate line
+#
+#
+# def predictSetFromDB(model_id, excel_file_path):
+#     """
+#     Runs whole workflow: standardize, descriptors, prediction, applicability domain
+#     :param model_id:
+#     :param smiles:
+#     :param mwu:
+#     :return:
+#     """
+#
+#     descriptorAPI = DescriptorsAPI()
+#
+#     # serverAPIs = "https://hcd.rtpnc.epa.gov" # TODO this should come from environment variable
+#     serverAPIs = os.getenv("CIM_API_SERVER", "https://cim-dev.sciencedataexperts.com/")
+#
+#     # initialize model bytes and all details from db:
+#     model = init_model(model_id)
+#
+#     import pandas as pd
+#     df = pd.read_excel(excel_file_path, sheet_name='Test set')
+#     smiles_list = df['Smiles'].tolist()  # Extract the 'Smiles' column into a list
+#
+#     directory = os.path.dirname(excel_file_path)
+#
+#     # Create a text file path in the same directory
+#     text_file_path = os.path.join(directory, "output.txt")
+#     logging.debug(text_file_path)
+#
+#     with open(text_file_path, 'w') as file:
+#         file.write("smiles\tqsarSmiles\tpred_value\tpred_AD\n")
+#
+#         # for smiles, predOld in zip(smiles_list, pred_list):
+#         for smiles in smiles_list:
+#             qsarSmiles, code = standardizeStructure(serverAPIs, smiles, model)
+#             if code != 200:
+#                 logging.warn(smiles, qsarSmiles)
+#                 file.write(smiles + "\terror smiles")
+#                 continue
+#
+#             df_prediction, code = descriptorAPI.calculate_descriptors(serverAPIs, qsarSmiles, model.descriptorService)
+#             if code != 200:
+#                 logging.warn(smiles, 'error descriptors')
+#                 file.write(smiles + "\terror descriptors")
+#
+#                 continue
+#
+#             pred_results = json.loads(call_do_predictions_from_df(df_prediction, model))
+#             pred_value = pred_results[0]['pred']
+#
+#             str_ad_results = determineApplicabilityDomain(model, df_prediction)
+#             ad_results = json.loads(str_ad_results)
+#             pred_AD = ad_results[0]["AD"]
+#
+#             line = smiles + "\t" + qsarSmiles + "\t" + str(pred_value) + "\t" + str(pred_AD) + "\n"
+#             print(line)
+#             file.write(line)
+#             file.flush()
+#
+#     if True:
+#         return
+#
+#     # Standardize smiles:
+#
+#     # Descriptor calcs:
+#
+#     # Run model prediction:
+#     # df_prediction = model.model_details.predictionSet #all chemicals in the model's prediction set, for testing
+#     # print("for qsarSmiles="+qsarSmiles+", descriptors="+json.dumps(descriptorsResults,indent=4))
+#
+#     logging.debug(pred_results)
+#
+#     # # applicability domain calcs:
+#     # ad_results = None
+#     # if model.applicabilityDomainName:
+#     #     str_ad_results = determineApplicabilityDomain(model, df_prediction)
+#     #     # str_ad_results = determineApplicabilityDomain(model, model.df_prediction) #testing AD method using multiple chemicals in df
+#     #
+#     #     ad_results = json.loads(str_ad_results)[0]  # TODO check len first?
+#     #     print(ad_results)
+#     # else:
+#     #     print('AD method for model was not set:', model_id)
+#
+#     return "OK", 200
+#
+#
+# @timer
+# def determineApplicabilityDomain(model: Model, test_tsv):
+#     """
+#     Calculate the applicability domain using the model's training set and the AD measure assigned to the model in the DB
+#     TODO make sure this works when a model doesnt have a set embedding object
+#     :param model:
+#     :param test_tsv:
+#     :return:
+#     """
+#     json_model_description = model.get_model_description()
+#     model_description = json.loads(json_model_description)
+#     remove_log_p = model_description["remove_log_p_descriptors"]  # just set to False instead?
+#     # print("remove_log_p", remove_log_p)
+#
+#     from applicability_domain import applicability_domain_utilities as adu
+#     # model.applicabilityDomainName = adu.strOPERA_local_index  # for testing diff number of neighbors
+#
+#     output = adu.generate_applicability_domain_with_preselected_descriptors_from_dfs(
+#         train_df=model.df_training,
+#         test_df=test_tsv,
+#         remove_log_p=remove_log_p,
+#         embedding=model.embedding,
+#         applicability_domain=model.applicabilityDomainName,
+#         filterColumnsInBothSets=True)
+#
+#     # return output.to_json(orient='records', lines=True) # gives each object on separate line
+#     return output.to_json(orient='records', lines=False)  # gives an array instead of each object on separate line
 
 
 def getSession():
@@ -882,7 +901,7 @@ class ModelResults:
     def __init__(self, chemical=None, modelDetails: ModelDetails=None, adResults=None):
         
         self.chemical = chemical
-
+        
         self.experimentalValueUnitsModel = None
         self.experimentalValueUnitsDisplay = None
         self.experimentalValueSet = None
@@ -895,16 +914,12 @@ class ModelResults:
 
         self.predictionError = None
 
+        self.adResults = None # old way just store directly
         self.applicabilityDomains = []
         self.modelDetails = modelDetails
-        
-        self.neighborsTraining = None
-        self.neighborsTrainingMAE = None
-        
-        self.neighborsTest = None
-        self.neighborsTestMAE = None
-        
-        
+                
+        self.neighborsForSets = []
+                
         
 
     def to_dict(self):
@@ -920,6 +935,7 @@ class ModelResults:
             "unitsDisplay": self.unitsDisplay,
             "predictionError": self.predictionError,
             "modelDetails": self.modelDetails.__dict__ if self.modelDetails else None,
+            "adResults": self.adResults if self.adResults is not None else None,
             "applicabilityDomains": self.applicabilityDomains if self.applicabilityDomains is not None else None,
             "neighborsForSets": self.neighborsForSets if self.neighborsForSets is not None else None,
 
@@ -1262,6 +1278,8 @@ class NeighborGetter:
 
 class ModelPredictor:
 
+    def __init__(self):
+        self.cache={}
 
     @timer
     def predictFromDB(self, model_id, smiles, generate_report, report_format):
@@ -1276,18 +1294,18 @@ class ModelPredictor:
         if isinstance(smiles, str):
 
             key = f"{model_id}-{smiles}--{report_format}"
-            if key in cache:
-                return cache[key]
+            if key in self.cache:
+                return self.cache[key]
             else:
-                cache[key], code = self.predict_model_smiles(model_id, smiles, generate_report=generate_report, report_format=report_format)
-                return cache[key]
+                self.cache[key], code = self.predict_model_smiles(model_id, smiles, generate_report=generate_report, report_format=report_format)
+                return self.cache[key]
         else:
             result, missing = [], []
 
             for smi in smiles:
                 key = f"{model_id}-{smi}--{report_format}"
-                if key in cache:
-                    result.append(cache[key])
+                if key in self.cache:
+                    result.append(self.cache[key])
                 else:
                     missing.append(smi)
 
@@ -1302,7 +1320,7 @@ class ModelPredictor:
                         result.append(r)
 
                     key = f"{model_id}-{smi}--{report_format}"
-                    cache[key] = r
+                    self.cache[key] = r
 
             return result
 
@@ -1381,31 +1399,27 @@ class ModelPredictor:
     def addNeighborsFromSets(self, model:Model, modelResults: ModelResults, df_test_chemicals):
 
         ng = NeighborGetter()
-        # import time
+        # import time 
         # t1 = time.time()
         
-        modelResults.neighborsTest = ng.find_neighbors_in_set(model=model, df_set=model.df_prediction, df_test_chemicals=df_test_chemicals)
-        modelResults.neighborsTraining = ng.find_neighbors_in_set(model=model, df_set=model.df_training, df_test_chemicals=df_test_chemicals)
+        neighborsTest = ng.find_neighbors_in_set(model=model, df_set=model.df_prediction, df_test_chemicals=df_test_chemicals)
+        neighborsTraining = ng.find_neighbors_in_set(model=model, df_set=model.df_training, df_test_chemicals=df_test_chemicals)
 
-        modelResults.neighborsTraining=self.setExpPredValuesForNeighbors(model.df_preds_training_cv,modelResults.neighborsTraining,model.df_dsstoxRecords)
-        modelResults.neighborsTest=self.setExpPredValuesForNeighbors(model.df_preds_test,modelResults.neighborsTest,model.df_dsstoxRecords)
-        
-        
-        df_neighborsTest=pd.DataFrame(modelResults.neighborsTest)
+        neighborsTraining=self.setExpPredValuesForNeighbors(model.df_preds_training_cv,neighborsTraining,model.df_dsstoxRecords)
+        neighborsTest=self.setExpPredValuesForNeighbors(model.df_preds_test,neighborsTest,model.df_dsstoxRecords)
+                
+        df_neighborsTest=pd.DataFrame(neighborsTest)
         stats_test = stats.calculate_continuous_statistics(df_neighborsTest, 0, PredictConstants.TAG_TEST)
-        modelResults.neighborsTestMAE=stats_test[pc.MAE+pc.TAG_TEST]
+        neighborsTestMAE=stats_test[pc.MAE+pc.TAG_TEST]
                     
-        df_neighborsTraining=pd.DataFrame(modelResults.neighborsTraining)
+        df_neighborsTraining=pd.DataFrame(neighborsTraining)
         stats_training = stats.calculate_continuous_statistics(df_neighborsTraining, 0, PredictConstants.TAG_TRAINING)
-        modelResults.neighborsTrainingMAE= stats_training[pc.MAE+pc.TAG_TRAINING]
+        neighborsTrainingMAE= stats_training[pc.MAE+pc.TAG_TRAINING]
+    
+        modelResults.neighborsForSets.append({"set": "Test","neighbors":neighborsTest,"MAE":neighborsTestMAE})
+        modelResults.neighborsForSets.append({"set": "Training","neighbors":neighborsTraining,"MAE":neighborsTrainingMAE})
         
-        # print(len(modelResults.neighborsTest),len(modelResults.neighborsTraining))
-
-        # t2 = time.time()
-        # print("time to get neighbors")
-        # print(str(t2-t1))
-
-
+    @timer
     def getFragmentAD(self, df_prediction, df_training, modelResults:ModelResults):
         start_column = "As [+5 valence, one double bond]"
         stop_column = "-N=S=O"
@@ -1413,21 +1427,21 @@ class ModelPredictor:
         columns_greater_than_one = df_new.iloc[0] > 0
         df_new = df_new.loc[:, columns_greater_than_one]
         common_columns = df_new.columns.intersection(df_training.columns)
-
+        
         # # Calculate min and max for each common column in df_training
         min_values = df_training[common_columns].apply(lambda col: col[col > 0].min())
         max_values = df_training[common_columns].max()
-
+        
         results = {
             "test_chemical": df_new.loc[0, common_columns].to_dict(),
             "training_min": min_values.to_dict(),
             "training_max": max_values.to_dict()
         }
-
+        
         modelResults.adResultsFrag = results
-
+        
         outside_ad = False
-
+        
         for col_name in modelResults.adResultsFrag["test_chemical"].keys():
 
             test_value = int(modelResults.adResultsFrag["test_chemical"][col_name])
@@ -1438,36 +1452,11 @@ class ModelPredictor:
             if test_value < training_min or test_value > training_max:
                 outside_ad = True
                         
-                        
-        
-        modelResults.adResultsFrag={}
-        modelResults.adResultsFrag["AD"] = not outside_ad
-        
-                    
-        modelResults.adResultsFrag["fragmentTable"] = results
-        
-        # Convert the dictionary to a JSON string with indentation for readability
-        # json_output = json.dumps(results, indent=4)
-        
-        # Display the JSON
-        # print(json_output)
-        
-        # self.printFirstRowDF(new_df)
-        # print(new_df.columns)
-        
-        
-        # self.printFirstRowDF(df_prediction)
-        # self.printFirstRowDF(df_new)
-        # print(new_df["As [+5 valence, one double bond]"])
-        
-        # df_new = df_new.loc[:, non_zero_columns]
-        # print(new_df.shape)
-        # print(df_prediction.shape)
-        
-        
-        
-        # print(self.printFirstRowDF(df_prediction))
-        # print(self.printFirstRowDF(new_df))
+        adResultsFrag={}
+        adResultsFrag["AD"] = not outside_ad
+        adResultsFrag["fragmentTable"] = results     
+        adResultsFrag["method"] = pc.TEST_FRAGMENTS
+        modelResults.applicabilityDomains.append(adResultsFrag)
         
     
     @timer
@@ -1483,64 +1472,64 @@ class ModelPredictor:
         serverAPIs = os.getenv("CIM_API_SERVER", "https://cim-dev.sciencedataexperts.com/")
 
         # initialize model bytes and all details from db:
-
+        
         mi = ModelInitializer()
         model = mi.init_model(model_id)
-
+        
         modelDetails=ModelDetails(model)
-
+    
         # Standardize smiles:
         chemical, code = self.standardizeStructure(serverAPIs, smiles, model)
         # print(json.dumps(chemical, indent=4))
-
+        
         # print(chemical)
-
+    
         if code != 200:
             modelResults = ModelResults(chemical=None, modelDetails=modelDetails)
             modelResults.predictionError = chemical
             return modelResults.to_json(), 200
             # return "error: " + chemical, code
-
+    
         qsarSmiles = chemical['canonicalSmiles']
-
+    
         # Descriptor calcs:
         descriptorAPI = DescriptorsAPI()
         df_prediction, code = descriptorAPI.calculate_descriptors(serverAPIs, qsarSmiles,
                                                                   model.descriptorService)
-
+        
         # print(self.printFirstRowDF(df_prediction))
-
+        
         # print(df_prediction, code)
-
+        
         if code != 200:
             modelResults = ModelResults(chemical=chemical, modelDetails=modelDetails)
             modelResults.predictionError = df_prediction
             return modelResults.to_json(), 200
-
+    
         # Run model prediction:
         # df_prediction = model.model_details.predictionSet #all chemicals in the model's prediction set, for testing
         # print("for qsarSmiles="+qsarSmiles+", descriptors="+json.dumps(descriptorsResults,indent=4))
-
-
-        json_predictions = call_do_predictions_from_df(df_prediction, model)
+                
+                
+        json_predictions = call_do_predictions_from_df(df_prediction, model)        
         # print(json_predictions)
-
+        
         pred_results = json.loads(json_predictions)
-
+        
         pred_value = pred_results[0]['pred']
-
+        
         # applicability domain calcs:
         ad_results = None
         if model.applicabilityDomainName:
             ad_results = self.determineApplicabilityDomain(model, df_prediction)
         else:
             print('AD method for model was not set:', model_id)
-
+    
         # store everything in results:
         modelResults = ModelResults(chemical, modelDetails)
         modelResults.chemical = chemical
-
-        # TODO add values in display units here:
+        
+        # TODO add values in display units here: 
         modelResults.predictionValueUnitsModel = pred_value
         modelResults.unitsModel = model.unitsModel  # duplicated so displayed near prediction value
 
@@ -1548,68 +1537,70 @@ class ModelPredictor:
         self.setExpValue(model, modelResults)
 
         uc = UnitsConverter()
-
+        
         if "sid" not in chemical:
             chemical["sid"] = "N/A"
             chemical["cid"] = "N/A"
             chemical["name"] = "N/A"
-
+                
         if modelResults.experimentalValueUnitsModel:
             modelResults.experimentalValueUnitsDisplay=uc.convert_units(model.propertyName, modelResults.experimentalValueUnitsModel, model.unitsModel, model.unitsDisplay,
                                                                     chemical["sid"], chemical["averageMass"])
-
+        
         # TODO:  convert to unitsDisplay and add here
         modelResults.predictionValueUnitsDisplay = uc.convert_units(model.propertyName, pred_value, model.unitsModel, model.unitsDisplay,
                                                                     chemical["sid"], chemical["averageMass"])
         modelResults.unitsDisplay = model.unitsDisplay
-
+                
         # print("modelResults.predictionValueUnitsDisplay", modelResults.predictionValueUnitsDisplay)
-            
-        modelResults.adResults = ad_results
-        modelResults.adResults["analogs"] = self.setExpPredValuesForADAnalogs(model, modelResults.adResults["analogs"])
+        
+        ad_results["method"] = modelDetails.applicabilityDomainName    
+        ad_results["analogs"] = self.setExpPredValuesForADAnalogs(model, ad_results["analogs"])
+        modelResults.applicabilityDomains.append(ad_results)
         
         # print("modelResults", modelResults.to_json)
-
+        
         if generate_report:
-
+            
             self.addNeighborsFromSets(model, modelResults, df_prediction)
             self.getFragmentAD(df_prediction,model.df_training, modelResults)
-
+            
             # print(useFileAPI)
-
+            
             if useFileAPI:
                 urlCtxApi="https://ctx-api-dev.ccte.epa.gov/chemical/property/model/file/search/"
-
+                                
                 modelResults.modelDetails.urlQMRF=urlCtxApi+"?typeId=1&modelId="+modelResults.modelDetails.modelId
                 modelResults.modelDetails.urlExcelSummary=urlCtxApi+"?typeId=2&modelId="+modelResults.modelDetails.modelId
 
                 # these need to be added to ctx api:
                 modelResults.modelDetails.imgSrcPlotScatter = urlCtxApi+"?typeId=3&modelId="+modelResults.modelDetails.modelId
                 modelResults.modelDetails.imgSrcPlotHistogram = urlCtxApi+"?typeId=4&modelId="+modelResults.modelDetails.modelId
-
+                
             else:
                 #TODO generate plot and hardcode in the html
-                # plot_base64 = self.generateScatterPlot(neighbors, md.unitsModel, "Results for "+modelResults.modelDetails.modelName, "Exp. vs Pred.")
+                # plot_base64 = self.generateScatterPlot(neighbors, md.unitsModel, "Results for "+modelResults.modelDetails.modelName, "Exp. vs Pred.")                                    
                 # modelResults.modelDetails.imgSrcPlotScatter="data:image/png;base64,"+plot_base64
                 pass
 
             from report_creator import ReportCreator
-            rc = ReportCreator()
-
+            rc = ReportCreator()                        
+            
             if report_format == "json":
                 return modelResults.to_json(), 200
-
+            
             if report_format == "html":
                 html = rc.create_html_report(modelResults)
-
+                
                 # print(html)
                 return html, 200
 
             return html, 200
-
+    
         results_json = modelResults.to_json()
         # print(results_json)
-        return results_json, 200, smiles
+        return results_json, 200
+    
 
     @timer
     def standardizeStructure(self, serverAPIs, smiles, model: Model):
@@ -1761,23 +1752,19 @@ class ModelPredictor:
             applicability_domain=model.applicabilityDomainName,
             filterColumnsInBothSets=True)
 
-        # print(output.head)
-
+        # self.printFirstRowDF(output)
+                
         # TODO: following code will have to be revised for batch model calculations (have more than one row in df_predictio
         analogsAD = output['ids'].tolist()[0]  # only use first one for singleton prediction
         
         # print(json.dumps(analogsAD,indent=4))
-        
-        
         # dictsAnalogs = [ast.literal_eval(item) for item in analogsAD]
         
         AD = output['AD'].tolist()[0]
         results = {"AD":AD, "analogs": analogsAD}
 
         # print(json.dumps(dicts,indent=4))
-
         return results  # gives an array instead of each object on separate line
-
 
 
 # def createHmtlReportFromJson():
@@ -1818,6 +1805,26 @@ class ModelPredictor:
 #
 #     webbrowser.open(f'file://{file_path}')
 
+
+def runExample2(model_id, smiles, generate_report, file_format, useValeryCode):
+    
+    if useValeryCode:
+        output, code, smiles = predict_model_smiles(model_id, smiles) #doesnt create reports
+        file_name = model_id + "_report_valery_" + smiles + "." + file_format
+    else:
+        mp = ModelPredictor()
+        file_name = model_id + "_report_todd_" + smiles + "." + file_format
+        output, code = mp.predict_model_smiles(model_id, smiles, generate_report=generate_report, report_format=file_format, 
+            useFileAPI=True)
+
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    file_path = os.path.join(script_dir, "data/reports", file_name)
+    
+    with open(file_path, 'w', encoding='utf-8') as f:
+        f.write(output)
+        
+    webbrowser.open(f'file://{file_path}')
+
 def runExample():
 
     model_id = str(1065)  # HLC, smallest dataset
@@ -1827,7 +1834,6 @@ def runExample():
     # model_id = str(1069)  # LogKow
     # model_id = str(1070) # MP, biggest dataset
 
-
     # smiles = "c1ccccc1"
     smiles = "OC(=O)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)F"
     # smiles = "COCOCOCOCCCCCCOCCCCOCOCOCCC" # not in dsstox
@@ -1835,38 +1841,18 @@ def runExample():
     # smiles = "C[As]C[As]C" # violate frag AD?
 
     generate_report = True
-    file_format = "html"
-    # file_format = "json"
+    # file_format = "html"
+    file_format = "json"
+            
+    if not generate_report:
+        file_format = "json"
+    
+    runExample2(model_id, smiles, generate_report, "json", useValeryCode=True)
+    
+    print("\n")
+    
+    runExample2(model_id, smiles, generate_report, file_format, useValeryCode=False)
 
-    mp = ModelPredictor()
-    output, code = mp.predict_model_smiles(model_id, smiles, generate_report=generate_report, report_format=file_format,
-                                     useFileAPI=True)
-
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    file_path = os.path.join(script_dir, model_id + "_report." + file_format)
-
-    # Write the HTML to the specified file path
-    with open(file_path, 'w',encoding='utf-8') as f:
-        f.write(output)
-
-    # mi=ModelInitializer()
-    # models=mi.get_available_models()
-    # session=getSession()
-    # for model in models:
-    #     print(model['modelId'])
-    #     mi.get_dsstox_records_for_dataset(model['modelId'], session)
-
-    webbrowser.open(f'file://{file_path}')
-
-    # model=mwu.models[model_id]
-    # # with open(file_name, 'wb') as file:
-    # #     pickle.dump(model, file)
-    #
-    # with open(file_name, 'rb') as file:
-    #     model = pickle.load(file)
-    #
-    # # print("time to load from pickle",t2)
-    # print(model.modelName)
 
 
 def runExampleFromService():
@@ -1936,8 +1922,7 @@ def test_say_hello():
 
 if __name__ == '__main__':
     
-    # runExample()
-    test_say_hello()
+    runExample()
     
     # excel_file_path = r"C:\Users\TMARTI02\OneDrive - Environmental Protection Agency (EPA)\0 java\0 model_management\hibernate_qsar_model_building\data\reports\prediction reports upload\WebTEST2.1\HLC v1 modeling_RND_REPRESENTATIVE.xlsx"
     # mp=ModelPredictor()
@@ -1946,10 +1931,4 @@ if __name__ == '__main__':
     # modelStatistics = ModelStatistics()
     # modelStatistics.updateStatsPredictModuleModels()
 
-    # runExample()
-    # createHmtlReportFromJson()
-
-    # runExampleFromService()
-
-    # excel_file_path = r"C:\Users\TMARTI02\OneDrive - Environmental Protection Agency (EPA)\0 java\0 model_management\hibernate_qsar_model_building\data\reports\prediction reports upload\WebTEST2.1\HLC v1 modeling_RND_REPRESENTATIVE.xlsx"
-    # predictSetFromDB(1065, excel_file_path)
+    
