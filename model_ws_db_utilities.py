@@ -1820,6 +1820,9 @@ def runExample2(model_id, smiles, generate_report, file_format, useValeryCode):
     script_dir = os.path.dirname(os.path.abspath(__file__))
     file_path = os.path.join(script_dir, "data/reports", file_name)
     
+    # Ensure the directory exists
+    os.makedirs(os.path.dirname(file_path), exist_ok=True)
+    
     with open(file_path, 'w', encoding='utf-8') as f:
         f.write(output)
         
