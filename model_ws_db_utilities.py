@@ -185,14 +185,14 @@ def predict_model_smiles(model_id, smiles):
     uc = UnitsConverter()
     model_results.predictionValueUnitsModel = pred_value
     model_results.predictionValueUnitsDisplay = uc.convert_units(model.propertyName, pred_value, model.unitsModel, 
-                                                                 model.unitsDisplay, chemical["sid"], chemical["averageMass"])
+                                                                 model.unitsDisplay, smiles, chemical["averageMass"])
     
     mp.setExpValue(model, model_results)
     
     if model_results.experimentalValueUnitsModel:
         model_results.experimentalValueUnitsDisplay=uc.convert_units(model.propertyName, model_results.experimentalValueUnitsModel, 
                                                                      model.unitsModel, model.unitsDisplay, 
-                                                                     chemical["sid"], chemical["averageMass"])
+                                                                     smiles, chemical["averageMass"])
     
     
     model_results.adResults = ad_results
