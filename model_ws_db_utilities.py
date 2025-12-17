@@ -4,6 +4,11 @@ import json
 import os
 import threading
 from io import BytesIO
+import pathlib
+
+from indigo import Indigo
+from indigo.renderer import IndigoRenderer
+import base64
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import URL
@@ -27,17 +32,26 @@ from sklearn.neighbors import NearestNeighbors
 import model_ws_utilities as mwu
 import numpy as np
 
+from report_creator_dict import ReportCreator
+
+
 import webbrowser
 from predict_constants import UnitsConverter
 from predict_constants import PredictConstants as pc
 
 from utils import timer
+# from bleach._vendor.html5lib.serializer import serialize
 
 
 debug = False
 import logging
 logging.getLogger('sqlalchemy').setLevel(logging.ERROR)
+
 fk_dsstox_snapshot_id = 3
+
+USE_TEMPORARY_MODEL_PLOTS = False
+urlCtxApi="https://ctx-api-dev.ccte.epa.gov/chemical/property/model/file/search/"
+imgURLCid = "https://comptox.epa.gov/dashboard-api/ccdapp1/chemical-files/image/by-dtxcid/";
 
 
 """
@@ -721,6 +735,7 @@ class ModelInitializer:
     def getModelMetaDataQuery(self):
         return """
         SELECT 
+                m.id,
                 m.name_ccd,
                 m.details,
                 d.id,
@@ -786,7 +801,8 @@ class ModelInitializer:
 
     def row_to_model_details(self, m: Model, row):
 
-        (m.modelName,
+        (m.modelId,
+         m.modelName,
         m.detailsFile,
         m.datasetId,
         m.datasetName,
@@ -810,6 +826,8 @@ class ModelInitializer:
         # print(details)
         # print(m.modelId)
 
+        
+        m.modelId = str(m.modelId)
         details = json.loads(m.detailsFile.tobytes().decode('utf-8'))  # it's stored as a file object in database for now
         m.is_binary = details['is_binary']
         m.remove_log_p_descriptors = details['remove_log_p_descriptors']
@@ -894,8 +912,10 @@ class ModelDetails:
         self.embedding = model.embedding
 
 
-
-
+# from pydantic import BaseModel
+# class ModelResults(BaseModel):
+    
+    
 class ModelResults:
 
     def __init__(self, chemical=None, modelDetails: ModelDetails=None, adResults=None):
@@ -1276,13 +1296,12 @@ class NeighborGetter:
         return neighbors
 
 
+cache={}
+
 class ModelPredictor:
 
-    def __init__(self):
-        self.cache={}
-
     @timer
-    def predictFromDB(self, model_id, smiles, generate_report, report_format):
+    def predictFromDB(self, model_id, smiles, generate_report=True):
         """
         Runs whole workflow: standardize, descriptors, prediction, applicability domain
         """
@@ -1293,19 +1312,21 @@ class ModelPredictor:
 
         if isinstance(smiles, str):
 
-            key = f"{model_id}-{smiles}--{report_format}"
-            if key in self.cache:
-                return self.cache[key]
+            key = f"{model_id}-{smiles}"
+            
+            if key in cache:
+                print("in cache: " + key)
+                return cache[key]
             else:
-                self.cache[key], code = self.predict_model_smiles(model_id, smiles, generate_report=generate_report, report_format=report_format)
-                return self.cache[key]
+                cache[key], code = self.predict_model_smiles(model_id, smiles, generate_report=generate_report)
+                return cache[key]
         else:
             result, missing = [], []
 
             for smi in smiles:
-                key = f"{model_id}-{smi}--{report_format}"
-                if key in self.cache:
-                    result.append(self.cache[key])
+                key = f"{model_id}-{smi}"
+                if key in cache:
+                    result.append(cache[key])
                 else:
                     missing.append(smi)
 
@@ -1319,12 +1340,160 @@ class ModelPredictor:
                     else:
                         result.append(r)
 
-                    key = f"{model_id}-{smi}--{report_format}"
-                    self.cache[key] = r
+                    key = f"{model_id}-{smi}"
+                    cache[key] = r
 
             return result
 
+    def smiles_to_base64(self, smiles_string):
+        '''
+        TODO: move to utility class
+        
+        :param smiles_string:
+        '''
+        
+        indigo = Indigo()
+        renderer = IndigoRenderer(indigo)
+        
+        mol = indigo.loadMolecule(smiles_string)
+        # 1. Set the output format (this sets the context to 2D molecule rendering implicitly in most cases)
+        indigo.setOption("render-output-format", "png") 
+        
+        # 2. (Optional but Recommended) Set a default image size
+        # The renderer often needs dimensions defined.
+        indigo.setOption("render-image-width", 400)
+        indigo.setOption("render-image-height", 400)
+        
+        # Use renderToBuffer() to get the image data as bytes
+        img_bytes = renderer.renderToBuffer(mol)
+        
+        # Encode the bytes to a base64 string
+        base64_string = base64.b64encode(img_bytes).decode('utf-8')
+        
+        # print(base64_string)
+        
+        return base64_string
+    
+    
+    
+    
+    def insert_image(self, file_path, username, fk_model_id,  fk_file_type_id, session):
 
+        try:
+        # Read the image file as binary
+            with open(file_path, 'rb') as file:
+                binary_data = file.read()
+        
+            # Prepare the SQL query
+            insert_query = text("""
+            INSERT INTO qsar_models.model_files (created_at, created_by, file, updated_at, updated_by, fk_file_type_id, fk_model_id)
+            VALUES (:created_at, :created_by, :file, :updated_at, :updated_by, :fk_file_type_id, :fk_model_id)
+            """)
+        
+            # Data to insert
+            data = {
+                'created_at': datetime.now(),
+                'created_by': username,
+                'file': binary_data,
+                'updated_at': datetime.now(),
+                'updated_by': username,
+                'fk_file_type_id': fk_file_type_id,  # Example foreign key value
+                'fk_model_id': fk_model_id       # Example foreign key value
+            }
+        
+        
+            session.execute(insert_query, data)
+            session.commit()
+            
+        except Exception as e:
+            session.rollback()
+            print(f"An error occurred: {e}")
+    
+    
+    def display_image(self, fk_model_id, fk_file_type_id, session):
+        try:
+            # Prepare the SQL query to retrieve the image using foreign keys
+            select_query = text("""
+            SELECT file FROM qsar_models.model_files 
+            WHERE fk_model_id = :fk_model_id AND fk_file_type_id = :fk_file_type_id
+            """)
+    
+            # Execute the query
+            result = session.execute(select_query, {'fk_model_id': fk_model_id, 'fk_file_type_id': fk_file_type_id})
+            row = result.fetchone()
+            
+            if row and row[0]:  # Access the first element of the tuple
+                # Get the binary data from the result
+                binary_data = row[0]
+                
+                # Define a temporary file path
+                temp_file_path = "data/plots/db/"+str(fk_model_id)+"_"+str(fk_file_type_id)+'.png'
+                
+                # Write the binary data to a temporary file
+                with open(temp_file_path, 'wb') as temp_file:
+                    temp_file.write(binary_data)
+                
+                # Open the image in the default web browser
+                webbrowser.open('file://' + os.path.realpath(temp_file_path))
+            else:
+                print("No image found with the specified foreign keys.")
+        except Exception as e:
+            print(f"An error occurred: {e}")
+            session.rollback()
+        
+        
+    
+    def createTrainingTestPlotsForReports(self):
+
+        username="tmarti02"
+
+        try:
+                
+            from models import make_test_plots as mtp 
+                        
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            folder_path = os.path.join(script_dir, "data/plots/")
+            os.makedirs(os.path.dirname(folder_path), exist_ok=True)
+
+            mi = ModelInitializer()
+            models = mi.get_available_models()
+            
+            session=getSession()
+            
+            for model_dict in models:
+                model = mi.init_model(model_dict["modelId"])
+                print(model.modelId)              
+
+                mpsTraining = model.df_preds_training_cv.to_dict(orient='records')
+                mpsTest = model.df_preds_test.to_dict(orient='records')
+                
+                filePathOutScatter = os.path.join(folder_path,"scatter_plot_"+str(model.modelId)+".png")
+                title = model.modelName + " results for "+model.propertyName
+                mtp.generateScatterPlot2(filePathOut=filePathOutScatter, title=title,unitName=model.unitsModel,  
+                                         mpsTraining=mpsTraining, mpsTest=mpsTest, 
+                                         seriesNameTrain="Training set (CV)", seriesNameTest="Test set")
+                
+
+                self.insert_image(filePathOutScatter, username, model.modelId, 3, session)
+                self.display_image(model.modelId, 3, session)
+                
+                filePathOutHistogram = os.path.join(folder_path,"histogram_"+str(model.modelId)+".png")
+                
+                mtp.generateHistogram2(fileOutHistogram=filePathOutHistogram, property_name=model.propertyName, unit_name=model.unitsModel, 
+                                       mpsTraining=mpsTraining, mpsTest=mpsTest, 
+                                       seriesNameTrain="Training set", seriesNameTest="TestSet")
+                self.insert_image(filePathOutHistogram, username, model.modelId, 4, session)
+                self.display_image(model.modelId, 4, session)
+                
+                
+        except Exception as ex:
+            ex.with_traceback()
+            print(f"Exception occurred: {ex}")
+        
+        finally:
+            session.close()
+    
+    
     def setExpValue(self, model, modelResults:ModelResults):
 
         qsarSmiles = modelResults.chemical["canonicalSmiles"]
@@ -1460,7 +1629,7 @@ class ModelPredictor:
         
     
     @timer
-    def predict_model_smiles(self, model_id, smiles, generate_report=False, report_format=None, useFileAPI=True):
+    def predict_model_smiles(self, model_id, smiles, generate_report=True, useFileAPI=True):
         """
         Runs whole workflow: standardize, descriptors, prediction, applicability domain
         :param model_id:
@@ -1482,6 +1651,13 @@ class ModelPredictor:
         chemical, code = self.standardizeStructure(serverAPIs, smiles, model)
         # print(json.dumps(chemical, indent=4))
         
+                
+        if "smiles" in chemical and "cid" not in chemical:
+            img_base64=self.smiles_to_base64(chemical["smiles"])
+            chemical["imageSrc"]=f'data:image/png;base64,{img_base64}'
+        else:
+            chemical["imageSrc"]=imgURLCid + chemical["cid"]
+                                            
         # print(chemical)
     
         if code != 200:
@@ -1567,12 +1743,14 @@ class ModelPredictor:
             
             # print(useFileAPI)
             
-            if useFileAPI:
-                urlCtxApi="https://ctx-api-dev.ccte.epa.gov/chemical/property/model/file/search/"
-                                
-                modelResults.modelDetails.urlQMRF=urlCtxApi+"?typeId=1&modelId="+modelResults.modelDetails.modelId
-                modelResults.modelDetails.urlExcelSummary=urlCtxApi+"?typeId=2&modelId="+modelResults.modelDetails.modelId
-
+            if USE_TEMPORARY_MODEL_PLOTS:
+                script_dir = os.path.dirname(os.path.abspath(__file__))
+                file_path_scatter = os.path.join(script_dir, "data/plots", "scatter_plot_"+model.modelId+".png")
+                modelResults.modelDetails.imgSrcPlotScatter= pathlib.Path(file_path_scatter).as_uri()
+                file_path_histogram = os.path.join(script_dir, "data/plots", "histogram_"+model.modelId+".png")
+                modelResults.modelDetails.imgSrcPlotHistogram = pathlib.Path(file_path_histogram).as_uri()
+                
+            elif useFileAPI:
                 # these need to be added to ctx api:
                 modelResults.modelDetails.imgSrcPlotScatter = urlCtxApi+"?typeId=3&modelId="+modelResults.modelDetails.modelId
                 modelResults.modelDetails.imgSrcPlotHistogram = urlCtxApi+"?typeId=4&modelId="+modelResults.modelDetails.modelId
@@ -1582,24 +1760,13 @@ class ModelPredictor:
                 # plot_base64 = self.generateScatterPlot(neighbors, md.unitsModel, "Results for "+modelResults.modelDetails.modelName, "Exp. vs Pred.")                                    
                 # modelResults.modelDetails.imgSrcPlotScatter="data:image/png;base64,"+plot_base64
                 pass
-
-            from report_creator import ReportCreator
-            rc = ReportCreator()                        
             
-            if report_format == "json":
-                return modelResults.to_json(), 200
-            
-            if report_format == "html":
-                html = rc.create_html_report(modelResults)
-                
-                # print(html)
-                return html, 200
+            modelResults.modelDetails.urlQMRF=urlCtxApi+"?typeId=1&modelId="+modelResults.modelDetails.modelId
+            modelResults.modelDetails.urlExcelSummary=urlCtxApi+"?typeId=2&modelId="+modelResults.modelDetails.modelId
 
-            return html, 200
-    
-        results_json = modelResults.to_json()
+            
         # print(results_json)
-        return results_json, 200
+        return modelResults.to_json(), 200
     
 
     @timer
@@ -1810,12 +1977,13 @@ def runExample2(model_id, smiles, generate_report, file_format, useValeryCode):
     
     if useValeryCode:
         output, code, smiles = predict_model_smiles(model_id, smiles) #doesnt create reports
-        file_name = model_id + "_report_valery_" + smiles + "." + file_format
+        file_name = model_id + "_report_valery_" + smiles + ".json"
     else:
         mp = ModelPredictor()
-        file_name = model_id + "_report_todd_" + smiles + "." + file_format
-        output, code = mp.predict_model_smiles(model_id, smiles, generate_report=generate_report, report_format=file_format, 
-            useFileAPI=True)
+        file_name = model_id + "_report_todd_" + smiles + ".json"
+        output, code = mp.predict_model_smiles(model_id, smiles, generate_report=generate_report, useFileAPI=True)
+        # print(output)
+        
 
     script_dir = os.path.dirname(os.path.abspath(__file__))
     file_path = os.path.join(script_dir, "data/reports", file_name)
@@ -1826,31 +1994,55 @@ def runExample2(model_id, smiles, generate_report, file_format, useValeryCode):
     with open(file_path, 'w', encoding='utf-8') as f:
         f.write(output)
         
-    webbrowser.open(f'file://{file_path}')
+    # webbrowser.open(f'file://{file_path}')
+    
+    if file_format == "html":
+        
+        rc=ReportCreator()
+        
+        with open(file_path, 'r') as file:
+            modelResults = json.load(file)
+            # print(type(modelResults))
+            # print(modelResults)
+            html=rc.create_html_report(mr=modelResults)
+            file_path_html = file_path.replace(".json", ".html")
+            with open(file_path_html, 'w', encoding='utf-8') as f:
+                f.write(html)
+            htmlPath = pathlib.Path(file_path_html)
+            webbrowser.open(htmlPath)
+
+            
+
 
 def runExample():
 
-    model_id = str(1065)  # HLC, smallest dataset
-    # model_id = str(1066)  # WS
+    global USE_TEMPORARY_MODEL_PLOTS
+    USE_TEMPORARY_MODEL_PLOTS = True
+
+    # model_id = str(1065)  # HLC, smallest dataset
+    model_id = str(1066)  # WS
     # model_id = str(1067)  # VP
     # model_id = str(1068)  # BP
     # model_id = str(1069)  # LogKow
     # model_id = str(1070) # MP, biggest dataset
+    # model_id = str(1615) # Koc, MLR model
 
     # smiles = "c1ccccc1"
     smiles = "OC(=O)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)F"
     # smiles = "COCOCOCOCCCCCCOCCCCOCOCOCCC" # not in dsstox
     # smiles = "C[Sb]" # passes standardizer, fails test descriptors
     # smiles = "C[As]C[As]C" # violate frag AD?
+    # smiles = "XX" # fails standardizer 
+    
 
     generate_report = True
-    # file_format = "html"
-    file_format = "json"
+    file_format = "html"
+    # file_format = "json"
             
     if not generate_report:
         file_format = "json"
     
-    runExample2(model_id, smiles, generate_report, "json", useValeryCode=True)
+    # runExample2(model_id, smiles, generate_report, "json", useValeryCode=True)
     
     print("\n")
     
@@ -1910,15 +2102,11 @@ def runExampleFromService():
 
 
 def test_say_hello():
-
     import requests
-
     # Define the name to test
     test_name = "World"
-
     # Send a GET request to the /hello/<name> endpoint on localhost
     response = requests.get(f'http://localhost:5004/hello/{test_name}')
-
     print(response.text)
 
 
@@ -1927,8 +2115,13 @@ if __name__ == '__main__':
     
     runExample()
     
-    # excel_file_path = r"C:\Users\TMARTI02\OneDrive - Environmental Protection Agency (EPA)\0 java\0 model_management\hibernate_qsar_model_building\data\reports\prediction reports upload\WebTEST2.1\HLC v1 modeling_RND_REPRESENTATIVE.xlsx"
     # mp=ModelPredictor()
+    
+    # mp.createTrainingTestPlotsForReports()
+    # mp.display_image(1065, 3, getSession())
+    # mp.display_image(1065, 4, getSession())
+    
+    # excel_file_path = r"C:\Users\TMARTI02\OneDrive - Environmental Protection Agency (EPA)\0 java\0 model_management\hibernate_qsar_model_building\data\reports\prediction reports upload\WebTEST2.1\HLC v1 modeling_RND_REPRESENTATIVE.xlsx"
     # mp.predictSetFromDB_SmilesFromExcel(1065,excel_file_path,'Test set')
 
     # modelStatistics = ModelStatistics()

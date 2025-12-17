@@ -1,7 +1,12 @@
-from model_ws_db_utilities import ModelResults, ModelDetails
+
+"""
+This version uses ModelResults as a dict loaded from json string
+
+"""
 from dominate import document
 from dominate.tags import meta, title, h3, table, tbody, tfoot, tr, td, th, img, font, b, br, caption, sup, a, p, span, em
 
+import json
 import matplotlib
 matplotlib.use('Agg')  # Use a non-interactive backend
 import matplotlib.pyplot as plt
@@ -27,8 +32,7 @@ import base64, io
 
 class ReportCreator:
 
-
-    def addFragmentADTable(self, ad, mr:ModelResults, my_td):
+    def addFragmentADTable(self, ad, mr, my_td):
                 
         with table(cellspacing="0", cellpadding="5", border="1"):
             
@@ -75,7 +79,7 @@ class ReportCreator:
         
 
 
-    def addAnalogADTable(self, ad, mr:ModelResults, my_td):
+    def addAnalogADTable(self, ad, mr, my_td):
     
         strAD = None
         
@@ -95,7 +99,10 @@ class ReportCreator:
             cap = caption()
             cap.add(strAD)
             cap += br()
-            cap += f"Analogs from Training Set (values in {mr.unitsModel}, CV predictions)"
+            
+            unitsModel=mr["unitsModel"]
+            
+            cap += f"Analogs from Training Set (values in {unitsModel}, CV predictions)"
         
             with tbody():
                 tr()
@@ -106,13 +113,14 @@ class ReportCreator:
                 
 
     def addApplicabilityDomains(self, mr, my_td):
-        
-        my_td += b("Applicability domain:"), br()
+        my_td += br()
+        my_td += b("Applicability domain:")
+        my_td += br()
         
         with my_td:
-            with table(cellpadding = "10"):
+            with table(style="table-layout: fixed; width: 100%; border: 0px; cellpadding = 10px"):
                 with tr():
-                    for ad in mr.applicabilityDomains:
+                    for ad in mr["applicabilityDomains"]:
                         with td(style="vertical-align: top;"):
                             if ad["method"] == pc.Applicability_Domain_TEST_Embedding_Euclidean:
                                 self.addAnalogADTable(ad, mr, my_td)
@@ -137,6 +145,45 @@ class ReportCreator:
         return exps, preds
 
     
+
+    def setScatterplotBounds(self, unitName, x, y, ax):
+        # Determine the range for the axes
+        min_value = min(min(x), min(y))
+        max_value = max(max(x), max(y))
+    # Check if "log" is in unitName
+        if "log" in unitName.lower():
+            min_int = int(np.floor(min_value))
+            max_int = int(np.ceil(max_value))
+            # Determine if padding is needed
+            if (min_value - min_int) < 0.25:
+                min_value = min_int - 1
+            else:
+                min_value = min_int
+            if (max_int - max_value) < 0.25:
+                max_value = max_int + 1
+            else:
+                max_value = max_int
+            ax.set_xticks(range(min_value, max_value + 1))
+            ax.set_yticks(range(min_value, max_value + 1))
+        elif unitName == "°C":
+            min_value_50 = (np.floor(min_value / 50) * 50) 
+            max_value_50 = (np.ceil(max_value / 50) * 50)
+            
+            if abs(min_value - min_value_50) < 10:
+                min_value = min_value_50 - 50
+            else:
+                min_value = min_value_50
+            if abs(max_value_50 - max_value) < 10:
+                max_value = max_value_50 + 50
+            else:
+                max_value = max_value_50
+                
+            ax.set_xticks(range(int(min_value), int(max_value), 50))
+            ax.set_yticks(range(int(min_value), int(max_value), 50))
+                         
+        ax.set_xlim(min_value, max_value)
+        ax.set_ylim(min_value, max_value)
+
     def generateScatterPlot(self, modelPredictions, unitName, plotTitle, seriesName):
         
         x, y = self.getArraysOmitNullPreds(modelPredictions)
@@ -152,40 +199,7 @@ class ReportCreator:
         ax.scatter(x, y, label=seriesName, color="red", edgecolor='black')
         ax.plot(x, x, label='Y=X', color="black")
         
-        # Determine the range for the axes
-        min_value = min(min(x), min(y))
-        max_value = max(max(x), max(y))
-    
-        # Check if "log" is in unitName
-        if "log" in unitName.lower():
-        
-            min_int = int(np.floor(min_value))
-            max_int = int(np.ceil(max_value))
-    
-            # Determine if padding is needed
-            if (min_value - min_int) < 0.25:
-                min_value = min_int - 1
-            else:
-                min_value = min_int
-    
-            if (max_int - max_value) < 0.25:
-                max_value = max_int + 1
-            else:
-                max_value = max_int
-    
-            ax.set_xticks(range(min_value, max_value + 1))
-            ax.set_yticks(range(min_value, max_value + 1))        
-
-        elif unitName == "°C":
-            min_value = (np.floor(min_value / 50) * 50) - 50
-            max_value = (np.ceil(max_value / 50) * 50) + 50
-        else:
-            padding = (max_value - min_value) * 0.05
-            min_value -= padding
-            max_value += padding
-    
-        ax.set_xlim(min_value, max_value)
-        ax.set_ylim(min_value, max_value)
+        self.setScatterplotBounds(unitName, x, y, ax)
         
         
         plt.legend(loc="lower right")
@@ -202,11 +216,11 @@ class ReportCreator:
     
                     
 
-    def create_model_results_table(self, mr: ModelResults):
+    def create_model_results_table(self, mr):
         
         # print(mr.to_json())
         
-        md = mr.modelDetails
+        md = mr["modelDetails"]
     
         with table(border="0", width="100%"):
             with tbody():
@@ -216,14 +230,14 @@ class ReportCreator:
                 with tr():
                     my_td = td()
 
-                    # my_td += b("Model name:"), " " + md.modelName, br()
+                    # my_td += b("Model name:"), " " + md["modelName"], br()
                     
-                    my_td += b("Model name:"), " " + md.modelName, 
+                    my_td += b("Model name:"), " " + md["modelName"], 
                     
-                    # link_qmrf = model_file_api + "?modelId="+mr.modelDetails.modelId+"&typeId=1"
-                    # link_excel = model_file_api + "?modelId="+mr.modelDetails.modelId+"&typeId=2"
-                    link_qmrf = mr.modelDetails.urlQMRF
-                    link_excel = mr.modelDetails.urlExcelSummary
+                    # link_qmrf = model_file_api + "?modelId="+mr["modelDetails"].modelId+"&typeId=1"
+                    # link_excel = model_file_api + "?modelId="+mr["modelDetails"].modelId+"&typeId=2"
+                    link_qmrf = md["urlQMRF"]
+                    link_excel = md["urlExcelSummary"]
                     
                     
                     my_td +=" ("
@@ -233,35 +247,33 @@ class ReportCreator:
                     my_td +=")",br()
 
                     
-                    my_td += b("Model source:"), " " + md.modelSource, br()
+                    my_td += b("Model source:"), " " + md["modelSource"], br()
                                         
                     
-                    my_td += b("Property name:"), " " + md.propertyName, br()
-                    my_td += b("Property description:"), " " + md.propertyDescription, br()
+                    my_td += b("Property name:"), " " + md["propertyName"], br()
+                    my_td += b("Property description:"), " " + md["propertyDescription"], br()
     
-                    if mr.experimentalValueUnitsModel:
+                    if mr["experimentalValueUnitsModel"]:
                         
-                        str_exp_model_units = self.get_formatted_value(mr.modelDetails.is_binary, mr.experimentalValueUnitsModel, 3)
-                        my_td += b("Experimental value:"), " " + str_exp_model_units + " " + mr.unitsModel
+                        str_exp_model_units = self.get_formatted_value(md["is_binary"], mr["experimentalValueUnitsModel"], 3)
+                        my_td += b("Experimental value:"), " " + str_exp_model_units + " " + mr["unitsModel"]
                     
-                        if mr.unitsDisplay != mr.unitsModel:
-                            str_exp_display_units = self.get_formatted_value(mr.modelDetails.is_binary, mr.experimentalValueUnitsDisplay, 3)
-                            my_td += " = " + str_exp_display_units + " " + mr.unitsDisplay
+                        if mr["unitsDisplay"] != mr["unitsModel"]:
+                            str_exp_display_units = self.get_formatted_value(md["is_binary"], mr["experimentalValueUnitsDisplay"], 3)
+                            my_td += " = " + str_exp_display_units + " " + mr["unitsDisplay"]
 
-                        my_td += em(" (in "+mr.experimentalValueSet.lower()+" set)"), br()
+                        my_td += em(" (in "+mr["experimentalValueSet"].lower()+" set)"), br()
 
 
                     else:
                         my_td += b("Experimental value:"), " N/A", br()
-    
-                    # print(mr.modelDetails.is_binary, mr.predictionValue, mr.predictionUnits)
-    
-                    str_pred_model_units = self.get_formatted_value(mr.modelDetails.is_binary, mr.predictionValueUnitsModel, 3)
-                    my_td += b("Predicted value:"), " " + str_pred_model_units + " " + mr.unitsModel
+        
+                    str_pred_model_units = self.get_formatted_value(md["is_binary"], mr["predictionValueUnitsModel"], 3)
+                    my_td += b("Predicted value:"), " " + str_pred_model_units + " " + mr["unitsModel"]
 
-                    if mr.unitsDisplay != mr.unitsModel:
-                        str_pred_display_units = self.get_formatted_value(mr.modelDetails.is_binary, mr.predictionValueUnitsDisplay, 3)
-                        my_td += " = " + str_pred_display_units + " " + mr.unitsDisplay, br()
+                    if mr["unitsDisplay"] != mr["unitsModel"]:
+                        str_pred_display_units = self.get_formatted_value(md["is_binary"], mr["predictionValueUnitsDisplay"], 3)
+                        my_td += " = " + str_pred_display_units + " " + mr["unitsDisplay"], br()
                     
                     self.addApplicabilityDomains(mr, my_td)
                     
@@ -317,9 +329,46 @@ class ReportCreator:
             return "error:"+str(value)
     
     
+    def createTestChemicalTile(self, td_tc, mr, align):
+        
+        # print(set, i)
+        td_tc += br(), br()
+        chemical = mr["chemical"]
+        td_tc += b("Test chemical"), br()
+        
+        md = mr["modelDetails"]
+        
+        exp_float = mr["experimentalValueUnitsModel"]
+        pred_float = mr["predictionValueUnitsModel"]
+        
+        # print(exp_float, pred_float)
+        
+        
+        if md["is_binary"]:
+            exp = self.get_formatted_value(True, exp_float, -1)
+            td_tc += b("Measured: "),exp, br()    
+        else:
+            exp = self.get_formatted_value(False, exp_float, 3)
+            td_tc += b("Measured: "), exp, br()
         
 
-    def createAnalogTile(self, analog, i, mr:ModelResults,align):
+        if md["is_binary"]:
+            pred = self.get_formatted_value(True, pred_float, -1)
+            td_tc += b("Predicted: "), pred, br()    
+        else:
+            pred = self.get_formatted_value(False, pred_float, 3)
+            td_tc += b("Predicted: "), pred, br()
+
+        
+        if chemical.get("sid","N/A") != "N/A":        
+            td_tc += img(src=chemical["imageSrc"], border="1", alt="Image for " + chemical["name"], width="150", height="150"), br()
+            td_tc += a(chemical["sid"], href=urlChemicalDetails+chemical["sid"], title=chemical["sid"]+' on the Chemicals Dashboard', target="_blank")
+        else:
+            td_tc += img(src=chemical["imageSrc"], border="1", alt="Image for " + chemical["smiles"], width="150", height="150"), br()
+            td_tc += chemical["smiles"]
+            
+
+    def createAnalogTile(self, analog, i, mr,align):
         
         # print(set, i)
         
@@ -327,7 +376,9 @@ class ReportCreator:
                 
         analog_td+= b("Neighbor:"), " " + str(i+1), br()
         
-        if mr.modelDetails.is_binary:
+        md = mr["modelDetails"]
+        
+        if md["is_binary"]:
             exp = self.get_formatted_value(True, analog["exp"], -1)
             analog_td+= b("Measured: "),exp, br()    
         else:
@@ -335,7 +386,7 @@ class ReportCreator:
             analog_td+= b("Measured: "), exp, br()
         
 
-        if mr.modelDetails.is_binary:
+        if md["is_binary"]:
             pred = self.get_formatted_value(True, analog["pred"], -1)
             analog_td+= b("Predicted: "), pred, br()    
         else:
@@ -353,7 +404,7 @@ class ReportCreator:
     def addNeighborTileTable(self, mr, neighbors):
 
         with table(border="0", width="100%", cellpadding=10):
-            caption("Neighbor values in " + mr.unitsModel)
+            caption("Neighbor values in " + mr["unitsModel"])
             # following is hardcoded to use top 10 analogs but could be made to only have the analogs that are similar enough
             with tr():
                 for i in range(0, 5):
@@ -365,18 +416,15 @@ class ReportCreator:
                     analog = neighbors[i]
                     self.createAnalogTile(analog, i, mr, "left")
 
-    def write_neighbors(self, mr:ModelResults, neighborsInSet):
+    def write_neighbors(self, mr, neighborsInSet):
         
-        md = mr.modelDetails
         
         with table(border="0", width="100%"):
                                     
             with tbody():
                 
                 with tr(bgcolor="black"):
-                
-                    with td(colspan="3"):
-                        
+                    with td(colspan="4"):
                         set = neighborsInSet["set"] 
                         if set == "Test":
                             font("Nearest Neighbors from " + set+" (External Predictions)", color="white")
@@ -385,26 +433,46 @@ class ReportCreator:
                         
                 with tr(): 
                     
-                    with td():                    
+                    with td(valign="top"):
+                        br(), br()                  
                         plotTitle= "Nearest neighbors from "+set
-                        plot_base64 = self.generateScatterPlot(neighborsInSet["neighbors"], md.unitsModel, plotTitle, "Exp. vs Pred.")        
-                        img_tag = img(src=f'data:image/png;base64,{plot_base64}', alt='Plot of experimental vs. predicted for '+set+" set", height="400")
+                        plot_base64 = self.generateScatterPlot(neighborsInSet["neighbors"], mr["unitsModel"], plotTitle, "Exp. vs Pred.")        
+                        img(src=f'data:image/png;base64,{plot_base64}', alt='Plot of experimental vs. predicted for '+set+" set", height="400")
                     
-                    with td():                                                        
-                        self.addMaeTable(mr, neighborsInSet)
+                    td_tc = td(valign="top")
+                    self.createTestChemicalTile(td_tc, mr, "center")
+                    self.addMaeTable( td_tc, mr, neighborsInSet)
                                             
                     with td():
                         self.addNeighborTileTable(mr, neighborsInSet["neighbors"])
 
     
-    def create_html_report(self, mr:ModelResults):
+    def create_html_report_from_json(self, reportJson): 
+        '''
+        Method to create report from ModelResults json
+        This approach loads from json into dictionary. It was not attempted to reinstantiate the original class which may change over time
+                
+        :param reportJson: ModelResults report as json string
+        '''
+        modelResults=json.loads(reportJson)
+        
+        
+        
+        return self.create_html_report(modelResults)
+        
+    
+    def create_html_report(self, mr):
+        '''
+        Method to create report from ModelResults dictionary
+        :param mr: ModelResults dictionary
+        '''
     
         # print(chemical)
-        md = mr.modelDetails
+        md = mr["modelDetails"]
         
         # print("sid", chemical["sid"])
     
-        page_title = md.modelName + " Model Calculation Details: " + md.propertyName
+        page_title = md["modelName"] + " Model Calculation Details: " + md["propertyName"]
         doc = document(lang='en', title=page_title)  # title has to be set here, the title object in the head doesnt work
     
         with doc.head:
@@ -424,7 +492,7 @@ class ReportCreator:
                             self.write_model_performance(md)
 
                     
-                    for neighborsInSet in mr.neighborsForSets:
+                    for neighborsInSet in mr["neighborsForSets"]:
 
                         with tr():
                             with td():
@@ -444,129 +512,126 @@ class ReportCreator:
         
         return str(doc)
     
-    def write_model_performance(self, md: ModelDetails):
+    def write_model_performance(self, md):
     
         with table(border="0", width="100%"):
             with tbody():
                 with tr(bgcolor="black"):
-                    with td():
+                    with td(colspan="3"):
                         font("Model performance", color="white")
                 with tr():
-                    with td():
-                        self.addPlotsTable(md)
+                    with td(align="center"):                        
+                        img(src=md["imgSrcPlotScatter"], alt="Scatter plot for " + md["modelName"], height=400)
+                    with td(align="center"):          
+                        img(src=md["imgSrcPlotHistogram"], alt="Histogram plot for " + md["modelName"], height=400)
+                    with td(align="left"):
+                        self.addStatsTableTraining(md)
+                        br()
+                        self.addStatsTableTest(md)
+                        
+                        with p():
+                            span("R")
+                            sup("2")
+                            span(" = Pearson correlation coefficient, RMSE = root mean squared error, MAE = mean absolute error")                        
     
-                with tr():
-                    with td():
-                        self.addStatsTable(md)
-    
-    def addPlotsTable(self, md: ModelDetails):
-        sizePlot=400
-        padding=20
-        sizeTable=sizePlot*2+3*padding
+    def addMaeTable(self, td_tc, mr, neighborsInSet):
         
-        with table(border="0", width=str(sizeTable)+"px", cellpadding=str(padding)+"px"):
-            with tbody():
-                with tr():
-                    with td():                        
-                        img(src=md.imgSrcPlotScatter, alt="Scatter plot for " + md.modelName, height=400)
-                    with td():
-                        img(src=md.imgSrcPlotHistogram, alt="Histogram plot for " + md.modelName, height=400)
+        with td_tc:
+            p()
+            with table(border=1, cellpadding="5", cellspacing="0"):
+                caption("Results for neighbors compared with entire set")
+                    
+                with tbody():
+                    
+                    with tr(style="background-color: #d3d3d3"):
+                        th("Chemicals")
+                        th("MAE*")
+                    
+                    with tr():
+                        td("Analogs from set")
+                        td(self.get_formatted_value(False,neighborsInSet["MAE"], 3))
     
-    
-    def addMaeTable(self, mr:ModelResults, neighborsInSet):
+                    with tr():
+                        td("Entire set")
+                        
+                        if "train" in neighborsInSet["set"].lower():
+                            td(self.get_formatted_value(False,mr["modelDetails"]["modelStatistics"]["MAE_CV_Training"],3))    
+                        else:
+                            td(self.get_formatted_value(False,mr["modelDetails"]["modelStatistics"]["MAE_Test"], 3))
+                        
         
-        with table(border=1, cellpadding="5", cellspacing="0"):
-            caption("Results for neighbors compared with entire set")
-                
-            with tbody():
-                
-                with tr(style="background-color: #d3d3d3"):
-                    th("Chemicals")
-                    th("MAE*")
-                
-                with tr():
-                    td("Analogs from set")
-                    td(self.get_formatted_value(False,neighborsInSet["MAE"], 3))
-
-                with tr():
-                    td("Entire set")
-                    
-                    if "train" in neighborsInSet["set"].lower():
-                        td(self.get_formatted_value(False,mr.modelDetails.modelStatistics["MAE_CV_Training"],3))    
-                    else:
-                        td(self.get_formatted_value(False,mr.modelDetails.modelStatistics["MAE_Test"], 3))
-                    
+            p('* Mean absolute error in '+mr["modelDetails"]["unitsModel"]) 
     
-        p('* Mean absolute error in '+mr.modelDetails.unitsModel) 
+    def addStatsTableTraining(self, md):    
     
-    def addStatsTable(self, md: ModelDetails):
-    
-        # metrics = [
-        #     "PearsonRSQ_CV_Training",
-        #     "R2_Test",
-        #     "Q2_Test",
-        #     "RMSE_Test",
-        #     "MAE_CV_Training",
-        #     "MAE_Test",
-        #     "MAE_Test_inside_AD",
-        #     "MAE_Test_outside_AD",
-        #     "Coverage_Test"
-        # ]
+        ms=md["modelStatistics"]
     
         with table(border=1, cellpadding="0", cellspacing="0", width="100%"):
-            caption("Model Statistics")
-            # with tbody():
-            #     with tr():
-            #         for metric in metrics:
-            #             td(metric, align="center")
-            #     with tr():
-            #         for metric in metrics:
-            #             if metric in md.modelStatistics:
-            #                 td("{:.2f}".format(md.modelStatistics[metric]), align="center")
-            #             else:
-            #                 td("TODO", align="center")
+            caption("Model Training Set Statistics")
     
             with tbody():
                 with tr():
                     # Row for "Training" and "Test" headers
                     td("Training (80%)", colspan="3", align="center", style="background-color: #d3d3d3; width: 25%;")
                     td("5-fold CV (80%)", colspan="3", align="center", style="background-color: #ccffcc; width: 25%;")
-                    td("Test (20%)", colspan="3", align="center", style="background-color: #ccccff; width: 25%;")
-                    td("Test Set Applicability Domain Statistics", colspan="3", align="center",
-                       style="background-color: #ffffcc; width: 25%;")
-    
+        
                 with tr():
-                    # Header row for metrics
-    
-                    for i in range(1, 4):
+                    
+                    for _ in range(2):
                         td(["R", sup("2")], align="center")
                         td("RMSE", align="center")
                         td("MAE", align="center")
-    
-                    td("MAE Test inside AD", align="center")
-                    td("MAE Test outside AD", align="center")
-                    td("Fraction Inside AD", align="center")
-    
+                                    
                 with tr():
                     # Training set stats
-                    td(self.format2(md.modelStatistics["PearsonRSQ_Training"]), align="center")
-                    td(self.format2(md.modelStatistics["RMSE_Training"]), align="center")
-                    td(self.format2(md.modelStatistics["MAE_Training"]), align="center")
+                    td(self.format2(ms["PearsonRSQ_Training"]), align="center")
+                    td(self.format2(ms["RMSE_Training"]), align="center")
+                    td(self.format2(ms["MAE_Training"]), align="center")
     
                     # CV stats
-                    td(self.format2(md.modelStatistics["PearsonRSQ_CV_Training"]), align="center")
-                    td(self.format2(md.modelStatistics["RMSE_CV_Training"]), align="center")
-                    td(self.format2(md.modelStatistics["MAE_CV_Training"]), align="center")
+                    td(self.format2(ms["PearsonRSQ_CV_Training"]), align="center")
+                    td(self.format2(ms["RMSE_CV_Training"]), align="center")
+                    td(self.format2(ms["MAE_CV_Training"]), align="center")
     
-                    # Test set stats
-                    td(self.format2(md.modelStatistics["PearsonRSQ_Test"]), align="center")
-                    td(self.format2(md.modelStatistics["RMSE_Test"]), align="center")
-                    td(self.format2(md.modelStatistics["MAE_Test"]), align="center")
     
-                    # AD stats
-                    td(self.format2(md.modelStatistics["MAE_Test_inside_AD"]), align="center")
-                    td(self.format2(md.modelStatistics["MAE_Test_outside_AD"]), align="center")
-                    td(self.format2(md.modelStatistics["Coverage_Test"]), align="center")
+        
+    
+    def addStatsTableTest(self, md):    
+    
+        ms=md["modelStatistics"]
+    
+        with table(border=1, cellpadding="0", cellspacing="0", width="100%"):
+                caption("Model Test Set Statistics")
+        
+                with tbody():
+                    with tr():
+                        # Row for "Training" and "Test" headers
+                        td("Test (20%)", colspan="3", align="center", style="background-color: #ccccff; width: 25%;")
+                        td("Test Set Applicability Domain Statistics", colspan="3", align="center",
+                           style="background-color: #ffffcc; width: 25%;")
+        
+                    with tr():
+                        # Header row for metrics
+        
+                        td(["R", sup("2")], align="center")
+                        td("RMSE", align="center")
+                        td("MAE", align="center")
+        
+                        td("MAE Test inside AD", align="center")
+                        td("MAE Test outside AD", align="center")
+                        td("Fraction Inside AD", align="center")
+        
+                    with tr():
+        
+                        td(self.format2(ms["PearsonRSQ_Test"]), align="center")
+                        td(self.format2(ms["RMSE_Test"]), align="center")
+                        td(self.format2(ms["MAE_Test"]), align="center")
+
+                        # AD stats
+                        td(self.format2(ms["MAE_Test_inside_AD"]), align="center")
+                        td(self.format2(ms["MAE_Test_outside_AD"]), align="center")
+                        td(self.format2(ms["Coverage_Test"]), align="center")
+    
     
     # MAE_Test_inside_AD	MAE_Test_outside_AD	Coverage_Test
     
@@ -599,23 +664,17 @@ class ReportCreator:
     
     def write_first_row(self, modelResults):
     
-        with table(border="0", width="100%"):
+        chemical = modelResults["chemical"]
+    
+        with table(style="table-layout: fixed; width: 100%; border: 0px"):
             with tbody():
                 with tr():  # first row of main table
                     with td(valign="top", width="150px"):
-                        
-                        if modelResults.chemical["cid"]=="N/A":
-                            img_base64=self.smiles_to_base64(modelResults.chemical["smiles"])
-                            # img(src=img_src, alt='Plot of experimental vs. predicted for '+set+" set", height="150")
-                            img(src=f'data:image/png;base64,{img_base64}', alt='Structure image for '+modelResults.chemical["smiles"], height="150", border="2")
-                            
-                        else:
-                            imgURL = imgURLCid + modelResults.chemical["cid"]
-                            img(src=imgURL, alt="Structural image of " + modelResults.chemical["name"], height=150,
-                                width=150, border="2")
+                        img(src=chemical["imageSrc"], alt="Structural image of " + chemical["name"], 
+                            height=150, width=150, border="2")
     
-                    with td(valign="top"):
-                        self.create_chemical_identifiers_table(modelResults.chemical)
+                    with td(valign="top", width="20%"):
+                        self.create_chemical_identifiers_table(chemical)
     
                     with td(valign="top"):
                         self.create_model_results_table(modelResults)
@@ -664,6 +723,48 @@ class ReportCreator:
 #         monisotopicMass = None
 
 
+def create_report_from_json():
+    
+    import os, json, webbrowser, pathlib
+    rc=ReportCreator()
+    
+    
+    model_id = "1065"
+    smiles = "OC(=O)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)F"     
+    
+    # file_name = model_id + "_report_todd_" + smiles + ".json"
+    file_name = "bob.json"
+    
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    # file_path = os.path.join(script_dir, "data","reports", file_name)
+    file_path = os.path.join("data/reports/"+ file_name)
+    
+    try:
+        with open(file_path, 'r') as file:
+            modelResults = json.load(file)
+            # print(modelResults)
+            
+            html = rc.create_html_report(modelResults)
+            
+            file_path_html = file_path.replace(".json", ".html")
+            
+            with open(file_path_html, 'w', encoding='utf-8') as f:
+                f.write(html)
+                
+            htmlPath = pathlib.Path(file_path_html)
+        
+            webbrowser.open(htmlPath)
+
+            
+            
+    except FileNotFoundError:
+        print(f"File not found: {file_path}")
+    except json.JSONDecodeError as e:
+        print(f"JSON decode error: {e}")
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")
+    
+
 if __name__ == '__main__':
-    pass
+    create_report_from_json()
 

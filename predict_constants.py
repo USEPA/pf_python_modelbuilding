@@ -118,8 +118,8 @@ class PredictConstants:
     PKA = "pKa"
     LOG_BCF = "LogBCF"  # OLD OPERA
     
-    BCF = "Bioconcentration factor"  # OPERA
-    BAF = "Bioaccumulation factor"
+    BCF = "Bioconcentration Factor"  # OPERA
+    BAF = "Bioaccumulation Factor"
     
     ULTIMATE_BIODEG = "Ultimate biodegradation timeframe"
     PRIMARY_BIODEG = "Primary biodegradation timeframe"
@@ -550,8 +550,8 @@ class UnitsConverter:
         elif property_name == PredictConstants.CLINT:
             converted_value = self.handle_clint(property_name, value, unit_name, final_unit_name, chemical_id)
     
-        elif property_name in [PredictConstants.FUB, PredictConstants.TTR_BINDING]:
-            converted_value = self.handle_dimensionless(property_name, value, unit_name, final_unit_name, chemical_id)
+        # elif property_name in [PredictConstants.FUB, PredictConstants.TTR_BINDING]:
+        #     converted_value = self.handle_dimensionless(property_name, value, unit_name, final_unit_name, chemical_id)
     
         elif property_name == PredictConstants.RBIODEG:
             converted_value = self.handle_binary(property_name, value, unit_name, final_unit_name, chemical_id)
