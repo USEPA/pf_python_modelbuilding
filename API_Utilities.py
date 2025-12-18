@@ -160,7 +160,7 @@ class QsarSmilesAPI:
         # Check if the request was successful
         if response.status_code == 200:
             # Parse the response JSON and convert it to a list of Chemical objects
-            return response.json()
+            return response.json(), 200
         else:
             # Handle the error appropriately
-            return response.text
+            return response.text,  response.status_code

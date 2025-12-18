@@ -167,6 +167,10 @@ class Model:
         self.modelSource = None
         self.modelStatistics = None
         
+        self.modelMethod = None
+        self.modelMethodDescription = None
+        self.modelMethodDescriptionURL = None
+        
         self.datasetId = None
         self.datasetName = None
         self.unitsModel = None
