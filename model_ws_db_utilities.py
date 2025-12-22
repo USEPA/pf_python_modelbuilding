@@ -39,6 +39,8 @@ from predict_constants import UnitsConverter
 from predict_constants import PredictConstants as pc
 
 from utils import timer
+from models.df_utilities import remove_log_p_descriptors,\
+    do_remove_correlated_descriptors
 # from bleach._vendor.html5lib.serializer import serialize
 
 debug = False
@@ -774,7 +776,7 @@ class ModelInitializer:
             for row in results:
                 model = Model()
                 self.row_to_model_details(model, row)
-                models.append(json.loads(model.get_model_description()))
+                models.append(model.get_model_description_dict())
 
             return models
 
@@ -1248,12 +1250,22 @@ class NeighborGetter:
 
         n_neighbors = 10
         nbrs = NearestNeighbors(n_neighbors=n_neighbors, algorithm='brute', metric='euclidean')
-
-        TrainSet = df_set[model.embedding]
-        TestSet = df_test_chemicals[model.embedding]
-
-        scaler = StandardScaler().fit(TrainSet)
-        train_x, test_x = scaler.transform(TrainSet), scaler.transform(TestSet)
+        
+        useEmbedding = True # probably should be consistent with what is use to find the Applicability domain analogs
+        
+        if useEmbedding: #Using embedding descriptors picks weird neighbors sometimes:
+            TrainSet = df_set[model.embedding]
+            TestSet = df_test_chemicals[model.embedding]
+            scaler = StandardScaler().fit(TrainSet)
+            train_x, test_x = scaler.transform(TrainSet), scaler.transform(TestSet)
+        
+        else: # Following just uses all TEST descriptors (removes constant ones)
+            TrainSet = df_set
+            TestSet = df_test_chemicals
+            ids_train, labels_train, features_train, column_names_train, is_binary= dfu.prepare_instances(TrainSet, "Training", model.remove_log_p_descriptors, remove_corr=False, remove_constant=True)        
+            features_test = TestSet[features_train.columns]
+            scaler = StandardScaler().fit(features_train)
+            train_x, test_x = scaler.transform(features_train), scaler.transform(features_test)
 
         nbrs.fit(train_x)
         # train_distances, train_indices = nbrs.kneighbors(train_x)
@@ -1267,7 +1279,9 @@ class NeighborGetter:
         # print(test_distances)
         # print(neighbors)
 
-        return neighbors
+        distances = list(test_distances[0])
+
+        return neighbors, distances
 
 
 class PlotCreator:
@@ -1500,6 +1514,12 @@ class ModelPredictor:
 
         return analogs2
 
+    def addDistances(self, analogs, distances):
+        # print(len(analogs), len(distances))
+        for index, analog in enumerate(analogs):  # these are just the qsarSmiles
+            analog["distance"] = distances[index] 
+
+
     def setExpPredValuesForNeighbors(self, df_preds, neighbors, df_dsstoxRecords):
 
         neighbors2 = []
@@ -1528,11 +1548,18 @@ class ModelPredictor:
         # import time 
         # t1 = time.time()
         
-        neighborsTest = ng.find_neighbors_in_set(model=model, df_set=model.df_prediction, df_test_chemicals=df_test_chemicals)
-        neighborsTraining = ng.find_neighbors_in_set(model=model, df_set=model.df_training, df_test_chemicals=df_test_chemicals)
+        neighborsTest, distances_test = ng.find_neighbors_in_set(model=model, df_set=model.df_prediction, df_test_chemicals=df_test_chemicals)
+        neighborsTraining, distances_training = ng.find_neighbors_in_set(model=model, df_set=model.df_training, df_test_chemicals=df_test_chemicals)
+
+        # print(distances_test)
+
 
         neighborsTraining = self.setExpPredValuesForNeighbors(model.df_preds_training_cv, neighborsTraining, model.df_dsstoxRecords)
         neighborsTest = self.setExpPredValuesForNeighbors(model.df_preds_test, neighborsTest, model.df_dsstoxRecords)
+                
+        self.addDistances(neighborsTraining, distances_training)    
+        self.addDistances(neighborsTest, distances_test)
+                            
                 
         df_neighborsTest = pd.DataFrame(neighborsTest)
         stats_test = stats.calculate_continuous_statistics(df_neighborsTest, 0, PredictConstants.TAG_TEST)
@@ -1643,11 +1670,11 @@ class ModelPredictor:
                             
         qsarSmiles = chemical['canonicalSmiles']
     
+        # print("Running descriptors")
         # Descriptor calcs:
         descriptorAPI = DescriptorsAPI()
         df_prediction, code = descriptorAPI.calculate_descriptors(serverAPIs, qsarSmiles,
                                                                   model.descriptorService)
-        
         # print(self.printFirstRowDF(df_prediction))
         
         # print(df_prediction, code)
@@ -1707,6 +1734,10 @@ class ModelPredictor:
         
         ad_results["method"] = modelDetails.applicabilityDomainName    
         ad_results["analogs"] = self.setExpPredValuesForADAnalogs(model, ad_results["analogs"])
+        self.addDistances(ad_results["analogs"], ad_results["distances"])        
+        del ad_results['distances']
+        
+        
         modelResults.applicabilityDomains.append(ad_results)
         
         # print("modelResults", modelResults.to_json)
@@ -1719,6 +1750,7 @@ class ModelPredictor:
             
         # print(results_json)
         return modelResults.to_json(), 200
+        # return modelResults
     
     def addLinks(self, modelResults, useFileAPI=True):
         
@@ -1788,7 +1820,7 @@ class ModelPredictor:
         mi = ModelInitializer()
 
         # initialize model bytes and all details from db:
-        model = mi.init_model(model_id, mwu)
+        model = mi.init_model(model_id)
 
         df = pd.read_excel(excel_file_path, sheet_name=sheetName)
         smiles_list = df['Smiles'].tolist()  # Extract the 'Smiles' column into a list
@@ -1823,9 +1855,10 @@ class ModelPredictor:
                 pred_results = json.loads(mwu.call_do_predictions_from_df(df_prediction, model))
                 pred_value = pred_results[0]['pred']
 
-                str_ad_results = self.determineApplicabilityDomain(model, df_prediction)
-                ad_results = json.loads(str_ad_results)
-                pred_AD = ad_results[0]["AD"]
+                ad_results = self.determineApplicabilityDomain(model, df_prediction)
+                # ad_results = json.loads(str_ad_results)
+                # pred_AD = ad_results[0]["AD"]
+                pred_AD = ad_results["AD"]
 
                 line = smiles + "\t" + qsarSmiles + "\t" + str(pred_value) + "\t" + str(pred_AD) + "\n"
                 print(line)
@@ -1883,7 +1916,7 @@ class ModelPredictor:
         from applicability_domain import applicability_domain_utilities as adu
         # model.applicabilityDomainName = adu.strOPERA_local_index  # for testing diff number of neighbors
 
-        output = adu.generate_applicability_domain_with_preselected_descriptors_from_dfs(
+        output,ad_cutoff = adu.generate_applicability_domain_with_preselected_descriptors_from_dfs(
             train_df=model.df_training,
             test_df=df_prediction,
             # test_df=model.df_prediction,  #for testing running batch type ad calc
@@ -1892,6 +1925,8 @@ class ModelPredictor:
             applicability_domain=model.applicabilityDomainName,
             filterColumnsInBothSets=True)
 
+
+        # print("AD_CUTOFF",ad_cutoff)
         # self.printFirstRowDF(output)
                 
         # TODO: following code will have to be revised for batch model calculations (have more than one row in df_predictio
@@ -1901,7 +1936,12 @@ class ModelPredictor:
         # dictsAnalogs = [ast.literal_eval(item) for item in analogsAD]
         
         AD = output['AD'].tolist()[0]
-        results = {"AD":AD, "analogs": analogsAD}
+        
+        distances = list(output["distances"][0])
+
+        results = {"AD":AD, "analogs": analogsAD, "distances": distances, "AD_Cutoff": ad_cutoff}
+                    
+        # print(results)
 
         # print(json.dumps(dicts,indent=4))
         return results  # gives an array instead of each object on separate line
@@ -2000,25 +2040,26 @@ class ModelPredictor:
 def runExample():
 
     global USE_TEMPORARY_MODEL_PLOTS
-    USE_TEMPORARY_MODEL_PLOTS = True
+    USE_TEMPORARY_MODEL_PLOTS = False
 
     # model_id = str(1065)  # HLC, smallest dataset
-    model_id = str(1066)  # WS
+    # model_id = str(1066)  # WS
     # model_id = str(1067)  # VP
-    # model_id = str(1068)  # BP
+    model_id = str(1068)  # BP
     # model_id = str(1069)  # LogKow
     # model_id = str(1070) # MP, biggest dataset
     # model_id = str(1615) # Koc, MLR model
 
     smiles_list = []
-    smiles_list.append("c1ccccc1")
-    smiles_list.append("OC(=O)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)F")
-    smiles_list.append("COCOCOCOCCCCCCOCCCCOCOCOCCC") # not in DssTox
-    smiles_list.append("C[Sb]") # passes standardizer, fails test descriptors
-    smiles_list.append("C[As]C[As]C") # violates frag AD
-    smiles_list.append("XX")  # fails standardizer
-    smiles_list.append("CCC.Cl") # not mixture according to qsarReadySmiles
-    smiles_list.append("CCCCC.CCCC") # mixture according to qsarReadySmiles
+    smiles_list.append("c1ccccc1") # benzene
+    # smiles_list.append("OC(=O)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)F") # PFOA
+    # smiles_list.append("COCOCOCOCCCCCCOCCCCOCOCOCCC") # not in DssTox
+    # smiles_list.append("CCCCCCCc1ccccc1") # not in DssTox
+    # smiles_list.append("C[Sb]") # passes standardizer, fails test descriptors
+    # smiles_list.append("C[As]C[As]C") # violates frag AD
+    # smiles_list.append("XX")  # fails standardizer
+    # smiles_list.append("CCC.Cl") # not mixture according to qsarReadySmiles
+    # smiles_list.append("CCCCC.CCCC") # mixture according to qsarReadySmiles
      
     
     current_directory = os.getcwd()
@@ -2029,8 +2070,8 @@ def runExample():
     
     for smiles in smiles_list:
         print("\nRunning " + smiles)        
-        runChemical(mp, model_id, smiles, folder_path)
     
+        runChemical(mp, model_id, smiles, folder_path)
     
 def runChemical(mp, model_id, smiles, folder_path):
     
@@ -2133,7 +2174,8 @@ if __name__ == '__main__':
     # pc.display_image(1065, 3, getSession())
     # pc.display_image(1065, 4, getSession())
     
-    # excel_file_path = r"C:\Users\TMARTI02\OneDrive - Environmental Protection Agency (EPA)\0 java\0 model_management\hibernate_qsar_model_building\data\reports\prediction reports upload\WebTEST2.1\HLC v1 modeling_RND_REPRESENTATIVE.xlsx"
+    # excel_file_path = r"C:\Users\TMARTI02\OneDrive - Environmental Protection Agency (EPA)\0 java\0 model_management\hibernate_qsar_model_building\data\reports\prediction reports upload\WebTEST2.1\HLC v1 modeling_RND_REPRESENTATIVE.xlsx"    
+    # mp=ModelPredictor()
     # mp.predictSetFromDB_SmilesFromExcel(1065,excel_file_path,'Test set')
 
     # modelStatistics = ModelStatistics()

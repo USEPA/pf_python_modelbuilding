@@ -29,33 +29,32 @@ from sklearn2pmml import sklearn2pmml
 from dotenv import load_dotenv
 load_dotenv()
 
-USE_CONNEXION = True
+from report_creator_dict import ReportCreator
 
-if USE_CONNEXION:
-    
-    import coloredlogs
-    import connexion
-    from connexion.middleware import MiddlewarePosition
-    from connexion.options import SwaggerUIOptions
-    from starlette.middleware.cors import CORSMiddleware
-    coloredlogs.install(level=DEBUG, milliseconds=True,
-                        fmt='%(asctime)s - %(name)s - %(levelname)s - %(message)s (%(filename)s:%(lineno)d)')
-    
-    options = SwaggerUIOptions(spec_path="/api/predictor_models/swagger.yaml",
-                               swagger_ui_path="/api/predictor_models/swagger")
-    app = connexion.AsyncApp(__name__, swagger_ui_options=options)
-    app.add_middleware(
-        CORSMiddleware,
-        position=MiddlewarePosition.BEFORE_EXCEPTION,
-        allow_origins=["*"],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-    app.add_api('swagger.yaml', swagger_ui_options=options)
-else:
-    app = Flask(__name__)
-    
+import coloredlogs
+import connexion
+from connexion.middleware import MiddlewarePosition
+from connexion.options import SwaggerUIOptions
+from starlette.middleware.cors import CORSMiddleware
+from starlette.responses import HTMLResponse, Response
+coloredlogs.install(level=DEBUG, milliseconds=True,
+                    fmt='%(asctime)s - %(name)s - %(levelname)s - %(message)s (%(filename)s:%(lineno)d)')
+
+options = SwaggerUIOptions(spec_path="/api/predictor_models/swagger.yaml",
+                           swagger_ui_path="/api/predictor_models/swagger")
+app = connexion.AsyncApp(__name__, swagger_ui_options=options)
+app.add_middleware(
+    CORSMiddleware,
+    position=MiddlewarePosition.BEFORE_EXCEPTION,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+app.add_api('swagger.yaml', swagger_ui_options=options)
+
+
+app_flask = None
 
 def get_version():
     try:
@@ -558,43 +557,45 @@ def cross_validate_fold(qsar_method):
 #     return mwu.call_do_predictions(prediction_tsv, model), 200
 
 
-# following didnt work for me when I used simple flask app:
-# @app.route('/api/predictor_models/models/predictDB', methods=['POST', 'GET'])
-# def predictDB(smiles, model_id):
-#     return predictFromDB(model_id, smiles)
+# @app.route('/api/predictor_models/models/predictDB2', methods=['POST', 'GET'])
+# def predictDB2():
+#     """Automates prediction and AD for single smiles using model in database
+#     This one works in Flask"""
+#     if request.method == 'POST':
+#         obj = request.form
+#     elif request.method == 'GET':
+#         obj = request.args
+#     smiles = obj.get('smiles')  # Retrieves the model number to use
+#     model_id = obj.get('model_id')
+#     report_format = obj.get('report_format', 'json')
+#
+#     return predictDB(model_id, smiles, report_format)
 
 
 def predictDB_POST(body):
-    mp = ModelPredictor()
-    return mp.predictFromDB(body['model_id'], body['smiles'],body['generate_report'], body['report_format'])
+    return predictDB(body['model_id'], body['smiles'],body['report_format'])
 
-@app.route('/api/predictor_models/models/predictDB', methods=['POST', 'GET'])
-def predictDB():
+
+# @app.route('/api/predictor_models/predict', methods=['POST', 'GET'])  # old flask route
+def predictDB(model_id, smiles, report_format):
     """Automates prediction and AD for single smiles using model in database"""
-
-    # TODO: make this method work whether using simple flask app or connexion based one
-
-    if request.method == 'POST':
-        obj = request.form
-    elif request.method == 'GET':
-        obj = request.args
+        
+    # return get_html_example()
     
-    smiles = obj.get('smiles')  # Retrieves the model number to use
-    model_id = obj.get('model_id')
-
-    generate_report = obj.get('generate_report', 'false').lower() in ['true', '1', 'yes']
-    report_format = obj.get('report_format', 'json').lower()
+    report_format = report_format.lower()
     if report_format not in ['json', 'html']:
         report_format = 'json'
         
-    # generate_report = generate_report.lower() in ['true', '1', 'yes']
-    # report_format = report_format.lower()
-    # if report_format not in ['json', 'html']:
-    #     report_format = 'json'
-    # print(model_id, smiles, generate_report,report_format)
-    
     mp = ModelPredictor()
-    return mp.predictFromDB(model_id, smiles, generate_report, report_format)
+    modelResultsJson = mp.predictFromDB(model_id, smiles)
+    
+    if report_format == "html":
+        rc=ReportCreator()
+        modelResultsHtml = rc.create_html_report_from_json(modelResultsJson)
+        return HTMLResponse(content=modelResultsHtml)    
+    else:
+        return Response(content=modelResultsJson, media_type="application/json") #by using this return type it wont try to serialize the json again    
+
 
 
 @app.route('/api/predictor_models/models/predict', methods=['POST'])
@@ -895,10 +896,8 @@ def model_obj(model_id):
 
 if __name__ == '__main__':
     # Limit logging output for easier readability
-    
-    if not USE_CONNEXION:
-        log = logging.getLogger('werkzeug')
-        log.setLevel(logging.DEBUG)
-        app.run(host='0.0.0.0', port=5004, debug=True)
-    else:
-        app.run(host='0.0.0.0', port=5004)
+    app = Flask(__name__)
+    # Limit logging output for easier readability
+    log = logging.getLogger('werkzeug')
+    log.setLevel(logging.DEBUG)
+    app_flask.run(host='0.0.0.0', port=5004, debug=True)

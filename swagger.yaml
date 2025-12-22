@@ -6,6 +6,7 @@ info:
   description: API gateway to EPA predictions
 
 paths:
+  
   /api/predictor_models/version:
     get:
       operationId: app.get_version
@@ -62,6 +63,20 @@ paths:
             example6:
               summary: MP-XGB Martin 2024
               value: 1070
+        - name: report_format
+          in: query
+          description: which format to return
+          required: false
+          schema:
+            type: string
+          examples:
+            example1:
+              summary: JSON 
+              value: json
+            example2:
+              summary: HTML
+              value: html
+
       responses:
         200:
           description: Success

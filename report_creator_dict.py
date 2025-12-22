@@ -19,25 +19,25 @@ from decimal import Decimal, getcontext, ROUND_HALF_UP, InvalidOperation
 from predict_constants import PredictConstants as pc
 # import tempfile
 
-
 urlChemicalDetails = "https://comptox.epa.gov/dashboard/chemical/details/"
 imgURLCid = "https://comptox.epa.gov/dashboard-api/ccdapp1/chemical-files/image/by-dtxcid/";
-model_file_api = "https://ctx-api-dev.ccte.epa.gov/chemical/property/model/file/search/" # may not be needed here
-
+model_file_api = "https://ctx-api-dev.ccte.epa.gov/chemical/property/model/file/search/"  # may not be needed here
 
 import numpy as np           
 import base64, io
 
 
 def createAnalogTile(analog, i, mr, align):
+    # used in two different report sections
         
-    # print(set, i)
-    
     # analog_td = td(align=align, width="10%")
     analog_td = td(align=align)
-            
-    analog_td += b("Neighbor:"), " " + str(i + 1), br()
     
+    if "distance" in analog:
+        analog_td += b("Distance:"), " " + format2(analog["distance"]), br()  # TODO: replace with similarity / Euclidean distance    
+    else:
+        analog_td += b("Neighbor:"), " " + str(i + 1), br()  # TODO: replace with similarity / Euclidean distance
+        
     md = mr["modelDetails"]
     
     if md["is_binary"]:
@@ -60,7 +60,8 @@ def createAnalogTile(analog, i, mr, align):
 
 
 def get_formatted_value(format_as_integer: bool, dvalue: float, nsig: int):
-
+    # TODO: could move to ReportCreator but then would get confusing in terms of self and super()
+    
     if dvalue is None:
         return "N/A"
 
@@ -136,7 +137,6 @@ class ReportCreator:
                             else:
                                 my_td += b("Molecular weight:"), " N/A", br()        
     
-    
     class ModelResultsSection:
         
         def create_model_results_table(self, mr):
@@ -155,7 +155,7 @@ class ReportCreator:
     
                         # my_td += b("Model name:"), " " + md["modelName"], br()
                         
-                        my_td += b("Model name:"), " " + md["modelName"], 
+                        my_td += b("Model name:"), " " + md["modelName"],
                         
                         # link_qmrf = model_file_api + "?modelId="+mr["modelDetails"].modelId+"&typeId=1"
                         # link_excel = model_file_api + "?modelId="+mr["modelDetails"].modelId+"&typeId=2"
@@ -168,14 +168,13 @@ class ReportCreator:
                         my_td += a('Excel summary', href=link_excel, title='All model details in Excel format', target="_blank")
                         my_td += ")", br()
                         
-                        my_td += b("Model method:"), a(md["modelMethod"], title = md["modelMethodDescription"], href=md["modelMethodDescriptionURL"]), br()
+                        my_td += b("Model method:"), a(md["modelMethod"], title=md["modelMethodDescription"], href=md["modelMethodDescriptionURL"]), br()
                         my_td += b("Model source:"), " " + md["modelSource"], br()
                         
                         my_td += b("Property name:"), " " + md["propertyName"], br()
                         my_td += b("Property description:"), " " + md["propertyDescription"], br()
         
-                        if mr["experimentalValueUnitsModel"]:
-                            
+                        if mr["experimentalValueUnitsModel"]: 
                             str_exp_model_units = get_formatted_value(md["is_binary"], mr["experimentalValueUnitsModel"], 3)
                             my_td += b("Experimental value:"), " " + str_exp_model_units + " " + md["unitsModel"]
                         
@@ -200,104 +199,118 @@ class ReportCreator:
                             if md["unitsDisplay"] != md["unitsModel"]:
                                 str_pred_display_units = get_formatted_value(md["is_binary"], mr["predictionValueUnitsDisplay"], 3)
                                 my_td += " = " + str_pred_display_units + " " + md["unitsDisplay"], br()
+                            else:
+                                my_td += br()
                             
                             self.addApplicabilityDomains(mr, my_td)
                         
         def addApplicabilityDomains(self, mr, my_td):
-                my_td += br()
-                my_td += b("Applicability domain:")
-                my_td += br()
-                
-                with my_td:
-                    with table(style="table-layout: fixed; width: 100%; border: 0px; cellpadding = 10px"):
-                        with tr():
-                            for ad in mr["applicabilityDomains"]:
-                                with td(style="vertical-align: top;"):
-                                    if ad["method"] == pc.Applicability_Domain_TEST_Embedding_Euclidean:
-                                        self.addAnalogADTable(ad, mr, my_td)
-                                    elif ad["method"] == pc.TEST_FRAGMENTS:
-                                        self.addFragmentADTable(ad, mr, my_td)
-    
-        def addAnalogADTable(self, ad, mr, my_td):
+            # my_td += br()
+            my_td += b("Applicability domains:")
+            my_td += br()
             
-                strAD = None
+            with my_td:
+                with table(style="table-layout: fixed; width: 100%; border: 0; padding: 0; margin: 0; border-collapse: collapse;"):
+                    with tr():
+                        for ad in mr["applicabilityDomains"]:
+                            with td(style="vertical-align: top; padding: 0; margin: 0; padding-left: 20px;"):
+                                if ad["method"] == pc.Applicability_Domain_TEST_Embedding_Euclidean:
+                                    self.addAnalogADTable(ad, mr)
+                                elif ad["method"] == pc.TEST_FRAGMENTS:
+                                    self.addFragmentADTable(ad)
+    
+        def addAnalogADTable(self, ad, mr):
+            
+            md = mr["modelDetails"]
+            
+            if md["applicabilityDomainName"] == pc.Applicability_Domain_TEST_Embedding_Euclidean: 
+                # b("AD measure: "), span("If the avg. Euclidean distance of training set analogs  < "+format2(ad['AD_Cutoff'])+" (in terms of model variables"), br()
+                b("AD measure: "), span("Avg. distance to training set analogs < cutoff value"), br()
+            else:
+                print("TODO in addAnalogADTable(), handle", pc.Applicability_Domain_TEST_Embedding_Euclidean)
+            
+            with span() as container:
+                container.add(b("AD result: "))
                 
-                md = mr["modelDetails"]        
-                
-                if ad["AD"]:  # TODO make this clearer
-                    ad_status = span("Inside AD", style="color: green;")
-                    strAD = span()
-                    strAD.add(ad_status)
-                    # strAD += ": average distance to the training set analogs < cutoff distance"
-                    strAD += ": training set analogs are sufficiently similar to test chemical"
-
+                if ad["AD"]: 
+                    container.add(span("Inside AD", style="color: green;"))
+                    container.add(" (Avg. distance < ")
+                    container.add(b(em(format2(ad['AD_Cutoff']))))
+                    container.add(")")
                 else:
-                    ad_status = span("Outside AD", style="color: red;")
-                    strAD = span()
-                    strAD.add(ad_status)
-                    # strAD += ": average distance to the training set analogs > cutoff distance"
-                    strAD += ": training set analogs are too dissimilar from test chemical"
+                    container.add(span("Outside AD", style="color: red;"))                    
+                    container.add(" (Avg. distance > ")
+                    container.add(b(em(format2(ad['AD_Cutoff']))))
+                    container.add(")")
+                            
+            br(), br()
+
+            md = mr["modelDetails"]        
+            # Table 1: Analogs from Training Set
+            with table():
+                cap = caption()
+                # cap.add(strAD)
+                # cap += br(), br()
+                
+                unitsModel = md["unitsModel"]
+                
+                cap += f"Training analogs (values in {unitsModel}, CV predictions)"
             
-                # Table 1: Analogs from Training Set
-                with table():
-                    cap = caption()
-                    cap.add(strAD)
-                    cap += br()
-                    
-                    unitsModel = md["unitsModel"]
-                    
-                    cap += f"Analogs from Training Set (values in {unitsModel}, CV predictions)"
-                
-                    with tbody():
-                        tr()
-                        analogs = ad["analogs"]
-                        for i in range(len(analogs)):
-                            createAnalogTile(analogs[i], i, mr, "left")                                
+                with tbody():
+                    tr()
+                    analogs = ad["analogs"]
+                    for i in range(len(analogs)):
+                        createAnalogTile(analogs[i], i, mr, "left")                                
     
-        def addFragmentADTable(self, ad, mr, my_td):
+        def addFragmentADTable(self, ad):
+
+            b("AD measure: "), span("If the fragment counts are within the range for the training set"), br()
                         
-                with table(cellspacing="0", cellpadding="5", border="1"):
-                    
-                    cap = caption()
+            with span() as container:
+                container.add(b("AD result: "))
                 
-                    with tr(style="background-color: #d3d3d3"):
-                        th("Fragment") 
-                        th("Test Chemical")
-                        th("Training Min")
-                        th("Training Max")
-                    with tbody():
-                        for col_name in ad["fragmentTable"]["test_chemical"].keys():
-                            # Retrieve values
+                if ad["AD"]:
+                    container.add(span("Inside AD", style="color: green;"))
+                    container.add(" (fragment counts were within the training set range)")
+                else:
+                    container.add(span("Outside AD", style="color: red;"))
+                    container.add(" (fragment counts were outside the training set range)")
+                        
+            with table(cellspacing="0", cellpadding="5", border="1"):
                 
-                            test_value = int(ad["fragmentTable"]["test_chemical"][col_name])
-                            training_min = int(ad["fragmentTable"]["training_min"][col_name])
-                            training_max = int(ad["fragmentTable"]["training_max"][col_name])
-                
-                            # Determine if the row should be highlighted
-                            if test_value < training_min or test_value > training_max:
-                                row_style = "background-color: pink;"
-                            else:
-                                row_style = ""
-                
-                            with tr(style=row_style):
-                                td(col_name)
-                                td(test_value, align="center")
-                                td(training_min, align="center")
-                                td(training_max, align="center")
-                
-                    # Add AD status to the caption based on the flag
-                    ad_status_text = span()
-                
-                    if ad["AD"]:
-                        ad_status_text.add(span("Inside AD", style="color: green;"))
-                        ad_status_text += ": fragment count(s) were within the training set range"
-                    else:
-                        ad_status_text.add(span("Outside AD", style="color: red;"))
-                        ad_status_text += ": fragment count(s) were outside the training set range"
-        
-                    cap.add(ad_status_text)
-                    cap += br()
-                    cap += "Fragment counts for test chemical"
+                cap = caption()
+            
+                with tr(style="background-color: #d3d3d3"):
+                    th("Fragment") 
+                    th("Test Chemical")
+                    th("Training Min")
+                    th("Training Max")
+                with tbody():
+                    for col_name in ad["fragmentTable"]["test_chemical"].keys():
+                        # Retrieve values
+            
+                        test_value = int(ad["fragmentTable"]["test_chemical"][col_name])
+                        training_min = int(ad["fragmentTable"]["training_min"][col_name])
+                        training_max = int(ad["fragmentTable"]["training_max"][col_name])
+            
+                        # Determine if the row should be highlighted
+                        if test_value < training_min or test_value > training_max:
+                            row_style = "background-color: pink;"
+                        else:
+                            row_style = ""
+            
+                        with tr(style=row_style):
+                            td(col_name)
+                            td(test_value, align="center")
+                            td(training_min, align="center")
+                            td(training_max, align="center")
+            
+                # Add AD status to the caption based on the flag
+                ad_status_text = span()
+    
+                cap.add(ad_status_text)
+                cap += br()
+                cap += "Fragment counts for test chemical"
     
     class ModelPerformanceSection:
         
@@ -611,7 +624,6 @@ class ReportCreator:
                         else:
                             img(src=chemical["imageSrc"], alt="Structural image of " + chemical["chemId"],
                                 height=150, width=150, border="2")
-    
                     
                     cis = self.ChemicalIdentifiersSection()
                     
@@ -622,8 +634,6 @@ class ReportCreator:
                     
                     with td(valign="top"):
                         mrs.create_model_results_table(modelResults)
-    
-    
     
     # def create_report(self, model: Model, modelResults: ModelResults):
     #     print('enter create_json_report')
@@ -679,8 +689,8 @@ def create_report_from_json_file():
     # file_name = model_id + "_report_todd_" + safe_smiles(smiles) + ".json"
     # file_name = "1066_DTXSID8031865.json"
     # file_name = "1066_QLWFRFCRJULPCK-UHFFFAOYNA-N.json" # has error
-    # file_name = "1066_DTXSID3039242.json" #WS_BZ
-    file_name = "1066_DTXSID8031865.json" #WS_PFOA
+    file_name = "1065_DTXSID3039242.json"  # WS_BZ
+    # file_name = "1065_DTXSID8031865.json"  # WS_PFOA
     
     current_directory = os.getcwd()
     # Join the path components using os.path.join()

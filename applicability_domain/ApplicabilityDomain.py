@@ -15,6 +15,7 @@ from scipy.stats import pearsonr
 from sklearn.neighbors import KernelDensity
 from sklearn.metrics import balanced_accuracy_score
 import pandas as pd
+# from afxres import AFX_IDS_COMPANY_NAME
 
 debug = False
 
@@ -82,7 +83,7 @@ class ApplicabilityDomainStrategy:
         self.spreadRatioTest = stdTestInner / stdTestOuter
 
 
-    def get_results_df(self, AD, col_name_id, id, test_indices):
+    def get_results_df(self, AD, col_name_id, id, test_indices, test_distances=None):
         """Get AD dataframe for k neighbors"""
 
         # Recoding so that can have arbitrary number of neighbors (i.e. store as list), TODO check Java AD code for places this breaks things
@@ -92,14 +93,31 @@ class ApplicabilityDomainStrategy:
         ids_combined = [self.TrainSet[col_name_id].loc[neighbor].tolist() for neighbor in neighbors]
         # Transpose ids_combined to align with test_indices rows
         ids_combined_transposed = np.array(ids_combined).T.tolist()
+        
+        # print(ids_combined_transposed)
+        
         # makes results list instead of df (if want to try to add similarity/distance values later)
         # results = [{'idTest': id[i],'ids': list(map(str, ids_combined_transposed[i])),'AD': AD[i]}
         #     for i in range(len(id))
         # ]
         # Prepare the DataFrame
-        results = pd.DataFrame({'idTest': id, 'ids': ids_combined_transposed, 'AD': AD})
-        # Ensure 'ids' is stored as a list of strings instead of as comma delimited string
-        results['ids'] = results['ids'].apply(lambda x: list(map(str, x)))
+        
+        # distances = np.array(test_distances).T.tolist()
+        # print(test_distances)
+        # print(ids_combined_transposed)
+        # print(distances)
+        
+        if test_distances is not None:
+            results = pd.DataFrame({'idTest': id, 'ids': ids_combined_transposed, 'distances': list(test_distances), 'AD': AD})
+            # Ensure 'ids' is stored as a list of strings instead of as comma delimited string
+            results['ids'] = results['ids'].apply(lambda x: list(map(str, x)))
+        
+        else:
+            results = pd.DataFrame({'idTest': id, 'ids': ids_combined_transposed, 'AD': AD})
+            # Ensure 'ids' is stored as a list of strings instead of as comma delimited string
+            results['ids'] = results['ids'].apply(lambda x: list(map(str, x)))
+            
+        
         return results
 
 
@@ -318,7 +336,7 @@ class TESTApplicabilityDomain(ApplicabilityDomainStrategy):
 
         if debug:
             print('splitSimilarity', self.splitSimilarity)
-
+            
         self.TrainSet[self.AD_Label] = True
         self.TestSet[self.AD_Label] = True
 
@@ -343,7 +361,7 @@ class TESTApplicabilityDomain(ApplicabilityDomainStrategy):
         # results = pd.DataFrame(np.column_stack([id, id1, id2, id3, AD]),
         #                        columns=['idTest', 'idNeighbor1', 'idNeighbor2', 'idNeighbor3', 'AD'])
 
-        results = self.get_results_df(AD, col_name_id, id, test_indices)
+        results = self.get_results_df(AD, col_name_id, id, test_indices,test_distances)
 
         # TODO ideally results would also store the similarity for each neighbor and the cutoff value for inside AD but more complicated...
 

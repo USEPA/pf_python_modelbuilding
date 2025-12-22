@@ -1,6 +1,4 @@
 
-# from model_ws_db_utilities.ModelInitializer import init_model, get_available_models
-
 """
 Flask webservice to build QSAR models with a variety of modeling strategies (RF, SVM, DNN, XGB...more to come?)
 Run with Python 3.9 to avoid problems with parallelizing RF (bug in older versions of joblib backing sklearn)
@@ -16,6 +14,7 @@ import json
 import logging
 import pickle
 
+from logging import INFO, DEBUG
 from model_ws_db_utilities import ModelPredictor, ModelInitializer
 
 # why not make the following methods part of a Utility class then call methods from instance of it?
@@ -26,14 +25,39 @@ from model_ws_utilities import get_model_info, call_build_model_with_preselected
 from applicability_domain import applicability_domain_utilities as adu
 
 from sklearn2pmml import sklearn2pmml
-# from report_creator import ReportCreator
+
+from dotenv import load_dotenv
+from app import app_flask
+load_dotenv()
+
 from report_creator_dict import ReportCreator
 
-# from dotenv import load_dotenv
-# load_dotenv()
-
+# import coloredlogs
+# import connexion
+# from connexion.middleware import MiddlewarePosition
+# from connexion.options import SwaggerUIOptions
+# from starlette.middleware.cors import CORSMiddleware
+#
+# coloredlogs.install(level=DEBUG, milliseconds=True,
+#                     fmt='%(asctime)s - %(name)s - %(levelname)s - %(message)s (%(filename)s:%(lineno)d)')
+#
+# options = SwaggerUIOptions(spec_path="/api/predictor_models/swagger.yaml",
+#                            swagger_ui_path="/api/predictor_models/swagger")
+#
+# app = connexion.AsyncApp(__name__, swagger_ui_options=options)
+# app.add_middleware(
+#     CORSMiddleware,
+#     position=MiddlewarePosition.BEFORE_EXCEPTION,
+#     allow_origins=["*"],
+#     allow_credentials=True,
+#     allow_methods=["*"],
+#     allow_headers=["*"],
+# )
+# app.add_api('swagger.yaml', swagger_ui_options=options)
 app = Flask(__name__)
-    
+log = logging.getLogger('werkzeug')
+log.setLevel(logging.DEBUG)
+
 
 def get_version():
     try:
@@ -55,10 +79,20 @@ def get_metadata():
     )
     
 
-# app = Flask(__name__)
-# log = logging.getLogger('werkzeug')
-# log.setLevel(logging.DEBUG)
 
+
+@app.route('/hello/<name>', methods=['GET'])
+def say_hello(name):
+    """
+    API endpoint that returns a greeting for the given name.
+    The name is extracted from the URL path parameter.
+    """
+    return "Hello, " + name
+
+
+
+# # use_pmml_pipeline_during_model_building = True # if true use PMMLPipeline with standardizing happening separate during model building
+# # use_sklearn2pmml = True # if false uses pypmml to load the file. Note: pypmml doesnt handle knn predictions the same way...
 
 
 
@@ -201,7 +235,7 @@ def prediction_applicability_domain():
     if embedding and embedding == 'error':
         abort(400, 'non blank embedding and dont have tab character')
 
-    output = adu.generate_applicability_domain_with_preselected_descriptors(training_tsv=training_tsv,
+    output, ad_cutoff = adu.generate_applicability_domain_with_preselected_descriptors(training_tsv=training_tsv,
                                                                             test_tsv=test_tsv,
                                                                             remove_log_p=remove_log_p,
                                                                             embedding=embedding,
@@ -529,50 +563,56 @@ def cross_validate_fold(qsar_method):
 #     return predictFromDB(model_id, smiles)
 
 
-def predictDB_POST(body):
-    mp = ModelPredictor()
-    return mp.predictFromDB(body['model_id'], body['smiles'],body['generate_report'], body['report_format'])
-
-
 @app.route('/api/predictor_models/models/predictDB', methods=['POST', 'GET'])
 def predictDB():
-    """Automates prediction and AD for single smiles using model in database"""
-
-    # TODO: make this method work whether using simple flask app or connexion based one
-
+    """Automates prediction and AD for single smiles using model in database
+    This one works in Flask"""
     if request.method == 'POST':
         obj = request.form
     elif request.method == 'GET':
         obj = request.args
-
     smiles = obj.get('smiles')  # Retrieves the model number to use
     model_id = obj.get('model_id')
-
     report_format = obj.get('report_format', 'json').lower()
+    
     if report_format not in ['json', 'html']:
         report_format = 'json'
-
-    # generate_report = obj.get('generate_report', 'false').lower() in ['true', '1', 'yes']
-    # generate_report = generate_report.lower() in ['true', '1', 'yes']
-    # report_format = report_format.lower()
-    # if report_format not in ['json', 'html']:
-    #     report_format = 'json'
-    # print(model_id, smiles, generate_report,report_format)
-
-    mp = ModelPredictor()
         
+    mp = ModelPredictor()
     modelResultsJson = mp.predictFromDB(model_id, smiles)
     
-
     if report_format == "html":
         rc=ReportCreator()
-        # print(modelResultsJson)
         html = rc.create_html_report_from_json(modelResultsJson)
-        # print(html)
         return html, 200
     else:
         return modelResultsJson, 200
 
+    return mp.predictFromDB(model_id, smiles, report_format), 200
+
+
+# def predictDB_POST(body):
+#     return predictDB(body['model_id'], body['smiles'],body['report_format'])
+#
+# @app.route('/api/predictor_models/models/predictDB', methods=['POST', 'GET'])
+# def predictDB(model_id, smiles, report_format):
+#     """Automates prediction and AD for single smiles using model in database"""
+#
+#     report_format = report_format.lower()
+#     if report_format not in ['json', 'html']:
+#         report_format = 'json'
+#
+#     mp = ModelPredictor()
+#     modelResultsJson = mp.predictFromDB(model_id, smiles)
+#
+#     if report_format == "html":
+#         rc=ReportCreator()
+#         html = rc.create_html_report_from_json(modelResultsJson)
+#         return html, 200
+#     else:
+#         return modelResultsJson, 200
+#
+#     return mp.predictFromDB(model_id, smiles, report_format)
 
 
 @app.route('/api/predictor_models/models/predict', methods=['POST'])
@@ -871,14 +911,8 @@ def model_obj(model_id):
     return model.model_obj, 200
 
 
-@app.route('/hello/<name>', methods=['GET'])
-def say_hello(name):
-    """
-    API endpoint that returns a greeting for the given name.
-    The name is extracted from the URL path parameter.
-    """
-    return "Hello, " + name
-
 if __name__ == '__main__':
     # Limit logging output for easier readability
+    # log = logging.getLogger('werkzeug')
+    # log.setLevel(logging.ERROR)
     app.run(host='0.0.0.0', port=5004, debug=True)

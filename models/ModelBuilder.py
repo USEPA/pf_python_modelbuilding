@@ -46,7 +46,7 @@ import numpy as np
 
 from os.path import exists
 import json
-from fastjsonschema import indent
+
 
 __author__ = "Nathaniel Charest, Todd Martin (modified to work with webservice, added XGB)"
 
@@ -296,6 +296,11 @@ class Model:
     def get_model_description(self):
         modelDescription = ModelDescription(self)
         return json.dumps(modelDescription.__dict__)
+    
+    def get_model_description_dict(self):
+        modelDescription = ModelDescription(self)
+        return modelDescription.__dict__
+
 
     def get_model_description_pretty(self):
         modelDescription = ModelDescription(self)

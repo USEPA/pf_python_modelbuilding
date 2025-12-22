@@ -66,6 +66,10 @@ def generate_applicability_domain_with_preselected_descriptors_from_dfs(train_df
         ad.set_parameters({'fractionTrainingSetInsideAD': 0.95, 'train_column_names': train_column_names})
         output = ad.evaluate(embedding=embedding)
 
+    
+    
+
+
     df_results_inside = output.loc[output['AD'] == True]
     # print('inside shape=', df_results_inside.shape)
     coverage = df_results_inside.shape[0] / output.shape[0]
@@ -83,10 +87,10 @@ def generate_applicability_domain_with_preselected_descriptors_from_dfs(train_df
         AD_TR = ad.TrainSet[ad.AD_Label]
         idTR = ad.TrainSet[col_name_id]
         output = pd.DataFrame(np.column_stack([idTR, AD_TR]),columns=['idTrain', 'AD'])
-        return output
+        return output, ad.splitSimilarity
     else:
         # print(output)
-        return output
+        return output, ad.splitSimilarity
 
 
 
