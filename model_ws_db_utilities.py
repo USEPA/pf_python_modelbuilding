@@ -5,6 +5,7 @@ import os
 import threading
 from io import BytesIO
 import pathlib
+import traceback
 
 from indigo import Indigo
 from indigo.renderer import IndigoRenderer
@@ -14,9 +15,13 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import URL
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy import text, bindparam
 
 from API_Utilities import QsarSmilesAPI, DescriptorsAPI
-from db.mongo_cache import get_cached_prediction, cache_prediction
+
+# from db.mongo_cache import get_cached_prediction, cache_prediction
+
+
 from model_ws_utilities import call_do_predictions_from_df, models
 from models import df_utilities as dfu
 from models.ModelBuilder import Model
@@ -39,9 +44,8 @@ from predict_constants import UnitsConverter
 from predict_constants import PredictConstants as pc
 
 from utils import timer
-from models.df_utilities import remove_log_p_descriptors,\
-    do_remove_correlated_descriptors
-# from bleach._vendor.html5lib.serializer import serialize
+from numba.core.types import none
+# from models.df_utilities import remove_log_p_descriptors, do_remove_correlated_descriptors
 
 debug = False
 import logging
@@ -343,6 +347,162 @@ def getSession():
     return session
 
 
+def getSessionDsstox():
+    
+    # connect_url = URL.create(
+    #     drivername='postgresql+psycopg2',
+    #     username=os.getenv('DSSTOX_USER'),
+    #     password=os.getenv('DSSTOX_PASS'),
+    #     host=os.getenv('DSSTOX_HOST'),
+    #     port=os.getenv('DSSTOX_PORT'),
+    #     database=os.getenv('DSSTOX_DATABASE')
+    # )
+    
+    connect_url = URL.create(
+        drivername='mysql+pymysql',
+        username=os.getenv('DSSTOX_USER'),
+        password=os.getenv('DSSTOX_PASS'),
+        host=os.getenv('DSSTOX_HOST'),
+        port=int(os.getenv('DSSTOX_PORT', '3306')),
+        database=os.getenv('DSSTOX_DATABASE'),
+        query={'charset': 'utf8mb4'}  # recommended for full Unicode
+    )
+    
+    # print(connect_url)
+    engine = create_engine(connect_url, echo=debug)
+    Session = sessionmaker(bind=engine)
+    session = Session()
+    return session
+
+
+class ExpDataGetter:
+    
+    def getSqlPropertyValues(self):
+        sqlPropertyValues = text("""    
+        select 
+            pv.id as property_values_id,
+            sc.source_chemical_name,
+            sc.source_smiles,sc.source_casrn, sc.source_dtxsid, sc.source_dtxrid,      
+            p.name_ccd  as property_name,
+            qsar_exp_prop_property_values_id,
+            dpc.property_value        as property_value,
+            u.abbreviation_ccd        as property_units,        
+            ps."name"                 as public_source_name,
+            ps.description            as public_source_description,
+            ps.url                    as public_source_url,
+            pv.page_url               as direct_url,
+            ls."name"                 as literature_source_name,
+            ls.citation               as literature_source_description,
+            ls.doi                    as literature_source_url,
+            pv.document_name          as brief_citation,--From OPERA2.9 usually
+            ps2."name"                as public_source_original_name, --For sources like toxval,pubchem, sander
+            ps2.description           as public_source_original_description,
+            ps2.url                   as public_source_original_url
+        from qsar_datasets.datasets d
+        join qsar_datasets.properties p on p.id=d.fk_property_id 
+        join qsar_datasets.data_points dp on dp.fk_dataset_id =d.id
+        join qsar_datasets.data_point_contributors dpc on dpc.fk_data_point_id =dp.id
+        join qsar_datasets.units u on u.id=d.fk_unit_id_contributor 
+        join exp_prop.property_values pv on pv.id = dpc.exp_prop_property_values_id 
+        join exp_prop.source_chemicals sc on sc.id=pv.fk_source_chemical_id 
+        left join exp_prop.literature_sources ls on ls.id=pv.fk_literature_source_id 
+        left join exp_prop.public_sources ps on ps.id=pv.fk_public_source_id
+        left join exp_prop.public_sources ps2 on ps2.id=pv.fk_public_source_original_id 
+        where d.name=:datasetName and dp.canon_qsar_smiles =:qsarSmiles
+        order by dpc.property_value asc
+        """)
+        return sqlPropertyValues
+
+    
+    def getSqlParameters(self):
+        sqlParameters = text("""
+        SELECT
+            pv.id as property_values_id,p.id as parameters_id, p.name, pv2.value_point_estimate, 
+            pv2.value_min,pv2.value_max ,pv2.value_text,pv2.value_error, 
+            pv2.value_qualifier, u2.abbreviation_ccd as units
+        from qsar_datasets.datasets d
+        join qsar_datasets.data_points dp on dp.fk_dataset_id =d.id
+        join qsar_datasets.data_point_contributors dpc on dpc.fk_data_point_id =dp.id
+        join exp_prop.property_values pv on pv.id = dpc.exp_prop_property_values_id 
+        join exp_prop.parameter_values pv2 on pv2.fk_property_value_id  = pv.id
+        join exp_prop.parameters p on p.id=pv2.fk_parameter_id 
+        join exp_prop.units u on u.id=pv2.fk_unit_id
+        left join qsar_datasets.units u2 on u2.name=u.name
+        where d.name=:datasetName and dp.canon_qsar_smiles =:qsarSmiles;
+        """)
+        return sqlParameters
+        
+    
+    
+    def get_raw_exp_data(self, session, datasetName, qsarSmiles):
+        
+        try:
+            
+            #TODO: need to sort the propertyvalues and mark the ones that were used in the qsar property value
+            
+            # print(sqlPropertyValues)            
+            resultsPropertyValues = session.execute(self.getSqlPropertyValues(), {"datasetName": datasetName, "qsarSmiles": qsarSmiles})
+            df_pv = pd.DataFrame(resultsPropertyValues.mappings().all())
+                                            
+            # Get the parameters separately to make the query manageable
+            resultsParameters = session.execute(self.getSqlParameters(), {"datasetName": datasetName, "qsarSmiles": qsarSmiles})
+            df_params = pd.DataFrame(resultsParameters.mappings().all())
+            df_params = df_params.dropna(subset=["name"]).copy()
+            df_params["name"] = df_params["name"].astype(str).str.strip()
+            df_params = df_params[df_params["name"] != ""]
+            
+            # Build dict: {name: {row fields...}}
+            # params_by_name = (
+            #     df_params
+            #     .drop_duplicates(subset=["name"], keep="last")
+            #     .set_index("name")
+            #     .to_dict(orient="index")
+            # )
+            #
+            # print(params_by_name)
+            #
+            # df_pv["params"] = df_pv["property_values_id"].map(params_by_name)
+            #
+            # printFirstRowDF(df_pv)
+            
+            params_map = {
+                int(pid): grp.to_dict("records")
+                for pid, grp in df_params.groupby("property_values_id", sort=False)
+            }
+            
+            params_map = {
+                int(pid): (
+                    grp.drop_duplicates(subset=["name"], keep="last")
+                       .set_index("name")
+                       .drop(columns=["property_values_id"], errors="ignore")
+                       .to_dict(orient="index")
+                )
+                for pid, grp in df_params.groupby("property_values_id", sort=False)
+            }
+            
+            df_pv["params"] = df_pv["property_values_id"].map(params_map)
+            
+            
+            param_names = (
+                df_params["name"]
+                .dropna()
+                .drop_duplicates()
+                .tolist()
+            )
+            
+            
+            
+            # print(param_names)
+            return df_pv, param_names
+
+        except SQLAlchemyError as ex:
+            print(f"An error occurred: {ex}")
+        finally:
+            # print('done getting tsvs')
+            session.close()
+    
+
+
 class ModelInitializer:
 
     def init_model(self, model_id):
@@ -443,6 +603,10 @@ class ModelInitializer:
         except SQLAlchemyError as ex:
             print("error getting stats for modelId=" + str(model.modelId))
 
+    
+        
+    
+    
     def get_predictions(self, session, model: Model, split_num, fk_splitting_id):
 
         if debug:
@@ -602,38 +766,99 @@ class ModelInitializer:
         session.close()
 
         return model
+    
+    
+    def getQsarDtxcid(self,qsarSmiles,datasetName, session):
+        
+        sql = text("""
+            select dp.qsar_dtxcid  from qsar_datasets.datasets d
+            join qsar_datasets.data_points dp on dp.fk_dataset_id = d.id
+            where d.name = :datasetName and dp.canon_qsar_smiles = :qsarSmiles;
+            """)
+        
+        # print(sql)
+        
+        try :
+            connection = session.connection()
+            row = connection.execute(sql, {"datasetName": datasetName, "qsarSmiles": qsarSmiles}).fetchone()
+            if row is not None:
+                # Row supports positional access; use row[0] for the first column
+                val = row[0]
+                return str(val).split("|", 1)[0]            
+
+        except Exception as e:
+            print(e)
+            return None
+        
+    def getDtxsid(self,dtxcid, session):
+        """
+        Some of the dsstox records are missing because in dsstox there is no longer a matching dtxsid for given dtxcid
+        """
+        
+        session=getSession()
+        
+        sql = text("""
+            select dr.dtxsid, dr.preferred_name from qsar_models.dsstox_records dr
+            where dr.dtxcid = :dtxcid and dr.fk_dsstox_snapshot_id=:fk_dsstox_snapshot_id;
+            """)
+        
+        # where dr.dtxcid = :dtxcid and dr.fk_dsstox_snapshot_id=3;  
+        # print(sql,"*"+dtxcid+"*")
+        
+        try :
+            connection = session.connection()
+            row = connection.execute(sql, {"dtxcid": dtxcid,"fk_dsstox_snapshot_id": fk_dsstox_snapshot_id }).fetchone()
+        
+            if row is None:
+                # no hit — handle appropriately
+                # e.g., return None, or raise, or use defaults
+                return None, None
+            else:
+                a, b = row  # or row[0], row[1]
+                return a, b
+            
+        except Exception as e:
+            traceback.print_exc()
+            return None
+
 
     def get_dsstox_records_for_dataset(self, model: Model, session):
         """
         Gets the dsstox records for the dataset from res_qsar postgreSQL db (could also get from dsstox or a snapshot of dsstox)
+        Some of the dp.qsar_dtxcid values may not have matching value in dsstox_records because dsstox has changed and the cid no longer has matching sid
         """
         try:
             # Get a connection from the session
             connection = session.connection()
 
             # SQL query to retrieve bytes
+            
+            # TODO: need to fix because the dtxcid may have changed so that the dsstox record will be retrieved
+
 
             # Note: in the data_points table, sometimes the qsar_dtxcid is pipe delimited pair of cids
             sql = """
                 SELECT dp.canon_qsar_smiles as "canonicalSmiles", dr.dtxsid as sid, dr.dtxcid as cid, dr.casrn, dr.preferred_name as "name" , dr.smiles, dr.indigo_inchi_key as "inchiKey"
                     FROM qsar_datasets.datasets d
                     JOIN qsar_datasets.data_points dp ON dp.fk_dataset_id = d.id
-                    JOIN qsar_models.models m ON m.dataset_name = d.name
-                    LEFT JOIN qsar_models.dsstox_records dr ON dr.dtxcid = SUBSTRING(dp.qsar_dtxcid FROM 1 FOR POSITION('|' IN dp.qsar_dtxcid || '|') - 1)
-                """
+                    LEFT JOIN qsar_models.dsstox_records dr ON dr.dtxcid = split_part(dp.qsar_dtxcid, '|', 1)
+                """                
 
-            sql = text(sql + "\nWHERE m.id = :model_id and dr.fk_dsstox_snapshot_id = :fk_dsstox_snapshot_id;")
+            sql = text(sql + "\nWHERE d.name = :datasetName and dr.fk_dsstox_snapshot_id = :fk_dsstox_snapshot_id;")
 
             # print(sql)
 
             # Execute the query with the parameter
-            result = connection.execute(sql, {"model_id": model.modelId, "fk_dsstox_snapshot_id": fk_dsstox_snapshot_id})
+            result = connection.execute(sql, {"datasetName": model.datasetName, "fk_dsstox_snapshot_id": fk_dsstox_snapshot_id})
 
             # Convert result to DataFrame
             df = pd.DataFrame(result.fetchall(), columns=result.keys())
 
             model.df_dsstoxRecords = df;
-
+            
+            # print(model.df_dsstoxRecords.to_json(indent=4));
+            # rows = df.loc[df["canonicalSmiles"].eq("CC1C=CC2CC(C)CCC=2C=1")]
+            # print(rows)
             # print(df.head())
 
             none_sid_smiles = df[df['sid'].isnull()]['canonicalSmiles']
@@ -718,6 +943,49 @@ class ModelInitializer:
     def generate_instance(self, chemical_id, qsar_property_value, descriptors):
         return f"{chemical_id}\t{qsar_property_value}\t{descriptors}\n"
 
+    
+    def findMissingDsstoxRecordsInPhyschemModelDatasets(self):
+        """turns out I was missing some records in dsstox_records table in postgresql because they had cid but no longer had matching sid in dsstox"""
+        
+        session=getSession()
+        sessionDsstox=getSessionDsstox()
+
+        sql1=text("""
+                SELECT DISTINCT dp.canon_qsar_smiles, split_part(dp.qsar_dtxcid, '|', 1) AS cid
+                FROM qsar_datasets.datasets d
+                JOIN qsar_datasets.data_points dp ON dp.fk_dataset_id = d.id
+                LEFT JOIN qsar_models.dsstox_records dr ON dr.dtxcid = split_part(dp.qsar_dtxcid, '|', 1) AND dr.fk_dsstox_snapshot_id = 3
+                WHERE d.name LIKE :name_pattern AND dr.dtxcid IS NULL;
+            """)
+        
+        results = session.execute(sql1, {"name_pattern": "% v1 modeling"})
+        rows = results.mappings().all()            # list of dict-like rows
+        cids = [r["cid"] for r in rows]
+        print(len(cids)) 
+        
+        # for row in results:
+        #     print(row)
+        
+        sql2a=text("""SELECT dsstox_compound_id as cid,  c.smiles, c.indigo_inchi_key, gs.dsstox_substance_id as sid, gs.casrn, gs.preferred_name 
+                FROM compounds c
+                left join generic_substance_compounds gsc on gsc.fk_compound_id =c.id
+                left join generic_substances gs on gs.id=gsc.fk_generic_substance_id
+                 WHERE dsstox_compound_id IN :cids;        
+        """)
+        
+        sql2 =  sql2a.bindparams(bindparam("cids", expanding=True))
+
+        results = sessionDsstox.execute(sql2, {"cids": cids}).fetchall()
+        
+        for row in results:
+            print(row)
+        #
+        #
+        # print(len(results))
+#
+
+    
+    
     def getModelMetaDataQuery(self):
         return """
         SELECT 
@@ -1143,8 +1411,8 @@ class ModelStatistics:
                     WHERE fk_model_id = :model_id AND fk_statistic_id = :statistic_id
                 """),
                 {"model_id": model_id, "statistic_id": statistic_id}
-            ).fetchone()
 
+            ).fetchone()
             est = pytz.timezone('US/Eastern')
             current_time_utc = datetime.now(timezone.utc)  # Use timezone-aware UTC now
             current_time_est = current_time_utc.astimezone(est)
@@ -1251,18 +1519,18 @@ class NeighborGetter:
         n_neighbors = 10
         nbrs = NearestNeighbors(n_neighbors=n_neighbors, algorithm='brute', metric='euclidean')
         
-        useEmbedding = True # probably should be consistent with what is use to find the Applicability domain analogs
+        useEmbedding = True  # probably should be consistent with what is use to find the Applicability domain analogs
         
-        if useEmbedding: #Using embedding descriptors picks weird neighbors sometimes:
+        if useEmbedding:  # Using embedding descriptors picks weird neighbors sometimes:
             TrainSet = df_set[model.embedding]
             TestSet = df_test_chemicals[model.embedding]
             scaler = StandardScaler().fit(TrainSet)
             train_x, test_x = scaler.transform(TrainSet), scaler.transform(TestSet)
         
-        else: # Following just uses all TEST descriptors (removes constant ones)
+        else:  # Following just uses all TEST descriptors (removes constant ones)
             TrainSet = df_set
             TestSet = df_test_chemicals
-            ids_train, labels_train, features_train, column_names_train, is_binary= dfu.prepare_instances(TrainSet, "Training", model.remove_log_p_descriptors, remove_corr=False, remove_constant=True)        
+            ids_train, labels_train, features_train, column_names_train, is_binary = dfu.prepare_instances(TrainSet, "Training", model.remove_log_p_descriptors, remove_corr=False, remove_constant=True)        
             features_test = TestSet[features_train.columns]
             scaler = StandardScaler().fit(features_train)
             train_x, test_x = scaler.transform(features_train), scaler.transform(features_test)
@@ -1276,8 +1544,8 @@ class NeighborGetter:
 
         neighbors = self.get_neighbors(col_name_id, id_name, test_indices, n_neighbors, df_set)
 
-        # print(test_distances)
-        # print(neighbors)
+        # print(len(test_distances))
+        # print(len(neighbors))
 
         distances = list(test_distances[0])
 
@@ -1520,7 +1788,43 @@ class ModelPredictor:
             analog["distance"] = distances[index] 
 
 
-    def setExpPredValuesForNeighbors(self, df_preds, neighbors, df_dsstoxRecords):
+    def fixMissingNeighborDsstoxRecord(self, datasetName, neighbor):
+        row_as_dict = {
+            "canonicalSmiles":neighbor}
+        mi = ModelInitializer()
+        
+        
+        dtxcid = None
+        dtxsid = None
+        
+        try:
+            session = getSession()
+            dtxcid = mi.getQsarDtxcid(neighbor, datasetName, session)
+            
+            if dtxcid:
+                row_as_dict["cid"] = dtxcid
+                dtxsid, preferred_name = mi.getDtxsid(dtxcid, session)
+                
+                if dtxsid:
+                    row_as_dict["sid"] = dtxsid
+                    row_as_dict["name"] = preferred_name
+                else:
+                    row_as_dict["name"] = dtxcid
+                    
+            else:
+                row_as_dict["name"] = neighbor
+
+            session.close()
+            
+            # print(dtxcid, dtxsid)
+
+        except Exception as e:
+            print(e)
+
+        return row_as_dict
+        
+
+    def setExpPredValuesForNeighbors(self, model:Model, df_preds, neighbors, df_dsstoxRecords):
 
         neighbors2 = []
 
@@ -1531,6 +1835,21 @@ class ModelPredictor:
             if not matching_row_dsstox.empty:
                 row_as_dict = matching_row_dsstox.iloc[0].to_dict()
                 neighbors2.append(row_as_dict)
+            else:
+                print("Finding missing dsstox info for "+neighbor)
+                row_as_dict = self.fixMissingNeighborDsstoxRecord(model.datasetName, neighbor)
+                # print(neighbor +" not in dsstox records")
+                neighbors2.append(row_as_dict)
+                
+                # look up new dtxcids
+                # select dpc.dtxsid as dpc_dtxsid, dr.dtxcid from qsar_datasets.datasets d
+                # join qsar_datasets.data_points dp on dp.fk_dataset_id = d.id
+                # join qsar_datasets.data_point_contributors dpc on dpc.fk_data_point_id = dp.id
+                # left join qsar_models.dsstox_records dr on dr.dtxsid =dpc.dtxsid 
+                # where d.name = 'BP v1 modeling'  and dp.canon_qsar_smiles ='CC1C=CC2CC(C)CCC=2C=1' and dr.fk_dsstox_snapshot_id =3;
+
+                
+                
 
             # Find the matching row in model.df_preds_test
             matching_row_pred = df_preds[df_preds['id'] == neighbor]
@@ -1553,13 +1872,11 @@ class ModelPredictor:
 
         # print(distances_test)
 
-
-        neighborsTraining = self.setExpPredValuesForNeighbors(model.df_preds_training_cv, neighborsTraining, model.df_dsstoxRecords)
-        neighborsTest = self.setExpPredValuesForNeighbors(model.df_preds_test, neighborsTest, model.df_dsstoxRecords)
+        neighborsTraining = self.setExpPredValuesForNeighbors(model, model.df_preds_training_cv, neighborsTraining, model.df_dsstoxRecords)
+        neighborsTest = self.setExpPredValuesForNeighbors(model, model.df_preds_test, neighborsTest, model.df_dsstoxRecords)
                 
         self.addDistances(neighborsTraining, distances_training)    
         self.addDistances(neighborsTest, distances_test)
-                            
                 
         df_neighborsTest = pd.DataFrame(neighborsTest)
         stats_test = stats.calculate_continuous_statistics(df_neighborsTest, 0, PredictConstants.TAG_TEST)
@@ -1663,8 +1980,7 @@ class ModelPredictor:
         else:
             chemical["imageSrc"] = imgURLCid + chemical["cid"]
 
-
-        #TODO: right now it's letting salts through if the qsarReadySmiles isn't salt should we return error here?            
+        # TODO: right now it's letting salts through if the qsarReadySmiles isn't salt should we return error here?            
         if model.omitSalts and "." in smiles:
             pass
                             
@@ -1675,7 +1991,7 @@ class ModelPredictor:
         descriptorAPI = DescriptorsAPI()
         df_prediction, code = descriptorAPI.calculate_descriptors(serverAPIs, qsarSmiles,
                                                                   model.descriptorService)
-        # print(self.printFirstRowDF(df_prediction))
+        # print(printFirstRowDF(df_prediction))
         
         # print(df_prediction, code)
         
@@ -1737,7 +2053,6 @@ class ModelPredictor:
         self.addDistances(ad_results["analogs"], ad_results["distances"])        
         del ad_results['distances']
         
-        
         modelResults.applicabilityDomains.append(ad_results)
         
         # print("modelResults", modelResults.to_json)
@@ -1786,7 +2101,7 @@ class ModelPredictor:
         logging.debug(chemicals)
 
         if code == 500:
-            return smiles +": could not generate QSAR Ready SMILES", code 
+            return smiles + ": could not generate QSAR Ready SMILES", code 
                 
         if len(chemicals) == 0:
             # logging.debug('Standardization failed')
@@ -1891,11 +2206,6 @@ class ModelPredictor:
 
         return "OK", 200
 
-    def printFirstRowDF(self, df):
-        first_row_dict = df.loc[0].to_dict()
-        print(json.dumps(first_row_dict, indent=4))
-        return first_row_dict
-
     @timer
     def determineApplicabilityDomain(self, model: Model, df_prediction):
         """
@@ -1916,7 +2226,7 @@ class ModelPredictor:
         from applicability_domain import applicability_domain_utilities as adu
         # model.applicabilityDomainName = adu.strOPERA_local_index  # for testing diff number of neighbors
 
-        output,ad_cutoff = adu.generate_applicability_domain_with_preselected_descriptors_from_dfs(
+        output, ad_cutoff = adu.generate_applicability_domain_with_preselected_descriptors_from_dfs(
             train_df=model.df_training,
             test_df=df_prediction,
             # test_df=model.df_prediction,  #for testing running batch type ad calc
@@ -1924,7 +2234,6 @@ class ModelPredictor:
             embedding=model.embedding,
             applicability_domain=model.applicabilityDomainName,
             filterColumnsInBothSets=True)
-
 
         # print("AD_CUTOFF",ad_cutoff)
         # self.printFirstRowDF(output)
@@ -2037,6 +2346,12 @@ class ModelPredictor:
 #             webbrowser.open(htmlPath)
 
 
+def printFirstRowDF(df):
+    first_row_dict = df.loc[0].to_dict()
+    print(json.dumps(first_row_dict, indent=4))
+    return first_row_dict
+
+
 def runExample():
 
     global USE_TEMPORARY_MODEL_PLOTS
@@ -2051,16 +2366,15 @@ def runExample():
     # model_id = str(1615) # Koc, MLR model
 
     smiles_list = []
-    smiles_list.append("c1ccccc1") # benzene
-    # smiles_list.append("OC(=O)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)F") # PFOA
-    # smiles_list.append("COCOCOCOCCCCCCOCCCCOCOCOCCC") # not in DssTox
-    # smiles_list.append("CCCCCCCc1ccccc1") # not in DssTox
-    # smiles_list.append("C[Sb]") # passes standardizer, fails test descriptors
-    # smiles_list.append("C[As]C[As]C") # violates frag AD
-    # smiles_list.append("XX")  # fails standardizer
-    # smiles_list.append("CCC.Cl") # not mixture according to qsarReadySmiles
-    # smiles_list.append("CCCCC.CCCC") # mixture according to qsarReadySmiles
-     
+    smiles_list.append("c1ccccc1")  # benzene
+    smiles_list.append("OC(=O)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)F") # PFOA
+    smiles_list.append("COCOCOCOCCCCCCOCCCCOCOCOCCC") # not in DssTox
+    smiles_list.append("CCCCCCCc1ccccc1") # for some reason only has 9 neighbors for test set
+    smiles_list.append("C[Sb]") # passes standardizer, fails test descriptors
+    smiles_list.append("C[As]C[As]C") # violates frag AD
+    smiles_list.append("XX")  # fails standardizer
+    smiles_list.append("CCC.Cl") # not mixture according to qsarReadySmiles
+    smiles_list.append("CCCCC.CCCC") # mixture according to qsarReadySmiles
     
     current_directory = os.getcwd()
     folder_path = os.path.join(current_directory, "data", "reports")
@@ -2072,6 +2386,7 @@ def runExample():
         print("\nRunning " + smiles)        
     
         runChemical(mp, model_id, smiles, folder_path)
+
     
 def runChemical(mp, model_id, smiles, folder_path):
     
@@ -2165,18 +2480,56 @@ def test_say_hello():
     print(response.text)
 
 
+def test_get_exp_data():
+
+    temp_file_path = "data/reports/property_records.json"    
+    # datasetName = 'BP v1 modeling'
+    # datasetName = 'LogP v1 modeling'
+    datasetName = 'WS v1 modeling'
+    qsarSmiles = 'C#C'
+    propertyName = pc.WATER_SOLUBILITY
+    
+    session = getSession()
+    edg = ExpDataGetter()
+    df_pv, param_names = edg.get_raw_exp_data(session, datasetName, qsarSmiles)
+    df_pv.to_json(path_or_buf=temp_file_path,orient='records',indent=4)    
+            
+    # df_pv = pd.read_json(temp_file_path,orient='records')
+    
+    # print(df_pv.to_json(orient="records", indent=2))
+                
+    rc=ReportCreator()
+    es=rc.RawExpDataSection()    
+    html=es.create_exp_records_webpage(df_pv, param_names, title_text="Experimental Property Records for "+propertyName)
+    
+    temp_file_path = "data/reports/property_records.html"
+    with open(temp_file_path, "w", encoding="utf-8") as f:
+        f.write(html)
+        webbrowser.open('file://' + os.path.realpath(temp_file_path))
+    
+    
+    # printFirstRowDF(df)
+
+
 if __name__ == '__main__':
     
     runExample()
     
+    ######################################################################################################
+    # mi=ModelInitializer()
+    # mi.findMissingDsstoxRecordsInPhyschemModelDatasets()
+    ######################################################################################################
+    # test_get_exp_data()
+    ######################################################################################################
     # pc = PlotCreator()
     # pc.createTrainingTestPlotsForReports()
     # pc.display_image(1065, 3, getSession())
     # pc.display_image(1065, 4, getSession())
-    
+    ######################################################################################################
     # excel_file_path = r"C:\Users\TMARTI02\OneDrive - Environmental Protection Agency (EPA)\0 java\0 model_management\hibernate_qsar_model_building\data\reports\prediction reports upload\WebTEST2.1\HLC v1 modeling_RND_REPRESENTATIVE.xlsx"    
     # mp=ModelPredictor()
     # mp.predictSetFromDB_SmilesFromExcel(1065,excel_file_path,'Test set')
-
+    ######################################################################################################
     # modelStatistics = ModelStatistics()
     # modelStatistics.updateStatsPredictModuleModels()
+    ######################################################################################################

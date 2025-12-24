@@ -8,6 +8,9 @@ from dominate import document
 from dominate.tags import *
 
 import json
+import math
+from typing import List, Dict, Any, Optional        
+
 import matplotlib
 matplotlib.use('Agg')  # Use a non-interactive backend
 import matplotlib.pyplot as plt
@@ -53,11 +56,16 @@ def createAnalogTile(analog, i, mr, align):
     else:
         pred = get_formatted_value(False, analog["pred"], 3)
         analog_td += b("Predicted: "), pred, br()
-    
-    analog_td += img(src=imgURLCid + analog["cid"], border="1", alt="Analog Image for " + analog["name"], width="150", height="150"), br()
-    
-    analog_td += a(analog["sid"], href=urlChemicalDetails + analog["sid"], title=analog["sid"] + ' on the Chemicals Dashboard', target="_blank")
 
+    if "cid" in analog:
+        imgTitle =  "Analog Image for " + analog["name"]
+        analog_td += img(src=imgURLCid + analog["cid"], border="1", alt=imgTitle, title=imgTitle, width="150", height="150"), br()
+
+    if "sid" in analog:
+        analog_td += a(analog["sid"], href=urlChemicalDetails + analog["sid"], title=analog["sid"] + ' on the Chemicals Dashboard', target="_blank")
+    elif "cid" in analog:
+        analog_td +=span(analog["cid"])
+        
 
 def get_formatted_value(format_as_integer: bool, dvalue: float, nsig: int):
     # TODO: could move to ReportCreator but then would get confusing in terms of self and super()
@@ -114,6 +122,27 @@ def set_significant_digits(value, significant_digits):
 def format2(value):
     return format(value, ".2f")
             
+        
+def fmt_val(v: Any, default: str = "—") -> str:
+    """Format a value for display; replace None/NaN/empty with a placeholder."""
+    if v is None:
+        return default
+    if isinstance(v, float) and math.isnan(v):
+        return default
+    s = str(v)
+    return s if s.strip() != "" else default
+            
+
+def fmt_num(n: Optional[float], precision: int = 6) -> str:
+    """Pretty format a numeric value if present; else placeholder."""
+    if n is None or (isinstance(n, float) and math.isnan(n)):
+        return "—"
+    # Keep integers as-is; format floats with limited precision
+    if isinstance(n, (int,)) or (isinstance(n, float) and n.is_integer()):
+        return str(int(n))
+    return f"{round(float(n), precision)}"
+
+
 
 class ReportCreator:
     
@@ -403,6 +432,199 @@ class ReportCreator:
                             td(format2(ms["MAE_Test_outside_AD"]), align="center")
                             td(format2(ms["Coverage_Test"]), align="center")    
     
+    class RawExpDataSection:
+            
+        
+        
+        def safe_text(self, v, placeholder="N/A"):
+            # None
+            if v is None:
+                return placeholder
+            # pandas or numpy NA/NaN
+            try:
+                import pandas as pd
+                if pd.isna(v):
+                    return placeholder
+
+            except Exception:
+                pass
+            if isinstance(v, float) and math.isnan(v):
+                return placeholder
+            # Empty string
+            s = str(v)
+            
+            return s if s.strip() else placeholder
+        
+
+        def addSource(self, rec, fieldName):
+            source = self.safe_text(rec[fieldName+"_name"])
+            
+            # print(source)
+            
+            if source and source!="N/A":
+                description = self.safe_text(rec[fieldName+"_description"])
+                url = self.safe_text(rec[fieldName+"_url"])
+                
+                with li(cls="no-indent"):
+                    if url != "N/A" and description != "N/A":
+                        a(source, href=url, title=description, target="_blank")
+                    elif description != "N/A":
+                        span(description)
+                    else:
+                        span(source)
+
+            return source
+
+
+        def addParam(self, params, param_name):
+            param = params[param_name]
+            try:
+                with li():
+                    if param["value_min"] and param["value_max"]:
+                        minValue = get_formatted_value(False, param["value_min"], 3)
+                        maxValue = get_formatted_value(False, param["value_max"], 3)
+                        print(minValue, maxValue, param["units"])
+                        if param["units"]:
+                            span(param_name + ": " + minValue + " < " + param_name + " " + param["units"] + " < " + maxValue + " ")
+                        else:
+                            span(param_name + ": " + minValue + " < " + param_name + " < " + maxValue)
+                    elif param["value_text"]:
+                        span(param_name + ": " + param["value_text"])
+                    elif param["value_point_estimate"]:
+                        if param["value_qualifier"]:
+                            span(param_name + ": " + param["value_qualifier"] + " " + get_formatted_value(param["value_point_estimate"]) + " " + param["units"])
+                        else:
+                            span(param_name + ": " + get_formatted_value(False, param["value_point_estimate"], 3) + " " + param["units"])
+                    else:
+                        span(param_name + ": TODO")
+            except Exception as e:
+                print(f"An unexpected error occurred: {e}")
+
+        def addParams(self,rec, param_names):
+            with td():
+                params = rec["params"]
+                if isinstance(params, dict):
+                    with ul(cls="no-indent"):                        
+                        for param_name in param_names:
+                            if param_name in params:
+                                self.addParam(params, param_name)
+                else:
+                    br()
+        
+        def add_property_value_record(self, rec: Dict[str, Any], param_names) -> Any:
+
+            keys = ("source_chemical_name", "source_casrn", "source_smiles", "source_dtxsid","source_dtxrid")
+            identifiers = [self.safe_text(rec.get(k), placeholder=None) for k in keys]
+            identifiers = [v for v in identifiers if v]  
+            with td():
+                with ul(cls="no-indent"):
+                    for identifier in identifiers:
+                        li(identifier,cls="no-indent")
+                        
+            property_value = float(self.safe_text(rec["property_value"]))
+            str_property_value = get_formatted_value(False, property_value, 3)
+            td(str_property_value)
+            td(self.safe_text(rec["property_units"]), cls="compact")
+            
+            with td():
+                with ul(cls="no-indent"):
+                    self.addSource(rec,"public_source")
+                    self.addSource(rec,"public_source_original")
+                    self.addSource(rec,"literature_source")
+                    
+                    direct_url = self.safe_text(rec["direct_url"])
+                    if direct_url != "N/A":
+                        li(a("Direct link", href=direct_url, title="Direct link"),cls="no-indent", target="_blank")
+                        
+                    brief_citation = self.safe_text(rec["brief_citation"])
+                    
+                    if brief_citation  != "N/A":
+                        li(span(brief_citation,cls="no-indent"))
+                                    
+            self.addParams(rec, param_names)        
+            
+            # literature_source_name=self.safe_text(rec["literature_source_name"])
+            # public_source_original_name=self.safe_text(rec["public_source_original_name"])
+            
+
+        def create_experimental_records_table(self, records, param_names):
+                # caption("Results for neighbors compared with entire set")
+            with table(cls="compact"):
+                with body():
+                    with tr(style="background-color: #d3d3d3"):
+                        th("Source Chemical", cls="compact")
+                        th("Property Value", cls="compact")
+                        th("Property Units", cls="compact")
+                        th("Source", width="400px", cls="compact")
+                        th("Parameters", width="400px", cls="compact")
+                    for rec in records:
+                        
+                        qsar_exp_prop_property_values_id = self.safe_text(rec["qsar_exp_prop_property_values_id"])
+                        qsar_exp_prop_property_values_ids = qsar_exp_prop_property_values_id.split("|")
+                        property_values_id = self.safe_text(rec["property_values_id"])
+                        
+                        if property_values_id in qsar_exp_prop_property_values_ids:
+                            with tr(style="background-color: #90EE90;"):
+                                self.add_property_value_record(rec, param_names)
+                        else:
+                            with tr():
+                                self.add_property_value_record(rec, param_names)
+                        
+
+        
+
+        def getPageStyle(self):
+            return """
+ul.no-indent {
+  list-style: disc;
+  list-style-position: outside;
+  margin: 5px;
+  padding-left: 15px;
+}
+ul.no-indent li {
+  margin: 0;
+}
+
+table.compact {
+  border-collapse: collapse;
+  border: 1px solid #000;
+}
+
+table.compact th {
+  border-top: 1px solid #000;
+  border-bottom: 1px solid #000;
+  text-align: center;
+  padding: 4px;
+}
+
+table.compact td {
+  vertical-align: top;
+  padding: 4px;
+  border-bottom: 1px solid #000;
+}
+"""
+
+
+        def create_exp_records_webpage(self, records: List[Dict[str, Any]], param_names, title_text: str = "Experimental Records") -> str:
+            """Render a list of df_pv-like records into an HTML page and return the HTML string."""
+            
+            doc = document(title=title_text)
+            
+            with doc.head:
+                style(self.getPageStyle())
+        
+            records2 = records.to_dict(orient="records")
+            
+            with doc:
+                h3(title_text)
+                self.create_experimental_records_table(records2,param_names)
+            return doc.render()
+
+
+        def writeExpData(self):
+            pass
+        
+    
     class NeighborSection:
     
         def write_neighbors(self, mr, neighborsInSet):
@@ -512,8 +734,12 @@ class ReportCreator:
                     
                     with tr():
                         for i in range(5, 10):
-                            analog = neighbors[i]
-                            createAnalogTile(analog, i, mr, "left")
+                            
+                            if i>=len(neighbors):
+                                print(mr["chemical"]["chemId"]+" insufficient neighbors") #TODO figure out why this happens
+                            else:
+                                analog = neighbors[i]
+                                createAnalogTile(analog, i, mr, "left")
 
         def generateScatterPlot(self, modelPredictions, unitName, plotTitle, seriesName):
             

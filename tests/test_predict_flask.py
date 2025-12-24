@@ -36,14 +36,15 @@ class TestPredict(TestCase):
                     
     def test_predict_examples(self):
         smiles_list = []
-        smiles_list.append("c1ccccc1")
-        smiles_list.append("OC(=O)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)F")
-        smiles_list.append("COCOCOCOCCCCCCOCCCCOCOCOCCC")  # not in DssTox
-        smiles_list.append("C[Sb]")  # passes standardizer, fails test descriptors
-        smiles_list.append("C[As]C[As]C")  # violates frag AD
+        smiles_list.append("c1ccccc1")  # benzene
+        smiles_list.append("OC(=O)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)F") # PFOA
+        smiles_list.append("COCOCOCOCCCCCCOCCCCOCOCOCCC") # not in DssTox
+        smiles_list.append("CCCCCCCc1ccccc1") # for some reason only has 9 neighbors for test set
+        smiles_list.append("C[Sb]") # passes standardizer, fails test descriptors
+        smiles_list.append("C[As]C[As]C") # violates frag AD
         smiles_list.append("XX")  # fails standardizer
-        smiles_list.append("CCC.Cl")  # not mixture according to qsarReadySmiles
-        smiles_list.append("CCCCC.CCCC")  # mixture according to qsarReadySmiles
+        smiles_list.append("CCC.Cl") # not mixture according to qsarReadySmiles
+        smiles_list.append("CCCCC.CCCC") # mixture according to qsarReadySmiles
         
         for smiles in smiles_list:
             params = {'smiles': {smiles}, 'model_id': '1065','report_format':'json'}       
