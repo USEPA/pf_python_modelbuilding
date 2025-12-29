@@ -1706,7 +1706,7 @@ class ModelPredictor:
             key = f"{model_id}-{smiles}"
             
             if key in cache:
-                print("in cache: " + key)
+                # print("in cache: " + key)
                 return cache[key]
             else:
                 cache[key], code = self.predict_model_smiles(model_id, smiles, generate_report=generate_report)

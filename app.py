@@ -36,7 +36,7 @@ import connexion
 from connexion.middleware import MiddlewarePosition
 from connexion.options import SwaggerUIOptions
 from starlette.middleware.cors import CORSMiddleware
-from starlette.responses import HTMLResponse, Response
+from starlette.responses import HTMLResponse, Response, JSONResponse
 coloredlogs.install(level=DEBUG, milliseconds=True,
                     fmt='%(asctime)s - %(name)s - %(levelname)s - %(message)s (%(filename)s:%(lineno)d)')
 
@@ -577,24 +577,39 @@ def predictDB_POST(body):
 
 
 # @app.route('/api/predictor_models/predict', methods=['POST', 'GET'])  # old flask route
-def predictDB(model_id, smiles, report_format):
+def predictDB(smiles, model_id, report_format):
     """Automates prediction and AD for single smiles using model in database"""
         
-    # return get_html_example()
-    
     report_format = report_format.lower()
     if report_format not in ['json', 'html']:
         report_format = 'json'
         
     mp = ModelPredictor()
-    modelResultsJson = mp.predictFromDB(model_id, smiles)
     
-    if report_format == "html":
-        rc=ReportCreator()
-        modelResultsHtml = rc.create_html_report_from_json(modelResultsJson)
-        return HTMLResponse(content=modelResultsHtml)    
+    # TODO: should we just return a JSON array in either case?
+    
+    if isinstance(smiles, list):
+        modelResultsArray = []
+
+        #Following just runs each one at a time, will need to dive into code to ran true batch calculations
+        # With current code just better off pinging API one at a time since then wont need to deserialize 
+        for current_smiles in smiles:  
+            logging.debug("Running " +current_smiles)
+            modelResultsJson =  mp.predictFromDB(model_id, current_smiles)
+            modelResults = json.loads(modelResultsJson) #deserialize so can add to array
+            modelResultsArray.append(modelResults)
+        return JSONResponse(content=modelResultsArray) #this return type will automatically serialize the array    
     else:
-        return Response(content=modelResultsJson, media_type="application/json") #by using this return type it wont try to serialize the json again    
+    
+        modelResultsJson = mp.predictFromDB(model_id, smiles)
+    
+        if report_format == "html":
+            rc=ReportCreator()
+            modelResultsHtml = rc.create_html_report_from_json(modelResultsJson)
+            return HTMLResponse(content=modelResultsHtml)    
+        else:
+            # if just return a Response then can skip the json.loads step (takes time)
+            return Response(content=modelResultsJson, media_type="application/json") #by using this return type it wont try to serialize the json again    
 
 
 
