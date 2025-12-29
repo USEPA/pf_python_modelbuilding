@@ -65,6 +65,7 @@ py-serializable==2.1.0
 py4j==0.10.9.9
 Pygments==2.19.2
 pymongo==4.15.5
+PyMySQL==1.1.2
 pynndescent==0.5.13
 pyparsing==3.2.5
 pypmml==0.9.17
