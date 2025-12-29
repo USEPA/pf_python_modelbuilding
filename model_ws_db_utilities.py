@@ -51,7 +51,21 @@ debug = False
 import logging
 logging.getLogger('sqlalchemy').setLevel(logging.ERROR)
 
-fk_dsstox_snapshot_id = 3
+fk_dsstox_snapshot_id = 1 # DSSTOX Snapshot 04/23 (Physchem models were created 2024-02-29), if use fk = 2 or 3 will have more missing records
+
+# Following records are cids in the physchem models that didnt make it into the dsstox_records table for fk_dsstox_snapshot_id = 1 (dsstox changed slightly) 
+
+# Following was created by ModelInitializer.findMissingDsstoxRecordsInPhyschemModelDatasets()
+dict_missing_dsstox_records = {    
+               # "DTXCID001783033": {"smiles": "[H][C@]12[C@@H](Cl)[C@H](Cl)[C@](C(Cl)Cl)([C@@H](Cl)[C@@H]1Cl)C2(C)C(Cl)Cl"},#has no matching sid in dsstox
+               "DTXCID201784601": {"smiles": "CC[C@@H]1CCC[C@H]1C", "sid": "DTXSID2075055", "casrn": "930-90-5", "name": "trans-1-Methyl-2-ethylcyclopentane"}, 
+               "DTXCID401783809": {"smiles": "[H][C@]12CO[S@](=O)OC[C@@]1([H])[C@@]1(Cl)C(Cl)=C(Cl)[C@]2(Cl)C1(Cl)Cl", "sid": "DTXSID8037540", "casrn": "33213-65-9", "name": "Endosulfan II"},
+               "DTXCID501782911": {"smiles": "CN1C[C@@]2(C=C)[C@@H]3C[C@H]4OC[C@@H]3[C@@H]1[C@@H]2[C@@]41C(=O)NC2=CC=CC=C12", "sid": "DTXSID40878487", "casrn": "509-15-9", "name": "Gelsemine"}, 
+               "DTXCID501782985": {"smiles": "[H][C@]12CC(Cl)(Cl)[C@](CCl)([C@@H](Cl)[C@@H]1Cl)C2(CCl)CCl", "sid": "DTXSID80874069", "casrn": "51775-36-1", "name": "2,2,5-endo,6-exo,8,9,10-Heptachlorobornane"}, 
+               "DTXCID501783733": {"smiles": "[H][C@]12O[C@@]1([H])[C@@]1([H])[C@@]([H])([C@H]2Cl)[C@@]2(Cl)C(Cl)=C(Cl)[C@]1(Cl)C2(Cl)Cl", "sid": "DTXSID1024126", "casrn": "1024-57-3", "name": "Heptachlor epoxide B"}, 
+               "DTXCID601783831": {"smiles": "[H][C@]12CO[S@@](=O)OC[C@@]1([H])[C@@]1(Cl)C(Cl)=C(Cl)[C@]2(Cl)C1(Cl)Cl", "sid": "DTXSID9037539", "casrn": "959-98-8", "name": "Endosulfan I"}, 
+               "DTXCID701521422": {"smiles": "[H][C@@]12CCCC[C@@]1([H])CCCC2", "sid": "DTXSID90883405", "casrn": "493-02-7", "name": "trans-Decahydronaphthalene"}}
+
 USE_TEMPORARY_MODEL_PLOTS = False
 urlCtxApi = "https://ctx-api-dev.ccte.epa.gov/chemical/property/model/file/search/"
 imgURLCid = "https://comptox.epa.gov/dashboard-api/ccdapp1/chemical-files/image/by-dtxcid/";
@@ -790,6 +804,8 @@ class ModelInitializer:
             print(e)
             return None
         
+       
+    
     def getDtxsid(self,dtxcid, session):
         """
         Some of the dsstox records are missing because in dsstox there is no longer a matching dtxsid for given dtxcid
@@ -945,46 +961,51 @@ class ModelInitializer:
 
     
     def findMissingDsstoxRecordsInPhyschemModelDatasets(self):
-        """turns out I was missing some records in dsstox_records table in postgresql because they had cid but no longer had matching sid in dsstox"""
+        """Some datapoints are missing records in qsar_models.dsstox_records table in postgresql due to changes in dsstox over time"""
         
         session=getSession()
         sessionDsstox=getSessionDsstox()
+        
+        fk_dsstox_snapshot_id = 1
 
         sql1=text("""
-                SELECT DISTINCT dp.canon_qsar_smiles, split_part(dp.qsar_dtxcid, '|', 1) AS cid
-                FROM qsar_datasets.datasets d
+                SELECT DISTINCT dp.canon_qsar_smiles, split_part(dp.qsar_dtxcid, '|', 1) AS cid 
+                from qsar_models.models m                
+                join qsar_datasets.datasets d on d.name = m.dataset_name 
                 JOIN qsar_datasets.data_points dp ON dp.fk_dataset_id = d.id
-                LEFT JOIN qsar_models.dsstox_records dr ON dr.dtxcid = split_part(dp.qsar_dtxcid, '|', 1) AND dr.fk_dsstox_snapshot_id = 3
-                WHERE d.name LIKE :name_pattern AND dr.dtxcid IS NULL;
+                LEFT JOIN qsar_models.dsstox_records dr ON dr.dtxcid = split_part(dp.qsar_dtxcid, '|', 1) AND dr.fk_dsstox_snapshot_id = :fk_dsstox_snapshot_id
+                WHERE d.name LIKE :name_pattern and m.is_public =true AND dr.dtxcid IS NULL;
             """)
         
-        results = session.execute(sql1, {"name_pattern": "% v1 modeling"})
+        results = session.execute(sql1, {"name_pattern": "% v1 modeling","fk_dsstox_snapshot_id": fk_dsstox_snapshot_id})
         rows = results.mappings().all()            # list of dict-like rows
         cids = [r["cid"] for r in rows]
-        print(len(cids)) 
         
-        # for row in results:
-        #     print(row)
-        
-        sql2a=text("""SELECT dsstox_compound_id as cid,  c.smiles, c.indigo_inchi_key, gs.dsstox_substance_id as sid, gs.casrn, gs.preferred_name 
-                FROM compounds c
-                left join generic_substance_compounds gsc on gsc.fk_compound_id =c.id
-                left join generic_substances gs on gs.id=gsc.fk_generic_substance_id
-                 WHERE dsstox_compound_id IN :cids;        
+        print(len(cids))         
+        print (cids,"\n")        
+        #there are 8 dtxcids not in my dsstox_records table
+        # DTXCID001783033 doesnt have a generic substance in dsstox 
+                
+        sql2a=text("""SELECT dsstox_compound_id as cid,  c.smiles, gs.dsstox_substance_id as sid, gs.casrn, gs.preferred_name 
+        FROM compounds c
+        join generic_substance_compounds gsc on gsc.fk_compound_id =c.id
+        join generic_substances gs on gs.id=gsc.fk_generic_substance_id
+         WHERE dsstox_compound_id IN :cids;        
         """)
-        
+
         sql2 =  sql2a.bindparams(bindparam("cids", expanding=True))
-
-        results = sessionDsstox.execute(sql2, {"cids": cids}).fetchall()
+        res = sessionDsstox.execute(sql2, {"cids": cids})
+        # print(list(res.keys()))
+        results = res.fetchall()
         
+        cid_to_info = {}
         for row in results:
-            print(row)
-        #
-        #
-        # print(len(results))
-#
+            cid, smiles, sid, casrn, name = row
+            cid_to_info[cid]={"smiles":smiles, "sid":sid,"casrn":casrn, "name": name}
+                    
+        print(json.dumps(cid_to_info))
+        
 
-    
     
     def getModelMetaDataQuery(self):
         return """
@@ -1771,7 +1792,10 @@ class ModelPredictor:
 
             if not matching_row_dsstox.empty:
                 row_as_dict = matching_row_dsstox.iloc[0].to_dict()
-                analogs2.append(row_as_dict)
+            else:
+                row_as_dict = self.fixMissingNeighborDsstoxRecord(model.datasetName, analog)
+
+            analogs2.append(row_as_dict)
 
             # Find the matching row in model.df_preds_test
             matching_row_pred = df_preds[df_preds['id'] == analog]
@@ -1779,7 +1803,9 @@ class ModelPredictor:
                 # Add exp and pred values to the record
                 row_as_dict['exp'] = matching_row_pred['exp'].values[0]
                 row_as_dict['pred'] = matching_row_pred['pred'].values[0]
-
+        
+        # print(json.dumps(analogs2,indent=4))
+        
         return analogs2
 
     def addDistances(self, analogs, distances):
@@ -1788,31 +1814,40 @@ class ModelPredictor:
             analog["distance"] = distances[index] 
 
 
-    def fixMissingNeighborDsstoxRecord(self, datasetName, neighbor):
+    def fixMissingNeighborDsstoxRecord(self, datasetName, qsarSmiles):
         row_as_dict = {
-            "canonicalSmiles":neighbor}
+            "canonicalSmiles":qsarSmiles}
         mi = ModelInitializer()
-        
-        
-        dtxcid = None
-        dtxsid = None
         
         try:
             session = getSession()
-            dtxcid = mi.getQsarDtxcid(neighbor, datasetName, session)
+
+            dtxcid = mi.getQsarDtxcid(qsarSmiles, datasetName, session)
             
             if dtxcid:
                 row_as_dict["cid"] = dtxcid
-                dtxsid, preferred_name = mi.getDtxsid(dtxcid, session)
                 
-                if dtxsid:
-                    row_as_dict["sid"] = dtxsid
-                    row_as_dict["name"] = preferred_name
+                if dtxcid in dict_missing_dsstox_records:  # dict_missing_dsstox_records is global variable
+                    rec = dict_missing_dsstox_records[dtxcid]
+                    row_as_dict["sid"] = rec["sid"]
+                    row_as_dict["name"] = rec["name"]
+                    row_as_dict["smiles"] = rec["smiles"]
+                    row_as_dict["casrn"] = rec["casrn"]
+                    
                 else:
-                    row_as_dict["name"] = dtxcid
+                    row_as_dict["name"] = dtxcid    
+                
+                
+                # dtxsid, preferred_name = mi.getDtxsid(dtxcid, session)
+                #
+                # if dtxsid:
+                #     row_as_dict["sid"] = dtxsid
+                #     row_as_dict["name"] = preferred_name
+                # else:
+                #     row_as_dict["name"] = dtxcid
                     
             else:
-                row_as_dict["name"] = neighbor
+                row_as_dict["name"] = qsarSmiles
 
             session.close()
             
@@ -1836,8 +1871,10 @@ class ModelPredictor:
                 row_as_dict = matching_row_dsstox.iloc[0].to_dict()
                 neighbors2.append(row_as_dict)
             else:
-                print("Finding missing dsstox info for "+neighbor)
+                logging.debug("Finding missing dsstox info for "+neighbor) # only happens for 8 dtxcids
                 row_as_dict = self.fixMissingNeighborDsstoxRecord(model.datasetName, neighbor)
+                logging.debug(row_as_dict)
+                
                 # print(neighbor +" not in dsstox records")
                 neighbors2.append(row_as_dict)
                 
@@ -1899,7 +1936,9 @@ class ModelPredictor:
         common_columns = df_new.columns.intersection(df_training.columns)
         
         # # Calculate min and max for each common column in df_training
-        min_values = df_training[common_columns].apply(lambda col: col[col > 0].min())
+        # min_values = df_training[common_columns].apply(lambda col: col[col > 0].min())
+        min_values = (df_training[common_columns].apply(lambda col: col[col > 0].min()).fillna(0))        
+
         max_values = df_training[common_columns].max()
         
         results = {
@@ -1910,12 +1949,13 @@ class ModelPredictor:
         
         modelResults.adResultsFrag = results
         
+        # print(json.dumps(modelResults.adResultsFrag, indent=4))
+        
         outside_ad = False
         
         for col_name in modelResults.adResultsFrag["test_chemical"].keys():
-
             test_value = int(modelResults.adResultsFrag["test_chemical"][col_name])
-            training_min = int(modelResults.adResultsFrag["training_min"][col_name])
+            training_min = int(modelResults.adResultsFrag["training_min"][col_name])    
             training_max = int(modelResults.adResultsFrag["training_max"][col_name])
 
                     # Determine if the row should be highlighted
@@ -2360,21 +2400,29 @@ def runExample():
     # model_id = str(1065)  # HLC, smallest dataset
     # model_id = str(1066)  # WS
     # model_id = str(1067)  # VP
-    model_id = str(1068)  # BP
-    # model_id = str(1069)  # LogKow
+    # model_id = str(1068)  # BP
+    model_id = str(1069)  # LogP/LogKow
     # model_id = str(1070) # MP, biggest dataset
     # model_id = str(1615) # Koc, MLR model
 
     smiles_list = []
+    
     smiles_list.append("c1ccccc1")  # benzene
     smiles_list.append("OC(=O)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)F") # PFOA
     smiles_list.append("COCOCOCOCCCCCCOCCCCOCOCOCCC") # not in DssTox
-    smiles_list.append("CCCCCCCc1ccccc1") # for some reason only has 9 neighbors for test set
+    smiles_list.append("CCCCCCCc1ccccc1") # one of neighbors for test set doesnt have matching dtxsid for the dtxcid (not in dsstox_records table)
     smiles_list.append("C[Sb]") # passes standardizer, fails test descriptors
     smiles_list.append("C[As]C[As]C") # violates frag AD
     smiles_list.append("XX")  # fails standardizer
     smiles_list.append("CCC.Cl") # not mixture according to qsarReadySmiles
     smiles_list.append("CCCCC.CCCC") # mixture according to qsarReadySmiles
+
+    # For LogP model, following use additional code to get dsstox record for neighbor / analogs:
+    smiles_list.append("[H][C@]12[C@@H](Cl)[C@H](Cl)[C@](C(Cl)Cl)([C@@H](Cl)[C@@H]1Cl)C2(C)C(Cl)Cl") # DTXCID001783033 
+    smiles_list.append("[H][C@]12O[C@@]1([H])[C@@]1([H])[C@@]([H])([C@H]2Cl)[C@@]2(Cl)C(Cl)=C(Cl)[C@]1(Cl)C2(Cl)Cl") #DTXCID501783733
+    smiles_list.append("[H][C@]12CC(Cl)(Cl)[C@](CCl)([C@@H](Cl)[C@@H]1Cl)C2(CCl)CCl") # DTXCID501782985
+    smiles_list.append("[H][C@]12CO[S@@](=O)OC[C@@]1([H])[C@@]1(Cl)C(Cl)=C(Cl)[C@]2(Cl)C1(Cl)Cl") #DTXCID601783831, fails standardization!
+
     
     current_directory = os.getcwd()
     folder_path = os.path.join(current_directory, "data", "reports")

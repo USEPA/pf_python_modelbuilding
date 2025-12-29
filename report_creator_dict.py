@@ -326,7 +326,7 @@ class ReportCreator:
                         if test_value < training_min or test_value > training_max:
                             row_style = "background-color: pink;"
                         else:
-                            row_style = ""
+                            row_style = "background-color: #E4FAE4;"
             
                         with tr(style=row_style):
                             td(col_name)
