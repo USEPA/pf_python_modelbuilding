@@ -328,7 +328,7 @@ class CalculationInfo(dict):
                  threshold, datasetName, descriptorSetName, splittingName, remove_log_p,use_wards):
 
         # Add dictionary so can just output the fields we want in the correct order in the json:
-        # TODO add remove_log_p to the dictionary
+        # TODO add remove_log_p_descriptors to the dictionary
         dict.__init__(self, num_generations=num_generations, num_optimizers=num_optimizers,
                       num_jobs=num_jobs, n_threads=n_threads, max_length=max_length,
                       descriptor_coefficient=descriptor_coefficient,
@@ -344,7 +344,7 @@ class CalculationInfo(dict):
         self.datasetName = datasetName
         self.descriptorSetName = descriptorSetName
         self.splittingName = splittingName
-        self.remove_log_p = remove_log_p
+        self.remove_log_p_descriptors = remove_log_p
         self.use_wards = use_wards
 
 
@@ -381,7 +381,7 @@ def a_run_dataset(f, training_tsv_path, prediction_tsv_path, ci):
         # Run from API call:
         str_result = mwu.api_call_build_embedding_ga(qsar_method=qsar_method,
                                                      training_tsv=training_tsv,prediction_tsv=prediction_tsv,
-                                                     remove_log_p=ci.remove_log_p, n_threads=n_threads,
+                                                     remove_log_p=ci.remove_log_p_descriptors, n_threads=n_threads,
                                                      num_generations=num_generations, num_optimizers=num_optimizers,
                                                      num_jobs=num_jobs,use_wards=use_wards,
                                                      descriptor_coefficient=descriptor_coefficient,
@@ -397,7 +397,7 @@ def a_run_dataset(f, training_tsv_path, prediction_tsv_path, ci):
         # Run from method
         features, timeGA = mwu.call_build_embedding_ga(qsar_method=qsar_method,
                                                        training_tsv=training_tsv, prediction_tsv=prediction_tsv,
-                                                       remove_log_p=ci.remove_log_p, n_threads=n_threads,
+                                                       remove_log_p=ci.remove_log_p_descriptors, n_threads=n_threads,
                                                        num_generations=num_generations,
                                                        num_optimizers=num_optimizers, num_jobs=num_jobs,
                                                        descriptor_coefficient=descriptor_coefficient,
@@ -406,12 +406,12 @@ def a_run_dataset(f, training_tsv_path, prediction_tsv_path, ci):
     logging.debug('Time to run ga  = ', timeGA, 'mins')
     # **************************************************************************************
     # Build model based on embedded descriptors: TODO use api to run this code
-    embed_model = mwu.call_build_model_with_preselected_descriptors(qsar_method, training_tsv, ci.remove_log_p,
+    embed_model = mwu.call_build_model_with_preselected_descriptors(qsar_method, training_tsv, ci.remove_log_p_descriptors,
                                                                     features, 1)
     score_embed = embed_model.do_predictions(df_prediction, return_score=True)
     # **************************************************************************************
     # Build model based on all descriptors (except correlated and constant ones) as baseline prediction:
-    full_model = mwu.call_build_model_with_preselected_descriptors(qsar_method, training_tsv, ci.remove_log_p,
+    full_model = mwu.call_build_model_with_preselected_descriptors(qsar_method, training_tsv, ci.remove_log_p_descriptors,
                                                                     None, 1)
     score = full_model.do_predictions(df_prediction, return_score=True)
 

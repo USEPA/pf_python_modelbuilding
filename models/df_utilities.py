@@ -107,6 +107,21 @@ def remove_log_p_descriptors(df, which_set):
     return df
 
 
+def do_remove_fragment_descriptors(df):
+    
+    start_column = "As [+5 valence, one double bond]"
+    stop_column = "-N=S=O"
+    i = df.columns.get_loc(start_column)
+    j = df.columns.get_loc(stop_column)
+    lo, hi = sorted([i, j])
+    to_drop = df.columns[lo:hi+1] 
+    return df.drop(columns=to_drop)
+
+def do_remove_acnt_descriptors(df):
+    cols_to_drop = [c for c in df.columns if '_acnt' in c.lower()]  # case-insensitive    
+    # print(cols_to_drop)
+    return df.drop(columns=cols_to_drop)  #    return df.drop(columns=to_drop)
+
 def do_remove_non_double_descriptors(df):
     df_non_num = df.select_dtypes(exclude=[np.number])
     df = df.drop(df_non_num, axis=1)
@@ -208,7 +223,58 @@ def filter_columns_in_both_sets(df_training, df_prediction):
 #     return ids, labels, features
 
 
-def prepare_instances(df, which_set, remove_logp, remove_corr):
+# def prepare_instances(df, which_set, remove_logp=False, remove_corr=True):
+#     """Prepares a pandas df of training data by removing logp and correlated descriptors"""
+#     df_labels = df[df.columns[1]]
+#     if df_labels.isin([0, 1]).all():
+#         is_binary = True
+#     else:
+#         is_binary = False
+#
+#     # Labels are the values we want to predict
+#     # labels = np.array(df_labels)
+#     labels = df_labels
+#
+#     ids = df[df.columns[0]]
+#
+#     col_name_id = df.columns[0]
+#
+#     # print('col_name_id',col_name_id)
+#
+#     col_name_property = df.columns[1]
+#
+#     # drop Property column with experimental property we are trying to correlate (# axis 1 refers to the columns):
+#     df = df.drop(col_name_property, axis=1)
+#
+#     # drop ID column:
+#     df = df.drop(col_name_id, axis=1)
+#
+#     df = do_remove_non_double_descriptors(df)
+#
+#     # Remove constant descriptors:
+#     df = do_remove_constant_descriptors(df)
+#
+#     if remove_logp:
+#         df = remove_log_p_descriptors(df, which_set)
+#
+#     if remove_corr:
+#         do_remove_correlated_descriptors(df, 0.95)
+#
+#     # print(which_set + ': The shape of features is:', df.shape)
+#
+#     # Convert to numpy array
+#     # features = np.array(df)
+#
+#     features = df  # scikit learn converts it to numpy array later anyways
+#
+#     column_names = list(df.columns)
+#
+#     return ids, labels, features, column_names, is_binary
+
+
+def prepare_instances(df, which_set, remove_logp=False, remove_corr=True, 
+                      remove_constant=True,
+                      remove_fragment_descriptors=False,remove_acnt_descriptors=False):
     """Prepares a pandas df of training data by removing logp and correlated descriptors"""
     df_labels = df[df.columns[1]]
     if df_labels.isin([0, 1]).all():
@@ -234,54 +300,11 @@ def prepare_instances(df, which_set, remove_logp, remove_corr):
     # drop ID column:
     df = df.drop(col_name_id, axis=1)
 
-    df = do_remove_non_double_descriptors(df)
+    if remove_fragment_descriptors:
+        df = do_remove_fragment_descriptors(df)
 
-    # Remove constant descriptors:
-    df = do_remove_constant_descriptors(df)
-
-    if remove_logp:
-        df = remove_log_p_descriptors(df, which_set)
-
-    if remove_corr:
-        do_remove_correlated_descriptors(df, 0.95)
-
-    # print(which_set + ': The shape of features is:', df.shape)
-
-    # Convert to numpy array
-    # features = np.array(df)
-
-    features = df  # scikit learn converts it to numpy array later anyways
-
-    column_names = list(df.columns)
-
-    return ids, labels, features, column_names, is_binary
-
-
-def prepare_instances(df, which_set, remove_logp=False, remove_corr=True, remove_constant=True):
-    """Prepares a pandas df of training data by removing logp and correlated descriptors"""
-    df_labels = df[df.columns[1]]
-    if df_labels.isin([0, 1]).all():
-        is_binary = True
-    else:
-        is_binary = False
-
-    # Labels are the values we want to predict
-    # labels = np.array(df_labels)
-    labels = df_labels
-
-    ids = df[df.columns[0]]
-
-    col_name_id = df.columns[0]
-
-    # print('col_name_id',col_name_id)
-
-    col_name_property = df.columns[1]
-
-    # drop Property column with experimental property we are trying to correlate (# axis 1 refers to the columns):
-    df = df.drop(col_name_property, axis=1)
-
-    # drop ID column:
-    df = df.drop(col_name_id, axis=1)
+    if remove_acnt_descriptors:
+        df = do_remove_acnt_descriptors(df)
 
     df = do_remove_non_double_descriptors(df)
 
@@ -294,6 +317,7 @@ def prepare_instances(df, which_set, remove_logp=False, remove_corr=True, remove
 
     if remove_corr:
         do_remove_correlated_descriptors(df, 0.95)
+        
 
     # print(which_set + ': The shape of features is:', df.shape)
 
@@ -456,6 +480,9 @@ def prepare_instances_with_preselected_descriptors(df, which_set, descriptor_nam
     labels = df_labels
 
     ids = df[df.columns[0]]
+    
+    
+    # print(ids)
 
     # print(descriptor_names)
     # print(df.columns)
@@ -471,7 +498,7 @@ def prepare_instances_with_preselected_descriptors(df, which_set, descriptor_nam
     # Use one liner to drop columns:
     df = df[descriptor_names]
 
-    print(which_set + ': The shape of features is:', df.shape)
+    logging.debug(which_set + ': The shape of features is:', df.shape)
 
     # Convert to numpy array
     # features = np.array(df)

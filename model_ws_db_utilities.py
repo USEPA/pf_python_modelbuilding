@@ -1,4 +1,4 @@
-import concurrent
+# import concurrent
 import concurrent.futures
 import json
 import os
@@ -11,7 +11,7 @@ from indigo import Indigo
 from indigo.renderer import IndigoRenderer
 import base64
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine
 from sqlalchemy.engine import URL
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
@@ -956,6 +956,8 @@ class ModelInitializer:
             # print('done getting tsvs')
             # session.close()
 
+
+
     def generate_instance(self, chemical_id, qsar_property_value, descriptors):
         return f"{chemical_id}\t{qsar_property_value}\t{descriptors}\n"
 
@@ -1005,6 +1007,34 @@ class ModelInitializer:
                     
         print(json.dumps(cid_to_info))
         
+    def exportRandomDsstoxSample(self):
+        """Export sample smiles from dsstox"""
+        
+        
+        sessionDsstox=getSessionDsstox()
+        
+        sql=text("""SELECT c.smiles
+                    FROM compounds AS c
+                    JOIN (SELECT FLOOR(RAND() * (SELECT MAX(id) FROM compounds)) AS start_id) AS r
+                    WHERE c.id >= r.start_id
+                    ORDER BY c.id
+                    LIMIT 1000;       
+        """)
+
+        results = sessionDsstox.execute(sql)
+
+        smiles = []
+        
+        for result in results:
+            smiles.append(result[0])
+        
+        smiles_list = [s for s in smiles if s is not None]
+        
+        OUTPUT_JSON = "dsstox smiles sample.json"
+        
+        with open(OUTPUT_JSON, "w", encoding="utf-8") as f:
+            json.dump(smiles_list, f, ensure_ascii=False, indent=2)
+                    
 
     
     def getModelMetaDataQuery(self):
@@ -1551,7 +1581,10 @@ class NeighborGetter:
         else:  # Following just uses all TEST descriptors (removes constant ones)
             TrainSet = df_set
             TestSet = df_test_chemicals
-            ids_train, labels_train, features_train, column_names_train, is_binary = dfu.prepare_instances(TrainSet, "Training", model.remove_log_p_descriptors, remove_corr=False, remove_constant=True)        
+            ids_train, labels_train, features_train, column_names_train, is_binary = dfu.prepare_instances(df=TrainSet, 
+                                                                                                           which_set="Training", 
+                                                                                                           remove_logp=model.remove_log_p_descriptors,
+                                                                                                           remove_corr=False, remove_constant=True)        
             features_test = TestSet[features_train.columns]
             scaler = StandardScaler().fit(features_train)
             train_x, test_x = scaler.transform(features_train), scaler.transform(features_test)
@@ -1661,20 +1694,20 @@ class PlotCreator:
                     mpsTraining = model.df_preds_training_cv.to_dict(orient='records')
                     mpsTest = model.df_preds_test.to_dict(orient='records')
                     
-                    filePathOutScatter = os.path.join(folder_path, "scatter_plot_" + str(model.modelId) + ".png")
-                    title = model.modelName + " results for " + model.propertyName
-                    mtp.generateScatterPlot2(filePathOut=filePathOutScatter, title=title, unitName=model.unitsModel,
-                                             mpsTraining=mpsTraining, mpsTest=mpsTest,
-                                             seriesNameTrain="Training set (CV)", seriesNameTest="Test set")
-    
-                    self.insert_image(filePathOutScatter, username, model.modelId, 3, session)
-                    self.display_image(model.modelId, 3, session)
+                    # filePathOutScatter = os.path.join(folder_path, "scatter_plot_" + str(model.modelId) + ".png")
+                    # title = model.modelName + " results for " + model.propertyName
+                    # mtp.generateScatterPlot2(filePathOut=filePathOutScatter, title=title, unitName=model.unitsModel,
+                    #                          mpsTraining=mpsTraining, mpsTest=mpsTest,
+                    #                          seriesNameTrain="Training set (CV)", seriesNameTest="Test set")
+                    #
+                    # self.insert_image(filePathOutScatter, username, model.modelId, 3, session)
+                    # self.display_image(model.modelId, 3, session)
                     
                     filePathOutHistogram = os.path.join(folder_path, "histogram_" + str(model.modelId) + ".png")
                     
                     mtp.generateHistogram2(fileOutHistogram=filePathOutHistogram, property_name=model.propertyName, unit_name=model.unitsModel,
                                            mpsTraining=mpsTraining, mpsTest=mpsTest,
-                                           seriesNameTrain="Training set", seriesNameTest="TestSet")
+                                           seriesNameTrain="Training set", seriesNameTest="Test set")
                     self.insert_image(filePathOutHistogram, username, model.modelId, 4, session)
                     self.display_image(model.modelId, 4, session)
                     
@@ -2391,6 +2424,33 @@ def printFirstRowDF(df):
     print(json.dumps(first_row_dict, indent=4))
     return first_row_dict
 
+def runRandomSample():
+
+    OUTPUT_JSON = "dsstox smiles sample.json"
+    with open(OUTPUT_JSON, "r", encoding="utf-8") as f:
+        smiles_list = json.load(f)
+    mp = ModelPredictor()
+    
+    out_path = "dsstox smiles sample.txt"
+    
+    start_smiles = "CC(=O)OC1CCN2C1=NC1=C2C(=O)C(C)=C(N2CC2)C1=O"
+    
+    start = False
+    
+    with open(out_path, "a", encoding="utf-8") as f:
+        for idx, smiles in enumerate(smiles_list):
+            
+            if smiles == start_smiles:
+                start = True
+                
+            if not start:
+                continue
+            
+            for model_id in range(1065, 1071):
+                _, code = mp.predict_model_smiles(model_id, smiles)
+                print(idx, model_id, smiles, code, file=f, sep="\t")
+                f.flush()
+            
 
 def runExample():
 
@@ -2410,7 +2470,7 @@ def runExample():
     smiles_list.append("c1ccccc1")  # benzene
     smiles_list.append("OC(=O)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)F") # PFOA
     smiles_list.append("COCOCOCOCCCCCCOCCCCOCOCOCCC") # not in DssTox
-    smiles_list.append("CCCCCCCc1ccccc1") # one of neighbors for test set doesnt have matching dtxsid for the dtxcid (not in dsstox_records table)
+    # smiles_list.append("CCCCCCCc1ccccc1") # one of neighbors for test set doesnt have matching dtxsid for the dtxcid (not in dsstox_records table)
     smiles_list.append("C[Sb]") # passes standardizer, fails test descriptors
     smiles_list.append("C[As]C[As]C") # violates frag AD
     smiles_list.append("XX")  # fails standardizer
@@ -2561,11 +2621,13 @@ def test_get_exp_data():
 
 if __name__ == '__main__':
     
-    runExample()
+    # runExample()
+    runRandomSample()
     
     ######################################################################################################
     # mi=ModelInitializer()
     # mi.findMissingDsstoxRecordsInPhyschemModelDatasets()
+    # mi.exportRandomDsstoxSample()
     ######################################################################################################
     # test_get_exp_data()
     ######################################################################################################

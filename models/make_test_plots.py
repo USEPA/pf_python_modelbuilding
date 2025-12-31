@@ -177,7 +177,7 @@ def generateHistogram2(fileOutHistogram, property_name, unit_name, mpsTraining, 
 
     plt.xlabel('Experimental ' + unit_name)
     plt.ylabel('Count')
-    plt.title("Histogram of " + property_name + " Data in Sets")
+    plt.title("Histogram of " + property_name + " datasets")
 
     # plt.legend(loc='upper left')
 

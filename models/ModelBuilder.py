@@ -346,8 +346,13 @@ class Model:
             # print(self.embedding)
 
         else:
+            
             train_ids, train_labels, train_features, train_column_names, self.is_binary = \
                 DFU.prepare_instances_with_preselected_descriptors(self.df_training, "training", self.embedding)
+                
+            # print("train_ids", train_ids)
+                
+                
             # Use columns selected by prepare_instances (in case logp descriptors were removed)
             self.embedding = train_column_names
 
@@ -374,10 +379,10 @@ class Model:
                 self.hyperparameter_grid = {"estimator__C": self.c_space, "estimator__gamma": self.gamma_space}
                 print('using single set of hyperparameters for SVM due to large data set')
 
-        print('hyperparameter_grid', self.hyperparameter_grid)
+        logging.debug('hyperparameter_grid', self.hyperparameter_grid)
 
         if self.has_hyperparameter_grid():
-            print('Hyperparameter grid has multiple sets of parameters, running grid search')
+            logging.debug('Hyperparameter grid has multiple sets of parameters, running grid search')
 
             kfold_splitter = KFold(n_splits=5, shuffle=True, random_state=42)
 
@@ -392,7 +397,7 @@ class Model:
             self.hyperparameters = optimizer.best_params_
 
         else:
-            print('Hyperparameter grid only has a single set of parameters, skipping grid search')
+            logging.debug('Hyperparameter grid only has a single set of parameters, skipping grid search')
             self.hyperparameters = self.get_single_parameters()
             self.model_obj.set_params(**self.hyperparameters)
 
@@ -417,16 +422,16 @@ class Model:
         t2 = time.time()
         training_time = t2 - t1
 
-        print('\n******************************************************************************************')
-        print('Regressor', self.regressor_name)
-        print('Best model params', self.hyperparameters)
+        logging.debug('\n******************************************************************************************')
+        logging.debug('Regressor', self.regressor_name)
+        logging.debug('Best model params', self.hyperparameters)
         # print('training_cv_r2',self.training_stats['training_cv_r2'])
         # print('training_cv_q2', self.training_stats['training_cv_q2'])
 
         # print(r'Score for Training data = {score}'.format(score=training_score))
-        print(r'Time to train model  = {training_time} seconds'.format(training_time=training_time))
-        print('modelDescription', self.get_model_description())
-        print('******************************************************************************************\n')
+        logging.debug(r'Time to train model  = {training_time} seconds'.format(training_time=training_time))
+        logging.debug('modelDescription', self.get_model_description())
+        logging.debug('******************************************************************************************\n')
 
         self.training_stats['training_time'] = t2 - t1
         return self
@@ -736,7 +741,7 @@ class Model:
             else:
                 print("Cant handle ", type(self.model_obj))
 
-            print(r'Balanced Accuracy for Test data = {score}'.format(score=score))
+            logging.debug(r'Balanced Accuracy for Test data = {score}'.format(score=score))
 
         elif not self.is_binary:
 
@@ -762,7 +767,7 @@ class Model:
             if df_prediction.shape[0] > 1:
                 score = stats.pearsonr(predictions, pred_labels)[0]
                 score = score * score
-                print(r'R2 for Test data = {score}'.format(score=score))
+                logging.debug(r'R2 for Test data = {score}'.format(score=score))
 
         else:
             print("is_categorical is null")  # does this happen?

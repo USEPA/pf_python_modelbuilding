@@ -672,9 +672,9 @@ def runTrainingPredictionExample():
     # mp.qsar_method = 'svm'
     # mp.qsar_method = 'reg'
     # mp.qsar_method = 'las'
-    mp.remove_log_p = False
+    mp.remove_log_p_descriptors = False
     if 'LogP' in datasetName:
-        mp.remove_log_p = True
+        mp.remove_log_p_descriptors = True
 
     inputFolder = '../datasets_exp_prop/'
     training_file_name = datasetName + "_" + descriptor_software + "_RND_REPRESENTATIVE_training.tsv"
@@ -781,9 +781,9 @@ def run_dataset(datasetName, descriptor_software, f, inputFolder, num_generation
     mp = model_parameters(property_name=datasetName, property_units="N/A", descriptor_set=descriptor_software)
     mp.useEmbeddings = useEmbeddings
     mp.num_generations_ga = num_generations
-    mp.remove_log_p = False
+    mp.remove_log_p_descriptors = False
     if 'LogP' in datasetName:
-        mp.remove_log_p = True
+        mp.remove_log_p_descriptors = True
 
     if mp.useEmbeddings:
         embedding, timeMin = getEmbedding(mp, prediction_tsv, training_tsv)
@@ -816,7 +816,7 @@ def run_dataset(datasetName, descriptor_software, f, inputFolder, num_generation
 
 
 
-# def call_build_model_with_preselected_descriptors(qsar_method, training_tsv, remove_log_p, descriptor_names_tsv,
+# def call_build_model_with_preselected_descriptors(qsar_method, training_tsv, remove_log_p_descriptors, descriptor_names_tsv,
 #                                                   n_jobs):
 #     """Loads TSV training data into a pandas DF and calls the appropriate training method"""
 #
@@ -824,13 +824,13 @@ def run_dataset(datasetName, descriptor_software, f, inputFolder, num_generation
 #     qsar_method = qsar_method.lower()
 #
 #     if qsar_method == 'svm':
-#         model = mb.SVM(df_training=df_training, remove_log_p_descriptors=remove_log_p, n_jobs=n_jobs)
+#         model = mb.SVM(df_training=df_training, remove_log_p_descriptors=remove_log_p_descriptors, n_jobs=n_jobs)
 #     elif qsar_method == 'knn':
-#         model = mb.KNN(df_training=df_training, remove_log_p_descriptors=remove_log_p, n_jobs=n_jobs)
+#         model = mb.KNN(df_training=df_training, remove_log_p_descriptors=remove_log_p_descriptors, n_jobs=n_jobs)
 #     elif qsar_method == 'rf':
-#         model = mb.RF(df_training=df_training, remove_log_p_descriptors=remove_log_p, n_jobs=n_jobs)
+#         model = mb.RF(df_training=df_training, remove_log_p_descriptors=remove_log_p_descriptors, n_jobs=n_jobs)
 #     elif qsar_method == 'xgb':
-#         model = mb.XGB(df_training=df_training, remove_log_p_descriptors=remove_log_p, n_jobs=n_jobs)
+#         model = mb.XGB(df_training=df_training, remove_log_p_descriptors=remove_log_p_descriptors, n_jobs=n_jobs)
 #     else:
 #         # 404 NOT FOUND if requested QSAR method has not been implemented
 #         print(qsar_method + ' not implemented with preselected descriptors')
@@ -909,13 +909,13 @@ class model_parameters:
         self.max_length = 24
         self.descriptor_coefficient = 0.002
         self.threshold = 1
-        self.remove_log_p = False
+        self.remove_log_p_descriptors = False
 
 
 def buildModel(embedding, mp, training_tsv, prediction_tsv, filterColumnsInBothSets=True):
     model = mwu.call_build_model_with_preselected_descriptors(qsar_method=mp.qsar_method,
                                                               training_tsv=training_tsv, prediction_tsv=prediction_tsv,
-                                                              remove_log_p=mp.remove_log_p,
+                                                              remove_log_p=mp.remove_log_p_descriptors,
                                                               use_pmml_pipeline=mp.use_pmml,
                                                               include_standardization_in_pmml=mp.include_standardization_in_pmml,
                                                               descriptor_names_tsv=embedding,
@@ -934,7 +934,7 @@ def getEmbedding(mp, prediction_tsv, training_tsv):
         embedding, timeMin = mwu.call_build_embedding_importance(qsar_method=mp.qsar_method,
                                                                  training_tsv=training_tsv,
                                                                  prediction_tsv=prediction_tsv,
-                                                                 remove_log_p_descriptors=mp.remove_log_p,
+                                                                 remove_log_p_descriptors=mp.remove_log_p_descriptors,
                                                                  n_threads=mp.n_threads,
                                                                  num_generations=mp.num_generations_pi,
                                                                  use_permutative=mp.use_permutative,
@@ -950,7 +950,7 @@ def getEmbedding(mp, prediction_tsv, training_tsv):
         embedding, timeMin = mwu.call_build_embedding_ga(qsar_method=mp.qsar_method,
                                                          training_tsv=training_tsv,
                                                          prediction_tsv=prediction_tsv,
-                                                         remove_log_p=mp.remove_log_p,
+                                                         remove_log_p=mp.remove_log_p_descriptors,
                                                          num_generations=mp.num_generations_ga,
                                                          num_optimizers=mp.num_optimizers,
                                                          num_jobs=mp.n_threads, n_threads=mp.n_threads,
@@ -964,7 +964,7 @@ def getEmbedding(mp, prediction_tsv, training_tsv):
         embedding, timeMin = mwu.call_build_embedding_lasso(qsar_method=mp.qsar_method,
                                                             training_tsv=training_tsv,
                                                             prediction_tsv=prediction_tsv,
-                                                            remove_log_p_descriptors=mp.remove_log_p,
+                                                            remove_log_p_descriptors=mp.remove_log_p_descriptors,
                                                             n_threads=mp.n_threads, run_rfe=True)
 
     return embedding, timeMin

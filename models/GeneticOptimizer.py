@@ -92,7 +92,10 @@ DESCRIPTOR_COEFFICIENT = 0.002
 #     return wardsFeatures
 
 
-def runGA(df_training, model, use_wards, remove_log_p_descriptors=False):
+def runGA(df_training, model, use_wards, remove_log_p_descriptors=False,remove_fragment_descriptors=False,remove_acnt_descriptors=False):
+
+
+    # print("remove_fragment_descriptors",remove_fragment_descriptors)
 
     if use_wards:
         # Using ward's method removes too descriptors for PFAS only training sets:
@@ -101,8 +104,11 @@ def runGA(df_training, model, use_wards, remove_log_p_descriptors=False):
                                         0.5)  # uses wards method to remove extra descriptors
     else:
         train_ids, train_labels, train_features, train_column_names, model.is_binary = \
-            DFU.prepare_instances(df_training, "training", remove_log_p_descriptors,
-                                  True)  # removes descriptors which are correlated by 0.95
+            DFU.prepare_instances(df=df_training, which_set="training", remove_logp=remove_log_p_descriptors,
+                                  remove_corr=True,remove_constant=True, 
+                                  remove_fragment_descriptors=remove_fragment_descriptors,
+                                  remove_acnt_descriptors=remove_acnt_descriptors)  # removes descriptors which are correlated by 0.95
+
 
 
     # train_ids, train_labels, train_features, train_column_names, model.is_categorical = \
@@ -110,8 +116,8 @@ def runGA(df_training, model, use_wards, remove_log_p_descriptors=False):
 
     # print(type(model))
 
-    logging.debug('use_wards = ',use_wards)
-    logging.debug('after initial feature selection, # features = ',len(train_column_names))
+    logging.debug('use_wards: '+str(use_wards))
+    logging.debug('after initial feature selection, # features: '+str(len(train_column_names)))
     # print('Number of rows = ', len(train_ids))
 
 
@@ -142,7 +148,7 @@ def runGA(df_training, model, use_wards, remove_log_p_descriptors=False):
 
     ensemble_selector = GeneticSelector(descriptor_pool, fitness_calculator)
 
-    logging.debug('NUM_GENERATIONS',NUM_GENERATIONS)
+    logging.debug('NUM_GENERATIONS: '+str(NUM_GENERATIONS))
 
     ensemble_selector.ensemble_evolution(num_optimizers=NUM_OPTIMIZERS, num_generations=NUM_GENERATIONS,
                                          num_parents=NUM_PARENTS, min_length=MINIMUM_LENGTH,
@@ -324,6 +330,7 @@ class GeneticOptimizer:
             if debug:
                 print('\tgeneration',i+1)
             children, prime = self.run_generation(children, mutation_probability, num_survivors, return_prime = True)
+            
             self.generations[i] = children
             primes.append(prime)
 

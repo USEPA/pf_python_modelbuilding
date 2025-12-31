@@ -36,7 +36,7 @@ def generateEmbedding(model, df_training, df_prediction, fraction_of_max_importa
 
     # print(min_descriptor_count,min_descriptor_count_2)
 
-    logging.debug('use_wards = ', use_wards)
+    logging.debug(f"use_wards = {use_wards}")
 
     if use_wards:
         # Using ward's method removes too descriptors for PFAS only training sets:
@@ -72,7 +72,7 @@ def generateEmbedding(model, df_training, df_prediction, fraction_of_max_importa
 
         for run_num in range(num_generations):
 
-            logging.debug("Run number = ", run_num + 1)
+            logging.debug(f"Run number = {run_num + 1}")
 
             model.model_obj.fit(train_features, train_labels)
 
@@ -84,8 +84,8 @@ def generateEmbedding(model, df_training, df_prediction, fraction_of_max_importa
                                 new_descriptors, sorted_importances, sorted_names)
 
             # print(count,fraction_of_max_importance)
-        logging.debug('len(new_descriptors)', len(new_descriptors))
-        logging.debug('new_descriptors',new_descriptors)
+        logging.debug(f"len(new_descriptors)={len(new_descriptors)}")
+        logging.debug(f"new_descriptors={new_descriptors}")
 
         if (len(new_descriptors) == len(train_column_names)):
             model.embedding = train_column_names # *** store final descriptors here ***
