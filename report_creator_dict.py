@@ -687,10 +687,12 @@ table.compact td {
                     td_tc += b("Predicted: "), pred, br()
                 
                 if chemical.get("sid", "N/A") != "N/A": 
-                    td_tc += img(src=chemical["imageSrc"], border="1", alt="Image for " + chemical["name"], width="150", height="150"), br()
+                    title = "Image for " + chemical["name"]
+                    td_tc += img(src=chemical["imageSrc"], border="1", alt=title, title = title, width="150", height="150"), br()
                     td_tc += a(chemical["chemId"], href=urlChemicalDetails + chemical["sid"], title=chemical["sid"] + ' on the Chemicals Dashboard', target="_blank")
                 else:
-                    td_tc += img(src=chemical["imageSrc"], border="1", alt="Image for " + chemical["smiles"], width="150", height="150"), br()
+                    title = "Image for " + chemical["smiles"]
+                    td_tc += img(src=chemical["imageSrc"], border="1", alt=title, title=title, width="150", height="150"), br()
                     td_tc += chemical["chemId"]        
     
         def addMaeTable(self, td_tc, mr, neighborsInSet):
@@ -848,7 +850,8 @@ table.compact td {
                         if chemical["imageSrc"] == "N/A":
                                 div("No structure image", style="border: 2px solid black; padding: 10px;")                        
                         else:
-                            img(src=chemical["imageSrc"], alt="Structural image of " + chemical["chemId"],
+                            title = "Structural image of " + chemical["chemId"]
+                            img(src=chemical["imageSrc"], alt=title, title=title,
                                 height=150, width=150, border="2")
                     
                     cis = self.ChemicalIdentifiersSection()
