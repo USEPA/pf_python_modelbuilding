@@ -509,62 +509,62 @@ class ExpDataGetter:
 
 class ModelInitializer:
     
-    def get_model_list(self, session):
-        """Gets model meta data (except training and test set tsvs).
-        TODO Should this info be stored directly in model object and then for new models we won't need to query the db since will be already in the pickled object?
-        Is this used?
-        """
-        try:
-            # SQL query to retrieve model details
-            sql = text("""
-                       SELECT m.name_ccd,
-                              d.id,
-                              d.name,
-                              u.abbreviation_ccd,
-                              d.dsstox_mapping_strategy,
-                              p.name_ccd,
-                              ds.id,
-                              ds.name,
-                              ds.descriptor_service,
-                              ds.headers_tsv,
-                              s.id,
-                              s.name,
-                              adm.name,
-                              de.embedding_tsv
-                       FROM qsar_models.models m
-                                LEFT JOIN qsar_datasets.datasets d ON d.name = m.dataset_name
-                                LEFT JOIN qsar_datasets.units u ON d.fk_unit_id = u.id
-                                LEFT JOIN qsar_datasets.properties p ON d.fk_property_id = p.id
-                                LEFT JOIN qsar_descriptors.descriptor_sets ds ON m.descriptor_set_name = ds.name
-                                LEFT JOIN qsar_datasets.splittings s ON m.splitting_name = s.name
-                                LEFT JOIN qsar_models.ad_methods adm ON m.fk_ad_method = adm.id
-                                LEFT JOIN qsar_models.descriptor_embeddings de ON m.fk_descriptor_embedding_id = de.id
-                       WHERE fk_source_id = 3
-                         and is_public = true
-                       """)
-
-            # Use left joins so can still get a result if something is missing (like fk_ad_method was not set for model)
-            # print(sql)
-
-            # Execute the query
-            rows = session.execute(sql).fetch()
-
-            models = []
-
-            for row in rows:
-                model_details = self.row_to_model_details(row)
-                models.append(model_details)
-
-            return models
-
-        except Exception as ex:
-            print(f"Exception occurred: {ex}")
-        finally:
-            # Close the session
-            print('done with details')
-            # session.close()
-
-        return None
+    # def get_model_list(self, session):
+    #     """Gets model meta data (except training and test set tsvs).
+    #     TODO Should this info be stored directly in model object and then for new models we won't need to query the db since will be already in the pickled object?
+    #     Is this used?
+    #     """
+    #     try:
+    #         # SQL query to retrieve model details
+    #         sql = text("""
+    #                    SELECT m.name_ccd,
+    #                           d.id,
+    #                           d.name,
+    #                           u.abbreviation_ccd,
+    #                           d.dsstox_mapping_strategy,
+    #                           p.name_ccd,
+    #                           ds.id,
+    #                           ds.name,
+    #                           ds.descriptor_service,
+    #                           ds.headers_tsv,
+    #                           s.id,
+    #                           s.name,
+    #                           adm.name,
+    #                           de.embedding_tsv
+    #                    FROM qsar_models.models m
+    #                             LEFT JOIN qsar_datasets.datasets d ON d.name = m.dataset_name
+    #                             LEFT JOIN qsar_datasets.units u ON d.fk_unit_id = u.id
+    #                             LEFT JOIN qsar_datasets.properties p ON d.fk_property_id = p.id
+    #                             LEFT JOIN qsar_descriptors.descriptor_sets ds ON m.descriptor_set_name = ds.name
+    #                             LEFT JOIN qsar_datasets.splittings s ON m.splitting_name = s.name
+    #                             LEFT JOIN qsar_models.ad_methods adm ON m.fk_ad_method = adm.id
+    #                             LEFT JOIN qsar_models.descriptor_embeddings de ON m.fk_descriptor_embedding_id = de.id
+    #                    WHERE fk_source_id = 3
+    #                      and is_public = true
+    #                    """)
+    #
+    #         # Use left joins so can still get a result if something is missing (like fk_ad_method was not set for model)
+    #         # print(sql)
+    #
+    #         # Execute the query
+    #         rows = session.execute(sql).fetch()
+    #
+    #         models = []
+    #
+    #         for row in rows:
+    #             model_details = self.row_to_model_details(row)
+    #             models.append(model_details)
+    #
+    #         return models
+    #
+    #     except Exception as ex:
+    #         print(f"Exception occurred: {ex}")
+    #     finally:
+    #         # Close the session
+    #         print('done with details')
+    #         # session.close()
+    #
+    #     return None
 
     def init_model(self, model_id):
 
@@ -1752,6 +1752,34 @@ class ModelPredictor:
 
             return result
 
+    
+    def addPerformance(self, md:ModelDetails):
+    
+        ms = md.modelStatistics
+            
+        md.performance = {}
+        md.performance["train"] = {}
+        md.performance["train"]["R2"] = ms["PearsonRSQ_Training"]
+        md.performance["train"]["RMSE"] = ms["RMSE_Training"]
+        md.performance["train"]["MAE"] = ms["MAE_Training"]
+        
+        md.performance["fiveFoldICV"] = {}
+        md.performance["fiveFoldICV"]["R2"] = ms["PearsonRSQ_CV_Training"]
+        md.performance["fiveFoldICV"]["RMSE"] = ms["RMSE_CV_Training"]
+        md.performance["fiveFoldICV"]["MAE"] = ms["MAE_CV_Training"]
+        
+        md.performance["external"] = {}
+        md.performance["external"]["R2"] = ms["PearsonRSQ_Test"]
+        md.performance["external"]["RMSE"] = ms["RMSE_Test"]
+        md.performance["external"]["MAE"] = ms["MAE_Test"]
+        
+        md.performance["externalAD"] = {}
+        md.performance["externalAD"]["MAE_inside_AD"] = ms["MAE_Test_inside_AD"]
+        md.performance["externalAD"]["MAE_outside_AD"] = ms["MAE_Test_outside_AD"]
+        md.performance["externalAD"]["Fraction_inside_AD"] = ms["Coverage_Test"]
+        
+        md.modelStatistics = None
+    
     def smiles_to_base64(self, smiles_string):
         '''
         TODO: move to utility class
@@ -2014,7 +2042,7 @@ class ModelPredictor:
         
         modelDetails = ModelDetails(model)
         self.addLinks(modelDetails, useFileAPI)
-        addPerformance(modelDetails)
+        self.addPerformance(modelDetails)
         
         modelResults = ModelResults()
 
@@ -2463,11 +2491,11 @@ def runExample():
     global USE_TEMPORARY_MODEL_PLOTS
     USE_TEMPORARY_MODEL_PLOTS = False
 
-    model_id = str(1065)  # HLC, smallest dataset
+    # model_id = str(1065)  # HLC, smallest dataset
     # model_id = str(1066)  # WS
     # model_id = str(1067)  # VP
     # model_id = str(1068)  # BP
-    # model_id = str(1069)  # LogP/LogKow
+    model_id = str(1069)  # LogP/LogKow
     # model_id = str(1070) # MP, biggest dataset
     # model_id = str(1615) # Koc, MLR model
 
@@ -2476,7 +2504,6 @@ def runExample():
     smiles_list.append("c1ccccc1")  # benzene
     smiles_list.append("OC(=O)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)F")  # PFOA
     smiles_list.append("COCOCOCOCCCCCCOCCCCOCOCOCCC")  # not in DssTox
-    # smiles_list.append("CCCCCCCc1ccccc1") # one of neighbors for test set doesnt have matching dtxsid for the dtxcid (not in dsstox_records table)
     smiles_list.append("C[Sb]")  # passes standardizer, fails test descriptors
     smiles_list.append("C[As]C[As]C")  # violates frag AD
     smiles_list.append("XX")  # fails standardizer
@@ -2486,8 +2513,10 @@ def runExample():
     # For LogP model, following use additional code to get dsstox record for neighbor / analogs:
     smiles_list.append("[H][C@]12[C@@H](Cl)[C@H](Cl)[C@](C(Cl)Cl)([C@@H](Cl)[C@@H]1Cl)C2(C)C(Cl)Cl")  # DTXCID001783033 
     smiles_list.append("[H][C@]12O[C@@]1([H])[C@@]1([H])[C@@]([H])([C@H]2Cl)[C@@]2(Cl)C(Cl)=C(Cl)[C@]1(Cl)C2(Cl)Cl")  # DTXCID501783733
-    smiles_list.append("[H][C@]12CC(Cl)(Cl)[C@](CCl)([C@@H](Cl)[C@@H]1Cl)C2(CCl)CCl")  # DTXCID501782985
-    smiles_list.append("[H][C@]12CO[S@@](=O)OC[C@@]1([H])[C@@]1(Cl)C(Cl)=C(Cl)[C@]2(Cl)C1(Cl)Cl")  # DTXCID601783831, fails standardization!
+    # smiles_list.append("[H][C@]12CC(Cl)(Cl)[C@](CCl)([C@@H](Cl)[C@@H]1Cl)C2(CCl)CCl")  # DTXCID501782985
+    # smiles_list.append("[H][C@]12CO[S@@](=O)OC[C@@]1([H])[C@@]1(Cl)C(Cl)=C(Cl)[C@]2(Cl)C1(Cl)Cl")  # DTXCID601783831, fails standardization!
+    # smiles_list.append("CCCCCCCc1ccccc1") # one of neighbors for test set doesnt have matching dtxsid for the dtxcid (not in dsstox_records table)
+
 
     current_directory = os.getcwd()
     folder_path = os.path.join(current_directory, "data", "reports")
@@ -2496,42 +2525,16 @@ def runExample():
     mp = ModelPredictor()
     
     for smiles in smiles_list:
-        print("\nRunning " + smiles)        
+        print("\nRunning " + smiles)
         runChemical(mp, model_id, smiles, folder_path)
         
+    # run all models:
     # for smiles in smiles_list:
     #     for model_id in range(1065, 1071):
     #         print("\nRunning " + smiles)        
     #         runChemical(mp, str(model_id), smiles, folder_path)
 
 
-def addPerformance(md:ModelDetails):
-    
-    ms = md.modelStatistics
-        
-    md.performance = {}
-    md.performance["train"] = {}
-    md.performance["train"]["R2"] = ms["PearsonRSQ_Training"]
-    md.performance["train"]["RMSE"] = ms["RMSE_Training"]
-    md.performance["train"]["MAE"] = ms["MAE_Training"]
-    
-    md.performance["fiveFoldICV"] = {}
-    md.performance["fiveFoldICV"]["R2"] = ms["PearsonRSQ_CV_Training"]
-    md.performance["fiveFoldICV"]["RMSE"] = ms["RMSE_CV_Training"]
-    md.performance["fiveFoldICV"]["MAE"] = ms["MAE_CV_Training"]
-    
-    md.performance["external"] = {}
-    md.performance["external"]["R2"] = ms["PearsonRSQ_Test"]
-    md.performance["external"]["RMSE"] = ms["RMSE_Test"]
-    md.performance["external"]["MAE"] = ms["MAE_Test"]
-    
-    md.performance["externalAD"] = {}
-    md.performance["externalAD"]["MAE_inside_AD"] = ms["MAE_Test_inside_AD"]
-    md.performance["externalAD"]["MAE_outside_AD"] = ms["MAE_Test_outside_AD"]
-    md.performance["externalAD"]["Fraction_inside_AD"] = ms["Coverage_Test"]
-    
-    md.modelStatistics = None
-    # md.pop("modelStatistics")
 
 # def create_standardized_report(modelResults2):
 #
@@ -2589,9 +2592,13 @@ def runChemical(mp, model_id, smiles, folder_path):
     chemical = report["chemicalIdentifiers"]
     
     chemId = chemical.get("chemId", "N/A")
-    file_name = model_id + "_" + chemId + ".json"
+
+    # file_path = os.path.join(folder_path, model_id + "_" + chemId + ".json")
+
+    folder_path2 = os.path.join(folder_path, chemId) 
+    os.makedirs(folder_path2, exist_ok=True)
+    file_path = os.path.join(folder_path2, model_id + ".json")
     
-    file_path = os.path.join(folder_path, file_name)
     
     # Ensure the directory exists
     
@@ -2748,6 +2755,8 @@ def test_get_exp_data():
 if __name__ == '__main__':
     
     runExample()
+    # runExampleFromService()
+    # runExamplePredictPost()
     # runRandomSample()
     
     ######################################################################################################
