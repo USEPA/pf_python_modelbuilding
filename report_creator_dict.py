@@ -6,6 +6,7 @@ This version uses ModelResults as a dict loaded from json string (cant use code 
 """
 from dominate import document
 from dominate.tags import *
+import logging
 
 import json
 import math
@@ -906,7 +907,7 @@ table.compact td {
             return str(doc)
 
         except:
-            print("An error occurred. Here is the stack trace:")
+            logging.error("Error creating html report")
             traceback.print_exc()  # Prints the full traceback
             return None
 
