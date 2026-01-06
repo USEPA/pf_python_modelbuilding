@@ -2013,8 +2013,11 @@ class ModelPredictor:
         model = mi.init_model(model_id)
         
         modelDetails = ModelDetails(model)
-
+        self.addLinks(modelDetails, useFileAPI)
         addPerformance(modelDetails)
+        
+        modelResults = ModelResults()
+
     
         # Standardize smiles:
         chemical, code = self.standardizeStructure(serverAPIs, smiles, model)
@@ -2036,9 +2039,7 @@ class ModelPredictor:
             else:
                 chemical["imageSrc"] = "N/A"
             
-            modelResults = ModelResults()
             modelResults.predictionError = error
-            self.addLinks(modelDetails, useFileAPI)
             report = Report(chemical, modelDetails, modelResults)
             return report.to_json(), 200
 
@@ -2064,9 +2065,7 @@ class ModelPredictor:
         # print(df_prediction, code)
         
         if code != 200:
-            modelResults = ModelResults()
             report = Report(chemical, modelDetails, modelResults)
-            self.addLinks(modelDetails, useFileAPI)
             modelResults.predictionError = df_prediction
             return report.to_json(), 200
     
@@ -2082,10 +2081,6 @@ class ModelPredictor:
         pred_value = pred_results[0]['pred']
         
         # applicability domain calcs:
-    
-        # store everything in results:
-        modelResults = ModelResults()
-        
         if model.applicabilityDomainName:
             ad_results = self.determineApplicabilityDomain(model, df_prediction)
             ad_results["method"] = modelDetails.applicabilityDomainName    
@@ -2128,7 +2123,6 @@ class ModelPredictor:
         if generate_report:
             report.neighborResultsTraining, report.neighborResultsPrediction = self.addNeighborsFromSets(model, modelResults, df_prediction)
             self.getFragmentAD(df_prediction, model.df_training, modelResults)
-            self.addLinks(modelDetails, useFileAPI)
             # print(useFileAPI)
             
         # print(results_json)
