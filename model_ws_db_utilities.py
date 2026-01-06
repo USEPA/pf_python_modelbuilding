@@ -44,7 +44,7 @@ from predict_constants import UnitsConverter
 from utils import timer
 
 
-debug = False
+# debug = False
 import logging
 logging.getLogger('sqlalchemy').setLevel(logging.ERROR)
 
@@ -351,8 +351,10 @@ def getSession():
         port=os.getenv('DEV_QSAR_PORT', 5432),
         database=os.getenv('DEV_QSAR_DATABASE')
     )
-    # print(connect_url)
-    engine = create_engine(connect_url, echo=debug)
+    
+    print(connect_url)    
+    
+    engine = create_engine(connect_url, echo=False)
     Session = sessionmaker(bind=engine)
     session = Session()
     return session
@@ -380,7 +382,7 @@ def getSessionDsstox():
     )
     
     # print(connect_url)
-    engine = create_engine(connect_url, echo=debug)
+    engine = create_engine(connect_url, echo=False)
     Session = sessionmaker(bind=engine)
     session = Session()
     return session
@@ -665,9 +667,8 @@ class ModelInitializer:
             print("error getting stats for modelId=" + str(model.modelId))
     
     def get_predictions(self, session, model: Model, split_num, fk_splitting_id):
-
-        if debug:
-            print("Getting model training/prediction set TSVs")
+        
+        logging.debug("Getting model training/prediction set TSVs")
 
         sql = text("""
             select dp.canon_qsar_smiles, dp.qsar_property_value,p.qsar_predicted_value
@@ -774,33 +775,26 @@ class ModelInitializer:
         model_bytes = self.get_model_bytes(model_id, session)
 
         if not model_bytes:
-            print("Couldnt load " + model_id + " from model bytes")
+            logging.error(f"Couldnt load {model_id} from model bytes")
             return
 
         import pickle
         model = pickle.loads(model_bytes)
 
         if not model:
-            print("Couldnt load " + model_id + " from model bytes")
+            logging.error(f"Couldnt load {model_id} from model bytes")
             return
 
-        if debug:
-            print('model_description from pickled model:', model.get_model_description())
+        model.modelId = model_id
 
         if not hasattr(model, "is_binary"):
-            print('model.is_binary is none, setting to false')
+            logging.info('model.is_binary is none, setting to false')
             model.is_binary = False
 
         # Stores model under provided number
 
-        model.modelId = model_id
-
         self.get_model_details(model, session)
-
-        # print(model.get_model_description())
-
         self.get_model_statistics(model, session)
-
         self.get_training_prediction_instances(session, model)
         self.get_dsstox_records_for_dataset(model, session)
 
@@ -810,11 +804,9 @@ class ModelInitializer:
 
         # self.replace_id_with_dsstox_record(model.df_prediction, model.df_dsstoxRecords)
         # self.replace_id_with_dsstox_record(model.df_training, model.df_dsstoxRecords)
-
         # print('model_description with added metadata', model.get_model_description_pretty())
 
-        if debug:
-            print('model_description with added metadata', model.get_model_description_pretty())
+        logging.debug(f"model_description with added metadata:{model.get_model_description_pretty()}")
 
         # TODO: for the training/prediction instances, could also query the descriptor api but it would take longer and
         #  sometimes the descriptors will come out different due to the fact that the descriptors will be pulled from the
@@ -933,8 +925,7 @@ class ModelInitializer:
             return None
 
     def get_training_prediction_instances(self, session, model:Model):
-        if debug:
-            print("Getting model training/prediction set TSVs")
+        logging.debug("Getting model training/prediction set TSVs")
 
         instance_header = f"ID\tProperty\t{model.headersTsv}\r\n"
         sql = text("""
@@ -962,9 +953,8 @@ class ModelInitializer:
                 chemical_id, qsar_property_value, descriptors, split_num = row
                 instance = self.generate_instance(chemical_id, qsar_property_value, descriptors)
 
-                if instance is None and debug:
-                    print(
-                        f"{id}\tnull instance\tdatasetName={model.datasetName}\tdescriptorSetName={model.descriptorSetName}")
+                if instance is None:
+                    logging.debug(f"{id}\tnull instance\tdatasetName={model.datasetName}\tdescriptorSetName={model.descriptorSetName}")
                     continue
 
                 if split_num == 0:
@@ -983,9 +973,9 @@ class ModelInitializer:
 
                     # Replace IDs in df_set
 
-            if debug:
-                print('trainingSet shape', model.df_training.shape)
-                print('predictionSet shape', model.df_prediction.shape)
+            
+            logging.debug(f"trainingSet shape:{model.df_training.shape}")
+            logging.debug(f"predictionSet shape:{model.df_prediction.shape}")
 
         except SQLAlchemyError as ex:
             print(f"An error occurred: {ex}")
@@ -2511,12 +2501,11 @@ def runExample():
     smiles_list.append("CCCCC.CCCC")  # mixture according to qsarReadySmiles
     
     # For LogP model, following use additional code to get dsstox record for neighbor / analogs:
-    smiles_list.append("[H][C@]12[C@@H](Cl)[C@H](Cl)[C@](C(Cl)Cl)([C@@H](Cl)[C@@H]1Cl)C2(C)C(Cl)Cl")  # DTXCID001783033 
+    smiles_list.append("[H][C@]12[C@@H](Cl)[C@H](Cl)[C@](C(Cl)Cl)([C@@H](Cl)[C@@H]1Cl)C2(C)C(Cl)Cl")  # DTXCID001783033
     smiles_list.append("[H][C@]12O[C@@]1([H])[C@@]1([H])[C@@]([H])([C@H]2Cl)[C@@]2(Cl)C(Cl)=C(Cl)[C@]1(Cl)C2(Cl)Cl")  # DTXCID501783733
     # smiles_list.append("[H][C@]12CC(Cl)(Cl)[C@](CCl)([C@@H](Cl)[C@@H]1Cl)C2(CCl)CCl")  # DTXCID501782985
     # smiles_list.append("[H][C@]12CO[S@@](=O)OC[C@@]1([H])[C@@]1(Cl)C(Cl)=C(Cl)[C@]2(Cl)C1(Cl)Cl")  # DTXCID601783831, fails standardization!
     # smiles_list.append("CCCCCCCc1ccccc1") # one of neighbors for test set doesnt have matching dtxsid for the dtxcid (not in dsstox_records table)
-
 
     current_directory = os.getcwd()
     folder_path = os.path.join(current_directory, "data", "reports")
@@ -2527,11 +2516,10 @@ def runExample():
     for smiles in smiles_list:
         print("\nRunning " + smiles)
         runChemical(mp, model_id, smiles, folder_path)
-        
     # run all models:
     # for smiles in smiles_list:
     #     for model_id in range(1065, 1071):
-    #         print("\nRunning " + smiles)        
+    #         print("\nRunning " + smiles)
     #         runChemical(mp, str(model_id), smiles, folder_path)
 
 
@@ -2564,7 +2552,7 @@ def runExample():
 #
 #     for adEstimate in mr["adEstimates"]:
 #         adEstimate["adMethod"] = {}
-#         adEstimate["adMethod"]["name"] = adEstimate.pop("method") 
+#         adEstimate["adMethod"]["name"] = adEstimate.pop("method")
 #         adEstimate["adMethod"]["description"] = adEstimate.pop("description")
 #         adEstimate.pop("AD")
 #
@@ -2574,11 +2562,11 @@ def runExample():
 #
 #     if len(modelResults["neighborsForSets"])>0:
 #         report["neighborResultsPrediction"] = modelResults["neighborsForSets"][0]
-#         report["neighborResultsPrediction"]["title"] = "Nearest Neighbors from Test (External Predictions)" 
+#         report["neighborResultsPrediction"]["title"] = "Nearest Neighbors from Test (External Predictions)"
 #         report["neighborResultsPrediction"]["unitNeighbor"] = modelResults["unitsModel"]
 #
 #         report["neighborResultsTraining"] = modelResults["neighborsForSets"][1]
-#         report["neighborResultsTraining"]["title"] = "Nearest Neighbors from Training (Cross Validation Predictions)" 
+#         report["neighborResultsTraining"]["title"] = "Nearest Neighbors from Training (Cross Validation Predictions)"
 #         report["neighborResultsTraining"]["unitNeighbor"] = modelResults["unitsModel"]
 #
 #     return report
@@ -2590,12 +2578,12 @@ def runChemical(mp, model_id, smiles, folder_path):
 
     report = json.loads(output)
     chemical = report["chemicalIdentifiers"]
-    
+
     chemId = chemical.get("chemId", "N/A")
 
     # file_path = os.path.join(folder_path, model_id + "_" + chemId + ".json")
 
-    folder_path2 = os.path.join(folder_path, chemId) 
+    folder_path2 = os.path.join(folder_path, chemId)
     os.makedirs(folder_path2, exist_ok=True)
     file_path = os.path.join(folder_path2, model_id + ".json")
     
@@ -2608,7 +2596,7 @@ def runChemical(mp, model_id, smiles, folder_path):
     # webbrowser.open(f'file://{file_path}')
     # file_name2 = model_id + "_" + chemId + "_2.json"
     # file_path2 = os.path.join(folder_path, file_name2)
-    # report = create_standardized_report(modelResults)    
+    # report = create_standardized_report(modelResults)
     # with open(file_path2, 'w', encoding='utf-8') as f:
     #     f.write(json.dumps(report, indent=4))
     # webbrowser.open(file_path2)
@@ -2724,7 +2712,7 @@ def test_say_hello():
 
 def test_get_exp_data():
 
-    temp_file_path = "data/reports/property_records.json"    
+    temp_file_path = "data/reports/property_records.json"
     # datasetName = 'BP v1 modeling'
     # datasetName = 'LogP v1 modeling'
     datasetName = 'WS v1 modeling'
@@ -2734,14 +2722,14 @@ def test_get_exp_data():
     session = getSession()
     edg = ExpDataGetter()
     df_pv, param_names = edg.get_raw_exp_data(session, datasetName, qsarSmiles)
-    df_pv.to_json(path_or_buf=temp_file_path, orient='records', indent=4)    
+    df_pv.to_json(path_or_buf=temp_file_path, orient='records', indent=4)
             
     # df_pv = pd.read_json(temp_file_path,orient='records')
     
     # print(df_pv.to_json(orient="records", indent=2))
                 
     rc = ReportCreator()
-    es = rc.RawExpDataSection()    
+    es = rc.RawExpDataSection()
     html = es.create_exp_records_webpage(df_pv, param_names, title_text="Experimental Property Records for " + propertyName)
     
     temp_file_path = "data/reports/property_records.html"
@@ -2752,8 +2740,11 @@ def test_get_exp_data():
     # printFirstRowDF(df)
 
 
-if __name__ == '__main__':
+def main():
     
+    from dotenv import load_dotenv
+    load_dotenv()
+
     runExample()
     # runExampleFromService()
     # runExamplePredictPost()
@@ -2771,10 +2762,14 @@ if __name__ == '__main__':
     # pc.display_image(1065, 3, getSession())
     # pc.display_image(1065, 4, getSession())
     ######################################################################################################
-    # excel_file_path = r"C:\Users\TMARTI02\OneDrive - Environmental Protection Agency (EPA)\0 java\0 model_management\hibernate_qsar_model_building\data\reports\prediction reports upload\WebTEST2.1\HLC v1 modeling_RND_REPRESENTATIVE.xlsx"    
+    # excel_file_path = r"C:\Users\TMARTI02\OneDrive - Environmental Protection Agency (EPA)\0 java\0 model_management\hibernate_qsar_model_building\data\reports\prediction reports upload\WebTEST2.1\HLC v1 modeling_RND_REPRESENTATIVE.xlsx"
     # mp=ModelPredictor()
     # mp.predictSetFromDB_SmilesFromExcel(1065,excel_file_path,'Test set')
     ######################################################################################################
     # modelStatistics = ModelStatistics()
     # modelStatistics.updateStatsPredictModuleModels()
     ######################################################################################################
+
+
+if __name__ == '__main__':
+    main()

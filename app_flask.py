@@ -27,8 +27,13 @@ from applicability_domain import applicability_domain_utilities as adu
 from sklearn2pmml import sklearn2pmml
 
 from dotenv import load_dotenv
-from app import app_flask
 load_dotenv()
+
+
+# import os
+# user_name = os.getenv('DEV_QSAR_USER', 'default_user')
+# print(f"The user is: {user_name}")
+
 
 from report_creator_dict import ReportCreator
 
