@@ -16,11 +16,6 @@ COPY requirements.txt .
 # Install Python deps
 RUN pip install -r requirements.txt
 
-# Make sure the dynamic loader can find Indigo’s bundled libs (libindigo.so, etc.)
-# Path matches your environment: /usr/local/lib/python3.12/site-packages/indigo/lib/linux-x86_64
-ENV LD_LIBRARY_PATH=/usr/local/lib/python3.12/site-packages/indigo/lib/linux-x86_64:$LD_LIBRARY_PATH
-
-
 COPY . .
 
 EXPOSE 8080
