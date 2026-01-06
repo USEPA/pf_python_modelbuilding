@@ -573,7 +573,7 @@ def cross_validate_fold(qsar_method):
 
 
 def predictDB_POST(body):
-    return predictDB(body['model_id'], body['smiles'],body['report_format'])
+    return predictDB(body['smiles'], body['model_id'], "json")
 
 
 # @app.route('/api/predictor_models/predict', methods=['POST', 'GET'])  # old flask route

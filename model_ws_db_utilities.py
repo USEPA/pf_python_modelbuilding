@@ -2621,23 +2621,58 @@ def runChemical(mp, model_id, smiles, folder_path):
         webbrowser.open(htmlPath)
             
 
+def runExamplePredictPost():
+    
+    import requests
+    
+    url = "http://localhost:5005/api/predictor_models/predict"
+
+    payload = json.dumps({
+      "smiles": [
+        "c1ccccc1",
+        "CCO"
+      ],
+      "model_id": 1065,
+    })
+    
+    # dont need report_format because gonna get back json array - doesnt make sense to get array of html
+
+    
+    headers = {
+      'Content-Type': 'application/json'
+    }
+    
+    response = requests.request("POST", url, headers=headers, data=payload)
+    pretty_json = json.dumps(response.json(), indent=4)
+    print(pretty_json)
+    
+    
+
+
 def runExampleFromService():
+    
 
     import requests
 
     # Define the parameters
     smiles = "c1ccccc1"
     model_id = "1065"
-    report_format = "json"
+    # report_format = "json"
+    report_format = "html"
+
+    use_uvicorn = True
 
     # Define the base URL
-    base_url = "http://localhost:5004/models/predictDB"
+    if use_uvicorn:
+        base_url = "http://localhost:5005/api/predictor_models/predict"
+    else:
+        base_url = "http://localhost:5004/api/predictor_models/models/predictDB"
+        
 
     # Set up the parameters as a dictionary
     params = {
         'smiles': smiles,
         'model_id': model_id,
-        'generate_report': 'true',
         'report_format': report_format
     }
 
