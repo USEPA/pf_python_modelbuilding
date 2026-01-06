@@ -352,7 +352,7 @@ def getSession():
         database=os.getenv('DEV_QSAR_DATABASE')
     )
     
-    print(connect_url)    
+    # print(connect_url)    
     
     engine = create_engine(connect_url, echo=False)
     Session = sessionmaker(bind=engine)
