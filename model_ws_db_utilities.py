@@ -6,7 +6,6 @@ import threading
 from io import BytesIO
 import pathlib
 import traceback
-
 from indigo import Indigo
 from indigo.renderer import IndigoRenderer
 import base64
@@ -21,6 +20,7 @@ from API_Utilities import QsarSmilesAPI, DescriptorsAPI
 
 # from db.mongo_cache import get_cached_prediction, cache_prediction
 
+from predict_constants import PredictConstants
 
 from model_ws_utilities import call_do_predictions_from_df, models
 from models import df_utilities as dfu
@@ -30,7 +30,6 @@ import StatsCalculator as stats
 import pandas as pd
 from datetime import datetime, timezone
 import pytz
-from StatsCalculator import PredictConstants
 
 from sklearn.preprocessing import StandardScaler
 from sklearn.neighbors import NearestNeighbors
@@ -41,29 +40,27 @@ from report_creator_dict import ReportCreator
 
 import webbrowser
 from predict_constants import UnitsConverter
-from predict_constants import PredictConstants as pc
 
 from utils import timer
-from numba.core.types import none
-# from models.df_utilities import remove_log_p_descriptors, do_remove_correlated_descriptors
+
 
 debug = False
 import logging
 logging.getLogger('sqlalchemy').setLevel(logging.ERROR)
 
-fk_dsstox_snapshot_id = 1 # DSSTOX Snapshot 04/23 (Physchem models were created 2024-02-29), if use fk = 2 or 3 will have more missing records
+fk_dsstox_snapshot_id = 1  # DSSTOX Snapshot 04/23 (Physchem models were created 2024-02-29), if use fk = 2 or 3 will have more missing records
 
 # Following records are cids in the physchem models that didnt make it into the dsstox_records table for fk_dsstox_snapshot_id = 1 (dsstox changed slightly) 
 
 # Following was created by ModelInitializer.findMissingDsstoxRecordsInPhyschemModelDatasets()
 dict_missing_dsstox_records = {    
                # "DTXCID001783033": {"smiles": "[H][C@]12[C@@H](Cl)[C@H](Cl)[C@](C(Cl)Cl)([C@@H](Cl)[C@@H]1Cl)C2(C)C(Cl)Cl"},#has no matching sid in dsstox
-               "DTXCID201784601": {"smiles": "CC[C@@H]1CCC[C@H]1C", "sid": "DTXSID2075055", "casrn": "930-90-5", "name": "trans-1-Methyl-2-ethylcyclopentane"}, 
+               "DTXCID201784601": {"smiles": "CC[C@@H]1CCC[C@H]1C", "sid": "DTXSID2075055", "casrn": "930-90-5", "name": "trans-1-Methyl-2-ethylcyclopentane"},
                "DTXCID401783809": {"smiles": "[H][C@]12CO[S@](=O)OC[C@@]1([H])[C@@]1(Cl)C(Cl)=C(Cl)[C@]2(Cl)C1(Cl)Cl", "sid": "DTXSID8037540", "casrn": "33213-65-9", "name": "Endosulfan II"},
-               "DTXCID501782911": {"smiles": "CN1C[C@@]2(C=C)[C@@H]3C[C@H]4OC[C@@H]3[C@@H]1[C@@H]2[C@@]41C(=O)NC2=CC=CC=C12", "sid": "DTXSID40878487", "casrn": "509-15-9", "name": "Gelsemine"}, 
-               "DTXCID501782985": {"smiles": "[H][C@]12CC(Cl)(Cl)[C@](CCl)([C@@H](Cl)[C@@H]1Cl)C2(CCl)CCl", "sid": "DTXSID80874069", "casrn": "51775-36-1", "name": "2,2,5-endo,6-exo,8,9,10-Heptachlorobornane"}, 
-               "DTXCID501783733": {"smiles": "[H][C@]12O[C@@]1([H])[C@@]1([H])[C@@]([H])([C@H]2Cl)[C@@]2(Cl)C(Cl)=C(Cl)[C@]1(Cl)C2(Cl)Cl", "sid": "DTXSID1024126", "casrn": "1024-57-3", "name": "Heptachlor epoxide B"}, 
-               "DTXCID601783831": {"smiles": "[H][C@]12CO[S@@](=O)OC[C@@]1([H])[C@@]1(Cl)C(Cl)=C(Cl)[C@]2(Cl)C1(Cl)Cl", "sid": "DTXSID9037539", "casrn": "959-98-8", "name": "Endosulfan I"}, 
+               "DTXCID501782911": {"smiles": "CN1C[C@@]2(C=C)[C@@H]3C[C@H]4OC[C@@H]3[C@@H]1[C@@H]2[C@@]41C(=O)NC2=CC=CC=C12", "sid": "DTXSID40878487", "casrn": "509-15-9", "name": "Gelsemine"},
+               "DTXCID501782985": {"smiles": "[H][C@]12CC(Cl)(Cl)[C@](CCl)([C@@H](Cl)[C@@H]1Cl)C2(CCl)CCl", "sid": "DTXSID80874069", "casrn": "51775-36-1", "name": "2,2,5-endo,6-exo,8,9,10-Heptachlorobornane"},
+               "DTXCID501783733": {"smiles": "[H][C@]12O[C@@]1([H])[C@@]1([H])[C@@]([H])([C@H]2Cl)[C@@]2(Cl)C(Cl)=C(Cl)[C@]1(Cl)C2(Cl)Cl", "sid": "DTXSID1024126", "casrn": "1024-57-3", "name": "Heptachlor epoxide B"},
+               "DTXCID601783831": {"smiles": "[H][C@]12CO[S@@](=O)OC[C@@]1([H])[C@@]1(Cl)C(Cl)=C(Cl)[C@]2(Cl)C1(Cl)Cl", "sid": "DTXSID9037539", "casrn": "959-98-8", "name": "Endosulfan I"},
                "DTXCID701521422": {"smiles": "[H][C@@]12CCCC[C@@]1([H])CCCC2", "sid": "DTXSID90883405", "casrn": "493-02-7", "name": "trans-Decahydronaphthalene"}}
 
 USE_TEMPORARY_MODEL_PLOTS = False
@@ -73,12 +70,12 @@ imgURLCid = "https://comptox.epa.gov/dashboard-api/ccdapp1/chemical-files/image/
 """
 Not completed:
 TODO: add qsarMethod and qsarMethodVersion
-TODO: add similarities and colors
-TODO: Add plot/ histo for overall sets (Use cross validation for plot for training)
 TODO: make a batch mode
 TODO: Add experimental tab with raw data
 
 Completed:
+X TODO add similarities and colors (distances added)
+X TODO Add plot/ histo for overall sets (Use cross validation for plot for training)
 X TODO Add display units
 X TODO Add exp, pred values for neighbors
 X TODO Move ad code to that class
@@ -426,7 +423,6 @@ class ExpDataGetter:
         order by dpc.property_value asc
         """)
         return sqlPropertyValues
-
     
     def getSqlParameters(self):
         sqlParameters = text("""
@@ -445,14 +441,12 @@ class ExpDataGetter:
         where d.name=:datasetName and dp.canon_qsar_smiles =:qsarSmiles;
         """)
         return sqlParameters
-        
-    
     
     def get_raw_exp_data(self, session, datasetName, qsarSmiles):
         
         try:
             
-            #TODO: need to sort the propertyvalues and mark the ones that were used in the qsar property value
+            # TODO: need to sort the propertyvalues and mark the ones that were used in the qsar property value
             
             # print(sqlPropertyValues)            
             resultsPropertyValues = session.execute(self.getSqlPropertyValues(), {"datasetName": datasetName, "qsarSmiles": qsarSmiles})
@@ -496,15 +490,12 @@ class ExpDataGetter:
             
             df_pv["params"] = df_pv["property_values_id"].map(params_map)
             
-            
             param_names = (
                 df_params["name"]
                 .dropna()
                 .drop_duplicates()
                 .tolist()
             )
-            
-            
             
             # print(param_names)
             return df_pv, param_names
@@ -514,10 +505,66 @@ class ExpDataGetter:
         finally:
             # print('done getting tsvs')
             session.close()
-    
 
 
 class ModelInitializer:
+    
+    def get_model_list(self, session):
+        """Gets model meta data (except training and test set tsvs).
+        TODO Should this info be stored directly in model object and then for new models we won't need to query the db since will be already in the pickled object?
+        Is this used?
+        """
+        try:
+            # SQL query to retrieve model details
+            sql = text("""
+                       SELECT m.name_ccd,
+                              d.id,
+                              d.name,
+                              u.abbreviation_ccd,
+                              d.dsstox_mapping_strategy,
+                              p.name_ccd,
+                              ds.id,
+                              ds.name,
+                              ds.descriptor_service,
+                              ds.headers_tsv,
+                              s.id,
+                              s.name,
+                              adm.name,
+                              de.embedding_tsv
+                       FROM qsar_models.models m
+                                LEFT JOIN qsar_datasets.datasets d ON d.name = m.dataset_name
+                                LEFT JOIN qsar_datasets.units u ON d.fk_unit_id = u.id
+                                LEFT JOIN qsar_datasets.properties p ON d.fk_property_id = p.id
+                                LEFT JOIN qsar_descriptors.descriptor_sets ds ON m.descriptor_set_name = ds.name
+                                LEFT JOIN qsar_datasets.splittings s ON m.splitting_name = s.name
+                                LEFT JOIN qsar_models.ad_methods adm ON m.fk_ad_method = adm.id
+                                LEFT JOIN qsar_models.descriptor_embeddings de ON m.fk_descriptor_embedding_id = de.id
+                       WHERE fk_source_id = 3
+                         and is_public = true
+                       """)
+
+            # Use left joins so can still get a result if something is missing (like fk_ad_method was not set for model)
+            # print(sql)
+
+            # Execute the query
+            rows = session.execute(sql).fetch()
+
+            models = []
+
+            for row in rows:
+                model_details = self.row_to_model_details(row)
+                models.append(model_details)
+
+            return models
+
+        except Exception as ex:
+            print(f"Exception occurred: {ex}")
+        finally:
+            # Close the session
+            print('done with details')
+            # session.close()
+
+        return None
 
     def init_model(self, model_id):
 
@@ -616,10 +663,6 @@ class ModelInitializer:
 
         except SQLAlchemyError as ex:
             print("error getting stats for modelId=" + str(model.modelId))
-
-    
-        
-    
     
     def get_predictions(self, session, model: Model, split_num, fk_splitting_id):
 
@@ -781,8 +824,7 @@ class ModelInitializer:
 
         return model
     
-    
-    def getQsarDtxcid(self,qsarSmiles,datasetName, session):
+    def getQsarDtxcid(self, qsarSmiles, datasetName, session):
         
         sql = text("""
             select dp.qsar_dtxcid  from qsar_datasets.datasets d
@@ -792,7 +834,7 @@ class ModelInitializer:
         
         # print(sql)
         
-        try :
+        try:
             connection = session.connection()
             row = connection.execute(sql, {"datasetName": datasetName, "qsarSmiles": qsarSmiles}).fetchone()
             if row is not None:
@@ -803,15 +845,13 @@ class ModelInitializer:
         except Exception as e:
             print(e)
             return None
-        
-       
     
-    def getDtxsid(self,dtxcid, session):
+    def getDtxsid(self, dtxcid, session):
         """
         Some of the dsstox records are missing because in dsstox there is no longer a matching dtxsid for given dtxcid
         """
         
-        session=getSession()
+        session = getSession()
         
         sql = text("""
             select dr.dtxsid, dr.preferred_name from qsar_models.dsstox_records dr
@@ -821,9 +861,9 @@ class ModelInitializer:
         # where dr.dtxcid = :dtxcid and dr.fk_dsstox_snapshot_id=3;  
         # print(sql,"*"+dtxcid+"*")
         
-        try :
+        try:
             connection = session.connection()
-            row = connection.execute(sql, {"dtxcid": dtxcid,"fk_dsstox_snapshot_id": fk_dsstox_snapshot_id }).fetchone()
+            row = connection.execute(sql, {"dtxcid": dtxcid, "fk_dsstox_snapshot_id": fk_dsstox_snapshot_id }).fetchone()
         
             if row is None:
                 # no hit — handle appropriately
@@ -837,7 +877,6 @@ class ModelInitializer:
             traceback.print_exc()
             return None
 
-
     def get_dsstox_records_for_dataset(self, model: Model, session):
         """
         Gets the dsstox records for the dataset from res_qsar postgreSQL db (could also get from dsstox or a snapshot of dsstox)
@@ -850,7 +889,6 @@ class ModelInitializer:
             # SQL query to retrieve bytes
             
             # TODO: need to fix because the dtxcid may have changed so that the dsstox record will be retrieved
-
 
             # Note: in the data_points table, sometimes the qsar_dtxcid is pipe delimited pair of cids
             sql = """
@@ -956,21 +994,18 @@ class ModelInitializer:
             # print('done getting tsvs')
             # session.close()
 
-
-
     def generate_instance(self, chemical_id, qsar_property_value, descriptors):
         return f"{chemical_id}\t{qsar_property_value}\t{descriptors}\n"
-
     
     def findMissingDsstoxRecordsInPhyschemModelDatasets(self):
         """Some datapoints are missing records in qsar_models.dsstox_records table in postgresql due to changes in dsstox over time"""
         
-        session=getSession()
-        sessionDsstox=getSessionDsstox()
+        session = getSession()
+        sessionDsstox = getSessionDsstox()
         
         fk_dsstox_snapshot_id = 1
 
-        sql1=text("""
+        sql1 = text("""
                 SELECT DISTINCT dp.canon_qsar_smiles, split_part(dp.qsar_dtxcid, '|', 1) AS cid 
                 from qsar_models.models m                
                 join qsar_datasets.datasets d on d.name = m.dataset_name 
@@ -979,23 +1014,23 @@ class ModelInitializer:
                 WHERE d.name LIKE :name_pattern and m.is_public =true AND dr.dtxcid IS NULL;
             """)
         
-        results = session.execute(sql1, {"name_pattern": "% v1 modeling","fk_dsstox_snapshot_id": fk_dsstox_snapshot_id})
-        rows = results.mappings().all()            # list of dict-like rows
+        results = session.execute(sql1, {"name_pattern": "% v1 modeling", "fk_dsstox_snapshot_id": fk_dsstox_snapshot_id})
+        rows = results.mappings().all()  # list of dict-like rows
         cids = [r["cid"] for r in rows]
         
         print(len(cids))         
-        print (cids,"\n")        
-        #there are 8 dtxcids not in my dsstox_records table
+        print (cids, "\n")        
+        # there are 8 dtxcids not in my dsstox_records table
         # DTXCID001783033 doesnt have a generic substance in dsstox 
                 
-        sql2a=text("""SELECT dsstox_compound_id as cid,  c.smiles, gs.dsstox_substance_id as sid, gs.casrn, gs.preferred_name 
+        sql2a = text("""SELECT dsstox_compound_id as cid,  c.smiles, gs.dsstox_substance_id as sid, gs.casrn, gs.preferred_name 
         FROM compounds c
         join generic_substance_compounds gsc on gsc.fk_compound_id =c.id
         join generic_substances gs on gs.id=gsc.fk_generic_substance_id
          WHERE dsstox_compound_id IN :cids;        
         """)
 
-        sql2 =  sql2a.bindparams(bindparam("cids", expanding=True))
+        sql2 = sql2a.bindparams(bindparam("cids", expanding=True))
         res = sessionDsstox.execute(sql2, {"cids": cids})
         # print(list(res.keys()))
         results = res.fetchall()
@@ -1003,17 +1038,16 @@ class ModelInitializer:
         cid_to_info = {}
         for row in results:
             cid, smiles, sid, casrn, name = row
-            cid_to_info[cid]={"smiles":smiles, "sid":sid,"casrn":casrn, "name": name}
+            cid_to_info[cid] = {"smiles":smiles, "sid":sid, "casrn":casrn, "name": name}
                     
         print(json.dumps(cid_to_info))
         
     def exportRandomDsstoxSample(self):
         """Export sample smiles from dsstox"""
         
+        sessionDsstox = getSessionDsstox()
         
-        sessionDsstox=getSessionDsstox()
-        
-        sql=text("""SELECT c.smiles
+        sql = text("""SELECT c.smiles
                     FROM compounds AS c
                     JOIN (SELECT FLOOR(RAND() * (SELECT MAX(id) FROM compounds)) AS start_id) AS r
                     WHERE c.id >= r.start_id
@@ -1034,8 +1068,6 @@ class ModelInitializer:
         
         with open(OUTPUT_JSON, "w", encoding="utf-8") as f:
             json.dump(smiles_list, f, ensure_ascii=False, indent=2)
-                    
-
     
     def getModelMetaDataQuery(self):
         return """
@@ -1183,7 +1215,7 @@ class ModelDetails:
     def __init__(self, model: Model):
         self.modelId = model.modelId
         self.modelName = model.modelName
-        self.modelSource = model.modelSource
+        self.modelSourceName = model.modelSource
         self.modelStatistics = model.modelStatistics
         
         self.modelMethod = model.modelMethod
@@ -1202,9 +1234,10 @@ class ModelDetails:
             self.propertyDescription = model.propertyDescription
         else:
             self.propertyDescription = None
+            
+        self.propertyIsBinary = model.is_binary
 
         # self.version = '0.0.1'
-        self.is_binary = model.is_binary
         # self.description = model.description # TODO: in database
         # self.description_url = model.description_url #TODO in database
         self.datasetName = model.datasetName
@@ -1225,36 +1258,25 @@ class ModelDetails:
 
 # from pydantic import BaseModel
 # class ModelResults(BaseModel):
-    
+        
     
 class ModelResults:
 
-    def __init__(self, chemical=None, modelDetails: ModelDetails=None, adResults=None):
-        
-        self.chemical = chemical
+    def __init__(self, adResults=None):
         
         self.experimentalValueUnitsModel = None
         self.experimentalValueUnitsDisplay = None
         self.experimentalValueSet = None
-
         self.predictionValueUnitsModel = None
         self.unitsModel = None
-
         self.predictionValueUnitsDisplay = None
         self.unitsDisplay = None
-
         self.predictionError = None
-
-        self.adResults = None  # old way just store directly
-        self.applicabilityDomains = []
-        self.modelDetails = modelDetails
-                
-        self.neighborsForSets = []
+        self.adEstimates = []
 
     def to_dict(self):
         # Convert the object to a dictionary, including nested objects
         return {
-            "chemical": self.chemical,
             "experimentalValueUnitsModel": self.experimentalValueUnitsModel,
             "experimentalValueUnitsDisplay": self.experimentalValueUnitsDisplay,
             "experimentalValueSet": self.experimentalValueSet,
@@ -1263,72 +1285,33 @@ class ModelResults:
             "predictionValueUnitsDisplay": self.predictionValueUnitsDisplay,
             "unitsDisplay": self.unitsDisplay,
             "predictionError": self.predictionError,
-            "modelDetails": self.modelDetails.__dict__ if self.modelDetails else None,
-            "adResults": self.adResults if self.adResults is not None else None,
-            "applicabilityDomains": self.applicabilityDomains if self.applicabilityDomains is not None else None,
-            "neighborsForSets": self.neighborsForSets if self.neighborsForSets is not None else None,
+            "adEstimates": self.adEstimates
+        }
 
+        
+class Report:
+
+    def __init__(self, chemical, modelDetails:ModelDetails, modelResults:ModelResults):
+        
+        self.chemicalIdentifiers = chemical
+        self.modelDetails = modelDetails
+        self.modelResults = modelResults
+        self.neighborResultsPrediction = None
+        self.neighborResultsTraining = None 
+    
+    def to_dict(self):
+        # Convert the object to a dictionary, including nested objects
+        return {
+            "chemicalIdentifiers": self.chemicalIdentifiers,
+            "modelDetails": self.modelDetails.__dict__ if self.modelDetails else None,
+            "modelResults": self.modelResults.__dict__ if self.modelResults else None,
+            "neighborResultsTraining": self.neighborResultsTraining,
+            "neighborResultsPrediction": self.neighborResultsPrediction,
         }
 
     def to_json(self):
         return json.dumps(self.to_dict(), indent=4)
-
-    def get_model_list(self, session):
-        """Gets model meta data (except training and test set tsvs).
-        TODO Should this info be stored directly in model object and then for new models we won't need to query the db since will be already in the pickled object?
-        """
-        try:
-            # SQL query to retrieve model details
-            sql = text("""
-                       SELECT m.name_ccd,
-                              d.id,
-                              d.name,
-                              u.abbreviation_ccd,
-                              d.dsstox_mapping_strategy,
-                              p.name_ccd,
-                              ds.id,
-                              ds.name,
-                              ds.descriptor_service,
-                              ds.headers_tsv,
-                              s.id,
-                              s.name,
-                              adm.name,
-                              de.embedding_tsv
-                       FROM qsar_models.models m
-                                LEFT JOIN qsar_datasets.datasets d ON d.name = m.dataset_name
-                                LEFT JOIN qsar_datasets.units u ON d.fk_unit_id = u.id
-                                LEFT JOIN qsar_datasets.properties p ON d.fk_property_id = p.id
-                                LEFT JOIN qsar_descriptors.descriptor_sets ds ON m.descriptor_set_name = ds.name
-                                LEFT JOIN qsar_datasets.splittings s ON m.splitting_name = s.name
-                                LEFT JOIN qsar_models.ad_methods adm ON m.fk_ad_method = adm.id
-                                LEFT JOIN qsar_models.descriptor_embeddings de ON m.fk_descriptor_embedding_id = de.id
-                       WHERE fk_source_id = 3
-                         and is_public = true
-                       """)
-
-            # Use left joins so can still get a result if something is missing (like fk_ad_method was not set for model)
-            # print(sql)
-
-            # Execute the query
-            rows = session.execute(sql).fetch()
-
-            models = []
-
-            for row in rows:
-                model_details = self.row_to_model_details(row)
-                models.append(model_details)
-
-            return models
-
-        except Exception as ex:
-            print(f"Exception occurred: {ex}")
-        finally:
-            # Close the session
-            print('done with details')
-            # session.close()
-
-        return None
-
+    
 
 class ModelStatistics:
 
@@ -1338,7 +1321,7 @@ class ModelStatistics:
         df_preds_training_cv = mi.get_cv_predictions(session, model)
 
         stats_training_cv = stats.calculate_continuous_statistics(df_preds_training_cv, 0,
-            stats.PredictConstants.TAG_CV + stats.PredictConstants.TAG_TRAINING)
+            PredictConstants.TAG_CV + PredictConstants.TAG_TRAINING)
 
         statistic_name = "RMSE_CV_Training"
         statistic_value = stats_training_cv[statistic_name]
@@ -1357,7 +1340,7 @@ class ModelStatistics:
         df_preds_test = mi.get_predictions(session, model=model, split_num=1, fk_splitting_id=1)
         mean_exp_training = stats.calculate_mean_exp_training(df_preds_training)
         stats_test_set = stats.calculate_continuous_statistics(df_preds_test, mean_exp_training,
-            stats.PredictConstants.TAG_TEST)
+            PredictConstants.TAG_TEST)
 
         self.compare_stats(model, stats_test_set)
 
@@ -1581,8 +1564,8 @@ class NeighborGetter:
         else:  # Following just uses all TEST descriptors (removes constant ones)
             TrainSet = df_set
             TestSet = df_test_chemicals
-            ids_train, labels_train, features_train, column_names_train, is_binary = dfu.prepare_instances(df=TrainSet, 
-                                                                                                           which_set="Training", 
+            ids_train, labels_train, features_train, column_names_train, is_binary = dfu.prepare_instances(df=TrainSet,
+                                                                                                           which_set="Training",
                                                                                                            remove_logp=model.remove_log_p_descriptors,
                                                                                                            remove_corr=False, remove_constant=True)        
             features_test = TestSet[features_train.columns]
@@ -1791,9 +1774,9 @@ class ModelPredictor:
             # print(f"An error occurred while loading the molecule: {e}")
             return None
     
-    def setExpValue(self, model, modelResults:ModelResults):
+    def setExpValue(self, chemical, model, modelResults:ModelResults):
 
-        qsarSmiles = modelResults.chemical["canonicalSmiles"]
+        qsarSmiles = chemical["canonicalSmiles"]
 
         # print(qsarSmiles)
 
@@ -1846,7 +1829,6 @@ class ModelPredictor:
         for index, analog in enumerate(analogs):  # these are just the qsarSmiles
             analog["distance"] = distances[index] 
 
-
     def fixMissingNeighborDsstoxRecord(self, datasetName, qsarSmiles):
         row_as_dict = {
             "canonicalSmiles":qsarSmiles}
@@ -1870,7 +1852,6 @@ class ModelPredictor:
                 else:
                     row_as_dict["name"] = dtxcid    
                 
-                
                 # dtxsid, preferred_name = mi.getDtxsid(dtxcid, session)
                 #
                 # if dtxsid:
@@ -1890,7 +1871,6 @@ class ModelPredictor:
             print(e)
 
         return row_as_dict
-        
 
     def setExpPredValuesForNeighbors(self, model:Model, df_preds, neighbors, df_dsstoxRecords):
 
@@ -1904,7 +1884,7 @@ class ModelPredictor:
                 row_as_dict = matching_row_dsstox.iloc[0].to_dict()
                 neighbors2.append(row_as_dict)
             else:
-                logging.debug("Finding missing dsstox info for "+neighbor) # only happens for 8 dtxcids
+                logging.debug("Finding missing dsstox info for " + neighbor)  # only happens for 8 dtxcids
                 row_as_dict = self.fixMissingNeighborDsstoxRecord(model.datasetName, neighbor)
                 logging.debug(row_as_dict)
                 
@@ -1917,9 +1897,6 @@ class ModelPredictor:
                 # join qsar_datasets.data_point_contributors dpc on dpc.fk_data_point_id = dp.id
                 # left join qsar_models.dsstox_records dr on dr.dtxsid =dpc.dtxsid 
                 # where d.name = 'BP v1 modeling'  and dp.canon_qsar_smiles ='CC1C=CC2CC(C)CCC=2C=1' and dr.fk_dsstox_snapshot_id =3;
-
-                
-                
 
             # Find the matching row in model.df_preds_test
             matching_row_pred = df_preds[df_preds['id'] == neighbor]
@@ -1950,17 +1927,24 @@ class ModelPredictor:
                 
         df_neighborsTest = pd.DataFrame(neighborsTest)
         stats_test = stats.calculate_continuous_statistics(df_neighborsTest, 0, PredictConstants.TAG_TEST)
-        neighborsTestMAE = stats_test[pc.MAE + pc.TAG_TEST]
+        neighborsTestMAE = stats_test[PredictConstants.MAE + PredictConstants.TAG_TEST]
                     
         df_neighborsTraining = pd.DataFrame(neighborsTraining)
         stats_training = stats.calculate_continuous_statistics(df_neighborsTraining, 0, PredictConstants.TAG_TRAINING)
-        neighborsTrainingMAE = stats_training[pc.MAE + pc.TAG_TRAINING]
-    
-        modelResults.neighborsForSets.append({"set": "Test", "neighbors":neighborsTest, "MAE":neighborsTestMAE})
-        modelResults.neighborsForSets.append({"set": "Training", "neighbors":neighborsTraining, "MAE":neighborsTrainingMAE})
+        neighborsTrainingMAE = stats_training[PredictConstants.MAE + PredictConstants.TAG_TRAINING]
+        
+        neighborResultsPrediction = {"set": "Test", "neighbors":neighborsTest, "MAE":neighborsTestMAE,
+                                                "unitNeighbor":modelResults.unitsModel,
+                                                "title": "Nearest Neighbors from Test Set (External Predictions)"}
+        neighborResultsTraining = {"set": "Training", "neighbors":neighborsTraining, "MAE":neighborsTrainingMAE,
+                                              "unitNeighbor":modelResults.unitsModel,
+                                              "title": "Nearest Neighbors from Training Set (Cross Validation Predictions)"}
+        
+        return neighborResultsTraining, neighborResultsPrediction
         
     @timer
     def getFragmentAD(self, df_prediction, df_training, modelResults:ModelResults):
+
         start_column = "As [+5 valence, one double bond]"
         stop_column = "-N=S=O"
         df_new = df_prediction.loc[:, start_column:stop_column]
@@ -1980,26 +1964,36 @@ class ModelPredictor:
             "training_max": max_values.to_dict()
         }
         
-        modelResults.adResultsFrag = results
-        
+        # modelResults.adResultsFrag = results
         # print(json.dumps(modelResults.adResultsFrag, indent=4))
         
         outside_ad = False
         
-        for col_name in modelResults.adResultsFrag["test_chemical"].keys():
-            test_value = int(modelResults.adResultsFrag["test_chemical"][col_name])
-            training_min = int(modelResults.adResultsFrag["training_min"][col_name])    
-            training_max = int(modelResults.adResultsFrag["training_max"][col_name])
+        for col_name in results["test_chemical"].keys():
+            test_value = int(results["test_chemical"][col_name])
+            training_min = int(results["training_min"][col_name])    
+            training_max = int(results["training_max"][col_name])
 
                     # Determine if the row should be highlighted
             if test_value < training_min or test_value > training_max:
                 outside_ad = True
                         
         adResultsFrag = {}
+        adResultsFrag["adMethod"] = {}
+        adResultsFrag["adMethod"]["name"] = PredictConstants.TEST_FRAGMENTS
+        adResultsFrag["adMethod"]["description"] = "Whether or not the fragment counts are within the range for chemicals in the training set"
+
         adResultsFrag["AD"] = not outside_ad
         adResultsFrag["fragmentTable"] = results     
-        adResultsFrag["method"] = pc.TEST_FRAGMENTS
-        modelResults.applicabilityDomains.append(adResultsFrag)
+        
+        if outside_ad: 
+            adResultsFrag["reasoning"] = "fragment counts were not within the training set range"
+            adResultsFrag["conclusion"] = "Outside"
+        else:
+            adResultsFrag["reasoning"] = "fragment counts were within the training set range"
+            adResultsFrag["conclusion"] = "Inside"
+                
+        modelResults.adEstimates.append(adResultsFrag)
     
     @timer
     def predict_model_smiles(self, model_id, smiles, generate_report=True, useFileAPI=True):
@@ -2019,6 +2013,8 @@ class ModelPredictor:
         model = mi.init_model(model_id)
         
         modelDetails = ModelDetails(model)
+
+        addPerformance(modelDetails)
     
         # Standardize smiles:
         chemical, code = self.standardizeStructure(serverAPIs, smiles, model)
@@ -2035,17 +2031,16 @@ class ModelPredictor:
             chemical["smiles"] = smiles
             img_base64 = self.smiles_to_base64(chemical["smiles"])
             
-            if img_base64:                            
+            if img_base64: 
                 chemical["imageSrc"] = f'data:image/png;base64,{img_base64}'
             else:
                 chemical["imageSrc"] = "N/A"
             
-            modelResults = ModelResults(chemical=chemical, modelDetails=modelDetails)
-            # modelResults.predictionError = "Could not generate QSAR Ready SMILES for "+smiles
+            modelResults = ModelResults()
             modelResults.predictionError = error
-            self.addLinks(modelResults, useFileAPI)
-            
-            return modelResults.to_json(), 200
+            self.addLinks(modelDetails, useFileAPI)
+            report = Report(chemical, modelDetails, modelResults)
+            return report.to_json(), 200
 
         if "smiles" in chemical and "cid" not in chemical:
             img_base64 = self.smiles_to_base64(chemical["smiles"])
@@ -2069,10 +2064,11 @@ class ModelPredictor:
         # print(df_prediction, code)
         
         if code != 200:
-            modelResults = ModelResults(chemical=chemical, modelDetails=modelDetails)
-            self.addLinks(modelResults, useFileAPI)
+            modelResults = ModelResults()
+            report = Report(chemical, modelDetails, modelResults)
+            self.addLinks(modelDetails, useFileAPI)
             modelResults.predictionError = df_prediction
-            return modelResults.to_json(), 200
+            return report.to_json(), 200
     
         # Run model prediction:
         # df_prediction = model.model_details.predictionSet #all chemicals in the model's prediction set, for testing
@@ -2086,22 +2082,27 @@ class ModelPredictor:
         pred_value = pred_results[0]['pred']
         
         # applicability domain calcs:
-        ad_results = None
-        if model.applicabilityDomainName:
-            ad_results = self.determineApplicabilityDomain(model, df_prediction)
-        else:
-            print('AD method for model was not set:', model_id)
     
         # store everything in results:
-        modelResults = ModelResults(chemical, modelDetails)
-        modelResults.chemical = chemical
+        modelResults = ModelResults()
+        
+        if model.applicabilityDomainName:
+            ad_results = self.determineApplicabilityDomain(model, df_prediction)
+            ad_results["method"] = modelDetails.applicabilityDomainName    
+            ad_results["description"] = modelDetails.applicabilityDomainDescription
+            ad_results["analogs"] = self.setExpPredValuesForADAnalogs(model, ad_results["analogs"])
+            self.addDistances(ad_results["analogs"], ad_results["distances"])        
+            del ad_results['distances']
+            modelResults.adEstimates.append(ad_results)
+        else:
+            print('AD method for model was not set:', model_id)
         
         # TODO add values in display units here: 
         modelResults.predictionValueUnitsModel = pred_value
         modelResults.unitsModel = model.unitsModel  # duplicated so displayed near prediction value
 
         # set exp value
-        self.setExpValue(model, modelResults)
+        self.setExpValue(chemical, model, modelResults)
 
         uc = UnitsConverter()
         
@@ -2121,40 +2122,35 @@ class ModelPredictor:
                 
         # print("modelResults.predictionValueUnitsDisplay", modelResults.predictionValueUnitsDisplay)
         
-        ad_results["method"] = modelDetails.applicabilityDomainName    
-        ad_results["analogs"] = self.setExpPredValuesForADAnalogs(model, ad_results["analogs"])
-        self.addDistances(ad_results["analogs"], ad_results["distances"])        
-        del ad_results['distances']
-        
-        modelResults.applicabilityDomains.append(ad_results)
-        
         # print("modelResults", modelResults.to_json)
-        
+        report = Report(chemical, modelDetails, modelResults)
+
         if generate_report:
-            self.addNeighborsFromSets(model, modelResults, df_prediction)
+            report.neighborResultsTraining, report.neighborResultsPrediction = self.addNeighborsFromSets(model, modelResults, df_prediction)
             self.getFragmentAD(df_prediction, model.df_training, modelResults)
-            self.addLinks(modelResults, useFileAPI)
+            self.addLinks(modelDetails, useFileAPI)
             # print(useFileAPI)
             
         # print(results_json)
-        return modelResults.to_json(), 200
+        
+        return report.to_json(), 200
         # return modelResults
     
-    def addLinks(self, modelResults, useFileAPI=True):
+    def addLinks(self, modelDetails, useFileAPI=True):
         
-        modelId = modelResults.modelDetails.modelId
+        modelId = modelDetails.modelId
         
         if USE_TEMPORARY_MODEL_PLOTS:
             script_dir = os.path.dirname(os.path.abspath(__file__))
             file_path_scatter = os.path.join(script_dir, "data/plots", "scatter_plot_" + modelId + ".png")
-            modelResults.modelDetails.imgSrcPlotScatter = pathlib.Path(file_path_scatter).as_uri()
+            modelDetails.imgSrcPlotScatter = pathlib.Path(file_path_scatter).as_uri()
             file_path_histogram = os.path.join(script_dir, "data/plots", "histogram_" + modelId + ".png")
-            modelResults.modelDetails.imgSrcPlotHistogram = pathlib.Path(file_path_histogram).as_uri()
+            modelDetails.imgSrcPlotHistogram = pathlib.Path(file_path_histogram).as_uri()
             
         elif useFileAPI:
             # these need to be added to ctx api:
-            modelResults.modelDetails.imgSrcPlotScatter = urlCtxApi + "?typeId=3&modelId=" + modelResults.modelDetails.modelId
-            modelResults.modelDetails.imgSrcPlotHistogram = urlCtxApi + "?typeId=4&modelId=" + modelResults.modelDetails.modelId
+            modelDetails.imgSrcPlotScatter = urlCtxApi + "?typeId=3&modelId=" + modelDetails.modelId
+            modelDetails.imgSrcPlotHistogram = urlCtxApi + "?typeId=4&modelId=" + modelDetails.modelId
             
         else:
             # TODO generate plot and hardcode in the html
@@ -2162,8 +2158,8 @@ class ModelPredictor:
             # modelResults.modelDetails.imgSrcPlotScatter="data:image/png;base64,"+plot_base64
             pass
         
-        modelResults.modelDetails.urlQMRF = urlCtxApi + "?typeId=1&modelId=" + modelResults.modelDetails.modelId
-        modelResults.modelDetails.urlExcelSummary = urlCtxApi + "?typeId=2&modelId=" + modelResults.modelDetails.modelId
+        modelDetails.urlQMRF = urlCtxApi + "?typeId=1&modelId=" + modelDetails.modelId
+        modelDetails.urlExcelSummary = urlCtxApi + "?typeId=2&modelId=" + modelDetails.modelId
 
     @timer
     def standardizeStructure(self, serverAPIs, smiles, model: Model):
@@ -2322,7 +2318,22 @@ class ModelPredictor:
         distances = list(output["distances"][0])
 
         results = {"AD":AD, "analogs": analogsAD, "distances": distances, "AD_Cutoff": ad_cutoff}
-                    
+        results["adMethod"] = {}
+        results["adMethod"]["name"] = model.applicabilityDomainName
+        results["adMethod"]["description"] = model.applicabilityDomainDescription
+
+        if model.applicabilityDomainName == PredictConstants.Applicability_Domain_TEST_Embedding_Euclidean\
+         or model.applicabilityDomainName == PredictConstants.Applicability_Domain_TEST_All_Descriptors_Euclidean:
+            
+            results["value"] = sum(distances) / len(distances)
+            
+            if AD == True: 
+                results["conclusion"] = "Inside"
+                results["reasoning"] = f"Avg. distance ({results['value']:.2f}) < {ad_cutoff:.2f}" 
+            else: 
+                results["conclusion"] = "Outside"
+                results["reasoning"] = f"Avg. distance ({results['value']:.2f}) > {ad_cutoff:.2f}"
+                
         # print(results)
 
         # print(json.dumps(dicts,indent=4))
@@ -2424,6 +2435,7 @@ def printFirstRowDF(df):
     print(json.dumps(first_row_dict, indent=4))
     return first_row_dict
 
+
 def runRandomSample():
 
     OUTPUT_JSON = "dsstox smiles sample.json"
@@ -2457,33 +2469,32 @@ def runExample():
     global USE_TEMPORARY_MODEL_PLOTS
     USE_TEMPORARY_MODEL_PLOTS = False
 
-    # model_id = str(1065)  # HLC, smallest dataset
+    model_id = str(1065)  # HLC, smallest dataset
     # model_id = str(1066)  # WS
     # model_id = str(1067)  # VP
     # model_id = str(1068)  # BP
-    model_id = str(1069)  # LogP/LogKow
+    # model_id = str(1069)  # LogP/LogKow
     # model_id = str(1070) # MP, biggest dataset
     # model_id = str(1615) # Koc, MLR model
 
     smiles_list = []
     
     smiles_list.append("c1ccccc1")  # benzene
-    smiles_list.append("OC(=O)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)F") # PFOA
-    smiles_list.append("COCOCOCOCCCCCCOCCCCOCOCOCCC") # not in DssTox
+    smiles_list.append("OC(=O)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)F")  # PFOA
+    smiles_list.append("COCOCOCOCCCCCCOCCCCOCOCOCCC")  # not in DssTox
     # smiles_list.append("CCCCCCCc1ccccc1") # one of neighbors for test set doesnt have matching dtxsid for the dtxcid (not in dsstox_records table)
-    smiles_list.append("C[Sb]") # passes standardizer, fails test descriptors
-    smiles_list.append("C[As]C[As]C") # violates frag AD
+    smiles_list.append("C[Sb]")  # passes standardizer, fails test descriptors
+    smiles_list.append("C[As]C[As]C")  # violates frag AD
     smiles_list.append("XX")  # fails standardizer
-    smiles_list.append("CCC.Cl") # not mixture according to qsarReadySmiles
-    smiles_list.append("CCCCC.CCCC") # mixture according to qsarReadySmiles
-
-    # For LogP model, following use additional code to get dsstox record for neighbor / analogs:
-    smiles_list.append("[H][C@]12[C@@H](Cl)[C@H](Cl)[C@](C(Cl)Cl)([C@@H](Cl)[C@@H]1Cl)C2(C)C(Cl)Cl") # DTXCID001783033 
-    smiles_list.append("[H][C@]12O[C@@]1([H])[C@@]1([H])[C@@]([H])([C@H]2Cl)[C@@]2(Cl)C(Cl)=C(Cl)[C@]1(Cl)C2(Cl)Cl") #DTXCID501783733
-    smiles_list.append("[H][C@]12CC(Cl)(Cl)[C@](CCl)([C@@H](Cl)[C@@H]1Cl)C2(CCl)CCl") # DTXCID501782985
-    smiles_list.append("[H][C@]12CO[S@@](=O)OC[C@@]1([H])[C@@]1(Cl)C(Cl)=C(Cl)[C@]2(Cl)C1(Cl)Cl") #DTXCID601783831, fails standardization!
-
+    smiles_list.append("CCC.Cl")  # not mixture according to qsarReadySmiles
+    smiles_list.append("CCCCC.CCCC")  # mixture according to qsarReadySmiles
     
+    # For LogP model, following use additional code to get dsstox record for neighbor / analogs:
+    smiles_list.append("[H][C@]12[C@@H](Cl)[C@H](Cl)[C@](C(Cl)Cl)([C@@H](Cl)[C@@H]1Cl)C2(C)C(Cl)Cl")  # DTXCID001783033 
+    smiles_list.append("[H][C@]12O[C@@]1([H])[C@@]1([H])[C@@]([H])([C@H]2Cl)[C@@]2(Cl)C(Cl)=C(Cl)[C@]1(Cl)C2(Cl)Cl")  # DTXCID501783733
+    smiles_list.append("[H][C@]12CC(Cl)(Cl)[C@](CCl)([C@@H](Cl)[C@@H]1Cl)C2(CCl)CCl")  # DTXCID501782985
+    smiles_list.append("[H][C@]12CO[S@@](=O)OC[C@@]1([H])[C@@]1(Cl)C(Cl)=C(Cl)[C@]2(Cl)C1(Cl)Cl")  # DTXCID601783831, fails standardization!
+
     current_directory = os.getcwd()
     folder_path = os.path.join(current_directory, "data", "reports")
     os.makedirs(os.path.dirname(folder_path), exist_ok=True)
@@ -2492,19 +2503,100 @@ def runExample():
     
     for smiles in smiles_list:
         print("\nRunning " + smiles)        
-    
         runChemical(mp, model_id, smiles, folder_path)
+        
+    # for smiles in smiles_list:
+    #     for model_id in range(1065, 1071):
+    #         print("\nRunning " + smiles)        
+    #         runChemical(mp, str(model_id), smiles, folder_path)
 
+
+def addPerformance(md:ModelDetails):
     
+    ms = md.modelStatistics
+        
+    md.performance = {}
+    md.performance["train"] = {}
+    md.performance["train"]["R2"] = ms["PearsonRSQ_Training"]
+    md.performance["train"]["RMSE"] = ms["RMSE_Training"]
+    md.performance["train"]["MAE"] = ms["MAE_Training"]
+    
+    md.performance["fiveFoldICV"] = {}
+    md.performance["fiveFoldICV"]["R2"] = ms["PearsonRSQ_CV_Training"]
+    md.performance["fiveFoldICV"]["RMSE"] = ms["RMSE_CV_Training"]
+    md.performance["fiveFoldICV"]["MAE"] = ms["MAE_CV_Training"]
+    
+    md.performance["external"] = {}
+    md.performance["external"]["R2"] = ms["PearsonRSQ_Test"]
+    md.performance["external"]["RMSE"] = ms["RMSE_Test"]
+    md.performance["external"]["MAE"] = ms["MAE_Test"]
+    
+    md.performance["externalAD"] = {}
+    md.performance["externalAD"]["MAE_inside_AD"] = ms["MAE_Test_inside_AD"]
+    md.performance["externalAD"]["MAE_outside_AD"] = ms["MAE_Test_outside_AD"]
+    md.performance["externalAD"]["Fraction_inside_AD"] = ms["Coverage_Test"]
+    
+    md.modelStatistics = None
+    # md.pop("modelStatistics")
+
+# def create_standardized_report(modelResults2):
+#
+#     modelResults = copy.deepcopy(modelResults2)
+#
+#     report = {}
+#     report["chemicalIdentifiers"] = modelResults["chemical"]
+#
+#     md = addPerformance(modelResults)
+#
+#     report["modelDetails"] = md
+#
+#     md["modelSourceName"] = md.pop("modelSource")
+#     md["propertyIsBinary"] = md.pop("is_binary")
+#
+#     mr = {}
+#     mr["experimentalValueUnitsModel"] = modelResults["experimentalValueUnitsModel"]
+#     mr["experimentalValueUnitsDisplay"] = modelResults["experimentalValueUnitsDisplay"]
+#     mr["experimentalValueSet"] = modelResults["experimentalValueSet"]
+#     mr["predictionValueUnitsModel"] = modelResults["predictionValueUnitsModel"]
+#     mr["unitsModel"] = modelResults["unitsModel"]
+#     mr["predictionValueUnitsDisplay"] = modelResults["predictionValueUnitsDisplay"]
+#     mr["unitsDisplay"] = modelResults["unitsDisplay"]
+#     mr["predictionError"] = modelResults["predictionError"]
+#
+#     mr["adEstimates"] = modelResults["applicabilityDomains"]
+#
+#     for adEstimate in mr["adEstimates"]:
+#         adEstimate["adMethod"] = {}
+#         adEstimate["adMethod"]["name"] = adEstimate.pop("method") 
+#         adEstimate["adMethod"]["description"] = adEstimate.pop("description")
+#         adEstimate.pop("AD")
+#
+#     report["modelResults"] = mr
+#
+#     # print(type(modelResults["neighborsForSets"]),len(modelResults["neighborsForSets"]))
+#
+#     if len(modelResults["neighborsForSets"])>0:
+#         report["neighborResultsPrediction"] = modelResults["neighborsForSets"][0]
+#         report["neighborResultsPrediction"]["title"] = "Nearest Neighbors from Test (External Predictions)" 
+#         report["neighborResultsPrediction"]["unitNeighbor"] = modelResults["unitsModel"]
+#
+#         report["neighborResultsTraining"] = modelResults["neighborsForSets"][1]
+#         report["neighborResultsTraining"]["title"] = "Nearest Neighbors from Training (Cross Validation Predictions)" 
+#         report["neighborResultsTraining"]["unitNeighbor"] = modelResults["unitsModel"]
+#
+#     return report
+
+
 def runChemical(mp, model_id, smiles, folder_path):
     
     output, code = mp.predict_model_smiles(model_id, smiles)
 
-    modelResults = json.loads(output)
-    chemical = modelResults["chemical"]
+    report = json.loads(output)
+    chemical = report["chemicalIdentifiers"]
     
     chemId = chemical.get("chemId", "N/A")
     file_name = model_id + "_" + chemId + ".json"
+    
     file_path = os.path.join(folder_path, file_name)
     
     # Ensure the directory exists
@@ -2513,6 +2605,12 @@ def runChemical(mp, model_id, smiles, folder_path):
         f.write(output)
         
     # webbrowser.open(f'file://{file_path}')
+    # file_name2 = model_id + "_" + chemId + "_2.json"
+    # file_path2 = os.path.join(folder_path, file_name2)
+    # report = create_standardized_report(modelResults)    
+    # with open(file_path2, 'w', encoding='utf-8') as f:
+    #     f.write(json.dumps(report, indent=4))
+    # webbrowser.open(file_path2)
     
     rc = ReportCreator()
     
@@ -2520,7 +2618,7 @@ def runChemical(mp, model_id, smiles, folder_path):
         modelResults = json.load(file)
         # print(type(modelResults))
         # print(modelResults)
-        html = rc.create_html_report(mr=modelResults)
+        html = rc.create_html_report(report=modelResults)
 
         file_path_html = file_path.replace(".json", ".html")
         with open(file_path_html, 'w', encoding='utf-8') as f:
@@ -2595,34 +2693,33 @@ def test_get_exp_data():
     # datasetName = 'LogP v1 modeling'
     datasetName = 'WS v1 modeling'
     qsarSmiles = 'C#C'
-    propertyName = pc.WATER_SOLUBILITY
+    propertyName = PredictConstants.WATER_SOLUBILITY
     
     session = getSession()
     edg = ExpDataGetter()
     df_pv, param_names = edg.get_raw_exp_data(session, datasetName, qsarSmiles)
-    df_pv.to_json(path_or_buf=temp_file_path,orient='records',indent=4)    
+    df_pv.to_json(path_or_buf=temp_file_path, orient='records', indent=4)    
             
     # df_pv = pd.read_json(temp_file_path,orient='records')
     
     # print(df_pv.to_json(orient="records", indent=2))
                 
-    rc=ReportCreator()
-    es=rc.RawExpDataSection()    
-    html=es.create_exp_records_webpage(df_pv, param_names, title_text="Experimental Property Records for "+propertyName)
+    rc = ReportCreator()
+    es = rc.RawExpDataSection()    
+    html = es.create_exp_records_webpage(df_pv, param_names, title_text="Experimental Property Records for " + propertyName)
     
     temp_file_path = "data/reports/property_records.html"
     with open(temp_file_path, "w", encoding="utf-8") as f:
         f.write(html)
         webbrowser.open('file://' + os.path.realpath(temp_file_path))
     
-    
     # printFirstRowDF(df)
 
 
 if __name__ == '__main__':
     
-    # runExample()
-    runRandomSample()
+    runExample()
+    # runRandomSample()
     
     ######################################################################################################
     # mi=ModelInitializer()

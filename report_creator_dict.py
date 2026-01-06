@@ -10,6 +10,7 @@ from dominate.tags import *
 import json
 import math
 from typing import List, Dict, Any, Optional        
+import traceback
 
 import matplotlib
 matplotlib.use('Agg')  # Use a non-interactive backend
@@ -30,7 +31,7 @@ import numpy as np
 import base64, io
 
 
-def createAnalogTile(analog, i, mr, align):
+def createAnalogTile(analog, i, md, align):
     # used in two different report sections
         
     # analog_td = td(align=align, width="10%")
@@ -41,16 +42,14 @@ def createAnalogTile(analog, i, mr, align):
     else:
         analog_td += b("Neighbor:"), " " + str(i + 1), br()  # TODO: replace with similarity / Euclidean distance
         
-    md = mr["modelDetails"]
-    
-    if md["is_binary"]:
+    if md["propertyIsBinary"]:
         exp = get_formatted_value(True, analog["exp"], -1)
         analog_td += b("Measured: "), exp, br()    
     else:
         exp = get_formatted_value(False, analog["exp"], 3)
         analog_td += b("Measured: "), exp, br()
 
-    if md["is_binary"]:
+    if md["propertyIsBinary"]:
         pred = get_formatted_value(True, analog["pred"], -1)
         analog_td += b("Predicted: "), pred, br()    
     else:
@@ -58,13 +57,13 @@ def createAnalogTile(analog, i, mr, align):
         analog_td += b("Predicted: "), pred, br()
 
     if "cid" in analog:
-        imgTitle =  "Analog Image for " + analog["name"]
+        imgTitle = "Analog Image for " + analog["name"]
         analog_td += img(src=imgURLCid + analog["cid"], border="1", alt=imgTitle, title=imgTitle, width="150", height="150"), br()
 
     if "sid" in analog:
         analog_td += a(analog["sid"], href=urlChemicalDetails + analog["sid"], title=analog["sid"] + ' on the Chemicals Dashboard', target="_blank")
     elif "cid" in analog:
-        analog_td +=span(analog["cid"])
+        analog_td += span(analog["cid"])
         
 
 def get_formatted_value(format_as_integer: bool, dvalue: float, nsig: int):
@@ -123,7 +122,7 @@ def format2(value):
     return format(value, ".2f")
             
         
-def fmt_val(v: Any, default: str = "—") -> str:
+def fmt_val(v: Any, default: str="—") -> str:
     """Format a value for display; replace None/NaN/empty with a placeholder."""
     if v is None:
         return default
@@ -133,7 +132,7 @@ def fmt_val(v: Any, default: str = "—") -> str:
     return s if s.strip() != "" else default
             
 
-def fmt_num(n: Optional[float], precision: int = 6) -> str:
+def fmt_num(n: Optional[float], precision: int=6) -> str:
     """Pretty format a numeric value if present; else placeholder."""
     if n is None or (isinstance(n, float) and math.isnan(n)):
         return "—"
@@ -141,7 +140,6 @@ def fmt_num(n: Optional[float], precision: int = 6) -> str:
     if isinstance(n, (int,)) or (isinstance(n, float) and n.is_integer()):
         return str(int(n))
     return f"{round(float(n), precision)}"
-
 
 
 class ReportCreator:
@@ -168,11 +166,13 @@ class ReportCreator:
     
     class ModelResultsSection:
         
-        def create_model_results_table(self, mr):
+        def create_model_results_table(self, report):
             
-            # print(mr.to_json())
+            # print(report.to_json())
             
-            md = mr["modelDetails"]
+            md = report["modelDetails"]
+            
+            mr = report["modelResults"]
         
             with table(border="0", width="100%"):
                 with tbody():
@@ -186,8 +186,8 @@ class ReportCreator:
                         
                         my_td += b("Model name:"), " " + md["modelName"],
                         
-                        # link_qmrf = model_file_api + "?modelId="+mr["modelDetails"].modelId+"&typeId=1"
-                        # link_excel = model_file_api + "?modelId="+mr["modelDetails"].modelId+"&typeId=2"
+                        # link_qmrf = model_file_api + "?modelId="+report["modelDetails"].modelId+"&typeId=1"
+                        # link_excel = model_file_api + "?modelId="+report["modelDetails"].modelId+"&typeId=2"
                         link_qmrf = md["urlQMRF"]
                         link_excel = md["urlExcelSummary"]
                         
@@ -204,11 +204,11 @@ class ReportCreator:
                         my_td += b("Property description:"), " " + md["propertyDescription"], br()
         
                         if mr["experimentalValueUnitsModel"]: 
-                            str_exp_model_units = get_formatted_value(md["is_binary"], mr["experimentalValueUnitsModel"], 3)
+                            str_exp_model_units = get_formatted_value(md["propertyIsBinary"], mr["experimentalValueUnitsModel"], 3)
                             my_td += b("Experimental value:"), " " + str_exp_model_units + " " + md["unitsModel"]
                         
                             if md["unitsDisplay"] != md["unitsModel"]:
-                                str_exp_display_units = get_formatted_value(md["is_binary"], mr["experimentalValueUnitsDisplay"], 3)
+                                str_exp_display_units = get_formatted_value(md["propertyIsBinary"], mr["experimentalValueUnitsDisplay"], 3)
                                 my_td += " = " + str_exp_display_units + " " + md["unitsDisplay"]
     
                             my_td += em(" (in " + mr["experimentalValueSet"].lower() + " set)"), br()
@@ -216,7 +216,7 @@ class ReportCreator:
                         else:
                             my_td += b("Experimental value:"), " N/A", br()
             
-                        str_pred_model_units = get_formatted_value(md["is_binary"], mr["predictionValueUnitsModel"], 3)
+                        str_pred_model_units = get_formatted_value(md["propertyIsBinary"], mr["predictionValueUnitsModel"], 3)
                         
                         if mr["predictionError"]:
                             my_td += b("Predicted value:"), " N/A", br()
@@ -226,14 +226,14 @@ class ReportCreator:
                         else:
                             my_td += b("Predicted value:"), " " + str_pred_model_units + " " + md["unitsModel"]
                             if md["unitsDisplay"] != md["unitsModel"]:
-                                str_pred_display_units = get_formatted_value(md["is_binary"], mr["predictionValueUnitsDisplay"], 3)
+                                str_pred_display_units = get_formatted_value(md["propertyIsBinary"], mr["predictionValueUnitsDisplay"], 3)
                                 my_td += " = " + str_pred_display_units + " " + md["unitsDisplay"], br()
                             else:
                                 my_td += br()
                             
-                            self.addApplicabilityDomains(mr, my_td)
+                            self.addApplicabilityDomains(md, mr, my_td)
                         
-        def addApplicabilityDomains(self, mr, my_td):
+        def addApplicabilityDomains(self, md, mr, my_td):
             # my_td += br()
             my_td += b("Applicability domains:")
             my_td += br()
@@ -241,16 +241,21 @@ class ReportCreator:
             with my_td:
                 with table(style="table-layout: fixed; width: 100%; border: 0; padding: 0; margin: 0; border-collapse: collapse;"):
                     with tr():
-                        for ad in mr["applicabilityDomains"]:
+                        for ad in mr["adEstimates"]:
+                            
                             with td(style="vertical-align: top; padding: 0; margin: 0; padding-left: 20px;"):
-                                if ad["method"] == pc.Applicability_Domain_TEST_Embedding_Euclidean:
-                                    self.addAnalogADTable(ad, mr)
-                                elif ad["method"] == pc.TEST_FRAGMENTS:
+                                                                
+                                method = ad["adMethod"]["name"]
+                                
+                                if method == pc.Applicability_Domain_TEST_Embedding_Euclidean:
+                                    # print(method,"Distance") 
+                                    self.addAnalogADTable(ad, md)
+                                elif method == pc.TEST_FRAGMENTS:
                                     self.addFragmentADTable(ad)
+                                else:
+                                    print("TODO handle " + method + " in addApplicabilityDomains")
     
-        def addAnalogADTable(self, ad, mr):
-            
-            md = mr["modelDetails"]
+        def addAnalogADTable(self, ad, md):
             
             if md["applicabilityDomainName"] == pc.Applicability_Domain_TEST_Embedding_Euclidean: 
                 # b("AD measure: "), span("If the avg. Euclidean distance of training set analogs  < "+format2(ad['AD_Cutoff'])+" (in terms of model variables"), br()
@@ -261,20 +266,15 @@ class ReportCreator:
             with span() as container:
                 container.add(b("AD result: "))
                 
-                if ad["AD"]: 
+                if ad["conclusion"] == "Inside": 
                     container.add(span("Inside AD", style="color: green;"))
-                    container.add(" (Avg. distance < ")
-                    container.add(b(em(format2(ad['AD_Cutoff']))))
-                    container.add(")")
+                    container.add(" (" + ad["reasoning"] + ")")
                 else:
                     container.add(span("Outside AD", style="color: red;"))                    
-                    container.add(" (Avg. distance > ")
-                    container.add(b(em(format2(ad['AD_Cutoff']))))
-                    container.add(")")
+                    container.add(" (" + ad["reasoning"] + ")")
                             
             br(), br()
-
-            md = mr["modelDetails"]        
+            
             # Table 1: Analogs from Training Set
             with table():
                 cap = caption()
@@ -289,16 +289,16 @@ class ReportCreator:
                     tr()
                     analogs = ad["analogs"]
                     for i in range(len(analogs)):
-                        createAnalogTile(analogs[i], i, mr, "left")                                
+                        createAnalogTile(analogs[i], i, md, "left")                                
     
         def addFragmentADTable(self, ad):
-
+            
             b("AD measure: "), span("If the fragment counts are within the range for the training set"), br()
                         
             with span() as container:
                 container.add(b("AD result: "))
                 
-                if ad["AD"]:
+                if ad["conclusion"] == "Inside":
                     container.add(span("Inside AD", style="color: green;"))
                     container.add(" (fragment counts were within the training set range)")
                 else:
@@ -367,7 +367,9 @@ class ReportCreator:
     
         def addStatsTableTraining(self, md): 
             
-                ms = md["modelStatistics"]
+                # ms = md["modelStatistics"]
+                
+                ms = md["performance"]
             
                 with table(border=1, cellpadding="0", cellspacing="0", width="100%"):
                     caption("Model Training Set Statistics")
@@ -387,18 +389,19 @@ class ReportCreator:
                                             
                         with tr():
                             # Training set stats
-                            td(format2(ms["PearsonRSQ_Training"]), align="center")
-                            td(format2(ms["RMSE_Training"]), align="center")
-                            td(format2(ms["MAE_Training"]), align="center")
+                            
+                            td(format2(ms["train"]["R2"]), align="center")
+                            td(format2(ms["train"]["RMSE"]), align="center")
+                            td(format2(ms["train"]["MAE"]), align="center")
             
                             # CV stats
-                            td(format2(ms["PearsonRSQ_CV_Training"]), align="center")
-                            td(format2(ms["RMSE_CV_Training"]), align="center")
-                            td(format2(ms["MAE_CV_Training"]), align="center")
+                            td(format2(ms["fiveFoldICV"]["R2"]), align="center")
+                            td(format2(ms["fiveFoldICV"]["RMSE"]), align="center")
+                            td(format2(ms["fiveFoldICV"]["MAE"]), align="center")
     
         def addStatsTableTest(self, md): 
         
-            ms = md["modelStatistics"]
+            ms = md["performance"]
         
             with table(border=1, cellpadding="0", cellspacing="0", width="100%"):
                     caption("Model Test Set Statistics")
@@ -423,18 +426,16 @@ class ReportCreator:
             
                         with tr():
             
-                            td(format2(ms["PearsonRSQ_Test"]), align="center")
-                            td(format2(ms["RMSE_Test"]), align="center")
-                            td(format2(ms["MAE_Test"]), align="center")
+                            td(format2(ms["external"]["R2"]), align="center")
+                            td(format2(ms["external"]["RMSE"]), align="center")
+                            td(format2(ms["external"]["MAE"]), align="center")
     
                             # AD stats
-                            td(format2(ms["MAE_Test_inside_AD"]), align="center")
-                            td(format2(ms["MAE_Test_outside_AD"]), align="center")
-                            td(format2(ms["Coverage_Test"]), align="center")    
+                            td(format2(ms["externalAD"]["MAE_inside_AD"]), align="center")
+                            td(format2(ms["externalAD"]["MAE_outside_AD"]), align="center")
+                            td(format2(ms["externalAD"]["Fraction_inside_AD"]), align="center")    
     
     class RawExpDataSection:
-            
-        
         
         def safe_text(self, v, placeholder="N/A"):
             # None
@@ -454,16 +455,15 @@ class ReportCreator:
             s = str(v)
             
             return s if s.strip() else placeholder
-        
 
         def addSource(self, rec, fieldName):
-            source = self.safe_text(rec[fieldName+"_name"])
+            source = self.safe_text(rec[fieldName + "_name"])
             
             # print(source)
             
-            if source and source!="N/A":
-                description = self.safe_text(rec[fieldName+"_description"])
-                url = self.safe_text(rec[fieldName+"_url"])
+            if source and source != "N/A":
+                description = self.safe_text(rec[fieldName + "_description"])
+                url = self.safe_text(rec[fieldName + "_url"])
                 
                 with li(cls="no-indent"):
                     if url != "N/A" and description != "N/A":
@@ -474,7 +474,6 @@ class ReportCreator:
                         span(source)
 
             return source
-
 
         def addParam(self, params, param_name):
             param = params[param_name]
@@ -500,11 +499,11 @@ class ReportCreator:
             except Exception as e:
                 print(f"An unexpected error occurred: {e}")
 
-        def addParams(self,rec, param_names):
+        def addParams(self, rec, param_names):
             with td():
                 params = rec["params"]
                 if isinstance(params, dict):
-                    with ul(cls="no-indent"):                        
+                    with ul(cls="no-indent"): 
                         for param_name in param_names:
                             if param_name in params:
                                 self.addParam(params, param_name)
@@ -513,13 +512,13 @@ class ReportCreator:
         
         def add_property_value_record(self, rec: Dict[str, Any], param_names) -> Any:
 
-            keys = ("source_chemical_name", "source_casrn", "source_smiles", "source_dtxsid","source_dtxrid")
+            keys = ("source_chemical_name", "source_casrn", "source_smiles", "source_dtxsid", "source_dtxrid")
             identifiers = [self.safe_text(rec.get(k), placeholder=None) for k in keys]
             identifiers = [v for v in identifiers if v]  
             with td():
                 with ul(cls="no-indent"):
                     for identifier in identifiers:
-                        li(identifier,cls="no-indent")
+                        li(identifier, cls="no-indent")
                         
             property_value = float(self.safe_text(rec["property_value"]))
             str_property_value = get_formatted_value(False, property_value, 3)
@@ -528,24 +527,23 @@ class ReportCreator:
             
             with td():
                 with ul(cls="no-indent"):
-                    self.addSource(rec,"public_source")
-                    self.addSource(rec,"public_source_original")
-                    self.addSource(rec,"literature_source")
+                    self.addSource(rec, "public_source")
+                    self.addSource(rec, "public_source_original")
+                    self.addSource(rec, "literature_source")
                     
                     direct_url = self.safe_text(rec["direct_url"])
                     if direct_url != "N/A":
-                        li(a("Direct link", href=direct_url, title="Direct link"),cls="no-indent", target="_blank")
+                        li(a("Direct link", href=direct_url, title="Direct link"), cls="no-indent", target="_blank")
                         
                     brief_citation = self.safe_text(rec["brief_citation"])
                     
-                    if brief_citation  != "N/A":
-                        li(span(brief_citation,cls="no-indent"))
+                    if brief_citation != "N/A":
+                        li(span(brief_citation, cls="no-indent"))
                                     
             self.addParams(rec, param_names)        
             
             # literature_source_name=self.safe_text(rec["literature_source_name"])
             # public_source_original_name=self.safe_text(rec["public_source_original_name"])
-            
 
         def create_experimental_records_table(self, records, param_names):
                 # caption("Results for neighbors compared with entire set")
@@ -569,9 +567,6 @@ class ReportCreator:
                         else:
                             with tr():
                                 self.add_property_value_record(rec, param_names)
-                        
-
-        
 
         def getPageStyle(self):
             return """
@@ -604,8 +599,7 @@ table.compact td {
 }
 """
 
-
-        def create_exp_records_webpage(self, records: List[Dict[str, Any]], param_names, title_text: str = "Experimental Records") -> str:
+        def create_exp_records_webpage(self, records: List[Dict[str, Any]], param_names, title_text: str="Experimental Records") -> str:
             """Render a list of df_pv-like records into an HTML page and return the HTML string."""
             
             doc = document(title=title_text)
@@ -617,69 +611,62 @@ table.compact td {
             
             with doc:
                 h3(title_text)
-                self.create_experimental_records_table(records2,param_names)
+                self.create_experimental_records_table(records2, param_names)
             return doc.render()
-
 
         def writeExpData(self):
             pass
-        
     
     class NeighborSection:
     
-        def write_neighbors(self, mr, neighborsInSet):
+        def write_neighbors(self, report, neighborsInSet):
+            
+            nset = neighborsInSet["set"]
+            
+            mr = report["modelResults"]
+            md = report["modelDetails"]
+            chemical = report["chemicalIdentifiers"]                     
                 
-                md = mr["modelDetails"]        
-                
-                with table(border="0", width="100%"):
-                                            
-                    with tbody():
+            with table(border="0", width="100%"):
+                                        
+                with tbody():
+                    
+                    with tr(bgcolor="black"):
+                        with td(colspan="4"):
+                            font(neighborsInSet["title"], color="white")
+                    with tr(): 
                         
-                        with tr(bgcolor="black"):
-                            with td(colspan="4"):
-                                set = neighborsInSet["set"] 
-                                if set == "Test":
-                                    font("Nearest Neighbors from " + set + " (External Predictions)", color="white")
-                                else:
-                                    font("Nearest Neighbors from " + set + " (Cross Validation Predictions)", color="white")    
+                        with td(valign="top"):
+                            br(), br()                  
+                            plotTitle = "Nearest neighbors from " + nset
+                            plot_base64 = self.generateScatterPlot(neighborsInSet["neighbors"], md["unitsModel"], plotTitle, "Exp. vs Pred.")        
+                            img(src=f'data:image/png;base64,{plot_base64}', alt='Plot of experimental vs. predicted for ' + nset + " set", height="400")
+                        
+                        td_tc = td(valign="top")
+                        self.createTestChemicalTile(td_tc, chemical, md, mr, "center")
+                        self.addMaeTable(td_tc, md, neighborsInSet)
+                                                
+                        with td():
+                            self.addNeighborTileTable(report, neighborsInSet["neighbors"])    
                                 
-                        with tr(): 
-                            
-                            with td(valign="top"):
-                                br(), br()                  
-                                plotTitle = "Nearest neighbors from " + set
-                                plot_base64 = self.generateScatterPlot(neighborsInSet["neighbors"], md["unitsModel"], plotTitle, "Exp. vs Pred.")        
-                                img(src=f'data:image/png;base64,{plot_base64}', alt='Plot of experimental vs. predicted for ' + set + " set", height="400")
-                            
-                            td_tc = td(valign="top")
-                            self.createTestChemicalTile(td_tc, mr, "center")
-                            self.addMaeTable(td_tc, mr, neighborsInSet)
-                                                    
-                            with td():
-                                self.addNeighborTileTable(mr, neighborsInSet["neighbors"])    
-                                
-        def createTestChemicalTile(self, td_tc, mr, align):
+        def createTestChemicalTile(self, td_tc, chemical, md, mr, align):
                 
-                # print(set, i)
                 td_tc += br(), br()
-                chemical = mr["chemical"]
                 td_tc += b("Test chemical"), br()
-                
-                md = mr["modelDetails"]
                 
                 exp_float = mr["experimentalValueUnitsModel"]
                 pred_float = mr["predictionValueUnitsModel"]
                 
                 # print(exp_float, pred_float)
                 
-                if md["is_binary"]:
+                if md["propertyIsBinary"]:
                     exp = get_formatted_value(True, exp_float, -1)
                     td_tc += b("Measured: "), exp, br()    
                 else:
                     exp = get_formatted_value(False, exp_float, 3)
                     td_tc += b("Measured: "), exp, br()
         
-                if md["is_binary"]:
+                if md["propertyIsBinary"]:
                     pred = get_formatted_value(True, pred_float, -1)
                     td_tc += b("Predicted: "), pred, br()    
                 else:
@@ -688,14 +675,14 @@ table.compact td {
                 
                 if chemical.get("sid", "N/A") != "N/A": 
                     title = "Image for " + chemical["name"]
-                    td_tc += img(src=chemical["imageSrc"], border="1", alt=title, title = title, width="150", height="150"), br()
+                    td_tc += img(src=chemical["imageSrc"], border="1", alt=title, title=title, width="150", height="150"), br()
                     td_tc += a(chemical["chemId"], href=urlChemicalDetails + chemical["sid"], title=chemical["sid"] + ' on the Chemicals Dashboard', target="_blank")
                 else:
                     title = "Image for " + chemical["smiles"]
                     td_tc += img(src=chemical["imageSrc"], border="1", alt=title, title=title, width="150", height="150"), br()
                     td_tc += chemical["chemId"]        
     
-        def addMaeTable(self, td_tc, mr, neighborsInSet):
+        def addMaeTable(self, td_tc, md, neighborsInSet):
                 
                 with td_tc:
                     p()
@@ -716,15 +703,15 @@ table.compact td {
                                 td("Entire set")
                                 
                                 if "train" in neighborsInSet["set"].lower():
-                                    td(get_formatted_value(False, mr["modelDetails"]["modelStatistics"]["MAE_CV_Training"], 3))    
+                                    td(get_formatted_value(False, md["performance"]["fiveFoldICV"]["MAE"], 3))    
                                 else:
-                                    td(get_formatted_value(False, mr["modelDetails"]["modelStatistics"]["MAE_Test"], 3))
+                                    td(get_formatted_value(False, md["performance"]["external"]["MAE"], 3))
                 
-                    p('* Mean absolute error in ' + mr["modelDetails"]["unitsModel"])
+                    p('* Mean absolute error in ' + md["unitsModel"])
                     
-        def addNeighborTileTable(self, mr, neighbors):
+        def addNeighborTileTable(self, report, neighbors):
                 
-                md = mr["modelDetails"]        
+                md = report["modelDetails"]        
         
                 with table(border="0", width="100%", cellpadding=10):
                     caption("Neighbor values in " + md["unitsModel"])
@@ -732,16 +719,16 @@ table.compact td {
                     with tr():
                         for i in range(0, 5):
                             analog = neighbors[i]
-                            createAnalogTile(analog, i, mr, "left")
+                            createAnalogTile(analog, i, md, "left")
                     
                     with tr():
                         for i in range(5, 10):
                             
-                            if i>=len(neighbors):
-                                print(mr["chemical"]["chemId"]+" insufficient neighbors") #TODO figure out why this happens
+                            if i >= len(neighbors):
+                                print(report["chemicalIdentifiers"]["chemId"] + " insufficient neighbors")  # TODO figure out why this happens
                             else:
                                 analog = neighbors[i]
-                                createAnalogTile(analog, i, mr, "left")
+                                createAnalogTile(analog, i, md, "left")
 
         def generateScatterPlot(self, modelPredictions, unitName, plotTitle, seriesName):
             
@@ -838,9 +825,9 @@ table.compact td {
         modelResults = json.loads(reportJson)
         return self.create_html_report(modelResults)
     
-    def write_first_row(self, modelResults):
+    def write_first_row(self, report):
         
-        chemical = modelResults["chemical"]
+        chemical = report["chemicalIdentifiers"]
     
         with table(style="table-layout: fixed; width: 100%; border: 0px"):
             with tbody():
@@ -862,52 +849,66 @@ table.compact td {
                     mrs = self.ModelResultsSection()
                     
                     with td(valign="top"):
-                        mrs.create_model_results_table(modelResults)
+                        mrs.create_model_results_table(report)
     
     # def create_report(self, model: Model, modelResults: ModelResults):
     #     print('enter create_json_report')
     #     report = Report(model,modelResults)
     #     return report
     
-    def create_html_report(self, mr):
+    def create_html_report(self, report):
         '''
         Method to create report from ModelResults dictionary
-        :param mr: ModelResults dictionary
+        :param report: ModelResults dictionary
         '''
     
-        # print(chemical)
-        md = mr["modelDetails"]
+        try:
+    
+            # print(chemical)
+            md = report["modelDetails"]
+            
+            # print("sid", chemical["sid"])
         
-        # print("sid", chemical["sid"])
-    
-        page_title = md["modelName"] + " Model Calculation Details: " + md["propertyName"]
-        doc = document(lang='en', title=page_title)  # title has to be set here, the title object in the head doesnt work
-    
-        with doc.head:
-            meta(charset="UTF-8")
-            meta(name="viewport", content="width=device-width, initial-scale=1.0")
-    
-        with doc:
-            h3(page_title)
-    
-            with table(border="0", width="100%"):  # main table
-                with tbody():
-                    with tr():
-                        with td():
-                            self.write_first_row(mr)
-                    with tr():
-                        with td():
-                            mps = self.ModelPerformanceSection()
-                            mps.write_model_performance(md)
-                    
-                    nrs = self.NeighborSection()
-                    
-                    for neighborsInSet in mr["neighborsForSets"]:
+            page_title = md["modelName"] + " Model Calculation Details: " + md["propertyName"]
+            doc = document(lang='en', title=page_title)  # title has to be set here, the title object in the head doesnt work
+        
+            with doc.head:
+                meta(charset="UTF-8")
+                meta(name="viewport", content="width=device-width, initial-scale=1.0")
+        
+            with doc:
+                h3(page_title)
+        
+                with table(border="0", width="100%"):  # main table
+                    with tbody():
                         with tr():
                             with td():
-                                nrs.write_neighbors(mr, neighborsInSet)
+                                self.write_first_row(report)
+                        with tr():
+                            with td():
+                                mps = self.ModelPerformanceSection()
+                                mps.write_model_performance(md)
+                        
+                        nrs = self.NeighborSection()
+                        
+                        if report["neighborResultsPrediction"]:
+                        
+                            with tr():
+                                with td():
+                                    nrs.write_neighbors(report, report["neighborResultsPrediction"])
 
-        return str(doc)
+                        if report["neighborResultsTraining"]:
+                                    
+                            with tr():
+                                with td():
+                                    nrs.write_neighbors(report, report["neighborResultsTraining"])
+    
+            return str(doc)
+
+        except:
+            print("An error occurred. Here is the stack trace:")
+            traceback.print_exc()  # Prints the full traceback
+            return None
 
 
 def create_report_from_json_file():
@@ -918,8 +919,9 @@ def create_report_from_json_file():
     # file_name = model_id + "_report_todd_" + safe_smiles(smiles) + ".json"
     # file_name = "1066_DTXSID8031865.json"
     # file_name = "1066_QLWFRFCRJULPCK-UHFFFAOYNA-N.json" # has error
-    file_name = "1065_DTXSID3039242.json"  # WS_BZ
+    # file_name = "1065_DTXSID3039242.json"  # WS_BZ
     # file_name = "1065_DTXSID8031865.json"  # WS_PFOA
+    file_name = "1069_DTXSID3039242.json"
     
     current_directory = os.getcwd()
     # Join the path components using os.path.join()
@@ -929,10 +931,10 @@ def create_report_from_json_file():
     print(file_path)    
     try:
         with open(file_path, 'r') as file:
-            modelResults = json.load(file)
+            report = json.load(file)
             # print(modelResults)
             
-            html = rc.create_html_report(modelResults)
+            html = rc.create_html_report(report)
             
             # print(html)
             

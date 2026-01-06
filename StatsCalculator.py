@@ -2,20 +2,22 @@ import pandas as pd
 import math
 from typing import Dict
 
-class PredictConstants:
-    COVERAGE = "Coverage"
-    MAE = "MAE"
-    PEARSON_RSQ = "PearsonRSQ"
-    RMSE = "RMSE"
-    Q2 = "Q2"
-    R2 = "R2"
+# class StatsConstants:
+#     COVERAGE = "Coverage"
+#     MAE = "MAE"
+#     PEARSON_RSQ = "PearsonRSQ"
+#     RMSE = "RMSE"
+#     Q2 = "Q2"
+#     R2 = "R2"
+#
+#     TAG_TEST = "_Test"
+#     TAG_TRAINING = "_Training"
+#     TAG_CV = "_CV"
+#
+#     Q2_TEST = Q2 + TAG_TEST
+#     R2_TRAINING = R2+TAG_TRAINING
 
-    TAG_TEST = "_Test"
-    TAG_TRAINING = "_Training"
-    TAG_CV = "_CV"
-
-    Q2_TEST = Q2 + TAG_TEST
-    R2_TRAINING = R2+TAG_TRAINING
+from predict_constants import PredictConstants as pc
 
 
 def calculate_mean_exp_training(df_training: pd.DataFrame):
@@ -61,15 +63,15 @@ def calculate_continuous_statistics(df: pd.DataFrame, mean_exp_training: float, 
     rmse = math.sqrt(ss / count_predicted)
 
     model_statistic_values = {
-        PredictConstants.COVERAGE + tag: coverage,
-        PredictConstants.MAE + tag: mae,
-        PredictConstants.PEARSON_RSQ + tag: pearson_rsq,
-        PredictConstants.RMSE + tag: rmse
+        pc.COVERAGE + tag: coverage,
+        pc.MAE + tag: mae,
+        pc.PEARSON_RSQ + tag: pearson_rsq,
+        pc.RMSE + tag: rmse
     }
 
-    if tag == PredictConstants.TAG_TEST:
-        model_statistic_values[PredictConstants.Q2_TEST] = coeff_det
-    elif tag == PredictConstants.TAG_TRAINING:
-        model_statistic_values[PredictConstants.R2_TRAINING] = coeff_det
+    if tag == pc.TAG_TEST:
+        model_statistic_values[pc.Q2_TEST] = coeff_det
+    elif tag == pc.TAG_TRAINING:
+        model_statistic_values[pc.R2_TRAINING] = coeff_det
 
     return model_statistic_values

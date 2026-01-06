@@ -278,7 +278,6 @@ class PredictConstants:
     G_KG_H20 = "g/kg H2O"
     
     ####################################################################################################################
-
     
     
     # Integer codes for train/test splitting
@@ -313,6 +312,7 @@ class PredictConstants:
     LAS = "las"
     CONSENSUS = "consensus"
     
+    ###################################################################################################
     # Statistic names in qsar_models database
     
     R2 = "R2"
