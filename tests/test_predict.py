@@ -1,13 +1,12 @@
 import os
 from unittest import TestCase, main
-
 from API_Utilities import DescriptorsAPI
 from app import predictDB
-from model_ws_utilities import call_do_predictions
 from models.df_utilities import load_df_from_file
 
 TEST_DATA_FOLDER = "test_data/"
 import json
+
 
 class TestPredict(TestCase):
     def setUp(self):
@@ -23,6 +22,7 @@ class TestPredict(TestCase):
         print(generic_response_data)        # print(r.json())
 
     def test_model_predict_1065_array(self):
+        """This one tests batch mode but it doesnt use live API"""
         
         smiles_list = []
         smiles_list.append("c1ccccc1")  # benzene
@@ -52,6 +52,9 @@ class TestPredict(TestCase):
         
         self.assertEqual(len(smiles_list),len(generic_response_data))        
 
+
+    
+    
     def test_descriptors_get(self):
         r = self.descriptors_api.call_descriptors_get(self.serverAPIs,
                                                       "c1ccccc1",

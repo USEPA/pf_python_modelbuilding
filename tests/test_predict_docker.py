@@ -5,14 +5,18 @@ Created on Jan 6, 2026
 '''
 import unittest
 import requests
+import json
+
 # from numpy.ma.testutils import assert_equal
 
 host = "http://v2626umcth882.rtord.epa.gov:8080"
+# host = "http://localhost:5005"
 
 class Test(unittest.TestCase):
 
-
-    def testDockerContainer(self):
+    
+    def get_smiles_list(self):
+    
         smiles_list = []
         smiles_list.append("c1ccccc1")  # benzene
         # smiles_list.append("OC(=O)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)F") # PFOA
@@ -23,14 +27,15 @@ class Test(unittest.TestCase):
         smiles_list.append("XX")  # fails standardizer
         smiles_list.append("CCC.Cl") # not mixture according to qsarReadySmiles
         smiles_list.append("CCCCC.CCCC") # mixture according to qsarReadySmiles
-    
         # For LogP model, following uses additional code to get dsstox record for neighbor / analogs:
         smiles_list.append("[H][C@]12[C@@H](Cl)[C@H](Cl)[C@](C(Cl)Cl)([C@@H](Cl)[C@@H]1Cl)C2(C)C(Cl)Cl") # DTXCID001783033 
         smiles_list.append("[H][C@]12O[C@@]1([H])[C@@]1([H])[C@@]([H])([C@H]2Cl)[C@@]2(Cl)C(Cl)=C(Cl)[C@]1(Cl)C2(Cl)Cl") #DTXCID501783733
-        # smiles_list.append("[H][C@]12CC(Cl)(Cl)[C@](CCl)([C@@H](Cl)[C@@H]1Cl)C2(CCl)CCl") # DTXCID501782985
-        # smiles_list.append("[H][C@]12CO[S@@](=O)OC[C@@]1([H])[C@@]1(Cl)C(Cl)=C(Cl)[C@]2(Cl)C1(Cl)Cl") #DTXCID601783831, fails standardization!
-        
-        print("\ntest_predict_examples")
+        return smiles_list
+
+
+    def test_docker_get(self):
+                        
+        smiles_list = self.get_smiles_list()
         
         count_failed = 0
         
@@ -44,6 +49,22 @@ class Test(unittest.TestCase):
                 count_failed+=1
         
         self.assertEqual(count_failed, 0)
+    
+    def test_docker_post(self):
+        
+        smiles_list = self.get_smiles_list()
+        
+        payload = json.dumps({
+          "smiles": smiles_list,
+          "model_id": 1065
+        })
+        
+        headers = {
+          'Content-Type': 'application/json'
+        }
+        url = host + "/api/predictor_models/predict"
+        response = requests.request("POST", url, headers=headers, data=payload)
+        self.assertEqual(len(response.json()), len(smiles_list))
 
 
 if __name__ == "__main__":

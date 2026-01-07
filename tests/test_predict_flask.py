@@ -1,4 +1,5 @@
 from unittest import TestCase, main
+import requests
 # import os
 
 # from API_Utilities import DescriptorsAPI
@@ -9,7 +10,10 @@ from app_flask import predictDB, info, details, model_coeffs, available_models
 
 TEST_DATA_FOLDER = "test_data/"
 host = "http://localhost:5004"
-import requests
+
+
+from dotenv import load_dotenv
+load_dotenv()
 
 
 class TestPredict(TestCase):
@@ -34,7 +38,6 @@ class TestPredict(TestCase):
         print("\navailable models")
         print(r)
                     
-    
     def test_predict_examples_lookup_missing_dsstox(self):
         # there were a handful of datapoints where the dsstox info isnt in dsstox_records table:
 
