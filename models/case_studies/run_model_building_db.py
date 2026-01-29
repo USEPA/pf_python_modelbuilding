@@ -678,20 +678,21 @@ def run_dataset(dataset_name):
     descriptor_set_name = "WebTEST-default"
     splitting_name = "RND_REPRESENTATIVE"
 
-    qsar_method = 'gcm'
+    # qsar_method = 'gcm'
     # qsar_method = 'xgb'
-    # qsar_method = 'rf'
+    qsar_method = 'rf'
     # qsar_method = 'knn'
     # qsar_method = 'reg'  #TODO see if using embedding from RF/XGB works better, add RFE so that unneeded features are removed
     # qsar_method = 'las'
     # qsar_method = 'svm'
     
-    cross_validate = False
+    cross_validate = True
     run_AD = True
 
     embedding = None
     folder_embedding = None
-    feature_selection = False
+    feature_selection = True
+    
     use_previous_embedding= False #load embedding from a json file
     rfe_previous_embedding = True # run RFE on previous embedding so dont have descriptors that dont help the REG model (have large standard error)  
     
@@ -813,7 +814,8 @@ def run_dataset(dataset_name):
     r.save_results(results_dict, df_predictions, df_cv_predictions, df_test_model, folder_embedding)
     logging.info(f"test set stats={json.dumps(test_stats, indent=4)}")
     logging.info(f"training cross validation stats={json.dumps(cv_stats, indent=4)}")   
-
+    logging.info(f"test set AD stats={json.dumps( results_dict['test_stats_AD'] , indent=4)}")
+    
     
     # coeff_dict = model.getOriginalRegressionCoefficients()
     # logging.debug(f"coeffs{coeff_dict}")
@@ -831,7 +833,6 @@ class Results:
         if df_cv_predictions is not None:
             df_cv_predictions = prepare_df(df_cv_predictions)
          
-        folder_project = r"C:\Users\TMARTI02\OneDrive - Environmental Protection Agency (EPA)\0 python\modeling services\pf_python_modelbuilding"
     
         subfolder = params["qsar_method"] + "_" + params["descriptor_set_name"] + "_fs=" + str(params["feature_selection"])
     
@@ -839,7 +840,7 @@ class Results:
             subfolder = subfolder +"_"+ folder_embedding
         
         
-        path_segments = [folder_project, "data", "models", params["dataset_name"], subfolder]
+        path_segments = [PROJECT_ROOT, "data", "models", params["dataset_name"], subfolder]
         
         folder_path = os.path.join(*path_segments)
         
@@ -901,8 +902,10 @@ class Results:
         """
         
         
-        folder = os.path.join(PROJECT_ROOT, "data/models", dataset_name)
+        folder = os.path.join(PROJECT_ROOT, "data","models", dataset_name)
         os.makedirs(folder, exist_ok=True)
+        
+        print(folder)
     
         print("\n\nStats for all models for " + dataset_name)
         print("Run\tMAE_Test\tMAE_Training_CV\t#_variables")

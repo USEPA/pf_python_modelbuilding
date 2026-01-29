@@ -431,11 +431,11 @@ class TESTFragmentCounts(ApplicabilityDomainStrategy):
             df_new[common_columns]
             .reset_index()  # preserves the original test chemical index
             .rename(columns={'index': 'test_chemical'})  # name the index column
-            .melt(id_vars=['test_chemical'], var_name='fragment', value_name='test_count')
+            .melt(id_vars=['test_chemical'], var_name='fragment', value_name='test_value')
         )
         
         # Keep only fragments that are present in the test chemical (count > 0)
-        results_df = results_df[results_df['test_count'] > 0]
+        results_df = results_df[results_df['test_value'] > 0]
         
         # Attach training stats per fragment
         train_stats = pd.DataFrame({
@@ -455,11 +455,11 @@ class TESTFragmentCounts(ApplicabilityDomainStrategy):
         
         # Build per_chemical_df:
         # - fragment_table: list of dicts with fragment-level details
-        # - AD: True if all test_count values are within [training_min, training_max]
+        # - AD: True if all test_value values are within [training_min, training_max]
         def _build_row(group: pd.DataFrame) -> dict:
-            frag_table = group[['fragment', 'test_count', 'training_min', 'training_max', 'training_count']] \
+            frag_table = group[['fragment', 'test_value', 'training_min', 'training_max', 'training_count']] \
                 .to_dict(orient='records')
-            in_bounds = (group['test_count'] >= group['training_min']) & (group['test_count'] <= group['training_max'])
+            in_bounds = (group['test_value'] >= group['training_min']) & (group['test_value'] <= group['training_max'])
             return {
                 'idTest': group['idTest'].iloc[0],
                 'fragment_table': frag_table,
@@ -472,7 +472,7 @@ class TESTFragmentCounts(ApplicabilityDomainStrategy):
             rows = [_build_row(g) for _, g in results_df.groupby('idTest', sort=False)]
             per_chemical_df = pd.DataFrame(rows, columns=['idTest', 'fragment_table', 'AD'])
             
-            print(f"First row of frag AD results:{json.dumps(per_chemical_df.loc[0].to_dict(),indent=4)}")
+            # print(f"First row of frag AD results:{json.dumps(per_chemical_df.loc[0].to_dict(),indent=4)}")
         
         return per_chemical_df
         
@@ -481,7 +481,7 @@ class TESTFragmentCounts(ApplicabilityDomainStrategy):
 # - results_df contains long-form rows for all nonzero fragments per test chemical.
 # - per_chemical is a dict keyed by ID, each value includes ID and lists of fragments/stats.
 # - per_chemical_df is the dataframe version of per_chemical, with an AD column indicating
-#   whether all fragment test_counts are within training bounds.
+#   whether all fragment test_values are within training bounds.
 
 # At this point:
 # - results_df contains long-form rows for all nonzero fragments per test chemical.
