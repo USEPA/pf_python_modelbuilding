@@ -4,23 +4,26 @@ import pypmml
 
 from models import df_utilities as dfu
 from models import ModelBuilder as mb
+
 from models import EmbeddingFromImportance as efi
-from models import df_utilities as DFU
+from models import GeneticOptimizer as go
+
 
 import time as time
 import numpy as np
 import pandas as pd
-from models import GeneticOptimizer as go
 from flask import abort
 import requests
 
 from sklearn2pmml.pipeline import PMMLPipeline as PMMLPipeline
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
+# from models.runGA import qsar_method
+
+
 
 models = {}  
 from utils import timer
-# from model_ws_db_builder_utilities import GeneticAlgorithmParameters
 
 
 def get_model_info(qsar_method):
@@ -74,10 +77,10 @@ def call_build_model_with_preselected_descriptors(qsar_method, training_tsv, pre
 
     df_training = dfu.load_df(training_tsv)
     logging.debug('training shape=', df_training.shape)
-    df_prediction = DFU.load_df(prediction_tsv)
+    df_prediction = dfu.load_df(prediction_tsv)
 
     if filterColumnsInBothSets:
-        df_training = DFU.filter_columns_in_both_sets(df_training, df_prediction)
+        df_training = dfu.filter_columns_in_both_sets(df_training, df_prediction)
         logging.debug('training shape after removing bad descriptors in both sets=', df_training.shape)
 
     qsar_method = qsar_method.lower()
@@ -94,9 +97,8 @@ def call_build_model_with_preselected_descriptors(qsar_method, training_tsv, pre
     return model
 
 
-def call_build_model_with_preselected_descriptors_from_df(qsar_method, df_training, df_prediction, remove_log_p, use_pmml_pipeline,
-                                                  include_standardization_in_pmml, descriptor_names_tsv=None,
-                                                  n_jobs=8,filterColumnsInBothSets=True):
+def call_build_model_with_preselected_descriptors_from_df(params, df_training, df_prediction, 
+                                                          descriptor_names_tsv=None, filterColumnsInBothSets=True):
     """Loads TSV training data into a pandas DF and calls the appropriate training method"""
 
     
@@ -104,18 +106,27 @@ def call_build_model_with_preselected_descriptors_from_df(qsar_method, df_traini
     
 
     if filterColumnsInBothSets:
-        df_training = DFU.filter_columns_in_both_sets(df_training, df_prediction)
+        df_training = dfu.filter_columns_in_both_sets(df_training, df_prediction)
         logging.debug('training shape after removing bad descriptors in both sets='+str(df_training.shape))
 
-    qsar_method = qsar_method.lower()
+    qsar_method = params.qsar_method.lower()
 
 
-    model = instantiateModel(df_training, n_jobs, qsar_method, remove_log_p, use_pmml_pipeline=use_pmml_pipeline, include_standardization_in_pmml=include_standardization_in_pmml)
+    model = instantiateModel(df_training, params.n_threads, qsar_method, params.remove_log_p_descriptors, 
+                             use_pmml_pipeline=params.use_pmml_pipeline, 
+                             include_standardization_in_pmml=params.include_standardization_in_pmml)
+
+    if params.hyperparameter_grid:
+        model.hyperparameter_grid=params.hyperparameter_grid
+        
+        
+    # print(json.dumps(model.hyperparameter_grid,indent=4))
 
     if not model:
         abort(404, qsar_method + ' not implemented')
 
-    model.build_model(use_pmml_pipeline=use_pmml_pipeline, include_standardization_in_pmml=include_standardization_in_pmml,
+    model.build_model(use_pmml_pipeline=params.use_pmml_pipeline, 
+                      include_standardization_in_pmml=params.include_standardization_in_pmml,
                       descriptor_names=descriptor_names_tsv)
     # Returns trained model:
     return model
@@ -132,8 +143,8 @@ def call_cross_validate(qsar_method, cv_training_tsv, cv_prediction_tsv, descrip
 
     df_training = dfu.load_df(cv_training_tsv)
     logging.debug('training shape=', df_training.shape)
-    df_prediction = DFU.load_df(cv_prediction_tsv)
-    df_training = DFU.filter_columns_in_both_sets(df_training, df_prediction)
+    df_prediction = dfu.load_df(cv_prediction_tsv)
+    df_training = dfu.filter_columns_in_both_sets(df_training, df_prediction)
 
 
     qsar_method = qsar_method.lower()
@@ -177,11 +188,12 @@ def instantiateModel(df_training, n_jobs, qsar_method, remove_log_p, use_pmml_pi
         model = mb.XGB(df_training, remove_log_p, n_jobs)
     elif qsar_method == 'lgb':
         model = mb.LGB(df_training, remove_log_p, n_jobs)
-
     elif qsar_method == 'knn':
         model = mb.KNN(df_training, remove_log_p, n_jobs)
-    elif qsar_method == 'reg':
-        model = mb.REG(df_training, remove_log_p, n_jobs)
+    elif qsar_method == 'reg': 
+        model = mb.REG(df_training, remove_log_p, n_jobs)    
+    elif qsar_method == 'gcm':
+        model = mb.GCM(df_training, remove_log_p, n_jobs)    
     elif qsar_method == 'las':
         model = mb.LAS(df_training, remove_log_p, n_jobs)
     # elif qsar_method == 'dnn':
@@ -189,7 +201,7 @@ def instantiateModel(df_training, n_jobs, qsar_method, remove_log_p, use_pmml_pi
     else:
         pass
         # 404 NOT FOUND if requested QSAR method has not been implemented
-    model.is_binary = DFU.isBinary(df_training)
+    model.is_binary = dfu.isBinary(df_training)
     model.use_pmml = use_pmml_pipeline
 
     logging.debug('instantiateModel: model.is_binary: '+str(model.is_binary))
@@ -257,9 +269,9 @@ def call_build_embedding_ga(qsar_method, training_tsv, prediction_tsv, remove_lo
                             num_generations, num_optimizers, num_jobs, n_threads, descriptor_coefficient, max_length,
                             threshold, use_wards, run_rfe):
     """Loads TSV training data into a pandas DF and calls the appropriate training method"""
-    df_training = DFU.load_df(training_tsv)
-    df_prediction = DFU.load_df(prediction_tsv)
-    df_training = DFU.filter_columns_in_both_sets(df_training, df_prediction)
+    df_training = dfu.load_df(training_tsv)
+    df_prediction = dfu.load_df(prediction_tsv)
+    df_training = dfu.filter_columns_in_both_sets(df_training, df_prediction)
     print('training shape=', df_training.shape)
 
     qsar_method = qsar_method.lower()
@@ -293,17 +305,26 @@ def call_build_embedding_ga(qsar_method, training_tsv, prediction_tsv, remove_lo
 
 
 
-def call_build_embedding_ga_db(qsar_method, df_training, df_prediction, gap):
+def call_build_embedding_ga_db(df_training, df_prediction, gap):
     """Loads TSV training data into a pandas DF and calls the appropriate training method"""
         
                 
-    df_training = DFU.filter_columns_in_both_sets(df_training, df_prediction)
+    df_training = dfu.filter_columns_in_both_sets(df_training, df_prediction)
     # print('training shape=', df_training.shape)
 
-    qsar_method = qsar_method.lower()
+    qsar_method = gap.qsar_method.lower()
+
+    # print(qsar_method)
+
 
     ga_model = instantiateModel(df_training=df_training, n_jobs=gap.n_threads, qsar_method=qsar_method,
                                  remove_log_p=gap.remove_log_p_descriptors, use_pmml_pipeline=False)
+    
+    
+    
+    if gap.hyperparameter_grid:
+        ga_model.hyperparameter_grid=gap.hyperparameter_grid
+    
 
     t1 = time.time()
     
@@ -345,7 +366,7 @@ def remove_descriptors_rfe(qsar_method, df_training, n_threads, descriptor_names
     # print('After RFE, ', len(model.embedding), "descriptors", model.embedding)
     model.embedding = descriptor_names
     embedding_old = descriptor_names
-    print('before rfe', embedding_old)
+    print('Before RFE,', len(model.embedding), "descriptors", embedding_old)
 
     while True:  # need to get more aggressive (remove 2 at a time) since first RFE didnt remove enough
         efi.perform_recursive_feature_elimination(model=model, df_training=df_training, n_threads=n_threads,
@@ -370,9 +391,9 @@ def call_build_embedding_importance(qsar_method, training_tsv, prediction_tsv, r
                                     min_descriptor_count, max_descriptor_count, use_wards):
     """Generates importance based embedding"""
 
-    df_training = DFU.load_df(training_tsv)
+    df_training = dfu.load_df(training_tsv)
     logging.debug('in call_build_embedding_importance, df_training.shape',df_training.shape)
-    df_prediction = DFU.load_df(prediction_tsv)
+    df_prediction = dfu.load_df(prediction_tsv)
     logging.debug('in call_build_embedding_importance, df_prediction.shape',df_prediction.shape)
     
     
@@ -380,32 +401,32 @@ def call_build_embedding_importance(qsar_method, training_tsv, prediction_tsv, r
                                     num_generations, use_permutative, run_rfe, fraction_of_max_importance,
                                     min_descriptor_count, max_descriptor_count, use_wards)
 
-    
 
 
-def call_build_embedding_importance_from_df2(qsar_method, df_training, df_prediction, ip):
-    
-    return call_build_embedding_importance_from_df(qsar_method, df_training, df_prediction, ip.remove_log_p_descriptors, 
-                                                   ip.n_threads,ip.num_generations, ip.use_permutative, ip.run_rfe, 
-                                                   ip.fraction_of_max_importance, ip.min_descriptor_count, ip.max_descriptor_count, 
-                                                   ip.use_wards)
-
+# def call_build_embedding_group_contribution_from_df(df_training, min_count):
+#     train_column_names = dfu.prepare_gcm_instances(df_training, min_count)
+#     return train_column_names
 
 
 def call_build_embedding_importance_from_df(qsar_method, df_training, df_prediction, remove_log_p_descriptors, n_threads,
                                     num_generations, use_permutative, run_rfe, fraction_of_max_importance,
-                                    min_descriptor_count, max_descriptor_count, use_wards):
+                                    min_descriptor_count, max_descriptor_count, use_wards, hyperparameter_grid = None):
     """Generates importance based embedding"""
 
-    print('in call_build_embedding_importance, df_training.shape',df_training.shape)
-    print('in call_build_embedding_importance, df_prediction.shape',df_prediction.shape)
+    # print('in call_build_embedding_importance, df_training.shape',df_training.shape)
+    # print('in call_build_embedding_importance, df_prediction.shape',df_prediction.shape)
 
-    df_training = DFU.filter_columns_in_both_sets(df_training, df_prediction)
+    df_training = dfu.filter_columns_in_both_sets(df_training, df_prediction)
 
-    print('in call_build_embedding_importance, df_training.shape2',df_training.shape)
+    # print('in call_build_embedding_importance, df_training.shape2',df_training.shape)
 
     model = instantiateModel(df_training=df_training, n_jobs=n_threads, qsar_method=qsar_method,
                                  remove_log_p=remove_log_p_descriptors, use_pmml_pipeline=False)
+    
+    if hyperparameter_grid:
+        model.hyperparameter_grid = hyperparameter_grid
+    
+    
 
     t1 = time.time()
 
@@ -429,35 +450,32 @@ def call_build_embedding_importance_from_df(qsar_method, df_training, df_predict
             embedding_old = model.embedding
 
     # Fit final model using final embedding:
-    train_ids, train_labels, train_features, train_column_names = \
-        DFU.prepare_instances2(df_training, model.embedding, False)
-    model.model_obj.fit(train_features, train_labels)  # train the model
-    # model.embedding = train_column_names # just in case the order changed but shouldnt matte
-
-    # Run calcs on test set to see how well embedding did:
-
-    if df_prediction.shape[0] != 0:
-        print("Final results for embedded model:")
-        score = model.do_predictions(df_prediction, return_score=True)
+    # train_ids, train_labels, train_features, train_column_names = \
+    #     dfu.prepare_instances2(df_training, model.embedding, False)
+    # model.model_obj.fit(train_features, train_labels)  # train the model
+    # # model.embedding = train_column_names # just in case the order changed but shouldnt matte
+    #
+    # # Run calcs on test set to see how well embedding did:
+    #
+    # if df_prediction.shape[0] != 0:
+    #     print("Final results for embedded model:")
+    #     score = model.do_predictions(df_prediction, return_score=True)
 
     t2 = time.time()
-
     timeMin = (t2 - t1) / 60
 
-    descriptor_names = model.embedding
-
     # Returns embedding results:
-    return descriptor_names, timeMin
+    return model.embedding, timeMin
 
 def call_build_embedding_lasso(qsar_method, training_tsv, prediction_tsv, remove_log_p_descriptors, n_threads,run_rfe):
     """Generates importance based embedding"""
 
     print('enter call_build_embedding_lasso')
-    df_training = DFU.load_df(training_tsv)
+    df_training = dfu.load_df(training_tsv)
     print('in call_build_embedding_importance, df_training.shape',df_training.shape)
 
-    df_prediction = DFU.load_df(prediction_tsv)
-    df_training = DFU.filter_columns_in_both_sets(df_training, df_prediction)
+    df_prediction = dfu.load_df(prediction_tsv)
+    df_training = dfu.filter_columns_in_both_sets(df_training, df_prediction)
     # print(df_training.shape)
 
     t1 = time.time()
@@ -503,7 +521,7 @@ def call_build_embedding_lasso(qsar_method, training_tsv, prediction_tsv, remove
 
     # Fit final model using final embedding:
     train_ids, train_labels, train_features, train_column_names = \
-        DFU.prepare_instances2(df_training, model.embedding, False)
+        dfu.prepare_instances2(df_training, model.embedding, False)
     model.model_obj.fit(train_features, train_labels)  # train the model
 
     clf = model.model_obj.steps[1][1]

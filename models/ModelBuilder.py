@@ -26,6 +26,8 @@ from sklearn.neighbors import KNeighborsRegressor, KNeighborsClassifier
 from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
 from lightgbm import LGBMRegressor, LGBMClassifier
 
+from utils import to_json_safe
+
 from sklearn.svm import SVC, SVR
 from sklearn.linear_model import LogisticRegression, LinearRegression, Lasso
 from xgboost import XGBRegressor, XGBClassifier
@@ -59,6 +61,11 @@ importance_type = 'weight' #default, TODO make a passable parameter to app when 
 # importance_type = 'cover'
 # importance_type = 'total_gain'
 # importance_type ='total_cover'
+
+
+
+
+
 
 
 def model_registry_model_obj(regressor_name, is_categorical):
@@ -101,7 +108,8 @@ def model_registry_model_obj(regressor_name, is_categorical):
             # return XGBClassifier(use_label_encoder=False, eval_metric='auc')
         else:
             return LGBMRegressor(eval_metric='rmse')
-    elif regressor_name == 'reg':
+    
+    elif regressor_name == 'reg' or regressor_name == 'gcm':
         # return LinearRegression()
         if is_categorical:
             # return LogisticRegression(penalty='none')
@@ -252,6 +260,155 @@ class Model:
         }
 
 
+    def getOriginalRegressionCoefficients(self):
+
+        # print('enter getOriginalRegressionCoefficients')
+
+        model_obj = self.get_model()
+        reg = model_obj.steps[1][1]
+        scale = model_obj.steps[0][1]
+        
+        # Get the scaled coefficients and intercept
+        beta_scaled = reg.coef_
+        intercept_scaled = reg.intercept_
+
+        # Get the means and standard deviations used by the StandardScaler
+        means = scale.mean_
+        stds = scale.scale_
+
+        # Transform the coefficients to the unscaled version
+        beta_unscaled = beta_scaled / stds
+
+        # Transform the intercept to the unscaled version
+        intercept_unscaled = intercept_scaled - np.sum((means * beta_scaled) / stds)
+
+        # Report the unscaled coefficients and intercept
+        # print("Intercept (unscaled):", intercept_unscaled)
+        # print("Coefficients (unscaled):", beta_unscaled)
+        # print(self.embedding)
+
+        # from collections import OrderedDict
+        # coefficients_dict = OrderedDict()
+        #
+        # # Create a dictionary for the coefficients, starting with the intercept
+        # coefficients_dict['Intercept'] = intercept_unscaled
+        #
+        # # Add the coefficients in the order of embedding
+        # coefficients_dict.update(dict(zip(self.embedding, beta_unscaled)))
+        #
+        # # print(coefficients_dict)
+        # # return coefficients_dict
+        # return json.dumps(coefficients_dict,indent=4)
+    
+        coefficients = []
+        coefficients.append({"name": "Intercept", "coefficient": float(intercept_unscaled)})
+        for name, coef in zip(self.embedding, beta_unscaled):
+            coefficients.append({"name": name, "coefficient": float(coef)})
+    
+        return json.dumps(coefficients,indent=4)
+    
+
+
+    def getOriginalRegressionCoefficients2(self, X, y):
+        """
+        Return a list of dicts: [{'name': <str>, 'coefficient': <float>, 'std_error': <float>}]
+        for the unscaled coefficients and intercept.
+        
+        Assumptions:
+        - reg is an OLS-like estimator (e.g., LinearRegression) with fit_intercept=True.
+        - X is the training DataFrame used to fit the model, with columns matching self.embedding.
+        - y is the training target (Series or 1D array).
+        
+        Notes:
+        - For multi-output regression, this computes SEs for the first target only.
+        - If any feature has std == 0 (constant feature), SEs for that coefficient are set to NaN.
+        """
+        model_obj = self.get_model()
+        reg = model_obj.steps[1][1]    # e.g., LinearRegression
+        scale = model_obj.steps[0][1]  # StandardScaler
+        
+        # Arrange X columns in the same order as self.embedding (features used by the model)
+        X_feats = X[self.embedding].to_numpy(dtype=float)
+        
+        # Use the scaler from the pipeline to transform X
+        X_scaled = scale.transform(X_feats)
+        
+        # Ensure y is 1D np.array
+        y = np.asarray(y).ravel()
+        n, p = X_scaled.shape
+    
+        # Extract scaled coefficients/intercept (handle multi-output)
+        beta_scaled = np.asarray(reg.coef_)
+        intercept_scaled = np.asarray(reg.intercept_)
+        
+        if beta_scaled.ndim == 2:
+            beta_scaled = beta_scaled[0]
+        if intercept_scaled.ndim > 0:
+            intercept_scaled = intercept_scaled[0]
+    
+        # Scaler params
+        means = np.asarray(scale.mean_, dtype=float)
+        stds  = np.asarray(scale.scale_, dtype=float)
+    
+        # Compute unscaled coefficients
+        with np.errstate(divide='ignore', invalid='ignore'):
+            beta_unscaled = np.divide(beta_scaled, stds, where=stds != 0)
+        intercept_unscaled = intercept_scaled - np.sum((means * beta_scaled) / stds)
+    
+        # OLS residuals and sigma^2
+        y_hat = reg.predict(X_scaled)
+        residuals = y - y_hat
+        # Degrees of freedom: n - (p + 1) when intercept is included
+        df_resid = n - (p + 1)
+        if df_resid <= 0:
+            raise ValueError("Not enough degrees of freedom to estimate standard errors.")
+        RSS = np.sum(residuals**2)
+        sigma2 = RSS / df_resid
+    
+        # Build design matrix consistent with fit_intercept=True (assumed)
+        Z = np.column_stack([np.ones(n, dtype=float), X_scaled])  # shape: (n, p+1)
+    
+        # Covariance of scaled parameters: sigma^2 * (Z^T Z)^(-1)
+        XtX = Z.T @ Z
+        XtX_inv = np.linalg.pinv(XtX)  # robust to singularity
+        cov_scaled = sigma2 * XtX_inv   # shape: (p+1, p+1)
+    
+        # Transform covariance to unscaled parameters using linear transform:
+        # theta_unscaled = T @ theta_scaled
+        # where theta = [intercept, beta_1, ..., beta_p]
+        T = np.zeros((p + 1, p + 1), dtype=float)
+        T[0, 0] = 1.0
+        # Intercept row depends on scaled intercept and scaled betas
+        with np.errstate(divide='ignore', invalid='ignore'):
+            ratios = np.divide(means, stds, where=stds != 0)  # mean_j / std_j
+        T[0, 1:] = -ratios
+        # Coefficient rows: beta_unscaled_j = beta_scaled_j / std_j
+        with np.errstate(divide='ignore', invalid='ignore'):
+            inv_stds = np.divide(1.0, stds, where=stds != 0)
+        np.fill_diagonal(T[1:, 1:], inv_stds)
+    
+        cov_unscaled = T @ cov_scaled @ T.T
+        se_unscaled = np.sqrt(np.diag(cov_unscaled))
+    
+        # Build coefficients: list of dicts with name, coefficient, std_error
+        coefficients = []
+        coefficients.append({
+            "name": "Intercept",
+            "coefficient": float(intercept_unscaled),
+            "std_error": float(se_unscaled[0]),
+        })
+        for i, (name, coef) in enumerate(zip(self.embedding, beta_unscaled), start=1):
+            # If std was zero (constant feature), set SE to NaN
+            se = se_unscaled[i] if np.isfinite(inv_stds[i-1]) else np.nan
+            coefficients.append({
+                "name": name,
+                "coefficient": float(coef),
+                "std_error": float(se) if np.isfinite(se) else np.nan,
+            })
+    
+        return json.dumps(coefficients,indent=4)
+        
+
     def set_model_obj_pmml_for_prediction(self, pmml_file_path, qsar_method):
 
         # print(type(self.model_obj))
@@ -293,9 +450,15 @@ class Model:
 
             setattr(self, key, value)
 
+
+    
+    
     def get_model_description(self):
         modelDescription = ModelDescription(self)
-        return json.dumps(modelDescription.__dict__)
+        # return json.dumps(modelDescription.__dict__)
+    
+        safe_dict = to_json_safe(modelDescription.__dict__)
+        return json.dumps(safe_dict, ensure_ascii=False)
     
     def get_model_description_dict(self):
         modelDescription = ModelDescription(self)
@@ -331,30 +494,32 @@ class Model:
     def build_model(self, use_pmml_pipeline, include_standardization_in_pmml, descriptor_names=None):
         logging.debug('enter build model')
 
+
         t1 = time.time()
-        self.embedding = descriptor_names
+        
         self.use_pmml = use_pmml_pipeline
         self.include_standardization_in_pmml = include_standardization_in_pmml
 
         # Call prepare_instances without removing correlated descriptors
-        if self.embedding is None:
-            train_ids, train_labels, train_features, train_column_names, self.is_binary = \
-                DFU.prepare_instances(self.df_training, "training", remove_logp=self.remove_log_p_descriptors, remove_corr=True)
-            # Use columns selected by prepare_instances (in case logp descriptors were removed)
-            self.embedding = train_column_names
 
-            # print(self.embedding)
-
-        else:
+        if descriptor_names is None:
             
+            if self.regressor_name == 'gcm':
+                train_ids, train_labels, train_features, train_column_names, self.is_binary = \
+                    DFU.prepare_instances_with_preselected_descriptors_gcm(self.df_training, "training")
+                # print(len(train_column_names))
+            else:
+                train_ids, train_labels, train_features, train_column_names, self.is_binary = \
+                    DFU.prepare_instances(self.df_training, "training", remove_logp=self.remove_log_p_descriptors, remove_corr=True)
+                # Use columns selected by prepare_instances (in case logp descriptors were removed)
+            self.embedding = train_column_names
+            # print(self.embedding)
+        else:
+            self.embedding = descriptor_names
             train_ids, train_labels, train_features, train_column_names, self.is_binary = \
                 DFU.prepare_instances_with_preselected_descriptors(self.df_training, "training", self.embedding)
-                
             # print("train_ids", train_ids)
-                
-                
-            # Use columns selected by prepare_instances (in case logp descriptors were removed)
-            self.embedding = train_column_names
+            # Use columns selected by prepare_instances (in case logp descriptors were removed)            
 
         # print(train_features)
         if use_pmml_pipeline and include_standardization_in_pmml is False:  # need to handle scaling outside of pipeline
@@ -379,7 +544,7 @@ class Model:
                 self.hyperparameter_grid = {"estimator__C": self.c_space, "estimator__gamma": self.gamma_space}
                 print('using single set of hyperparameters for SVM due to large data set')
 
-        logging.debug('hyperparameter_grid', self.hyperparameter_grid)
+        logging.debug('hyperparameter_grid %s', self.hyperparameter_grid)
 
         if self.has_hyperparameter_grid():
             logging.debug('Hyperparameter grid has multiple sets of parameters, running grid search')
@@ -406,6 +571,9 @@ class Model:
         # Train the model on training data
 
         self.model_obj.fit(train_features, train_labels)
+        
+        # print(self.getOriginalRegressionCoefficients())
+        
 
         # training_score = self.model_obj.score(train_features, train_labels)
         # self.training_stats['training_score'] = training_score
@@ -423,14 +591,14 @@ class Model:
         training_time = t2 - t1
 
         logging.debug('\n******************************************************************************************')
-        logging.debug('Regressor', self.regressor_name)
-        logging.debug('Best model params', self.hyperparameters)
+        logging.debug(f"Regressor{self.regressor_name}")
+        logging.debug(f"Best model params{self.hyperparameters}")
         # print('training_cv_r2',self.training_stats['training_cv_r2'])
         # print('training_cv_q2', self.training_stats['training_cv_q2'])
 
         # print(r'Score for Training data = {score}'.format(score=training_score))
-        logging.debug(r'Time to train model  = {training_time} seconds'.format(training_time=training_time))
-        logging.debug('modelDescription', self.get_model_description())
+        logging.debug(f"Time to train model  = {training_time:.0f} seconds")
+        logging.debug(f"modelDescription = {self.get_model_description()}")
         logging.debug('******************************************************************************************\n')
 
         self.training_stats['training_time'] = t2 - t1
@@ -827,48 +995,20 @@ class REG(Model):
         self.regressor_name = 'reg'
         self.version = '1.0'
         self.hyperparameter_grid = {}  # keep it consistent between endpoints, match OPERA
-
         self.description = 'python implementation of regression'
         self.description_url = 'https://scikit-learn.org/stable/modules/classes.html#module-sklearn.linear_model'
 
-    def getOriginalRegressionCoefficients(self):
 
-        # print('enter getOriginalRegressionCoefficients')
 
-        model_obj = self.get_model()
-        reg = model_obj.steps[1][1]
-        scale = model_obj.steps[0][1]
-        
-        # Get the scaled coefficients and intercept
-        beta_scaled = reg.coef_
-        intercept_scaled = reg.intercept_
 
-        # Get the means and standard deviations used by the StandardScaler
-        means = scale.mean_
-        stds = scale.scale_
-
-        # Transform the coefficients to the unscaled version
-        beta_unscaled = beta_scaled / stds
-
-        # Transform the intercept to the unscaled version
-        intercept_unscaled = intercept_scaled - np.sum((means * beta_scaled) / stds)
-
-        # Report the unscaled coefficients and intercept
-        # print("Intercept (unscaled):", intercept_unscaled)
-        # print("Coefficients (unscaled):", beta_unscaled)
-        # print(self.embedding)
-
-        from collections import OrderedDict
-        coefficients_dict = OrderedDict()
-
-        # Create a dictionary for the coefficients, starting with the intercept
-        coefficients_dict['Intercept'] = intercept_unscaled
-        
-        # Add the coefficients in the order of embedding
-        coefficients_dict.update(dict(zip(self.embedding, beta_unscaled)))        
-        # print(coefficients_dict)
-        # return coefficients_dict
-        return json.dumps(coefficients_dict,indent=4)
+class GCM(Model):
+    def __init__(self, df_training=None, remove_log_p_descriptors=False, n_jobs=1):
+        Model.__init__(self, df_training, remove_log_p_descriptors, n_jobs=n_jobs)
+        self.regressor_name = 'gcm'
+        self.version = '1.0'
+        self.hyperparameter_grid = {}  # keep it consistent between endpoints, match OPERA
+        self.description = 'group contribution model multilinear regression model with frag descriptors >= min_count'
+        self.description_url = 'https://scikit-learn.org/stable/modules/classes.html#module-sklearn.linear_model'
 
 
 class LAS(Model):
@@ -884,11 +1024,11 @@ class LAS(Model):
         #                            'estimator__max_iter': [1000000], 'estimator__tol': [1.0e-6, 1.0e-5, 1.0e-4, 1.0e-3]}
         # self.hyperparameter_grid = {}
 
-        print(self.hyperparameter_grid)
+        # print(self.hyperparameter_grid)
 
         self.description = 'python implementation of lasso'
         self.description_url = 'https://scikit-learn.org/stable/modules/classes.html#module-sklearn.linear_model'
-
+       
 
 class XGB(Model):
     def __init__(self, df_training=None, remove_log_p_descriptors=False, n_jobs=1):
@@ -945,7 +1085,7 @@ class SVM(Model):
         #                         "estimator__kernel": ["linear", "poly", "rbf"],
         #                         "estimator__gamma": [10 ** n for n in range(-3, 4)]}
 
-        self.self.qsar_method_version = '1.4'
+        self.qsar_method_version = '1.4'
         self.c_space = [1, 10, 100]
         self.gamma_space = ['scale', 'auto']
         self.hyperparameter_grid = {"estimator__C": self.c_space, "estimator__gamma": self.gamma_space}
@@ -960,10 +1100,10 @@ class RF(Model):
         Model.__init__(self, df_training, remove_log_p_descriptors, n_jobs=n_jobs)
         self.regressor_name = "rf"
 
-        # # self.version = '1.4'
-        # self.hyper_parameter_grid = {'max_features': ['sqrt', 'log2'],
-        #                              'min_impurity_decrease': [10 ** x for x in range(-5, 0)],
-        #                              'n_estimators': [10, 100, 250, 500]}
+        self.version = '1.4'
+        self.hyperparameter_grid = {'max_features': ['sqrt', 'log2'],
+                                     'min_impurity_decrease': [10 ** x for x in range(-5, 0)],
+                                     'n_estimators': [10, 100, 250, 500]}
 
         # following didnt seem to help at all for predicting PFAS properties:
         # self.hyperparameter_grid = {"estimator__max_features": ["sqrt", "log2"],
@@ -984,15 +1124,15 @@ class RF(Model):
         #                             "estimator__min_samples_split": [2, 5, 10],
         #                             "estimator__max_samples": [0.25, 0.50, 1.0]}
 
-        self.version = '1.8'
-
-        min_impurity_decrease = [10 ** x for x in range(-5, 0)]
-        min_impurity_decrease.append(0)
-
-        self.hyperparameter_grid = {"estimator__max_features": ["sqrt", "log2", None],
-                                    "estimator__n_estimators": [50, 100, 150, 300],
-                                    "estimator__min_impurity_decrease": min_impurity_decrease
-                                    }
+        # self.version = '1.8'
+        # min_impurity_decrease = [10 ** x for x in range(-5, 0)]
+        # min_impurity_decrease.append(0)
+        # self.hyperparameter_grid = {"estimator__max_features": ["sqrt", "log2", None],
+        #                             "estimator__n_estimators": [50, 100, 150, 300],
+        #                             "estimator__min_impurity_decrease": min_impurity_decrease
+        #                             }
+        
+        
 
         self.description = 'sklearn implementation of random forest'
         self.description_url = 'https://scikit-learn.org/stable/modules/generated/sklearn.ensemble.RandomForestClassifier.html'

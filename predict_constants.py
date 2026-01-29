@@ -1,13 +1,14 @@
 
 import math
+from dataclasses import dataclass
 
+@dataclass
 class PredictConstants:
     """Numerical constants for processing and modeling"""
     
     # TODO: move to separate script
     
     TEST_FRAGMENTS = "TEST Fragments"
-        
     SOURCE_CHEMINFORMATICS_MODULES = "Cheminformatics Modules"
 
     # Fraction agreement required to map a DSSTox conflict
@@ -67,6 +68,8 @@ class PredictConstants:
     Applicability_Domain_TEST_Embedding_Euclidean = "TEST Euclidean Distance Embedding Descriptors"  # matches ad_method_name in db
     Applicability_Domain_TEST_All_Descriptors_Cosine = "TEST Cosine Similarity All Descriptors"  # matches ad_method_name in db
     Applicability_Domain_TEST_All_Descriptors_Euclidean = "TEST Euclidean Distance All Descriptors"  # matches ad_method_name in db
+    Applicability_Domain_TEST_Fragment_Counts = "TEST Fragment Counts"  # matches ad_method_name in db
+
     
     Applicability_Domain_OPERA_local_index = "OPERA Local Index"
     Applicability_Domain_OPERA_global_index = "OPERA Global Index"

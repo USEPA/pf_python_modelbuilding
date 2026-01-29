@@ -7,11 +7,11 @@ import numpy as np
 import statistics as stats
 import scipy
 import pickle, csv
-
+import logging
 
 # from applicability_domain import applicability_domain_utilities as adu
 import applicability_domain.applicability_domain_utilities as adu
-
+from predict_constants import PredictConstants as pc
 # from models import df_utilities as DFU
 import model_ws_utilities as mwu
 from models import df_utilities as dfu
@@ -26,7 +26,7 @@ def runModelOptionsTodd():
     
     useModelFiles = False #if false will create pickle file for model, if true it will load from pickle file
     useAD = True
-    adMeasure = adu.strTESTApplicabilityDomainEmbeddingEuclidean
+    adMeasure = pc.Applicability_Domain_TEST_Embedding_Euclidean
 
     # datasetName = 'LD50 TEST'
     datasetName = 'LC50 TEST'
@@ -127,7 +127,7 @@ def runModelOptionsFishTox():
 
     useModelFiles = False  # if false will create pickle file for model, if true it will load from pickle file
     useAD = False
-    adMeasure = adu.strTESTApplicabilityDomainAllDescriptorsEuclideanDistance
+    adMeasure = pc.Applicability_Domain_TEST_Embedding_Euclidean
 
     datasetName = 'ECOTOX_2024_12_12_96HR_Fish_LC50_v3 modeling'
 
@@ -194,7 +194,7 @@ def runModelOptions(datasetName=None):
     
     useModelFiles = False #if false will create pickle file for model, if true it will load from pickle file
     useAD = False
-    adMeasure = adu.strTESTApplicabilityDomainEmbeddingEuclidean
+    adMeasure = pc.Applicability_Domain_TEST_Embedding_Euclidean
 
     # datasetName = 'HLC v1 modeling'
     # datasetName = 'VP v1 modeling'
@@ -218,7 +218,7 @@ def runModelOptions(datasetName=None):
     if 'exp_prop' in datasetName:
         inputFolder = '../datasets_exp_prop/'  
     elif 'v1 modeling' in datasetName:
-        inputFolder = '../datasets_v1_modeling/'
+        inputFolder = '../data/datasets_v1_modeling/'
     elif 'TEST' in datasetName:
         inputFolder = '../datasets_benchmark_TEST/'  
     elif 'OPERA' in datasetName:
@@ -319,7 +319,7 @@ def runLGB(abbrev):
 
     useModelFiles = False  # if false will create pickle file for model, if true it will load from pickle file
     useAD = True
-    adMeasure = adu.strTESTApplicabilityDomainEmbeddingEuclidean
+    adMeasure = pc.Applicability_Domain_TEST_Embedding_Euclidean
 
     # datasetName = 'HLC v1 modeling'
     datasetName = abbrev+' v1 modeling'
@@ -514,7 +514,7 @@ def save_json_file(df_results_all, embeddings, fileOut, mp, hyperparameters=None
     print(json.dumps(results))
     print(statistics)
 
-    import ModelBuilder
+    from models import ModelBuilder
 
     if mp.useEmbeddings:
         if mp.use_permutative:
@@ -1508,8 +1508,8 @@ def runDatasets():
 
 if __name__ == "__main__":
 
-    runDatasets()
-    # runModelOptions()
+    # runDatasets()
+    runModelOptions()
 
 
 

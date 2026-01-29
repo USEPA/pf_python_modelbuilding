@@ -2,7 +2,7 @@
 Created on Dec 4, 2024
 @author: TMARTI02
 '''
-
+import logging
 import statistics as stats
 
 # To avoid having to type rmb. for each method

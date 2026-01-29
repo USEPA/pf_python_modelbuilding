@@ -17,6 +17,9 @@ from sklearn.metrics import balanced_accuracy_score
 import pandas as pd
 # from afxres import AFX_IDS_COMPANY_NAME
 
+from predict_constants import PredictConstants
+from pandas.io.clipboard import init_klipper_clipboard
+
 debug = False
 
 class helpers:
@@ -43,6 +46,7 @@ class ApplicabilityDomainStrategy:
         self.response = None
         self.parameters = None
         self.is_categorical = is_categorical
+        self.splitting_value = None
 
     def setEmbedding(self, embedding):
         self.embedding = embedding
@@ -91,8 +95,10 @@ class ApplicabilityDomainStrategy:
         neighbors = [test_indices[:, i] for i in range(self.parameters['k'])]
         # Retrieve IDs for each neighbor and combine them into a list
         ids_combined = [self.TrainSet[col_name_id].loc[neighbor].tolist() for neighbor in neighbors]
+
         # Transpose ids_combined to align with test_indices rows
         ids_combined_transposed = np.array(ids_combined).T.tolist()
+        # ids_combined_transposed = [list(col) for col in zip(*ids_combined)] # make it json serializable by not using np.array
         
         # print(ids_combined_transposed)
         
@@ -332,17 +338,17 @@ class TESTApplicabilityDomain(ApplicabilityDomainStrategy):
         self.TestSet['TESTSimilarity'] = test_TESTSimilarity
         ###
 
-        self.splitSimilarity = helpers.find_split_value(train_TESTSimilarity, self.parameters['fractionTrainingSetInsideAD'])
+        self.splitting_value = helpers.find_split_value(train_TESTSimilarity, self.parameters['fractionTrainingSetInsideAD'])
 
         if debug:
-            print('splitSimilarity', self.splitSimilarity)
+            print('splitting_value', self.splitting_value)
             
         self.TrainSet[self.AD_Label] = True
         self.TestSet[self.AD_Label] = True
 
         # Sklearn similarities are actually distances (1-SC), so if distance > cutoff it's outside AD:
-        self.TrainSet.loc[self.TrainSet['TESTSimilarity'] > self.splitSimilarity, self.AD_Label] = False
-        self.TestSet.loc[self.TestSet['TESTSimilarity'] > self.splitSimilarity, self.AD_Label] = False
+        self.TrainSet.loc[self.TrainSet['TESTSimilarity'] > self.splitting_value, self.AD_Label] = False
+        self.TestSet.loc[self.TestSet['TESTSimilarity'] > self.splitting_value, self.AD_Label] = False
 
         # print(self.TestSet[self.AD_Label])  # array of whether or not it's in AD
 
@@ -378,19 +384,168 @@ class TESTApplicabilityDomain(ApplicabilityDomainStrategy):
         t2 = time.time()
         # print((t2-t1),' secs to evaluate')
 
-        # adResults = ADResults(AD, self.splitSimilarity, results)
+        # adResults = ADResults(AD, self.splitting_value, results)
         # print(json.dumps(adResults.__dict__,indent=4))
 
         return results
 
 
-
+# TODO convert to dataclass:
 class ADResults:
     def __init__(self, AD, splitSimilarity,results):
         self.AD = AD
-        self.splitSimilarity = splitSimilarity
+        self.splitting_value = splitSimilarity
         self.results = results
 
+
+class TESTFragmentCounts(ApplicabilityDomainStrategy):
+    
+    def __init__(self, TrainSet, TestSet, is_categorical):
+        ApplicabilityDomainStrategy.__init__(self, TrainSet, TestSet, is_categorical)
+        
+    def evaluate(self, embedding):
+        
+        # Define the fragment range
+        start_column = "As [+5 valence, one double bond]"
+        stop_column = "-N=S=O"
+        
+        # Subset the test set to the fragment range
+        df_new = self.TestSet.loc[:, start_column:stop_column]
+        
+        # Keep only fragments that also exist in the training set
+        common_columns = df_new.columns.intersection(self.TrainSet.columns)
+        
+        # Training stats for each fragment
+        min_values = (
+            self.TrainSet[common_columns]
+            .apply(lambda col: col[col > 0].min())
+            .fillna(0)
+        )
+        max_values = self.TrainSet[common_columns].max()
+        
+        # Count how many training chemicals contain each fragment
+        training_count = (self.TrainSet[common_columns] > 0).sum()
+        
+        # Build a long-format dataframe of test counts for all chemicals/fragments
+        results_df = (
+            df_new[common_columns]
+            .reset_index()  # preserves the original test chemical index
+            .rename(columns={'index': 'test_chemical'})  # name the index column
+            .melt(id_vars=['test_chemical'], var_name='fragment', value_name='test_count')
+        )
+        
+        # Keep only fragments that are present in the test chemical (count > 0)
+        results_df = results_df[results_df['test_count'] > 0]
+        
+        # Attach training stats per fragment
+        train_stats = pd.DataFrame({
+            'fragment': common_columns,
+            'training_min': min_values.values,
+            'training_max': max_values.values,
+            'training_count': training_count.values
+        })
+        results_df = results_df.merge(train_stats, on='fragment', how='left')
+        
+        # Add the ID from self.TestSet to results_df
+        if 'ID' in self.TestSet.columns:
+            results_df['idTest'] = results_df['test_chemical'].map(self.TestSet['ID'])
+        else:
+            # Fallback: if there's no ID column, use the original index as an identifier
+            results_df['idTest'] = results_df['test_chemical']
+        
+        # Build per_chemical_df:
+        # - fragment_table: list of dicts with fragment-level details
+        # - AD: True if all test_count values are within [training_min, training_max]
+        def _build_row(group: pd.DataFrame) -> dict:
+            frag_table = group[['fragment', 'test_count', 'training_min', 'training_max', 'training_count']] \
+                .to_dict(orient='records')
+            in_bounds = (group['test_count'] >= group['training_min']) & (group['test_count'] <= group['training_max'])
+            return {
+                'idTest': group['idTest'].iloc[0],
+                'fragment_table': frag_table,
+                'AD': bool(in_bounds.all())
+            }
+        
+        if results_df.empty:
+            per_chemical_df = pd.DataFrame(columns=['idTest', 'fragment_table', 'AD'])
+        else:
+            rows = [_build_row(g) for _, g in results_df.groupby('idTest', sort=False)]
+            per_chemical_df = pd.DataFrame(rows, columns=['idTest', 'fragment_table', 'AD'])
+            
+            print(f"First row of frag AD results:{json.dumps(per_chemical_df.loc[0].to_dict(),indent=4)}")
+        
+        return per_chemical_df
+        
+
+# At this point:
+# - results_df contains long-form rows for all nonzero fragments per test chemical.
+# - per_chemical is a dict keyed by ID, each value includes ID and lists of fragments/stats.
+# - per_chemical_df is the dataframe version of per_chemical, with an AD column indicating
+#   whether all fragment test_counts are within training bounds.
+
+# At this point:
+# - results_df contains long-form rows for all nonzero fragments per test chemical.
+# - per_chemical is a dict keyed by ID, each value includes ID and lists of fragments/stats.
+# - per_chemical_df is the dataframe version of per_chemical; first row printed above.        
+
+        
+        # start_column = "As [+5 valence, one double bond]"
+        # stop_column = "-N=S=O"
+        #
+        # # TODO technically it should check if the test chemical has a fragment not in the embedding and not just in the training set range
+        #
+        #
+        # df_new = self.TestSet.loc[:, start_column:stop_column]
+        # columns_greater_than_zero = df_new.iloc[0] > 0
+        # df_new = df_new.loc[:, columns_greater_than_zero]
+        # common_columns = df_new.columns.intersection(self.TrainSet.columns)
+        #
+        # # # Calculate min and max for each common column in df_training
+        # # min_values = df_training[common_columns].apply(lambda col: col[col > 0].min())
+        # min_values = (self.TrainSet[common_columns].apply(lambda col: col[col > 0].min()).fillna(0))        
+        #
+        # # check the count of chemicals containing the fragment in the training set
+        #
+        #
+        # max_values = self.TrainSet[common_columns].max()
+        #
+        # results = {
+        #     "test_chemical": df_new.loc[0, common_columns].to_dict(),
+        #     "training_min": min_values.to_dict(),
+        #     "training_max": max_values.to_dict()
+        # }
+        #
+        # # modelResults.adResultsFrag = results
+        # print(json.dumps(results, indent=4))
+        #
+        # outside_ad = False
+        #
+        # for col_name in results["test_chemical"].keys():
+        #     test_value = int(results["test_chemical"][col_name])
+        #     training_min = int(results["training_min"][col_name])    
+        #     training_max = int(results["training_max"][col_name])
+        #
+        #             # Determine if the row should be highlighted
+        #     if test_value < training_min or test_value > training_max:
+        #         outside_ad = True
+        #
+        # adResultsFrag = {}
+        # adResultsFrag["adMethod"] = {}
+        # adResultsFrag["adMethod"]["name"] = PredictConstants.TEST_FRAGMENTS
+        # adResultsFrag["adMethod"]["description"] = "Whether or not the fragment counts are within the range for chemicals in the training set"
+        #
+        # adResultsFrag["AD"] = not outside_ad
+        # adResultsFrag["fragmentTable"] = results     
+        #
+        # if outside_ad: 
+        #     adResultsFrag["reasoning"] = "fragment counts were not within the training set range"
+        #     adResultsFrag["conclusion"] = "Outside"
+        # else:
+        #     adResultsFrag["reasoning"] = "fragment counts were within the training set range"
+        #     adResultsFrag["conclusion"] = "Inside"
+        #
+        # return "TODO"
+        #
 
 
 # %%
@@ -492,7 +647,6 @@ class KernelDensityApplicabilityDomain(ApplicabilityDomainStrategy):
 
         # print (results)
         return results
-
 
 
 
@@ -760,7 +914,7 @@ class OPERALocalApplicabilityDomain(ApplicabilityDomainStrategy):
 
         # self.splitting_value=0.065
 
-        print('cutoff opera local index=', self.splitting_value)
+        # print('cutoff opera local index=', self.splitting_value)
 
 
         # print('splitting value=',self.splitting_value)
@@ -824,14 +978,16 @@ class OPERAGlobalApplicabilityDomain(ApplicabilityDomainStrategy):
 
         leverages_train = np.matmul(train_x, np.matmul(invXTX, train_x.transpose())).diagonal()
         leverages_test = np.matmul(test_x, np.matmul(invXTX, test_x.transpose())).diagonal()
+        
+        # print(leverages_train)
+        # print(leverages_test)
 
         self.splitting_value = helpers.find_split_value(list(leverages_train), self.parameters['fractionTrainingSetInsideAD'])
 
         cutoff_OPERA = 3 * train_x.shape[1]/train_x.shape[0] # 3 x p /n used by OPERA and in stats books
-
         # self.splitting_value=cutoff_OPERA
 
-        print('cutoff_OPERA=',cutoff_OPERA, 'splittingValue=',self.splitting_value)  #they come out pretty similar
+        # print('cutoff_OPERA=',cutoff_OPERA, 'splittingValue=',self.splitting_value)  #they come out pretty similar
 
         self.TestSet[self.AD_Label] = True
         self.TestSet.loc[leverages_test > self.splitting_value, self.AD_Label] = False

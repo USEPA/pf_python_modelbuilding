@@ -2196,6 +2196,30 @@ class ModelPredictor:
         qsarSmiles = chemical["canonicalSmiles"]
         logging.debug(f"qsarSmiles: {qsarSmiles}")
         return chemical, 200
+    
+        
+    def standardizeStructure2(self, serverAPIs, smiles, qsarReadyRuleSet, omitSalts):
+        useFullStandardize = False
+        qsAPI = QsarSmilesAPI()
+        chemicals, code = qsAPI.call_qsar_ready_standardize_post(server_host=serverAPIs, smiles=smiles, full=useFullStandardize,
+                                                           workflow=qsarReadyRuleSet)
+        logging.debug(chemicals)
+
+        if code == 500:
+            return smiles + ": could not generate QSAR Ready SMILES", code 
+                
+        if len(chemicals) == 0:
+            # logging.debug('Standardization failed')
+            return f"{smiles} failed standardization" if smiles else 'No Structure', 400
+
+        if len(chemicals) > 1 and omitSalts:
+            # print('qsar smiles indicates mixture')
+            return f"{smiles}: model can't run mixtures", 400
+
+        chemical = chemicals[0]
+        qsarSmiles = chemical["canonicalSmiles"]
+        logging.debug(f"qsarSmiles: {qsarSmiles}")
+        return chemical, 200
 
     def predictSetFromDB_SmilesFromExcel(self, model_id, excel_file_path, sheetName):
         """

@@ -10,7 +10,7 @@ import json
 # from numpy.ma.testutils import assert_equal
 
 host = "http://v2626umcth882.rtord.epa.gov:8080"
-# host = "http://localhost:5005"
+# host = "http://localhost:5005" # running on uvicorn.exe on local machine
 
 class Test(unittest.TestCase):
 
@@ -40,7 +40,7 @@ class Test(unittest.TestCase):
         count_failed = 0
         
         for smiles in smiles_list:
-            params = {'smiles': {smiles}, 'model_id': '1065','report_format':'json'}       
+            params = {'smiles': {smiles}, 'model_id': '1069','report_format':'json'}       
             url = host + "/api/predictor_models/predict"        
             response = requests.get(url, params) # need to use requests because cant pass parameters otherwise for flask       
             print(f"Status Code: {response.status_code}, smiles: {smiles}")
@@ -56,7 +56,7 @@ class Test(unittest.TestCase):
         
         payload = json.dumps({
           "smiles": smiles_list,
-          "model_id": 1065
+          "model_id": 1069
         })
         
         headers = {
