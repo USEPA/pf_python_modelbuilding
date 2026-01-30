@@ -184,6 +184,27 @@ def add_new_descriptors(fraction_of_max_importance, max_descriptor_count, min_de
                     new_descriptors.append(descriptor)
 
 
+def perform_sequential_feature_selection(model,df_training):
+    
+    from sklearn.feature_selection import SequentialFeatureSelector
+    
+    train_ids, train_labels, train_features, train_column_names = \
+    DFU.prepare_instances2(df_training, model.embedding,True)
+
+    sfs = SequentialFeatureSelector(
+        model.model_obj.steps[1][1], 
+        n_features_to_select='auto', # or integer, e.g., 3
+        direction='backward',         # 'forward' or 'backward'
+        cv=5,
+        n_jobs=-1
+    )
+    
+    # 5. Fit SFS
+    sfs.fit(train_features, train_labels)
+    
+    model.embedding = sfs.get_feature_names_out().tolist()
+    
+
 def perform_recursive_feature_elimination(model, df_training, n_threads, n_steps):
     '''
     Runs CV recursive_feature_elimination

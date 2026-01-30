@@ -62,11 +62,7 @@ importance_type = 'weight' #default, TODO make a passable parameter to app when 
 # importance_type = 'total_gain'
 # importance_type ='total_cover'
 
-
-
-
-
-
+SEED=42
 
 def model_registry_model_obj(regressor_name, is_categorical):
     '''
@@ -84,30 +80,30 @@ def model_registry_model_obj(regressor_name, is_categorical):
             return KNeighborsRegressor()
     elif regressor_name == 'rf':
         if is_categorical:
-            return RandomForestClassifier()
+            return RandomForestClassifier(random_state=SEED)
         else:
-            return RandomForestRegressor()
+            return RandomForestRegressor(random_state=SEED)
     elif regressor_name == 'svm':
         if is_categorical:
-            return SVC(probability=True)
+            return SVC(probability=True, random_state=SEED)
         else:
-            return SVR()
+            return SVR(random_state=SEED)
     elif regressor_name == 'xgb':
         if is_categorical:
             # return XGBClassifier()
             # return XGBClassifier(use_label_encoder=False, eval_metric='logloss')
-            return XGBClassifier(eval_metric='logloss')
+            return XGBClassifier(eval_metric='logloss',random_state=SEED)
             # return XGBClassifier(use_label_encoder=False, eval_metric='auc')
         else:
-            return XGBRegressor(importance_type=importance_type)
+            return XGBRegressor(importance_type=importance_type, random_state=SEED)
     elif regressor_name == 'lgb':
         if is_categorical:
             # return XGBClassifier()
             # return XGBClassifier(use_label_encoder=False, eval_metric='logloss')
-            return LGBMClassifier(eval_metric='logloss')
+            return LGBMClassifier(eval_metric='logloss',random_state=SEED)
             # return XGBClassifier(use_label_encoder=False, eval_metric='auc')
         else:
-            return LGBMRegressor(eval_metric='rmse')
+            return LGBMRegressor(eval_metric='rmse',random_state=SEED,)
     
     elif regressor_name == 'reg' or regressor_name == 'gcm':
         # return LinearRegression()
@@ -160,7 +156,7 @@ class Model:
         # self.coeff = None
         self.is_binary = None
         self.training_stats = {}
-        self.seed = 11171992
+        self.seed = SEED
 
         self.description = None
         self.description_url = None
@@ -1056,7 +1052,7 @@ class LGB(Model):
 
         # self.hyperparameter_grid = {'estimator__booster':['gbtree', 'gblinear','dart']}  #other two make it run a lot slower
 
-        self.self.qsar_method_version = '1.0'
+        self.qsar_method_version = '1.0'
 
         # 'weight': The default for , this represents the number of times a feature is used to split data across all trees.
         # 'gain': The default for the scikit-learn API's attribute, this is the average gain across all splits where the feature is used. Gain is the improvement in accuracy from a feature on its branches.
@@ -1101,9 +1097,9 @@ class RF(Model):
         self.regressor_name = "rf"
 
         self.version = '1.4'
-        self.hyperparameter_grid = {'max_features': ['sqrt', 'log2'],
-                                     'min_impurity_decrease': [10 ** x for x in range(-5, 0)],
-                                     'n_estimators': [10, 100, 250, 500]}
+        self.hyperparameter_grid = {'estimator__max_features': ['sqrt', 'log2'],
+                                     'estimator__min_impurity_decrease': [10 ** x for x in range(-5, 0)],
+                                     'estimator__n_estimators': [10, 100, 250, 500]}
 
         # following didnt seem to help at all for predicting PFAS properties:
         # self.hyperparameter_grid = {"estimator__max_features": ["sqrt", "log2"],

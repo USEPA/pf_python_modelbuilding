@@ -21,6 +21,9 @@ from pathlib import Path
 from model_ws_utilities import call_build_embedding_ga_db, call_build_model_with_preselected_descriptors_from_df, \
     call_do_predictions_from_df, call_build_embedding_importance_from_df
 
+from models.EmbeddingFromImportance import perform_recursive_feature_elimination as run_rfe
+from models.EmbeddingFromImportance import perform_sequential_feature_selection as run_sfs
+
 import StatsCalculator as sc
 
 from models.dataset_utilities_db import get_training_prediction_instances, get_training_cv_instances
@@ -91,6 +94,8 @@ class ParametersImportance:
             self.fraction_of_max_importance = 0.25
         elif method == "xgb":
             self.fraction_of_max_importance = 0.03
+        elif method == "lgb":
+            self.fraction_of_max_importance = 0.03 #TODO this needs checking
         else:
             raise ValueError(f"invalid method: {self.qsar_method}")
 
@@ -591,17 +596,27 @@ def set_hyper_parameters(qsar_method, feature_selection, descriptor_set_name, da
                                       descriptor_set_name=descriptor_set_name, dataset_name=dataset_name)
         
         # print(params.dataset_name)
+        
+    elif qsar_method == "lgb":
+        grid = {}        
+        params = ParametersImportance(qsar_method=qsar_method, feature_selection=feature_selection, hyperparameter_grid=grid,
+                                      descriptor_set_name=descriptor_set_name, dataset_name=dataset_name)
     
     elif qsar_method == "rf":
-        # grid = {'max_features': ['sqrt', 'log2'],'min_impurity_decrease': [10 ** x for x in range(-5, 0)],
-        #         'n_estimators': [10, 100, 250, 500]}
-        grid = {"estimator__max_features": ["sqrt", "log2"]}
+        grid = {'estimator__max_features': ['sqrt', 'log2'],
+                                     'estimator__min_impurity_decrease': [10 ** x for x in range(-5, 0)],
+                                     'estimator__n_estimators': [10, 100, 250, 500]}
+
+        # grid = {"estimator__max_features": ["sqrt", "log2"]}
 
         params = ParametersImportance(qsar_method=qsar_method, feature_selection=feature_selection, hyperparameter_grid=grid,
                                       descriptor_set_name=descriptor_set_name, dataset_name=dataset_name)
 
     elif qsar_method == "knn": 
-        grid = {'estimator__n_neighbors': [5], 'estimator__weights': ['distance']}  # default, same as OPERA
+        # grid = {'estimator__n_neighbors': [5], 'estimator__weights': ['distance']}  # default, same as OPERA
+        
+        grid = {'estimator__n_neighbors': [3], 'estimator__weights': ['distance']} # matches AD in terms of using 3
+        
         params = ParametersGeneticAlgorithm(qsar_method=qsar_method, hyperparameter_grid=grid,
                                             descriptor_set_name=descriptor_set_name, dataset_name=dataset_name)
 
@@ -707,36 +722,41 @@ def run_dataset(dataset_name):
 # TODO: reg model using descriptors from XGB or RF model
 # TODO: gcm model that uses reg with fragment descriptors such that it deletes rows with less than 3 instances and the associated rows
 
-    descriptor_set_name = "WebTEST-default"
+    descriptor_set_name = "WebTEST-default"  #TODO does add the LOGP predicted from my LOGP model improve the results?
     splitting_name = "RND_REPRESENTATIVE"
 
-    qsar_method = 'gcm'
+    # qsar_method = 'gcm'
     # qsar_method = 'xgb'
-    # qsar_method = 'rf'
+    qsar_method = 'rf'
     # qsar_method = 'knn'
     # qsar_method = 'reg'  #TODO see if using embedding from RF/XGB works better, add RFE so that unneeded features are removed
     # qsar_method = 'las'
+    # qsar_method = 'lgb'
     # qsar_method = 'svm'
     
-    cross_validate = False
+    cross_validate = True
     run_AD = True
 
     embedding = None
     folder_embedding = None
-    feature_selection = False
+    
+    feature_selection = True #***
     
     use_previous_embedding= False #load embedding from a json file
     rfe_previous_embedding = True # run RFE on previous embedding so dont have descriptors that dont help the REG model (have large standard error)  
     
     if use_previous_embedding: #TODO make a method that can take from embedding in database rather than JSON file
         feature_selection = False
-        folder_embedding="xgb_WebTEST-default_fs=True"
+        # folder_embedding="xgb_WebTEST-default_fs=True"
         # folder_embedding="rf_WebTEST-default_fs=True"
+        folder_embedding="knn_WebTEST-default_fs=False_rf_WebTEST-default_fs=True"
         file_name_embedding="results.json"
         file_path_embedding=os.path.join(PROJECT_ROOT,"data/models", dataset_name, folder_embedding, file_name_embedding)
+        
         with open(file_path_embedding, "r", encoding="utf-8") as f:
             results = json.load(f)
             embedding = results["embedding"] 
+            print(f"from {folder_embedding}:{embedding}")
         
     # if True:
     #     return
@@ -785,6 +805,9 @@ def run_dataset(dataset_name):
                 
     df_predictions, test_stats, model = mb.build_and_test_model(df_training, df_prediction, params, embedding)
     # print(df_predictions)
+    
+    # print("is_binary=",model.is_binary)
+    
 
     # if qsar_method == 'gcm':
     #     embedding = model.embedding #for gcm embedding is generated during model building to avoid duplication of code
@@ -792,11 +815,15 @@ def run_dataset(dataset_name):
     print(f"Before RFE {len(model.embedding)} descriptors: {model.embedding}")
     
     if use_previous_embedding and rfe_previous_embedding:
-        from models.EmbeddingFromImportance import perform_recursive_feature_elimination as run_rfe
-        run_rfe(model, df_training, 1, 1)
-        print(f"After RFE {len(model.embedding)} descriptors: {model.embedding}")
+
+        if qsar_method =='knn':
+            run_sfs(model, df_training)
+        else:
+            run_rfe(model, df_training, 1, 1)
+
+        # redo model and predictions:
         df_predictions, test_stats, model = mb.build_and_test_model(df_training, df_prediction, params, model.embedding)
-        
+        print(f"After RFE {len(model.embedding)} descriptors: {model.embedding}")
     
     embedding = None # use model.embedding from here on 
     
@@ -1003,35 +1030,33 @@ class Results:
         return df_stats, excel_path
 
 
-    def print_stats_models_in_folder(self, dataset_name):
-        
-        folder_main=r"C:\Users\TMARTI02\OneDrive - Environmental Protection Agency (EPA)\0 python\modeling services\pf_python_modelbuilding\data\models"
-        folder=os.path.join(folder_main, dataset_name)
-        
-        from pathlib import Path
-        
-        print("\n\nStats for all models for "+dataset_name)
-        print("Run\tMAE_Test\tMAE_Training_CV\t#_variables")
-        
-        for entry in Path(folder).iterdir():
-            if entry.is_dir():
-                json_path = entry / "results.json"
-                if json_path.is_file():
-                    try:
-                        with json_path.open("r", encoding="utf-8") as f:
-                            results = json.load(f)  # this is a dict
-                            
-                            lenEmbedding="N/A"
-                            
-                            if "len(embedding)" in results:
-                                lenEmbedding=results["len(embedding)"]
-                            elif "embedding" in results:
-                                lenEmbedding=len(results["embedding"])
-                            
-                            print(f"{entry.name}\t{results['test_stats']['MAE_Test']:.3f}\t{results['cv_stats']['MAE_Test']:.3f}\t{lenEmbedding}")
-                            
-                    except json.JSONDecodeError as e:
-                        print(f"Skipping {json_path}: invalid JSON ({e})")
+    # def print_stats_models_in_folder(self, dataset_name):
+    #
+    #     folder_main=r"C:\Users\TMARTI02\OneDrive - Environmental Protection Agency (EPA)\0 python\modeling services\pf_python_modelbuilding\data\models"
+    #     folder=os.path.join(folder_main, dataset_name)
+    #
+    #     print("\n\nStats for all models for "+dataset_name)
+    #     print("Run\tMAE_Test\tMAE_Training_CV\t#_variables")
+    #
+    #     for entry in Path(folder).iterdir():
+    #         if entry.is_dir():
+    #             json_path = entry / "results.json"
+    #             if json_path.is_file():
+    #                 try:
+    #                     with json_path.open("r", encoding="utf-8") as f:
+    #                         results = json.load(f)  # this is a dict
+    #
+    #                         lenEmbedding="N/A"
+    #
+    #                         if "len(embedding)" in results:
+    #                             lenEmbedding=results["len(embedding)"]
+    #                         elif "embedding" in results:
+    #                             lenEmbedding=len(results["embedding"])
+    #
+    #                         print(f"{entry.name}\t{results['test_stats']['MAE_Test']:.3f}\t{results['cv_stats']['MAE_Test']:.3f}\t{lenEmbedding}")
+    #
+    #                 except json.JSONDecodeError as e:
+    #                     print(f"Skipping {json_path}: invalid JSON ({e})")
     
 
 if __name__ == '__main__':

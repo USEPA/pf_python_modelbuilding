@@ -712,7 +712,16 @@ def do_remove_correlated_descriptors(df, threshold):
     """Removes descriptors correlated above a certain threshold
     Adapted from https://www.projectpro.io/recipes/drop-out-highly-correlated-features-in-python
     """
+    # corr = df.corr().abs()
+    # upper = corr.where(np.triu(np.ones(corr.shape), k=1).astype(bool))
+    # corr_to_drop = [column for column in upper.columns if any(upper[column] > threshold)]
+    # df.drop(corr_to_drop, axis=1, inplace=True)
+    
+    # to avoid "A value is trying to be set on a copy of a slice from a DataFrame" error:
+    # Ensure df is a full, explicit copy of the data, not a view/slice
+    df = df.copy() 
     corr = df.corr().abs()
     upper = corr.where(np.triu(np.ones(corr.shape), k=1).astype(bool))
     corr_to_drop = [column for column in upper.columns if any(upper[column] > threshold)]
-    df.drop(corr_to_drop, axis=1, inplace=True)
+    # Drop the columns without using inplace=True
+    df = df.drop(corr_to_drop, axis=1) 

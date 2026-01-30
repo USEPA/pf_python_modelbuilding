@@ -24,9 +24,8 @@ from utils import to_json_safe
 
 folder = r"C:\Users\TMARTI02\OneDrive - Environmental Protection Agency (EPA)\Comptox\000 scientists\keith salazar"
 
-from dataclasses import dataclass, asdict
-
-from typing import Optional, Dict, Any
+# from dataclasses import dataclass, asdict
+# from typing import Optional, Dict, Any
 
 box_style_true  = "display:inline-block; padding:4px 8px; border:2px solid #2e7d32; border-radius:6px; background:#e8f5e9; color:#2e7d32; font-weight:600;"
 box_style_false = "display:inline-block; padding:4px 8px; border:2px solid #c62828; border-radius:6px; background:#ffebee; color:#c62828; font-weight:600;"
@@ -58,11 +57,6 @@ def get_neighbors(row, df_train_ids):
         neighbors.append(neighbor)        
 
     return neighbors
-
-
-
-
-
 
 
 def addStructureImage(cid, smiles):
@@ -209,31 +203,18 @@ def create_webpage(results, out_path='results.html', title='Results'):
 
         t = table()
         with t:
-            # Single-column header: Structure + CID in the same cell
-            
-            # result0=results[0]
-            
             with thead():
                 with tr():
                     th('Chemical')                
                     th('Applicability Domains')
-                    
-                    # for applicability_domain in result0["applicability_domains"]:
-                    #     th(applicability_domain["adMethod"]["name"]) 
-
-            # Body rows
             tbody()
-            
             for result in results:
                 cid = result["CID"]
                 smiles = result["canonicalSmiles"]
-                
                 ads = result["applicability_domains"]                
-                
                 with tr():
                     with td():
                         addStructureImage(cid, smiles)
-                    
                     with td():
                         with table():
                             for ad in ads:
@@ -320,7 +301,7 @@ def determine_ad():
     
     print(json.dumps(results,indent=4))
     out_path = os.path.join(folder, "results.html")
-    create_webpage(results, out_path,"Applicability Domain Results for Sophorolipids for Respiratory Irritation Model by Chushak et al.(2025)")
+    create_webpage(results, out_path,"Applicability Domain Results for Sophorolipids for Respiratory Irritation Model by Chushak et al. (2025)")
 
 
 def runAD(df_training, df_prediction, embedding, ad_measure):
@@ -405,33 +386,6 @@ def create_df():
                 values_prefix = [chemical["CID"], qsarSmiles, chemical["Property"]]
                 values_desc = [v.item() if hasattr(v, "item") else v for v in desc_row.tolist()]
                 writer.writerow(values_prefix + values_desc)
-
-            # if row.Index == 3:
-            #     break
-            
-    # with open(os.path.join(folder, "chemicals.json"), "w", encoding="utf-8") as f:
-    #     json.dump(chemicals, f, indent=2, ensure_ascii=False)
-    
-        # if code != 200:
-        #     error = chemical
-        #     chemical = {}
-        #     chemical["chemId"] = smiles  # TODO add inchiKey
-        #     chemical["smiles"] = smiles
-        #     img_base64 = self.smiles_to_base64(chemical["smiles"])
-        #
-        #     if img_base64: 
-        #         chemical["imageSrc"] = f'data:image/png;base64,{img_base64}'
-        #     else:
-        #         chemical["imageSrc"] = "N/A"
-        #
-        #     print(smiles,"error generating qsar smiles")
-        #     continue
-        #
-        # if "smiles" in chemical and "cid" not in chemical:
-        #     img_base64 = self.smiles_to_base64(chemical["smiles"])
-        #     chemical["imageSrc"] = f'data:image/png;base64,{img_base64}'
-        # else:
-        #     chemical["imageSrc"] = imgURLCid + chemical["cid"]
 
 
 if __name__ == '__main__':
