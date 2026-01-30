@@ -333,9 +333,9 @@ class ExcelCreator:
         col_idx = df.columns.get_loc(column_name)
     
         # Rows (0-based): header at 0, data 1..nrows
-        subtotal_row = nrows + 1
-        fraction_row = nrows + 2
-        visible_row  = nrows + 3
+        subtotal_row = nrows + 2
+        fraction_row = nrows + 3
+        visible_row  = nrows + 4
     
         # Label column: place next to the formula cells
         label_col = col_idx - 1 if col_idx > 0 else col_idx + 1
@@ -360,7 +360,7 @@ class ExcelCreator:
             ws.write_formula(visible_row, col_idx, visible_count_formula)
     
             # fraction_inside = visible_count / numeric_count for that column (guard against divide-by-zero)
-            fraction_formula = f"=IF(SUBTOTAL(102,{range_ref})>0,SUBTOTAL(103,{range_ref})/SUBTOTAL(102,{range_ref}),0)"
+            fraction_formula = f"=IF(COUNT({range_ref})>0,SUBTOTAL(103,{range_ref})/COUNT({range_ref}),0)"
             ws.write_formula(fraction_row, col_idx, fraction_formula)
         else:
             # No data rows; write zeros
@@ -668,7 +668,39 @@ def runAD(df_training, df_prediction, params, embedding, df_predictions, ad_meas
     return df_predictions
 
 
+def generate_consensus_ad(df_predictions, stats_dict, ad_measure_final):
+    
+    # Build list of AD columns
+    colsAD = [f"AD_{ad.replace(' ', '_')}" for ad in ad_measure_final]
 
+    # Rows where all AD flags are True (inside consensus AD)
+    mask_all_true = df_predictions[colsAD].eq(True).all(axis=1)
+
+    # MAE inside the consensus AD
+    mae_inside = (df_predictions.loc[mask_all_true, 'exp'] -
+                  df_predictions.loc[mask_all_true, 'pred']).abs().mean()
+
+    # Rows outside consensus AD: at least one AD flag is False
+    mask_outside = ~mask_all_true
+
+    # MAE outside the consensus AD
+    mae_outside = (df_predictions.loc[mask_outside, 'exp'] -
+                   df_predictions.loc[mask_outside, 'pred']).abs().mean()
+                                      
+    mae_ratio = mae_outside / mae_inside
+    
+    ad_measure = " and ".join(ad_measure_final)
+    
+    total_rows = len(df_predictions)
+    coverage = (mask_all_true.sum() / total_rows) if total_rows > 0 else float('nan')
+
+    
+    stats = {"ad_measure":ad_measure, "mae_test_inside": mae_inside, "mae_test_outside": mae_outside, "mae_ratio": mae_ratio,
+             "fraction_inside":coverage}    
+    stats_dict[ad_measure] = stats
+
+    
+    
 
 def run_dataset(dataset_name):
         
@@ -678,25 +710,25 @@ def run_dataset(dataset_name):
     descriptor_set_name = "WebTEST-default"
     splitting_name = "RND_REPRESENTATIVE"
 
-    # qsar_method = 'gcm'
+    qsar_method = 'gcm'
     # qsar_method = 'xgb'
-    qsar_method = 'rf'
+    # qsar_method = 'rf'
     # qsar_method = 'knn'
     # qsar_method = 'reg'  #TODO see if using embedding from RF/XGB works better, add RFE so that unneeded features are removed
     # qsar_method = 'las'
     # qsar_method = 'svm'
     
-    cross_validate = True
+    cross_validate = False
     run_AD = True
 
     embedding = None
     folder_embedding = None
-    feature_selection = True
+    feature_selection = False
     
     use_previous_embedding= False #load embedding from a json file
     rfe_previous_embedding = True # run RFE on previous embedding so dont have descriptors that dont help the REG model (have large standard error)  
     
-    if use_previous_embedding:
+    if use_previous_embedding: #TODO make a method that can take from embedding in database rather than JSON file
         feature_selection = False
         folder_embedding="xgb_WebTEST-default_fs=True"
         # folder_embedding="rf_WebTEST-default_fs=True"
@@ -710,7 +742,7 @@ def run_dataset(dataset_name):
     #     return
 
     # **************************************************************************************************************************
-    ad_measure_final = pc.Applicability_Domain_TEST_Embedding_Euclidean
+    ad_measure_final = [pc.Applicability_Domain_TEST_Embedding_Euclidean, pc.Applicability_Domain_TEST_Fragment_Counts]
     ad_measures = []
     ad_measures.append(pc.Applicability_Domain_TEST_Embedding_Euclidean)
     ad_measures.append(pc.Applicability_Domain_TEST_All_Descriptors_Euclidean)
@@ -783,6 +815,10 @@ def run_dataset(dataset_name):
     if run_AD:
         for ad_measure in ad_measures:
             df_predictions = runAD(df_training, df_prediction, params, model.embedding, df_predictions, ad_measure, stats_dict)
+
+        if len(ad_measure_final)>1:
+            generate_consensus_ad(df_predictions, stats_dict, ad_measure_final)
+        
 
         # print(json.dumps(stats_dict,indent=4))
     
@@ -883,7 +919,8 @@ class Results:
         results_dict["test_stats"] = test_stats
         
         if len(stats_dict)>0:
-            results_dict["test_stats_AD"] = stats_dict[ad_measure_final]
+            str_ad_measure_final = " and ".join(ad_measure_final)                        
+            results_dict["test_stats_AD"] = stats_dict[str_ad_measure_final]
             results_dict["test_stats_all_AD"] = stats_dict
         
         if cv_stats:

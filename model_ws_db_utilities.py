@@ -1770,7 +1770,7 @@ class ModelPredictor:
         
         md.modelStatistics = None
     
-    def smiles_to_base64(self, smiles_string):
+    def smiles_to_base64(self, smiles_string, size=400):
         '''
         TODO: move to utility class
         :param smiles_string:
@@ -1782,8 +1782,8 @@ class ModelPredictor:
         try:
             mol = indigo.loadMolecule(smiles_string)
             indigo.setOption("render-output-format", "png") 
-            indigo.setOption("render-image-width", 400)
-            indigo.setOption("render-image-height", 400)
+            indigo.setOption("render-image-width", size)
+            indigo.setOption("render-image-height", size)
             img_bytes = renderer.renderToBuffer(mol)
             base64_string = base64.b64encode(img_bytes).decode('utf-8')
             return base64_string

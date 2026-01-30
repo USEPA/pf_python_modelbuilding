@@ -404,17 +404,26 @@ class TESTFragmentCounts(ApplicabilityDomainStrategy):
         ApplicabilityDomainStrategy.__init__(self, TrainSet, TestSet, is_categorical)
         
     def evaluate(self, embedding):
-        
         # Define the fragment range
         start_column = "As [+5 valence, one double bond]"
         stop_column = "-N=S=O"
-        
+    
+        # Robustly get the slice between start and stop by position (inclusive),
+        # regardless of column order
+        cols = self.TestSet.columns
+        if start_column not in cols or stop_column not in cols:
+            raise KeyError("Start or stop column not found in TestSet.")
+        lo = cols.get_loc(start_column)
+        hi = cols.get_loc(stop_column)
+        lo, hi = sorted([lo, hi])
+        frag_cols = cols[lo:hi+1]
+    
         # Subset the test set to the fragment range
-        df_new = self.TestSet.loc[:, start_column:stop_column]
-        
+        df_new = self.TestSet.loc[:, frag_cols]
+    
         # Keep only fragments that also exist in the training set
-        common_columns = df_new.columns.intersection(self.TrainSet.columns)
-        
+        common_columns = frag_cols.intersection(self.TrainSet.columns)
+    
         # Training stats for each fragment
         min_values = (
             self.TrainSet[common_columns]
@@ -422,10 +431,10 @@ class TESTFragmentCounts(ApplicabilityDomainStrategy):
             .fillna(0)
         )
         max_values = self.TrainSet[common_columns].max()
-        
+    
         # Count how many training chemicals contain each fragment
         training_count = (self.TrainSet[common_columns] > 0).sum()
-        
+    
         # Build a long-format dataframe of test counts for all chemicals/fragments
         results_df = (
             df_new[common_columns]
@@ -433,10 +442,10 @@ class TESTFragmentCounts(ApplicabilityDomainStrategy):
             .rename(columns={'index': 'test_chemical'})  # name the index column
             .melt(id_vars=['test_chemical'], var_name='fragment', value_name='test_value')
         )
-        
+    
         # Keep only fragments that are present in the test chemical (count > 0)
         results_df = results_df[results_df['test_value'] > 0]
-        
+    
         # Attach training stats per fragment
         train_stats = pd.DataFrame({
             'fragment': common_columns,
@@ -445,14 +454,11 @@ class TESTFragmentCounts(ApplicabilityDomainStrategy):
             'training_count': training_count.values
         })
         results_df = results_df.merge(train_stats, on='fragment', how='left')
-        
-        # Add the ID from self.TestSet to results_df
-        if 'ID' in self.TestSet.columns:
-            results_df['idTest'] = results_df['test_chemical'].map(self.TestSet['ID'])
-        else:
-            # Fallback: if there's no ID column, use the original index as an identifier
-            results_df['idTest'] = results_df['test_chemical']
-        
+    
+        # Correctly attach idTest per row by mapping test_chemical -> first column of TestSet
+        id_map = self.TestSet.iloc[:, 0]  # Series indexed by test chemical index
+        results_df['idTest'] = results_df['test_chemical'].map(id_map)
+    
         # Build per_chemical_df:
         # - fragment_table: list of dicts with fragment-level details
         # - AD: True if all test_value values are within [training_min, training_max]
@@ -465,15 +471,13 @@ class TESTFragmentCounts(ApplicabilityDomainStrategy):
                 'fragment_table': frag_table,
                 'AD': bool(in_bounds.all())
             }
-        
+    
         if results_df.empty:
             per_chemical_df = pd.DataFrame(columns=['idTest', 'fragment_table', 'AD'])
         else:
             rows = [_build_row(g) for _, g in results_df.groupby('idTest', sort=False)]
             per_chemical_df = pd.DataFrame(rows, columns=['idTest', 'fragment_table', 'AD'])
-            
-            # print(f"First row of frag AD results:{json.dumps(per_chemical_df.loc[0].to_dict(),indent=4)}")
-        
+    
         return per_chemical_df
         
 
