@@ -740,12 +740,17 @@ def run_dataset(dataset_name):
     embedding = None
     folder_embedding = None
     
-    feature_selection = True #***
-    
+    feature_selection = False #***
+
+    use_custom_embedding = False
     use_previous_embedding= False #load embedding from a json file
     rfe_previous_embedding = True # run RFE on previous embedding so dont have descriptors that dont help the REG model (have large standard error)  
     
-    if use_previous_embedding: #TODO make a method that can take from embedding in database rather than JSON file
+    if use_custom_embedding:
+        embedding = ['XLOGP', 'XLOGP2', 'piPC08', 'MDEC33', 'BEHm5', 'Hy', 'SsCl', 'Gmax'] #omit ALOGP2
+        folder_embedding = 'custom'
+    
+    elif use_previous_embedding and embedding is None: #TODO make a method that can take from embedding in database rather than JSON file
         feature_selection = False
         # folder_embedding="xgb_WebTEST-default_fs=True"
         # folder_embedding="rf_WebTEST-default_fs=True"
@@ -1029,35 +1034,6 @@ class Results:
         print(f"Saved summary to: {excel_path}")
         return df_stats, excel_path
 
-
-    # def print_stats_models_in_folder(self, dataset_name):
-    #
-    #     folder_main=r"C:\Users\TMARTI02\OneDrive - Environmental Protection Agency (EPA)\0 python\modeling services\pf_python_modelbuilding\data\models"
-    #     folder=os.path.join(folder_main, dataset_name)
-    #
-    #     print("\n\nStats for all models for "+dataset_name)
-    #     print("Run\tMAE_Test\tMAE_Training_CV\t#_variables")
-    #
-    #     for entry in Path(folder).iterdir():
-    #         if entry.is_dir():
-    #             json_path = entry / "results.json"
-    #             if json_path.is_file():
-    #                 try:
-    #                     with json_path.open("r", encoding="utf-8") as f:
-    #                         results = json.load(f)  # this is a dict
-    #
-    #                         lenEmbedding="N/A"
-    #
-    #                         if "len(embedding)" in results:
-    #                             lenEmbedding=results["len(embedding)"]
-    #                         elif "embedding" in results:
-    #                             lenEmbedding=len(results["embedding"])
-    #
-    #                         print(f"{entry.name}\t{results['test_stats']['MAE_Test']:.3f}\t{results['cv_stats']['MAE_Test']:.3f}\t{lenEmbedding}")
-    #
-    #                 except json.JSONDecodeError as e:
-    #                     print(f"Skipping {json_path}: invalid JSON ({e})")
-    
 
 if __name__ == '__main__':
     
