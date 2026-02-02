@@ -410,7 +410,8 @@ def call_build_embedding_importance(qsar_method, training_tsv, prediction_tsv, r
 
 def call_build_embedding_importance_from_df(qsar_method, df_training, df_prediction, remove_log_p_descriptors, n_threads,
                                     num_generations, use_permutative, run_rfe, fraction_of_max_importance,
-                                    min_descriptor_count, max_descriptor_count, use_wards, hyperparameter_grid = None):
+                                    min_descriptor_count, max_descriptor_count, use_wards, hyperparameter_grid = None,
+                                    run_sfs=False):
     """Generates importance based embedding"""
 
     # print('in call_build_embedding_importance, df_training.shape',df_training.shape)
@@ -448,6 +449,10 @@ def call_build_embedding_importance_from_df(qsar_method, df_training, df_predict
             if len(model.embedding) == len(embedding_old):
                 break
             embedding_old = model.embedding
+    
+    if run_sfs:
+        efi.perform_sequential_feature_selection(model=model, df_training=df_training)
+        print("After SFS, ", len(model.embedding), "descriptors", model.embedding)
 
     # Fit final model using final embedding:
     # train_ids, train_labels, train_features, train_column_names = \

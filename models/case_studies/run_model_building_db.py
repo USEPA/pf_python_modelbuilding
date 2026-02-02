@@ -76,13 +76,14 @@ class ParametersImportance:
     use_permutative: bool = True
     use_wards: bool = False
     run_rfe: bool = True
+    run_sfs: bool = True
 
     min_descriptor_count: int = 20
     max_descriptor_count: int = 30
 
     include_standardization_in_pmml: bool = False
     use_pmml_pipeline: bool = False
-    n_threads: Optional[int] = None
+    n_threads: Optional[int] = 4 # Set to n/2 where n is the number of logical processors on your computer
 
     # Derived value (set in __post_init__)
     fraction_of_max_importance: float = field(init=False)
@@ -260,7 +261,7 @@ class EmbeddingGenerator:
             embedding, _ = call_build_embedding_importance_from_df(params.qsar_method, df_training, df_prediction, ip.remove_log_p_descriptors,
                                                        ip.n_threads, ip.num_generations, ip.use_permutative, ip.run_rfe,
                                                        ip.fraction_of_max_importance, ip.min_descriptor_count, ip.max_descriptor_count,
-                                                       ip.use_wards, hyperparameter_grid=ip.hyperparameter_grid)
+                                                       ip.use_wards, hyperparameter_grid=ip.hyperparameter_grid, run_sfs=ip.run_sfs)
 
         elif params.feature_selection_method == feature_selection_method_group_contribution:
             # embedding = call_build_embedding_group_contribution_from_df(df_training, params.min_count)
@@ -557,6 +558,7 @@ class ExcelCreator:
         integer_ticks: bool=True,
         yx_offset_rows: int=3,  # empty rows between data and y=x helper points
     ):
+        # TODO: Change file names for output Excel files under data directory
         with pd.ExcelWriter(excel_path, engine="xlsxwriter") as writer:
             # Write data (now includes abs_diff column)
             workbook = writer.book
@@ -770,7 +772,7 @@ def run_dataset(dataset_name):
     # ad_measures.append(pc.Applicability_Domain_TEST_All_Descriptors_Cosine)
     ad_measures.append(pc.Applicability_Domain_TEST_Fragment_Counts)
     ad_measures.append(pc.Applicability_Domain_OPERA_local_index)
-    ad_measures.append(pc.Applicability_Domain_OPERA_global_index)
+    # ad_measures.append(pc.Applicability_Domain_OPERA_global_index) # Turn off when not doing feature selection on knn, fails due to a matrix singularity
     # ******************************************************************************************************
     # Print main info:
     logging.info(f"dataset_name={dataset_name}")
