@@ -1,5 +1,6 @@
 '''
 Created on Feb 3, 2026
+This script uses the sklearn_genetic package to perform genetic algorithm feature selection
 
 @author: TMARTI02
 '''

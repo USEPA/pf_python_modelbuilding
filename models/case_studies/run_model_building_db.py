@@ -156,8 +156,8 @@ class ParametersGeneticAlgorithm:
     feature_selection: bool = False
     remove_log_p_descriptors: bool = False
 
-    num_generations: int = 200
-    num_optimizers: int = 200
+    num_generations: int = 100
+    num_optimizers: int = 100
     num_jobs: int = 4
     n_threads: Optional[int] = None  # set to an int (e.g., 4) if you want to pin threads
     max_length: int = 24  # max number of variables
