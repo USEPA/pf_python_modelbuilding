@@ -33,9 +33,6 @@ from models.dataset_utilities_db import get_training_prediction_instances, get_t
 from utils import print_first_row
 
 from applicability_domain import applicability_domain_utilities as  adu
-from pickle import FALSE
-from pip_requirements_parser import use_feature
-from models.genetic_optimizer import MUTATION_PROBABILITY
 
 custom_level_styles = {
     'debug': {'color': 'cyan'},
@@ -1096,73 +1093,3 @@ class Results:
     
         print(f"Saved summary to: {excel_path}")
         return df_stats, excel_path
-
-def run_fish_tox():
-    
-    dataset_name = 'ECOTOX_2024_12_12_96HR_Fish_LC50_v3 modeling'
-    
-    
-    run_dataset(dataset_name=dataset_name,qsar_method='rf',feature_selection=True)
-    run_dataset(dataset_name=dataset_name,qsar_method='rf',feature_selection=False)
-    run_dataset(dataset_name=dataset_name,qsar_method='xgb',feature_selection=True)
-    run_dataset(dataset_name=dataset_name,qsar_method='xgb',feature_selection=False)
-    
-    r = Results()
-    r.summarize_model_stats(dataset_name)
-
-
-def run_Koc_knn_ga():
-    
-    descriptor_set_name = "WebTEST-default"
-    dataset_name = "KOC v1 modeling"
-    
-
-    grid = {'estimator__n_neighbors': [3], 'estimator__weights': ['distance']} # matches AD in terms of using 3
-    params = ParametersGeneticAlgorithm(qsar_method='knn', hyperparameter_grid=grid,
-                                        descriptor_set_name=descriptor_set_name, dataset_name=dataset_name, 
-                                        run_rfe=False)
-    params.num_optimizers=1
-    params.num_generations=1
-    run_dataset(dataset_name=dataset_name,qsar_method='knn',feature_selection=True, params=params)
-    
-    params.num_optimizers=1
-    params.num_generations=10
-    run_dataset(dataset_name=dataset_name,qsar_method='knn',feature_selection=True, params=params)
-    
-    params.num_optimizers=10
-    params.num_generations=10
-    run_dataset(dataset_name=dataset_name,qsar_method='knn',feature_selection=True, params=params)
-
-
-    
-def run_Koc():
-    dataset_name = "KOC v1 modeling"
-    
-    # run_dataset(dataset_name=dataset_name,qsar_method='rf',feature_selection=True) #OK
-    # run_dataset(dataset_name=dataset_name,qsar_method='rf',feature_selection=False) #OK
-    #
-    # run_dataset(dataset_name=dataset_name,qsar_method='xgb',feature_selection=True) #OK
-    # run_dataset(dataset_name=dataset_name,qsar_method='xgb',feature_selection=False)
-    
-    # run_dataset(dataset_name=dataset_name,qsar_method='knn',feature_selection=False) #OK
-    # run_dataset(dataset_name=dataset_name,qsar_method='knn',folder_embedding="rf_WebTEST-default_fs=True") #OK
-    run_dataset(dataset_name=dataset_name,qsar_method='knn',feature_selection=True) #OK
-
-    # run_dataset(dataset_name=dataset_name,qsar_method='gcm',feature_selection=False) #OK
-    #
-    # run_dataset(dataset_name=dataset_name,qsar_method='reg',folder_embedding="rf_WebTEST-default_fs=True") #OK
-
-
-    r = Results()
-    r.summarize_model_stats(dataset_name)
-
-
-if __name__ == '__main__':
-    
-    # dataset_name = "KOC v1 modeling"
-    # dataset_name = 'ECOTOX_2024_12_12_96HR_Fish_LC50_v3 modeling'
-    # run_dataset(dataset_name)
-    
-    # run_fish_tox()
-    run_Koc()
-    # run_Koc_knn_ga()
