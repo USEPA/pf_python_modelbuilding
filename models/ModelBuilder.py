@@ -85,9 +85,9 @@ def model_registry_model_obj(regressor_name, is_categorical):
             return RandomForestRegressor(random_state=SEED)
     elif regressor_name == 'svm':
         if is_categorical:
-            return SVC(probability=True, random_state=SEED)
+            return SVC(probability=True)
         else:
-            return SVR(random_state=SEED)
+            return SVR()
     elif regressor_name == 'xgb':
         if is_categorical:
             # return XGBClassifier()

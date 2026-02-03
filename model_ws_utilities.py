@@ -16,8 +16,9 @@ from flask import abort
 import requests
 
 from sklearn2pmml.pipeline import PMMLPipeline as PMMLPipeline
-from sklearn.pipeline import Pipeline
+# from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
+# from xgboost.testing.ranking import run_ranking_categorical
 # from models.runGA import qsar_method
 
 
@@ -267,7 +268,7 @@ def instantiateModelForPrediction(qsar_method, is_binary, pmml_file_path, use_sk
 
 def call_build_embedding_ga(qsar_method, training_tsv, prediction_tsv, remove_log_p,
                             num_generations, num_optimizers, num_jobs, n_threads, descriptor_coefficient, max_length,
-                            threshold, use_wards, run_rfe):
+                            threshold, use_wards, run_rfe, run_sfs=True):
     """Loads TSV training data into a pandas DF and calls the appropriate training method"""
     df_training = dfu.load_df(training_tsv)
     df_prediction = dfu.load_df(prediction_tsv)
@@ -291,10 +292,15 @@ def call_build_embedding_ga(qsar_method, training_tsv, prediction_tsv, remove_lo
     descriptor_names = go.runGA(df_training=df_training, model=ga_model, use_wards=use_wards,
                                 remove_log_p_descriptors=remove_log_p)
 
+    from models.EmbeddingFromImportance import perform_iterative_recursive_feature_elimination as run_rfe_it
+    from models.EmbeddingFromImportance import perform_sequential_feature_selection as run_sfs
 
     if run_rfe:
-        descriptor_names, time2 = remove_descriptors_rfe(qsar_method=qsar_method,df_training=df_training,
-                                   n_threads=n_threads,descriptor_names=descriptor_names)
+        run_rfe_it(ga_model,df_training=df_training, n_threads=n_threads)
+
+    if run_sfs:
+        run_sfs(ga_model,df_training=df_training)
+
 
     # embedding = json.dumps(descriptor_names)
     # print('embedding='+embedding)
@@ -317,13 +323,13 @@ def call_build_embedding_ga_db(df_training, df_prediction, gap):
     # print(qsar_method)
 
 
-    ga_model = instantiateModel(df_training=df_training, n_jobs=gap.n_threads, qsar_method=qsar_method,
+    model = instantiateModel(df_training=df_training, n_jobs=gap.n_threads, qsar_method=qsar_method,
                                  remove_log_p=gap.remove_log_p_descriptors, use_pmml_pipeline=False)
     
     
     
     if gap.hyperparameter_grid:
-        ga_model.hyperparameter_grid=gap.hyperparameter_grid
+        model.hyperparameter_grid=gap.hyperparameter_grid
     
 
     t1 = time.time()
@@ -337,53 +343,37 @@ def call_build_embedding_ga_db(df_training, df_prediction, gap):
     go.DESCRIPTOR_COEFFICIENT = gap.descriptor_coefficient
     go.THRESHOLD = gap.threshold
                 
-    descriptor_names = go.runGA(df_training=df_training, model=ga_model, use_wards=gap.use_wards,
+    descriptor_names = go.runGA(df_training=df_training, model=model, use_wards=gap.use_wards,
                                 remove_log_p_descriptors=gap.remove_log_p_descriptors, 
                                 remove_fragment_descriptors=gap.remove_fragment_descriptors,
                                 remove_acnt_descriptors=gap.remove_acnt_descriptors)
+    
+    model.embedding = descriptor_names
+    
+    logging.info(f"embedding from GA ({len(model.embedding)} descriptors): {model.embedding}")
 
+
+    from models.EmbeddingFromImportance import perform_iterative_recursive_feature_elimination as run_rfe_it
 
     if gap.run_rfe:
-        descriptor_names, _ = remove_descriptors_rfe(qsar_method=qsar_method,df_training=df_training,
-                                   n_threads=gap.n_threads,descriptor_names=descriptor_names)
+        run_rfe_it(model,df_training,gap.n_threads, n_steps=1)
+        logging.info(f"embedding after iterative RFE ({len(model.embedding)} descriptors): {model.embedding}")
+
+
+    from models.EmbeddingFromImportance import perform_sequential_feature_selection as run_sfs
+
+    if gap.run_sfs:
+        run_sfs(model=model, df_training=df_training)
+        logging.info(f"embedding after SFS ({len(model.embedding)} descriptors): {model.embedding}")
+
 
     # embedding = json.dumps(descriptor_names)
     # print('embedding='+embedding)
 
     t2 = time.time()
     timeMin = (t2 - t1) / 60
-    return descriptor_names, timeMin
+    return model.embedding, timeMin
 
-def remove_descriptors_rfe(qsar_method, df_training, n_threads, descriptor_names):
-    """Loads TSV training data into a pandas DF and calls the appropriate training method"""
-
-    t1 = time.time()
-    qsar_method = qsar_method.lower()
-    model = instantiateModel(df_training=df_training, n_jobs=n_threads, qsar_method=qsar_method,
-                                 remove_log_p=False, use_pmml_pipeline=False)
-
-    # efi.perform_recursive_feature_elimination(model=model, df_training=df_training, n_threads=n_threads,n_steps=1)
-    # print('After RFE, ', len(model.embedding), "descriptors", model.embedding)
-    model.embedding = descriptor_names
-    embedding_old = descriptor_names
-    print('Before RFE,', len(model.embedding), "descriptors", embedding_old)
-
-    while True:  # need to get more aggressive (remove 2 at a time) since first RFE didnt remove enough
-        efi.perform_recursive_feature_elimination(model=model, df_training=df_training, n_threads=n_threads,
-                                                  n_steps=1)
-        print('After RFE iteration, ', len(model.embedding), "descriptors", model.embedding)
-        if len(model.embedding) == len(embedding_old):
-            break
-        embedding_old = model.embedding
-
-    descriptor_names = model.embedding
-
-    # embedding = json.dumps(descriptor_names)
-    # print('embedding='+embedding)
-
-    t2 = time.time()
-    timeMin = (t2 - t1) / 60
-    return descriptor_names, timeMin
 
 
 def call_build_embedding_importance(qsar_method, training_tsv, prediction_tsv, remove_log_p_descriptors, n_threads,
@@ -437,18 +427,11 @@ def call_build_embedding_importance_from_df(qsar_method, df_training, df_predict
                           min_descriptor_count=min_descriptor_count, max_descriptor_count=max_descriptor_count,
                           use_wards=use_wards)
 
-    if run_rfe:
+    if run_rfe: #Not can't be used for knn        
         # efi.perform_recursive_feature_elimination(model=model, df_training=df_training, n_threads=n_threads,n_steps=1)
         # print('After RFE, ', len(model.embedding), "descriptors", model.embedding)
-
-        embedding_old = model.embedding
-        while True:  # need to get more aggressive (remove 2 at a time) since first RFE didnt remove enough
-            efi.perform_recursive_feature_elimination(model=model, df_training=df_training, n_threads=n_threads,
-                                                      n_steps=1)
-            print('After RFE iteration, ', len(model.embedding), "descriptors", model.embedding)
-            if len(model.embedding) == len(embedding_old):
-                break
-            embedding_old = model.embedding
+        efi.perform_iterative_recursive_feature_elimination(model, df_training, n_threads, n_steps=1)
+        print("After RFE, ", len(model.embedding), "descriptors", model.embedding)
     
     if run_sfs:
         efi.perform_sequential_feature_selection(model=model, df_training=df_training)

@@ -185,16 +185,28 @@ def add_new_descriptors(fraction_of_max_importance, max_descriptor_count, min_de
 
 
 def perform_sequential_feature_selection(model,df_training):
+    """
+    # https://scikit-learn.org/stable/modules/generated/sklearn.feature_selection.SequentialFeatureSelector.html
+    # if tol is not None, then features are selected while the score change does not exceed tol.
+    # otherwise, half of the features are selected!
+    """
     
     from sklearn.feature_selection import SequentialFeatureSelector
     
-    train_ids, train_labels, train_features, train_column_names = \
+    _, train_labels, train_features, _ = \
     DFU.prepare_instances2(df_training, model.embedding,True)
+
+    if model.is_binary:
+        scoring='balanced_accuracy'
+    else:
+        scoring ='neg_mean_squared_error'
 
     sfs = SequentialFeatureSelector(
         model.model_obj.steps[1][1], 
         n_features_to_select='auto', # or integer, e.g., 3
+        tol = 0.01,
         direction='backward',         # 'forward' or 'backward'
+        scoring=scoring,
         cv=5,
         n_jobs=-1
     )
@@ -204,8 +216,29 @@ def perform_sequential_feature_selection(model,df_training):
     
     model.embedding = sfs.get_feature_names_out().tolist()
     
+    return model.embedding
 
-def perform_recursive_feature_elimination(model, df_training, n_threads, n_steps):
+
+def perform_iterative_recursive_feature_elimination(model, df_training, n_threads, n_steps=1):
+    start_time = time.time()
+    
+    embedding_old = model.embedding
+    
+    while True:  # need to get more aggressive (remove 2 at a time) since first RFE didnt remove enough
+        perform_recursive_feature_elimination(model, df_training, n_threads, n_steps)
+        
+        print('After RFE iteration, ', len(model.embedding), "descriptors", model.embedding)
+        if len(model.embedding) == len(embedding_old):
+            break
+        embedding_old = model.embedding
+        
+    stop_time = time.time()
+        
+    calc_time = stop_time - start_time
+    return model.embedding, calc_time
+        
+
+def perform_recursive_feature_elimination(model, df_training, n_threads, n_steps=1):
     '''
     Runs CV recursive_feature_elimination
     :param n_steps:

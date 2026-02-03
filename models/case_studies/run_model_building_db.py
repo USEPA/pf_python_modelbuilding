@@ -21,7 +21,7 @@ from pathlib import Path
 from model_ws_utilities import call_build_embedding_ga_db, call_build_model_with_preselected_descriptors_from_df, \
     call_do_predictions_from_df, call_build_embedding_importance_from_df
 
-from models.EmbeddingFromImportance import perform_recursive_feature_elimination as run_rfe
+from models.EmbeddingFromImportance import perform_iterative_recursive_feature_elimination as run_rfe
 from models.EmbeddingFromImportance import perform_sequential_feature_selection as run_sfs
 
 import StatsCalculator as sc
@@ -31,6 +31,8 @@ from models.dataset_utilities_db import get_training_prediction_instances, get_t
 from utils import print_first_row
 
 from applicability_domain import applicability_domain_utilities as  adu
+from pickle import FALSE
+from pip_requirements_parser import use_feature
 
 custom_level_styles = {
     'debug': {'color': 'cyan'},
@@ -124,6 +126,23 @@ class ParametersGroupContribution:
 
 
 @dataclass
+class ParametersGeneric:
+
+    dataset_name: str
+    qsar_method: str    
+    descriptor_set_name: str
+    hyperparameter_grid: Optional[Dict[str, Any]] = None
+    feature_selection: bool = False
+    remove_log_p_descriptors: bool = False
+    n_threads: int = 10
+    include_standardization_in_pmml: bool = False
+    use_pmml_pipeline: bool = False
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
 class ParametersGeneticAlgorithm:
 
     dataset_name: str
@@ -144,6 +163,7 @@ class ParametersGeneticAlgorithm:
 
     use_wards: bool = False
     run_rfe: bool = True
+    run_sfs: bool = True
     remove_fragment_descriptors: bool = False
     remove_acnt_descriptors: bool = False
 
@@ -253,8 +273,7 @@ class EmbeddingGenerator:
         # imp_methods = ['rf', 'xgb']
         
         if params.feature_selection_method == feature_selection_method_genetic_algorithm:
-            embedding, timeEmbedding = call_build_embedding_ga_db(df_training, df_prediction, params)
-            logging.debug(f"embedding: {embedding}, time:{timeEmbedding}")
+            embedding, _ = call_build_embedding_ga_db(df_training, df_prediction, params)
         
         elif params.feature_selection_method == feature_selection_method_importance:
             ip = params
@@ -271,7 +290,8 @@ class EmbeddingGenerator:
             print("cant do feature selection for " + params.qsar_method)
             return None
 
-        logging.info(f"qsar_method={params.qsar_method}, embedding={embedding}")
+        # logging.info(f"qsar_method={params.qsar_method}, embedding generated with {len(embedding)} descriptors: {embedding}")
+
         return embedding
     
 
@@ -605,14 +625,17 @@ def set_hyper_parameters(qsar_method, feature_selection, descriptor_set_name, da
                                       descriptor_set_name=descriptor_set_name, dataset_name=dataset_name)
     
     elif qsar_method == "rf":
-        grid = {'estimator__max_features': ['sqrt', 'log2'],
-                                     'estimator__min_impurity_decrease': [10 ** x for x in range(-5, 0)],
-                                     'estimator__n_estimators': [10, 100, 250, 500]}
+        # grid = {'estimator__max_features': ['sqrt', 'log2'],
+        #                              'estimator__min_impurity_decrease': [10 ** x for x in range(-5, 0)],
+        #                              'estimator__n_estimators': [10, 100, 250, 500]}
 
-        # grid = {"estimator__max_features": ["sqrt", "log2"]}
+        grid = {"estimator__max_features": ["sqrt", "log2"]}
 
         params = ParametersImportance(qsar_method=qsar_method, feature_selection=feature_selection, hyperparameter_grid=grid,
                                       descriptor_set_name=descriptor_set_name, dataset_name=dataset_name)
+        
+        
+        
 
     elif qsar_method == "knn": 
         # grid = {'estimator__n_neighbors': [5], 'estimator__weights': ['distance']}  # default, same as OPERA
@@ -621,6 +644,11 @@ def set_hyper_parameters(qsar_method, feature_selection, descriptor_set_name, da
         
         params = ParametersGeneticAlgorithm(qsar_method=qsar_method, hyperparameter_grid=grid,
                                             descriptor_set_name=descriptor_set_name, dataset_name=dataset_name)
+        
+        params.num_generations=1
+        params.num_optimizers=1
+        params.run_rfe = False #doesnt work for knn 
+        
 
     elif qsar_method == "reg": 
         grid = {}  # default, same as OPERA
@@ -628,7 +656,7 @@ def set_hyper_parameters(qsar_method, feature_selection, descriptor_set_name, da
                                             descriptor_set_name=descriptor_set_name, dataset_name=dataset_name)
         
         params.remove_fragment_descriptors = True
-        params.remove_acnt_descriptors = True
+        params.remove_acnt_descriptors = True        
 
 
     elif qsar_method == "las": 
@@ -639,6 +667,11 @@ def set_hyper_parameters(qsar_method, feature_selection, descriptor_set_name, da
     elif qsar_method == "gcm":
         grid = {}        
         params = ParametersGroupContribution(qsar_method=qsar_method, hyperparameter_grid=grid,
+                                             descriptor_set_name=descriptor_set_name, dataset_name=dataset_name)
+
+    elif qsar_method == "svm":
+        grid = {}        
+        params = ParametersGeneric(qsar_method=qsar_method, hyperparameter_grid=grid,
                                              descriptor_set_name=descriptor_set_name, dataset_name=dataset_name)
     else:
         print('qsar_method not handled:', qsar_method)
@@ -717,46 +750,30 @@ def generate_consensus_ad(df_predictions, stats_dict, ad_measure_final):
     stats_dict[ad_measure] = stats
 
     
+
+
     
 
-def run_dataset(dataset_name):
+def run_dataset(dataset_name, qsar_method, embedding=None,  folder_embedding=None, cross_validate=True, 
+                run_AD=True, feature_selection=True,fs_previous_embedding=True, params=None,
+                descriptor_set_name = "WebTEST-default"):
         
 # TODO: reg model using descriptors from XGB or RF model
 # TODO: gcm model that uses reg with fragment descriptors such that it deletes rows with less than 3 instances and the associated rows
 
-    descriptor_set_name = "WebTEST-default"  #TODO does add the LOGP predicted from my LOGP model improve the results?
+      #TODO does add the LOGP predicted from my LOGP model improve the results?
     splitting_name = "RND_REPRESENTATIVE"
 
-    # qsar_method = 'gcm'
-    # qsar_method = 'xgb'
-    qsar_method = 'rf'
-    # qsar_method = 'knn'
-    # qsar_method = 'reg'  #TODO see if using embedding from RF/XGB works better, add RFE so that unneeded features are removed
-    # qsar_method = 'las'
-    # qsar_method = 'lgb'
-    # qsar_method = 'svm'
     
-    cross_validate = True
-    run_AD = True
-
-    embedding = None
-    folder_embedding = None
-    
-    feature_selection = False #***
-
-    use_custom_embedding = False
-    use_previous_embedding= False #load embedding from a json file
-    rfe_previous_embedding = True # run RFE on previous embedding so dont have descriptors that dont help the REG model (have large standard error)  
-    
-    if use_custom_embedding:
-        embedding = ['XLOGP', 'XLOGP2', 'piPC08', 'MDEC33', 'BEHm5', 'Hy', 'SsCl', 'Gmax'] #omit ALOGP2
-        folder_embedding = 'custom'
-    
-    elif use_previous_embedding and embedding is None: #TODO make a method that can take from embedding in database rather than JSON file
+    if qsar_method == 'gcm' or qsar_method=='svm':
         feature_selection = False
-        # folder_embedding="xgb_WebTEST-default_fs=True"
-        # folder_embedding="rf_WebTEST-default_fs=True"
-        folder_embedding="knn_WebTEST-default_fs=False_rf_WebTEST-default_fs=True"
+    
+    
+    if embedding is not None:
+        folder_embedding = 'custom'
+        feature_selection = False
+    elif folder_embedding is not None:
+        feature_selection = False
         file_name_embedding="results.json"
         file_path_embedding=os.path.join(PROJECT_ROOT,"data/models", dataset_name, folder_embedding, file_name_embedding)
         
@@ -764,6 +781,8 @@ def run_dataset(dataset_name):
             results = json.load(f)
             embedding = results["embedding"] 
             print(f"from {folder_embedding}:{embedding}")
+    else:
+        fs_previous_embedding = False
         
     # if True:
     #     return
@@ -803,34 +822,30 @@ def run_dataset(dataset_name):
     logging.info("done getting dataframes from db")
         
     # ******************************************************************************************************
-    params = set_hyper_parameters(qsar_method, feature_selection, descriptor_set_name, dataset_name)
+    
+    if params is None:    
+        params = set_hyper_parameters(qsar_method, feature_selection, descriptor_set_name, dataset_name)
     # hyperparameter_grid = None # use default
     # ******************************************************************************************************
 
-    if feature_selection and embedding is None:
+    if feature_selection:
         embedding = eg.feature_selection(df_training, df_prediction, params)
-                
+        
     df_predictions, test_stats, model = mb.build_and_test_model(df_training, df_prediction, params, embedding)
-    # print(df_predictions)
     
-    # print("is_binary=",model.is_binary)
-    
+    if not feature_selection and fs_previous_embedding and qsar_method !='gcm':
 
-    # if qsar_method == 'gcm':
-    #     embedding = model.embedding #for gcm embedding is generated during model building to avoid duplication of code
-    
-    print(f"Before RFE {len(model.embedding)} descriptors: {model.embedding}")
-    
-    if use_previous_embedding and rfe_previous_embedding:
-
-        if qsar_method =='knn':
-            run_sfs(model, df_training)
-        else:
+        print(f"Before FS, previous embedding has {len(model.embedding)} descriptors: {model.embedding}")
+        
+        if params.run_rfe:
             run_rfe(model, df_training, 1, 1)
+            
+        if params.run_sfs:
+            run_sfs(model, df_training)
 
         # redo model and predictions:
         df_predictions, test_stats, model = mb.build_and_test_model(df_training, df_prediction, params, model.embedding)
-        print(f"After RFE {len(model.embedding)} descriptors: {model.embedding}")
+        print(f"After FS, embedding has {len(model.embedding)} descriptors: {model.embedding}")
     
     embedding = None # use model.embedding from here on 
     
@@ -858,6 +873,7 @@ def run_dataset(dataset_name):
     
     # ******************************************************************************************************
     # look at first prediction to make sure it looks right:
+    print("First row of df_predictions:")
     print_first_row(df_predictions)
     # ******************************************************************************************************
     
@@ -1036,11 +1052,59 @@ class Results:
         print(f"Saved summary to: {excel_path}")
         return df_stats, excel_path
 
-
-if __name__ == '__main__':
+def run_fish_tox():
     
+    dataset_name = 'ECOTOX_2024_12_12_96HR_Fish_LC50_v3 modeling'
+    
+    
+    run_dataset(dataset_name=dataset_name,qsar_method='rf',feature_selection=True)
+    run_dataset(dataset_name=dataset_name,qsar_method='rf',feature_selection=False)
+    run_dataset(dataset_name=dataset_name,qsar_method='xgb',feature_selection=True)
+    run_dataset(dataset_name=dataset_name,qsar_method='xgb',feature_selection=False)
+    
+    r = Results()
+    r.summarize_model_stats(dataset_name)
+
+    
+def run_Koc():
+    descriptor_set_name = "WebTEST-default"
     dataset_name = "KOC v1 modeling"
-    run_dataset(dataset_name)
+    
+    # run_dataset(dataset_name=dataset_name,qsar_method='rf',feature_selection=True) #OK
+    # run_dataset(dataset_name=dataset_name,qsar_method='rf',feature_selection=False) #OK
+    # run_dataset(dataset_name=dataset_name,qsar_method='xgb',feature_selection=True) #OK
+    # run_dataset(dataset_name=dataset_name,qsar_method='xgb',feature_selection=False)
+    
+    grid = {'estimator__n_neighbors': [3], 'estimator__weights': ['distance']} # matches AD in terms of using 3
+    params = ParametersGeneticAlgorithm(qsar_method='knn', hyperparameter_grid=grid,
+                                        descriptor_set_name=descriptor_set_name, dataset_name=dataset_name, 
+                                        run_rfe=False)
+    params.num_optimizers=1
+    params.num_generations=1
+    run_dataset(dataset_name=dataset_name,qsar_method='knn',feature_selection=True, params=params)
+
+    params.num_optimizers=1
+    params.num_generations=10
+    run_dataset(dataset_name=dataset_name,qsar_method='knn',feature_selection=True, params=params)
+
+    params.num_optimizers=10
+    params.num_generations=10
+    run_dataset(dataset_name=dataset_name,qsar_method='knn',feature_selection=True, params=params)
+
+    
+    # run_dataset(dataset_name=dataset_name,qsar_method='knn',folder_embedding="rf_WebTEST-default_fs=True")
+    # run_dataset(dataset_name=dataset_name,qsar_method='gcm',feature_selection=False) #OK
 
     r = Results()
     r.summarize_model_stats(dataset_name)
+
+
+if __name__ == '__main__':
+    
+    # dataset_name = "KOC v1 modeling"
+    # dataset_name = 'ECOTOX_2024_12_12_96HR_Fish_LC50_v3 modeling'
+    # run_dataset(dataset_name)
+    
+    # run_fish_tox()
+    run_Koc()
+
