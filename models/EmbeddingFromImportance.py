@@ -230,14 +230,31 @@ def perform_recursive_feature_elimination(model, df_training, n_threads, n_steps
         cv = KFold(5)
 
     # Recursive feature elimination using 5 fold CV:
+    # Check if estimator supports feature importance
+    estimator = model.model_obj.steps[1][1]
+    estimator_name = model.regressor_name.lower() if hasattr(model, 'regressor_name') else ''
+    
+    # Define a custom importance getter for models without feature_importances_
+    # This will use absolute coefficient values for linear models, or uniform importance for KNN
+    def get_feature_importance(est):
+        if hasattr(est, 'feature_importances_'):
+            return est.feature_importances_
+        elif hasattr(est, 'coef_'):
+            return np.abs(est.coef_).flatten()
+        else:
+            # For models without feature importance (KNN), return uniform importance
+            # This makes RFECV use cross-validation score to select features
+            return np.ones(est.n_features_in_)
+    
     rfecv = RFECV(
-        # estimator=model.model_obj,
-        estimator=model.model_obj.steps[1][1],
+        estimator=estimator,
         step=n_steps,
         cv=cv,
         scoring=scoring,
         n_jobs=n_threads,
+        importance_getter=get_feature_importance
     )
+    
     rfecv.fit(train_features, train_labels)
     mask = rfecv.get_support(indices=True)
 
