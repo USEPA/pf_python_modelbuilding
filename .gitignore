@@ -20,10 +20,15 @@ models/SVM/
 datasets_benchmark/Boiling point OPERA/knn models/knn model numNeighbors=0003 numDescriptors = 0008.xml
 datasets_benchmark/
 datasets_benchmark_TEST/
-*.pickle
 *.pmml
 *.tsv
 *.png
 *.json
 *.pdf
 models/old/__init__.py
+.vs/
+models/__init__.py
+*.html
+env/
+*.bat
+*.R
