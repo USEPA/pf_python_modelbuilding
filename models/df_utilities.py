@@ -278,7 +278,7 @@ def prepare_instances(df, which_set, remove_logp=False, remove_corr=True,
                       remove_fragment_descriptors=False,remove_acnt_descriptors=False):
     
     
-    # #df = df.copy() # make sure we dont change it
+    df = df.copy() # make sure we dont change it
     
     """Prepares a pandas df of training data by removing logp and correlated descriptors"""
     df_labels = df[df.columns[1]]

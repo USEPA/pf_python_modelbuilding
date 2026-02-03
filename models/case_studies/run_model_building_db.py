@@ -33,6 +33,7 @@ from utils import print_first_row
 from applicability_domain import applicability_domain_utilities as  adu
 from pickle import FALSE
 from pip_requirements_parser import use_feature
+from models.genetic_optimizer import MUTATION_PROBABILITY
 
 custom_level_styles = {
     'debug': {'color': 'cyan'},
@@ -153,19 +154,23 @@ class ParametersGeneticAlgorithm:
     feature_selection: bool = False
     remove_log_p_descriptors: bool = False
 
-    num_generations: int = 100
-    num_optimizers: int = 10
+    num_generations: int = 200
+    num_optimizers: int = 200
     num_jobs: int = 4
     n_threads: Optional[int] = None  # set to an int (e.g., 4) if you want to pin threads
     max_length: int = 24  # max number of variables
     descriptor_coefficient: float = 0.002
     threshold: int = 1
+    elitism = True
+    crossover_probability = 0.9
+    mutation_probability = 0.05
 
     use_wards: bool = False
     run_rfe: bool = True
     run_sfs: bool = True
-    remove_fragment_descriptors: bool = False
-    remove_acnt_descriptors: bool = False
+    remove_fragment_descriptors: bool = True
+    remove_acnt_descriptors: bool = True
+    use_wards: bool = False
 
     include_standardization_in_pmml: bool = False
     use_pmml_pipeline: bool = False
@@ -642,17 +647,17 @@ def set_hyper_parameters(qsar_method, feature_selection, descriptor_set_name, da
         
         grid = {'estimator__n_neighbors': [3], 'estimator__weights': ['distance']} # matches AD in terms of using 3
         
-        params = ParametersGeneticAlgorithm(qsar_method=qsar_method, hyperparameter_grid=grid,
+        params = ParametersGeneticAlgorithm(qsar_method=qsar_method, hyperparameter_grid=grid,feature_selection=feature_selection,
                                             descriptor_set_name=descriptor_set_name, dataset_name=dataset_name)
         
-        params.num_generations=1
-        params.num_optimizers=1
-        params.run_rfe = False #doesnt work for knn 
+        # params.num_generations=1
+        # params.num_optimizers=1
+        # params.run_rfe = False #doesnt work for knn 
         
 
     elif qsar_method == "reg": 
         grid = {}  # default, same as OPERA
-        params = ParametersGeneticAlgorithm(qsar_method=qsar_method, hyperparameter_grid=grid,
+        params = ParametersGeneticAlgorithm(qsar_method=qsar_method, hyperparameter_grid=grid,feature_selection=feature_selection,
                                             descriptor_set_name=descriptor_set_name, dataset_name=dataset_name)
         
         params.remove_fragment_descriptors = True
@@ -662,16 +667,16 @@ def set_hyper_parameters(qsar_method, feature_selection, descriptor_set_name, da
     elif qsar_method == "las": 
         grid = {'estimator__alpha': [np.round(i, 5) for i in np.logspace(-4, 0, num=20)],
                                     'estimator__max_iter': [1000000]}
-        params = ParametersGeneticAlgorithm(qsar_method=qsar_method, hyperparameter_grid=grid,
+        params = ParametersGeneticAlgorithm(qsar_method=qsar_method, hyperparameter_grid=grid,feature_selection=feature_selection,
                                             descriptor_set_name=descriptor_set_name, dataset_name=dataset_name)
     elif qsar_method == "gcm":
         grid = {}        
-        params = ParametersGroupContribution(qsar_method=qsar_method, hyperparameter_grid=grid,
+        params = ParametersGroupContribution(qsar_method=qsar_method, hyperparameter_grid=grid,feature_selection=feature_selection,
                                              descriptor_set_name=descriptor_set_name, dataset_name=dataset_name)
 
     elif qsar_method == "svm":
         grid = {}        
-        params = ParametersGeneric(qsar_method=qsar_method, hyperparameter_grid=grid,
+        params = ParametersGeneric(qsar_method=qsar_method, hyperparameter_grid=grid,feature_selection=feature_selection,
                                              descriptor_set_name=descriptor_set_name, dataset_name=dataset_name)
     else:
         print('qsar_method not handled:', qsar_method)
@@ -761,7 +766,7 @@ def run_dataset(dataset_name, qsar_method, embedding=None,  folder_embedding=Non
 # TODO: reg model using descriptors from XGB or RF model
 # TODO: gcm model that uses reg with fragment descriptors such that it deletes rows with less than 3 instances and the associated rows
 
-      #TODO does add the LOGP predicted from my LOGP model improve the results?
+    #TODO does add the LOGP predicted from my LOGP model improve the results?
     splitting_name = "RND_REPRESENTATIVE"
 
     
@@ -784,6 +789,7 @@ def run_dataset(dataset_name, qsar_method, embedding=None,  folder_embedding=Non
     else:
         fs_previous_embedding = False
         
+            
     # if True:
     #     return
 
@@ -1065,16 +1071,13 @@ def run_fish_tox():
     r = Results()
     r.summarize_model_stats(dataset_name)
 
+
+def run_Koc_knn_ga():
     
-def run_Koc():
     descriptor_set_name = "WebTEST-default"
     dataset_name = "KOC v1 modeling"
     
-    # run_dataset(dataset_name=dataset_name,qsar_method='rf',feature_selection=True) #OK
-    # run_dataset(dataset_name=dataset_name,qsar_method='rf',feature_selection=False) #OK
-    # run_dataset(dataset_name=dataset_name,qsar_method='xgb',feature_selection=True) #OK
-    # run_dataset(dataset_name=dataset_name,qsar_method='xgb',feature_selection=False)
-    
+
     grid = {'estimator__n_neighbors': [3], 'estimator__weights': ['distance']} # matches AD in terms of using 3
     params = ParametersGeneticAlgorithm(qsar_method='knn', hyperparameter_grid=grid,
                                         descriptor_set_name=descriptor_set_name, dataset_name=dataset_name, 
@@ -1082,18 +1085,34 @@ def run_Koc():
     params.num_optimizers=1
     params.num_generations=1
     run_dataset(dataset_name=dataset_name,qsar_method='knn',feature_selection=True, params=params)
-
+    
     params.num_optimizers=1
     params.num_generations=10
     run_dataset(dataset_name=dataset_name,qsar_method='knn',feature_selection=True, params=params)
-
+    
     params.num_optimizers=10
     params.num_generations=10
     run_dataset(dataset_name=dataset_name,qsar_method='knn',feature_selection=True, params=params)
 
+
     
-    # run_dataset(dataset_name=dataset_name,qsar_method='knn',folder_embedding="rf_WebTEST-default_fs=True")
+def run_Koc():
+    dataset_name = "KOC v1 modeling"
+    
+    # run_dataset(dataset_name=dataset_name,qsar_method='rf',feature_selection=True) #OK
+    # run_dataset(dataset_name=dataset_name,qsar_method='rf',feature_selection=False) #OK
+    #
+    # run_dataset(dataset_name=dataset_name,qsar_method='xgb',feature_selection=True) #OK
+    # run_dataset(dataset_name=dataset_name,qsar_method='xgb',feature_selection=False)
+    
+    # run_dataset(dataset_name=dataset_name,qsar_method='knn',feature_selection=False) #OK
+    # run_dataset(dataset_name=dataset_name,qsar_method='knn',folder_embedding="rf_WebTEST-default_fs=True") #OK
+    run_dataset(dataset_name=dataset_name,qsar_method='knn',feature_selection=True) #OK
+
     # run_dataset(dataset_name=dataset_name,qsar_method='gcm',feature_selection=False) #OK
+    #
+    # run_dataset(dataset_name=dataset_name,qsar_method='reg',folder_embedding="rf_WebTEST-default_fs=True") #OK
+
 
     r = Results()
     r.summarize_model_stats(dataset_name)
@@ -1107,4 +1126,4 @@ if __name__ == '__main__':
     
     # run_fish_tox()
     run_Koc()
-
+    # run_Koc_knn_ga()
