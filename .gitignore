@@ -32,3 +32,5 @@ models/__init__.py
 env/
 *.bat
 *.R
+my.env
+.vscode/
