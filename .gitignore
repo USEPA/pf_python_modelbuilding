@@ -27,3 +27,5 @@ datasets_benchmark_TEST/
 *.json
 *.pdf
 models/old/__init__.py
+my.env
+.vscode/
