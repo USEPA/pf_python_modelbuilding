@@ -17,6 +17,8 @@ import pandas as pd
 from io import StringIO
 import math
 from pathlib import Path
+from time import time
+import re
 
 from model_ws_utilities import call_build_embedding_ga_db, call_build_model_with_preselected_descriptors_from_df, \
     call_do_predictions_from_df, call_build_embedding_importance_from_df
@@ -356,6 +358,8 @@ class ExcelCreator:
     
         Labels are written in the column adjacent to the target column:
           - left if possible; otherwise right.
+        
+        Returns the list of formulas written, or zeros if no data rows, for reusability
         """
         if column_name not in df.columns:
             return  # target column not present
@@ -393,11 +397,13 @@ class ExcelCreator:
             # fraction_inside = visible_count / numeric_count for that column (guard against divide-by-zero)
             fraction_formula = f"=IF(COUNT({range_ref})>0,SUBTOTAL(103,{range_ref})/COUNT({range_ref}),0)"
             ws.write_formula(fraction_row, col_idx, fraction_formula)
+            return [count_numeric_formula, fraction_formula, visible_count_formula]
         else:
             # No data rows; write zeros
             ws.write(subtotal_row, col_idx, 0)
             ws.write(fraction_row, col_idx, 0)
             ws.write(visible_row,  col_idx, 0)
+            return [0, 0, 0]
 
     
     def add_filter(self, writer, sheet_name, df):
@@ -572,6 +578,36 @@ class ExcelCreator:
             for col_idx, col_name in enumerate(safe_cols, start=start_col + col_offset):
                 worksheet.write_string(start_row, col_idx, col_name, header_fmt)
 
+
+    def add_summary_stats_to_ws(self, ws, source_ws, summary_stats, start_row=2, start_col=10):
+        """
+        Adds summary statistics from source_ws to ws at the given position.
+        
+        :param ws: Worksheet to write summary statistics to
+        :param source_ws: Name of the worksheet to take stats from
+        :param summary_stats: Formulas/values for MAE, fraction_inside, count_inside
+        :param start_row: Starting row in ws to put values
+        :param start_col: Starting column in ws to put values
+        """
+        if summary_stats is None:
+            return
+        else:
+            # Adjust formulas to point to values in source_ws
+            for i, stat in enumerate(summary_stats):
+                stat = str(stat)
+                summary_stats[i] = re.sub(r"([A-Z]+\d+)", rf"'{source_ws}'!\1", stat)
+        
+        # Write each statistic label and formula/value
+        row = start_row
+        for label, formula in zip(
+            ["MAE", "fraction_inside", "count_inside"],
+            summary_stats
+        ):
+            ws.write(row, start_col, label)
+            ws.write_formula(row, start_col + 1, formula)
+            row += 1
+    
+
     def create_excel(self,
         df_test: pd.DataFrame,
         df_training_cv: pd.DataFrame,
@@ -598,7 +634,7 @@ class ExcelCreator:
             df_test.to_excel(writer, sheet_name=sheet_name_test, index=False)
             self.add_filter(writer, sheet_name_test, df_test)
             ws = writer.sheets[sheet_name_test]
-            self.add_subtotal_count_fraction_and_visible(ws, df_test, column_name='abs_diff')
+            summary_stats = self.add_subtotal_count_fraction_and_visible(ws, df_test, column_name='abs_diff')
 
             # self.add_plot(df_test, sheet_name_test, chart_size_px, pad_ratio, integer_ticks, yx_offset_rows, writer, workbook)
             
@@ -608,7 +644,8 @@ class ExcelCreator:
             chart_ws = workbook.add_worksheet(chart_sheet_name_test)
             writer.sheets[chart_sheet_name_test] = chart_ws
             self.add_plot(df_test, sheet_name_test, chart_sheet_name_test, chart_size_px, pad_ratio, integer_ticks, yx_offset_rows, writer, workbook)
-                        
+            self.add_summary_stats_to_ws(chart_ws, sheet_name_test, summary_stats, start_row=2, start_col=10)
+
             self.writeDescriptors("test set descriptors", df_test_model, writer, workbook)
             self.writeModelCoefficients(results_dict, writer, workbook)
         
@@ -939,11 +976,13 @@ class Results:
         print(folder_path)
         
         os.makedirs(folder_path, exist_ok=True)
+
+        identifier = int(time() * 1000) # time in ms as identifier
         
-        prediction_csv_path = os.path.join(folder_path, "predictions.csv")    
+        prediction_csv_path = os.path.join(folder_path, f"predictions_{identifier}.csv")    
         df_predictions.to_csv(prediction_csv_path, index=False)
         
-        prediction_excel_path = os.path.join(folder_path, "predictions.xlsx")
+        prediction_excel_path = os.path.join(folder_path, f"predictions_{identifier}.xlsx")
         ec = ExcelCreator()
         ec.create_excel(df_predictions, df_cv_predictions, df_test_model, results_dict, prediction_excel_path)
         
