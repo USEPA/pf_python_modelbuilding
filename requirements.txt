@@ -83,6 +83,7 @@ scikit-learn==1.8.0
 scipy==1.13.1
 setuptools==80.9.0
 six==1.17.0
+sklearn-genetic-opt==0.12.0
 sklearn-pmml-model==1.0.7
 sklearn2pmml==0.125.0
 sortedcontainers==2.4.0
