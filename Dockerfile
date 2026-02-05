@@ -1,8 +1,8 @@
 FROM python:3.12-slim
 
+# Indigo renderer runtime deps reported missing:
 RUN apt-get update && apt-get -y upgrade && apt-get install -y --no-install-recommends \
     build-essential \
-    # Indigo renderer runtime deps reported missing:
     libfreetype6 \
     libfontconfig1 \
     fonts-dejavu-core \
