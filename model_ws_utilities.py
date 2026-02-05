@@ -21,8 +21,6 @@ from sklearn.preprocessing import StandardScaler
 # from xgboost.testing.ranking import run_ranking_categorical
 # from models.runGA import qsar_method
 
-
-
 models = {}  
 from utils import timer
 
@@ -71,11 +69,11 @@ def get_model_info(qsar_method):
 #     # Returns trained model:
 #     return model
 
+
 def call_build_model_with_preselected_descriptors(qsar_method, training_tsv, prediction_tsv, remove_log_p, use_pmml_pipeline,
                                                   include_standardization_in_pmml, descriptor_names_tsv=None,
                                                   n_jobs=8,filterColumnsInBothSets=True):
     """Loads TSV training data into a pandas DF and calls the appropriate training method"""
-
     df_training = dfu.load_df(training_tsv)
     logging.debug('training shape=', df_training.shape)
     df_prediction = dfu.load_df(prediction_tsv)
@@ -85,7 +83,6 @@ def call_build_model_with_preselected_descriptors(qsar_method, training_tsv, pre
         logging.debug('training shape after removing bad descriptors in both sets=', df_training.shape)
 
     qsar_method = qsar_method.lower()
-
 
     model = instantiateModel(df_training, n_jobs, qsar_method, remove_log_p, use_pmml_pipeline=use_pmml_pipeline, include_standardization_in_pmml=include_standardization_in_pmml)
 
@@ -101,17 +98,13 @@ def call_build_model_with_preselected_descriptors(qsar_method, training_tsv, pre
 def call_build_model_with_preselected_descriptors_from_df(params, df_training, df_prediction, 
                                                           descriptor_names_tsv=None, filterColumnsInBothSets=True):
     """Loads TSV training data into a pandas DF and calls the appropriate training method"""
-
-    
     logging.debug('training shape='+ str(df_training.shape))
     
-
     if filterColumnsInBothSets:
         df_training = dfu.filter_columns_in_both_sets(df_training, df_prediction)
         logging.debug('training shape after removing bad descriptors in both sets='+str(df_training.shape))
 
     qsar_method = params.qsar_method.lower()
-
 
     model = instantiateModel(df_training, params.n_threads, qsar_method, params.remove_log_p_descriptors, 
                              use_pmml_pipeline=params.use_pmml_pipeline, 
@@ -119,8 +112,7 @@ def call_build_model_with_preselected_descriptors_from_df(params, df_training, d
 
     if params.hyperparameter_grid:
         model.hyperparameter_grid=params.hyperparameter_grid
-        
-        
+    
     # print(json.dumps(model.hyperparameter_grid,indent=4))
 
     if not model:
@@ -132,6 +124,7 @@ def call_build_model_with_preselected_descriptors_from_df(params, df_training, d
     # Returns trained model:
     return model
 
+
 def call_cross_validate(qsar_method, cv_training_tsv, cv_prediction_tsv, descriptor_names_tsv, use_pmml_pipeline,
                         remove_log_p=False, hyperparameters={}, n_jobs=8):
     """Loads TSV training data into a pandas DF and calls the appropriate training method"""
@@ -141,12 +134,10 @@ def call_cross_validate(qsar_method, cv_training_tsv, cv_prediction_tsv, descrip
     # print('\n')
     # print(cv_prediction_tsv)
 
-
     df_training = dfu.load_df(cv_training_tsv)
     logging.debug('training shape=', df_training.shape)
     df_prediction = dfu.load_df(cv_prediction_tsv)
     df_training = dfu.filter_columns_in_both_sets(df_training, df_prediction)
-
 
     qsar_method = qsar_method.lower()
 
@@ -216,7 +207,6 @@ def instantiateModel(df_training, n_jobs, qsar_method, remove_log_p, use_pmml_pi
 
     # print(model.get_model_description())
     return model
-
 
 
 def instantiateModelForPrediction(qsar_method, is_binary, pmml_file_path, use_sklearn2pmml):
@@ -301,7 +291,6 @@ def call_build_embedding_ga(qsar_method, training_tsv, prediction_tsv, remove_lo
     if run_sfs:
         run_sfs(ga_model,df_training=df_training)
 
-
     # embedding = json.dumps(descriptor_names)
     # print('embedding='+embedding)
 
@@ -310,11 +299,8 @@ def call_build_embedding_ga(qsar_method, training_tsv, prediction_tsv, remove_lo
     return descriptor_names, timeMin
 
 
-
 def call_build_embedding_ga_db(df_training, df_prediction, gap):
-    """Loads TSV training data into a pandas DF and calls the appropriate training method"""
-        
-                
+    """Loads TSV training data into a pandas DF and calls the appropriate training method"""     
     df_training = dfu.filter_columns_in_both_sets(df_training, df_prediction)
     # print('training shape=', df_training.shape)
 
@@ -322,16 +308,12 @@ def call_build_embedding_ga_db(df_training, df_prediction, gap):
 
     # print(qsar_method)
 
-
     model = instantiateModel(df_training=df_training, n_jobs=gap.n_threads, qsar_method=qsar_method,
                                  remove_log_p=gap.remove_log_p_descriptors, use_pmml_pipeline=False)
-    
-    
     
     if gap.hyperparameter_grid:
         model.hyperparameter_grid=gap.hyperparameter_grid
     
-
     t1 = time.time()
     
     # print(go.NUM_GENERATIONS)
@@ -352,13 +334,11 @@ def call_build_embedding_ga_db(df_training, df_prediction, gap):
     
     logging.info(f"embedding from GA ({len(model.embedding)} descriptors): {model.embedding}")
 
-
     from models.EmbeddingFromImportance import perform_iterative_recursive_feature_elimination as run_rfe_it
 
     if gap.run_rfe:
         run_rfe_it(model,df_training,gap.n_threads, n_steps=1)
         logging.info(f"embedding after iterative RFE ({len(model.embedding)} descriptors): {model.embedding}")
-
 
     from models.EmbeddingFromImportance import perform_sequential_feature_selection as run_sfs
 
@@ -366,14 +346,12 @@ def call_build_embedding_ga_db(df_training, df_prediction, gap):
         run_sfs(model=model, df_training=df_training)
         logging.info(f"embedding after SFS ({len(model.embedding)} descriptors): {model.embedding}")
 
-
     # embedding = json.dumps(descriptor_names)
     # print('embedding='+embedding)
 
     t2 = time.time()
     timeMin = (t2 - t1) / 60
     return model.embedding, timeMin
-
 
 
 def call_build_embedding_importance(qsar_method, training_tsv, prediction_tsv, remove_log_p_descriptors, n_threads,
@@ -386,11 +364,9 @@ def call_build_embedding_importance(qsar_method, training_tsv, prediction_tsv, r
     df_prediction = dfu.load_df(prediction_tsv)
     logging.debug('in call_build_embedding_importance, df_prediction.shape',df_prediction.shape)
     
-    
     return call_build_embedding_importance_from_df(qsar_method, df_training, df_prediction, remove_log_p_descriptors, n_threads,
                                     num_generations, use_permutative, run_rfe, fraction_of_max_importance,
                                     min_descriptor_count, max_descriptor_count, use_wards)
-
 
 
 # def call_build_embedding_group_contribution_from_df(df_training, min_count):
@@ -403,7 +379,6 @@ def call_build_embedding_importance_from_df(qsar_method, df_training, df_predict
                                     min_descriptor_count, max_descriptor_count, use_wards, hyperparameter_grid = None,
                                     run_sfs=False):
     """Generates importance based embedding"""
-
     # print('in call_build_embedding_importance, df_training.shape',df_training.shape)
     # print('in call_build_embedding_importance, df_prediction.shape',df_prediction.shape)
 
@@ -416,8 +391,6 @@ def call_build_embedding_importance_from_df(qsar_method, df_training, df_predict
     
     if hyperparameter_grid:
         model.hyperparameter_grid = hyperparameter_grid
-    
-    
 
     t1 = time.time()
 
@@ -455,9 +428,9 @@ def call_build_embedding_importance_from_df(qsar_method, df_training, df_predict
     # Returns embedding results:
     return model.embedding, timeMin
 
+
 def call_build_embedding_lasso(qsar_method, training_tsv, prediction_tsv, remove_log_p_descriptors, n_threads,run_rfe):
     """Generates importance based embedding"""
-
     print('enter call_build_embedding_lasso')
     df_training = dfu.load_df(training_tsv)
     print('in call_build_embedding_importance, df_training.shape',df_training.shape)
@@ -506,7 +479,6 @@ def call_build_embedding_lasso(qsar_method, training_tsv, prediction_tsv, remove
                 break
             embedding_old = model.embedding
 
-
     # Fit final model using final embedding:
     train_ids, train_labels, train_features, train_column_names = \
         dfu.prepare_instances2(df_training, model.embedding, False)
@@ -533,6 +505,7 @@ def call_build_embedding_lasso(qsar_method, training_tsv, prediction_tsv, remove
     descriptor_names = model.embedding
     # Returns embedding results:
     return descriptor_names, timeMin
+
 
 def api_call_init(qsar_method, model_string, details, url_host, model_id):
     url = url_host + 'models/' + qsar_method + '/init'
@@ -657,12 +630,10 @@ def api_call_build_with_preselected_descriptors(qsar_method, training_tsv, remov
 #     return model
 
 
-
 def call_generate_plot(training_tsv, prediction_tsv, model, model_name, plot_type):
     df_training = dfu.load_df(training_tsv)
     df_prediction = dfu.load_df(prediction_tsv)
     return model.create_plot(df_training, df_prediction, model_name, plot_type)
-
 
 
 def call_do_predictions(prediction_tsv, model):
@@ -719,6 +690,7 @@ def call_do_predictions_from_df(df_prediction, model):
     results_json = results.to_json(orient='records')
     return results_json
 
+
 def call_do_predictions_to_df(prediction_tsv, model):
     """Loads TSV prediction data into a pandas DF, stores IDs and exp vals,
     and calls the appropriate prediction method"""
@@ -740,5 +712,3 @@ def get_model_details(m):
     else:
         # 404 NOT FOUND if requested QSAR method has not been implemented
         abort(404, 'details for m not available')
-
-
