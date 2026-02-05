@@ -61,10 +61,10 @@ from predict_constants import PredictConstants as pc
 
 # PROJECT_ROOT=r"C:\Users\TMARTI02\OneDrive - Environmental Protection Agency (EPA)\0 python\modeling services\pf_python_modelbuilding"    
 PROJECT_ROOT = os.getenv("PROJECT_ROOT")
- 
+
+
 @dataclass
 class ParametersImportance:
-    
     dataset_name: str
     qsar_method: str    
     descriptor_set_name: str
@@ -90,6 +90,7 @@ class ParametersImportance:
     # Derived value (set in __post_init__)
     fraction_of_max_importance: float = field(init=False)
 
+
     def __post_init__(self):
         method = self.qsar_method.lower()
                 
@@ -102,13 +103,13 @@ class ParametersImportance:
         else:
             raise ValueError(f"invalid method: {self.qsar_method}")
 
+    
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
     
 
 @dataclass
 class ParametersGroupContribution:
-
     dataset_name: str
     qsar_method: str    
     descriptor_set_name: str
@@ -121,13 +122,13 @@ class ParametersGroupContribution:
     include_standardization_in_pmml: bool = False
     use_pmml_pipeline: bool = False
 
+
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
 
 
 @dataclass
 class ParametersGeneric:
-
     dataset_name: str
     qsar_method: str    
     descriptor_set_name: str
@@ -138,13 +139,13 @@ class ParametersGeneric:
     include_standardization_in_pmml: bool = False
     use_pmml_pipeline: bool = False
 
+
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
 
 
 @dataclass
 class ParametersGeneticAlgorithm:
-
     dataset_name: str
     qsar_method: str    
     descriptor_set_name: str
@@ -303,7 +304,6 @@ class EmbeddingGenerator:
         # logging.info(f"qsar_method={params.qsar_method}, embedding generated with {len(embedding)} descriptors: {embedding}")
 
         return embedding
-    
 
 
 def getSession():
@@ -678,10 +678,7 @@ def set_hyper_parameters(qsar_method, feature_selection, descriptor_set_name, da
 
         params = ParametersImportance(qsar_method=qsar_method, feature_selection=feature_selection, hyperparameter_grid=grid,
                                       descriptor_set_name=descriptor_set_name, dataset_name=dataset_name)
-        
-        
-        
-
+    
     elif qsar_method == "knn": 
         # grid = {'estimator__n_neighbors': [5], 'estimator__weights': ['distance']}  # default, same as OPERA
         
@@ -693,8 +690,7 @@ def set_hyper_parameters(qsar_method, feature_selection, descriptor_set_name, da
         # params.num_generations=1
         # params.num_optimizers=1
         # params.run_rfe = False #doesnt work for knn 
-        
-
+    
     elif qsar_method == "reg": 
         grid = {}  # default, same as OPERA
         params = ParametersGeneticAlgorithm(qsar_method=qsar_method, hyperparameter_grid=grid,feature_selection=feature_selection,
@@ -702,7 +698,6 @@ def set_hyper_parameters(qsar_method, feature_selection, descriptor_set_name, da
         
         params.remove_fragment_descriptors = True
         params.remove_acnt_descriptors = True        
-
 
     elif qsar_method == "las": 
         grid = {'estimator__alpha': [np.round(i, 5) for i in np.logspace(-4, 0, num=20)],
@@ -724,10 +719,8 @@ def set_hyper_parameters(qsar_method, feature_selection, descriptor_set_name, da
 
     return params
 
-        
 
 def runAD(df_training, df_prediction, params, embedding, df_predictions, ad_measure, stats_dict):
-    
     df_ad_output, _ = adu.generate_applicability_domain_with_preselected_descriptors_from_dfs(
         train_df=df_training.copy(), test_df=df_prediction.copy(), 
         remove_log_p=params.remove_log_p_descriptors, 
@@ -764,7 +757,6 @@ def runAD(df_training, df_prediction, params, embedding, df_predictions, ad_meas
 
 
 def generate_consensus_ad(df_predictions, stats_dict, ad_measure_final):
-    
     # Build list of AD columns
     colsAD = [f"AD_{ad.replace(' ', '_')}" for ad in ad_measure_final]
 
@@ -794,14 +786,11 @@ def generate_consensus_ad(df_predictions, stats_dict, ad_measure_final):
              "fraction_inside":coverage}    
     stats_dict[ad_measure] = stats
 
-    
-
 
 def add_log_p_martin_columns(df_training, df_prediction, cross_validate, df_cv_dict=None):
     """
     Does adding columns for my LOGP prediction work better than ALOGP and XLOGP?    
     """
-    
     model_id = str(1069)
     pred_name = 'LOGP_Martin'
     from model_ws_db_utilities import add_model_prediction_to_df as add_mp
@@ -827,10 +816,8 @@ def run_dataset(dataset_name, qsar_method, embedding=None,  folder_embedding=Non
     #TODO does add the LOGP predicted from my LOGP model improve the results?
     splitting_name = "RND_REPRESENTATIVE"
 
-    
     if qsar_method == 'gcm' or qsar_method=='svm':
         feature_selection = False
-    
     
     if embedding is not None:
         folder_embedding = 'custom'
@@ -846,8 +833,7 @@ def run_dataset(dataset_name, qsar_method, embedding=None,  folder_embedding=Non
             # print(f"from {folder_embedding}:{embedding}")
     else:
         fs_previous_embedding = False
-        
-            
+     
     # if True:
     #     return
 
@@ -882,7 +868,6 @@ def run_dataset(dataset_name, qsar_method, embedding=None,  folder_embedding=Non
     df_training, df_prediction = get_training_prediction_instances(session, dataset_name, descriptor_set_name, splitting_name)
     # print(df_training.shape)
 
-
     df_cv_dict = None 
     if cross_validate:
         df_cv_dict = get_training_cv_instances(session, dataset_name, descriptor_set_name)
@@ -890,7 +875,6 @@ def run_dataset(dataset_name, qsar_method, embedding=None,  folder_embedding=Non
     if add_LOGP_Martin:
         df_training, df_prediction = add_log_p_martin_columns(df_training, df_prediction, cross_validate, df_cv_dict)
 
-    
     logging.info("done getting dataframes from db")
         
     # ******************************************************************************************************
@@ -942,7 +926,6 @@ def run_dataset(dataset_name, qsar_method, embedding=None,  folder_embedding=Non
         if len(ad_measure_final)>1:
             generate_consensus_ad(df_predictions, stats_dict, ad_measure_final)
         
-
         # print(json.dumps(stats_dict,indent=4))
     
     # ******************************************************************************************************
@@ -994,13 +977,11 @@ class Results:
         
         if df_cv_predictions is not None:
             df_cv_predictions = prepare_df(df_cv_predictions)
-         
-    
+        
         subfolder = params["qsar_method"] + "_" + params["descriptor_set_name"] + "_fs=" + str(params["feature_selection"])
     
         if folder_embedding is not None:
             subfolder = subfolder +"_"+ folder_embedding
-        
         
         path_segments = [PROJECT_ROOT, "data", "models", params["dataset_name"], subfolder]
         
@@ -1034,8 +1015,7 @@ class Results:
         results_dict["embedding"] = model.embedding
         
         results_dict["len(embedding)"] = len(model.embedding)
-            
-            
+        
         qsar_method = params.qsar_method
         
         if qsar_method == 'reg' or qsar_method == 'las' or qsar_method == 'gcm':
@@ -1065,8 +1045,6 @@ class Results:
             df_stats (pd.DataFrame): Summary table of runs and stats.
             excel_path (str): Path to the saved Excel file.
         """
-        
-        
         folder = os.path.join(PROJECT_ROOT, "data","models", dataset_name)
         os.makedirs(folder, exist_ok=True)
         
