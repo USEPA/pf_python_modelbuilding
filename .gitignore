@@ -3,6 +3,7 @@
 *.p
 *.zip
 data/
+src old/
 __pycache__/
 bash.exe.stackdump
 temp/
