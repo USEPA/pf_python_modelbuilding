@@ -176,14 +176,14 @@ class ParametersGeneticAlgorithm:
     include_standardization_in_pmml: bool = False
     use_pmml_pipeline: bool = False
 
+
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
 
 
 class ModelBuilder:
-    
-    def crossvalidate(self, df_cv_dict, params, embedding):
-        
+    @staticmethod
+    def crossvalidate(df_cv_dict, params, embedding):
         logging.info(f"Start running CV calculations ...")
         
         all_df_predictions = []
@@ -197,7 +197,7 @@ class ModelBuilder:
             df_prediction = df_cv_dict[i]["pred"]
             folds[i] = {"train": df_training, "pred": df_prediction}
             
-            df_predictions = self.build_and_test_model2(df_training.copy(), df_prediction.copy(), params, embedding)
+            df_predictions = ModelBuilder.build_and_test_model2(df_training.copy(), df_prediction.copy(), params, embedding)
             all_df_predictions.append(df_predictions)
         
         df_predictions_all = pd.concat(all_df_predictions, ignore_index=True)
@@ -240,8 +240,9 @@ class ModelBuilder:
         
         # self.crossvalidate(session, dataset_name, descriptorSetName, params, embedding)
     
-    def build_and_test_model(self, df_training, df_prediction, params, embedding):
-        
+
+    @staticmethod
+    def build_and_test_model(df_training, df_prediction, params, embedding):
         model = call_build_model_with_preselected_descriptors_from_df(params, df_training.copy(), df_prediction.copy(),
                                                                       descriptor_names_tsv=embedding,
                                                                       filterColumnsInBothSets=True)
@@ -262,8 +263,9 @@ class ModelBuilder:
                 
         # logging.info(f"MAE_TEST = {test_stats['MAE_Test']:.3f}")
 
-    def build_and_test_model2(self, df_training, df_prediction, params, embedding):
 
+    @staticmethod
+    def build_and_test_model2(df_training, df_prediction, params, embedding):
         model = call_build_model_with_preselected_descriptors_from_df(params, df_training, df_prediction,
                                                   descriptor_names_tsv=embedding, filterColumnsInBothSets=True)
         # generate predictions for test set:
@@ -277,9 +279,8 @@ class ModelBuilder:
 
 
 class EmbeddingGenerator:
-    
-    def feature_selection(self, df_training, df_prediction, params):
-        
+    @staticmethod
+    def feature_selection(df_training, df_prediction, params):
         # ga_methods = ['knn', 'reg','las']
         # imp_methods = ['rf', 'xgb']
         
@@ -339,18 +340,14 @@ def prepare_df(df):
     df = df.sort_values("abs_diff", ascending=False).reset_index(drop=True)
     return df
 
-        
-
-    
     # statistics_AD = None
     # if doAD:
     #     df_results, statistics_AD = runAD(mp.is_binary, adMeasure, df_results, model, training_tsv, prediction_tsv)
 
 
 class ExcelCreator:
-    
-
-    def add_subtotal_count_fraction_and_visible(self, ws, df, column_name='abs_diff'):
+    @staticmethod
+    def add_subtotal_count_fraction_and_visible(ws, df, column_name='abs_diff'):
         """
         Add rows below the data with formulas in the target column and place labels
         in the adjacent column (next to the formula cells):
@@ -409,8 +406,8 @@ class ExcelCreator:
             return [0, 0, 0]
 
     
-    def add_filter(self, writer, sheet_name, df):
-        
+    @staticmethod
+    def add_filter(writer, sheet_name, df):
         # Get the worksheet object
         ws = writer.sheets[sheet_name]
 
@@ -423,7 +420,9 @@ class ExcelCreator:
         # Optional: freeze the header row
         ws.freeze_panes(1, 0)
     
-    def nice_integer_major_unit(self, span: int, target_ticks: int=5) -> int:
+    
+    @staticmethod
+    def nice_integer_major_unit(span: int, target_ticks: int=5) -> int:
         raw = max(1, int(math.ceil(span / max(1, target_ticks))))
         exp = int(math.floor(math.log10(raw))) if raw > 0 else 0
         base = raw / (10 ** exp)
@@ -436,8 +435,10 @@ class ExcelCreator:
         else:
             step_base = 10
         return int(step_base * (10 ** exp))
+    
 
-    def compute_equal_axis_bounds(self,
+    @staticmethod
+    def compute_equal_axis_bounds(
         x_values: Iterable[float],
         y_values: Iterable[float],
         pad_ratio: float=0.02,
@@ -467,19 +468,21 @@ class ExcelCreator:
             if int_min == int_max:
                 int_min -= 1
                 int_max += 1
-            major_unit = self.nice_integer_major_unit(int_max - int_min, target_ticks=target_ticks)
+            major_unit = ExcelCreator.nice_integer_major_unit(int_max - int_min, target_ticks=target_ticks)
             return float(int_min), float(int_max), float(major_unit)
     
         return mn, mx, None
 
-    def add_plot(self, df, sheet_name, sheet_name_plot, chart_size_px, pad_ratio, integer_ticks, yx_offset_rows, writer, workbook):
+
+    @staticmethod
+    def add_plot(df, sheet_name, sheet_name_plot, chart_size_px, pad_ratio, integer_ticks, yx_offset_rows, writer, workbook):
         worksheet = writer.sheets[sheet_name]
         worksheet_plot = writer.sheets[sheet_name_plot]
     # Hide worksheet gridlines (screen + print)
         worksheet.hide_gridlines(2)
         nrows = len(df)
     # Compute unified bounds (also used for y=x line)
-        mn, mx, major_unit = self.compute_equal_axis_bounds(
+        mn, mx, major_unit = ExcelCreator.compute_equal_axis_bounds(
             df["exp"], df["pred"], pad_ratio=pad_ratio, integer_ticks=integer_ticks, target_ticks=5)
     # Create scatter chart with markers
         chart = workbook.add_chart({"type":"scatter", "subtype":"straight_with_markers"})
@@ -550,7 +553,8 @@ class ExcelCreator:
             worksheet_plot.insert_chart(0, 0, chart, {'x_scale': 1.0, 'y_scale': 1.0})
 
 
-    def writeModelCoefficients(self, results_dict, writer, workbook): 
+    @staticmethod
+    def writeModelCoefficients(results_dict, writer, workbook): 
         if results_dict and "model_coefficients" in results_dict:
             sheet_name = "model coefficients"
             df = pd.DataFrame(results_dict["model_coefficients"], columns=["name", "coefficient", "std_error"])
@@ -563,7 +567,9 @@ class ExcelCreator:
             for i, val in enumerate(df["name"], start=1):
                 worksheet.write_string(i, name_col_idx, val, text_fmt)
 
-    def writeDescriptors(self, sheet_name, df, writer, workbook):
+
+    @staticmethod
+    def writeDescriptors(sheet_name, df, writer, workbook):
         if df is not None:
             # df.to_excel(writer, sheet_name="training set descriptors", index=False)
             
@@ -582,7 +588,8 @@ class ExcelCreator:
                 worksheet.write_string(start_row, col_idx, col_name, header_fmt)
 
 
-    def add_summary_stats_to_ws(self, ws, source_ws, summary_stats, start_row=2, start_col=10):
+    @staticmethod
+    def add_summary_stats_to_ws(ws, source_ws, summary_stats, start_row=2, start_col=10):
         """
         Adds summary statistics from source_ws to ws at the given position.
         
@@ -960,15 +967,14 @@ def run_dataset(dataset_name, qsar_method, embedding=None,  folder_embedding=Non
     logging.info(f"test set AD stats={json.dumps( results_dict['test_stats_AD'] , indent=4)}")
     
     return results_dict
-    
-    
+
     # coeff_dict = model.getOriginalRegressionCoefficients()
     # logging.debug(f"coeffs{coeff_dict}")
-    
+
+
 class Results:
-    
-    def save_results(self, results_dict, df_predictions, df_cv_predictions=None, df_test_model=None, folder_embedding=None):
-    
+    @staticmethod
+    def save_results(results_dict, df_predictions, df_cv_predictions=None, df_test_model=None, folder_embedding=None, col_width_pad=4, min_col_width=5):
         params = results_dict["params"]
         
         # print (json.dumps(params))
@@ -998,15 +1004,15 @@ class Results:
         
         prediction_excel_path = os.path.join(folder_path, f"predictions_{identifier}.xlsx")
         ec = ExcelCreator()
-        ec.create_excel(df_predictions, df_cv_predictions, df_test_model, results_dict, prediction_excel_path)
+        ec.create_excel(df_predictions, df_cv_predictions, df_test_model, results_dict, prediction_excel_path, col_width_pad=col_width_pad, min_col_width=min_col_width)
         
         json_path = os.path.join(folder_path, "results.json")
         with open(json_path, 'w') as json_file:
             json.dump(results_dict, json_file, indent=4)
     
-    
-    def create_results_dict(self, ad_measure_final, df_training, params, model,test_stats, cv_stats, stats_dict):
-    
+
+    @staticmethod
+    def create_results_dict(ad_measure_final, df_training, params, model,test_stats, cv_stats, stats_dict):
         results_dict = {"params":params.to_dict()}
         
         # if feature_selection:
@@ -1036,7 +1042,9 @@ class Results:
         
         return results_dict
     
-    def summarize_model_stats(self, dataset_name, excel_name="model_stats.xlsx", sheet_name="stats"):
+
+    @staticmethod
+    def summarize_model_stats(dataset_name, excel_name="model_stats.xlsx", sheet_name="stats", col_width_pad=4, min_col_width=5):
         """
         Iterate subfolders, print model stats, collect them into a DataFrame,
         and save to an Excel file in that folder.
@@ -1104,6 +1112,7 @@ class Results:
             nrows, ncols = df_stats.shape
             ws.autofilter(0, 0, nrows, ncols - 1)
             ws.freeze_panes(1, 0)
+            ExcelCreator.set_column_width(writer, sheet_name=sheet_name, col_width_pad=col_width_pad, min_col_width=min_col_width, how="full")
     
         print(f"Saved summary to: {excel_path}")
         return df_stats, excel_path
