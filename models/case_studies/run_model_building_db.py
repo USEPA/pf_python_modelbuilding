@@ -103,7 +103,7 @@ class ParametersImportance:
         else:
             raise ValueError(f"invalid method: {self.qsar_method}")
 
-    
+
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
     
@@ -566,6 +566,7 @@ class ExcelCreator:
             # Header is row 0; data starts at row 1 in XlsxWriter's 0-based indexing.
             for i, val in enumerate(df["name"], start=1):
                 worksheet.write_string(i, name_col_idx, val, text_fmt)
+            ExcelCreator.set_column_width(writer, sheet_name=sheet_name, df=df, col_width_pad=4, min_col_width=5, how="header")
 
 
     @staticmethod
@@ -589,7 +590,7 @@ class ExcelCreator:
 
 
     @staticmethod
-    def add_summary_stats_to_ws(ws, source_ws, summary_stats, start_row=2, start_col=10):
+    def add_summary_stats_to_ws(ws, source_ws, summary_stats, start_row=2, start_col=10, col_width=15):
         """
         Adds summary statistics from source_ws to ws at the given position.
         
@@ -616,9 +617,35 @@ class ExcelCreator:
             ws.write(row, start_col, label)
             ws.write_formula(row, start_col + 1, formula)
             row += 1
+        ws.set_column(start_col, start_col+1, col_width)
     
 
-    def create_excel(self,
+    @staticmethod
+    def set_column_width(writer, sheet_name: str, df: pd.DataFrame, col_width_pad: int=4, min_col_width: int=5, how: str="header"):
+        worksheet = writer.sheets[sheet_name]
+        for col_idx in range(len(df.columns)):
+            if how == "header":
+                header_entry = df.columns[col_idx]
+                header_width = len(header_entry)
+                col_width = max(header_width, min_col_width) + col_width_pad
+                worksheet.set_column(col_idx, col_idx, col_width)
+            elif how == "full":
+                # Find the maximum width needed for data in this column
+                header_entry = df.columns[col_idx]
+                header_width = len(header_entry)
+                col_width = max(header_width, min_col_width)
+                max_width = col_width
+                for row_idx in range(df.shape[0]):
+                    cell_value = df.iloc[row_idx, col_idx]
+                    if cell_value is not None:
+                        cell_value = str(cell_value)
+                        max_width = max(max_width, len(cell_value))
+                col_width = max_width + col_width_pad
+                worksheet.set_column(col_idx, col_idx, col_width)
+    
+
+    @staticmethod
+    def create_excel(
         df_test: pd.DataFrame,
         df_training_cv: pd.DataFrame,
         df_test_model: pd.DataFrame=None,
@@ -628,8 +655,9 @@ class ExcelCreator:
         pad_ratio: float=0.02,
         integer_ticks: bool=True,
         yx_offset_rows: int=3,  # empty rows between data and y=x helper points
+        col_width_pad: int=4,
+        min_col_width: int=5
     ):
-        # TODO: Change file names for output Excel files under data directory
         with pd.ExcelWriter(excel_path, engine="xlsxwriter") as writer:
             # Write data (now includes abs_diff column)
             workbook = writer.book
@@ -637,31 +665,37 @@ class ExcelCreator:
             if df_training_cv is not None:
                 sheet_name_cv = "training cv predictions"
                 df_training_cv.to_excel(writer, sheet_name=sheet_name_cv, index=False)
-                self.add_plot(df_training_cv, sheet_name_cv, sheet_name_cv, chart_size_px, pad_ratio, integer_ticks, yx_offset_rows, writer, workbook)
-                self.add_filter(writer, sheet_name_cv, df_training_cv)
+                ExcelCreator.add_plot(df_training_cv, sheet_name_cv, sheet_name_cv, chart_size_px, pad_ratio, integer_ticks, yx_offset_rows, writer, workbook)
+                ExcelCreator.add_filter(writer, sheet_name_cv, df_training_cv)
+                ExcelCreator.set_column_width(writer, sheet_name=sheet_name_cv, df=df_training_cv, col_width_pad=col_width_pad, min_col_width=min_col_width, how="header")
 
             sheet_name_test = "test set predictions"
             df_test.to_excel(writer, sheet_name=sheet_name_test, index=False)
-            self.add_filter(writer, sheet_name_test, df_test)
+            ExcelCreator.add_filter(writer, sheet_name_test, df_test)
             ws = writer.sheets[sheet_name_test]
-            summary_stats = self.add_subtotal_count_fraction_and_visible(ws, df_test, column_name='abs_diff')
+            summary_stats = ExcelCreator.add_subtotal_count_fraction_and_visible(ws, df_test, column_name='abs_diff')
+            ExcelCreator.set_column_width(writer, sheet_name=sheet_name_test, df=df_test, col_width_pad=col_width_pad, min_col_width=min_col_width, how="header")
 
-            # self.add_plot(df_test, sheet_name_test, chart_size_px, pad_ratio, integer_ticks, yx_offset_rows, writer, workbook)
+            # ExcelCreator.add_plot(df_test, sheet_name_test, chart_size_px, pad_ratio, integer_ticks, yx_offset_rows, writer, workbook)
             
             # Create a dedicated sheet for the test set plot
             chart_sheet_name_test = "test set plot"
             # Add the worksheet explicitly and register it with writer.sheets
             chart_ws = workbook.add_worksheet(chart_sheet_name_test)
             writer.sheets[chart_sheet_name_test] = chart_ws
-            self.add_plot(df_test, sheet_name_test, chart_sheet_name_test, chart_size_px, pad_ratio, integer_ticks, yx_offset_rows, writer, workbook)
-            self.add_summary_stats_to_ws(chart_ws, sheet_name_test, summary_stats, start_row=2, start_col=10)
+            ExcelCreator.add_plot(df_test, sheet_name_test, chart_sheet_name_test, chart_size_px, pad_ratio, integer_ticks, yx_offset_rows, writer, workbook)
+            summary_row = 2
+            summary_col = 10
+            summary_col_width = 15
+            ExcelCreator.add_summary_stats_to_ws(chart_ws, sheet_name_test, summary_stats, start_row=summary_row, start_col=summary_col, col_width=summary_col_width)
 
-            self.writeDescriptors("test set descriptors", df_test_model, writer, workbook)
-            self.writeModelCoefficients(results_dict, writer, workbook)
+            sheet_name_descriptors = "test set descriptors"
+            ExcelCreator.writeDescriptors(sheet_name_descriptors, df_test_model, writer, workbook)
+            ExcelCreator.writeModelCoefficients(results_dict, writer, workbook)
+            ExcelCreator.set_column_width(writer, sheet_name=sheet_name_descriptors, df=df_test_model, col_width_pad=col_width_pad, min_col_width=min_col_width, how="header")
         
 
 def set_hyper_parameters(qsar_method, feature_selection, descriptor_set_name, dataset_name):
-
     params = None    
         
     if qsar_method == "xgb":
@@ -1112,7 +1146,7 @@ class Results:
             nrows, ncols = df_stats.shape
             ws.autofilter(0, 0, nrows, ncols - 1)
             ws.freeze_panes(1, 0)
-            ExcelCreator.set_column_width(writer, sheet_name=sheet_name, col_width_pad=col_width_pad, min_col_width=min_col_width, how="full")
+            ExcelCreator.set_column_width(writer, sheet_name=sheet_name, df=df_stats, col_width_pad=col_width_pad, min_col_width=min_col_width, how="full")
     
         print(f"Saved summary to: {excel_path}")
         return df_stats, excel_path
