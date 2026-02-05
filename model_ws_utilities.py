@@ -6,7 +6,7 @@ from models import df_utilities as dfu
 from models import ModelBuilder as mb
 
 from models import EmbeddingFromImportance as efi
-from models import GeneticOptimizer as go
+from models import genetic_optimizer as go
 
 
 import time as time
