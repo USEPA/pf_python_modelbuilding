@@ -1126,9 +1126,9 @@ class Results:
     
                             rows.append({
                                 "Run": entry.name,
-                                "MAE_Test": mae_test_str,
-                                "MAE_Training_CV": mae_cv_str,
-                                "#_variables": lenEmb_str
+                                "MAE_Test": float(mae_test_str) if mae_test_str != "N/A" else None,
+                                "MAE_Training_CV": float(mae_cv_str) if mae_cv_str != "N/A" else None,
+                                "#_variables": int(lenEmb_str) if lenEmb_str != "N/A" else None
                             })
     
                     except json.JSONDecodeError as e:
