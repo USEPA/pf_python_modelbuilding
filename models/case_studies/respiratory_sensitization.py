@@ -38,9 +38,9 @@ def get_neighbors(row, df_train_ids):
     
     neighbors = []
         
-    for smiles in row.ids:
+    for id_training in row.ids:
         
-        train_rows = df_train_ids[df_train_ids['canonicalSmiles'] == smiles]
+        train_rows = df_train_ids[df_train_ids['CID'] == id_training]
         if train_rows.empty:
             continue
 
@@ -233,11 +233,12 @@ def create_webpage(results, out_path='results.html', title='Results'):
 
 
 
-def get_ad_test(canonicalSmiles, df_train_ids, df_ad):
+def get_ad_test(id_test, df_train_ids, df_ad):
     
-    df_ad_rows = df_ad[df_ad['idTest'] == canonicalSmiles]
+    
+    df_ad_rows = df_ad[df_ad['idTest'] == id_test]
     df_ad_row=df_ad_rows.iloc[0]
-
+    
     adResultsTest = {}
     adResultsTest["adMethod"] = {}
     adResultsTest["adMethod"]["name"] = pc.Applicability_Domain_TEST_All_Descriptors_Euclidean
@@ -262,17 +263,17 @@ def get_ad_frag(canonicalSmiles, df_ad):
 
 def determine_ad():
     
-    file_name_test = "test_set2.tsv"
+    file_name_test = "test_set.tsv"
     path_test = os.path.join(folder, file_name_test)    
     df_test = pd.read_csv(path_test, delimiter='\t')
     df_test_ids = df_test.iloc[:,:3].copy()
-    df_test.drop(df_test.columns[0], axis=1, inplace=True)
+    df_test.drop(df_test.columns[1], axis=1, inplace=True) # drop smiles column, use CID column for merging dfs
     
     file_name_train = "training_set.tsv"
     path_train = os.path.join(folder, file_name_train)    
     df_train = pd.read_csv(path_train, delimiter='\t')
     df_train_ids = df_train.iloc[:,:3].copy()
-    df_train.drop(df_train.columns[0], axis=1, inplace=True)
+    df_train.drop(df_train.columns[1], axis=1, inplace=True)
 
     start = "As [+5 valence, one double bond]"
     stop = "-N=S=O"
@@ -289,10 +290,10 @@ def determine_ad():
         result=row.to_dict()
         result["applicability_domains"]=[]
         
-        adResultsNeighbors = get_ad_test(row.canonicalSmiles, df_train_ids, df_ad_neighbors)        
+        adResultsNeighbors = get_ad_test(row.CID, df_train_ids, df_ad_neighbors)        
         result["applicability_domains"].append(adResultsNeighbors)
         
-        adResultsFrag = get_ad_frag(row.canonicalSmiles, df_ad_frag)
+        adResultsFrag = get_ad_frag(row.CID, df_ad_frag)
         result["applicability_domains"].append(adResultsFrag)
         
         results.append(result)     
@@ -304,6 +305,62 @@ def determine_ad():
     create_webpage(results, out_path,"Applicability Domain Results for Sophorolipids for Respiratory Irritation Model by Chushak et al. (2025)")
 
 
+def determine_ad_separate(do_fragment):
+    
+    file_name_test = "test_set.tsv"
+    path_test = os.path.join(folder, file_name_test)    
+    df_test = pd.read_csv(path_test, delimiter='\t')
+    df_test_ids = df_test.iloc[:,:3].copy()
+    df_test.drop(df_test.columns[1], axis=1, inplace=True) # drop smiles column, use CID column for merging dfs
+    
+    file_name_train = "training_set.tsv"
+    path_train = os.path.join(folder, file_name_train)    
+    df_train = pd.read_csv(path_train, delimiter='\t')
+    df_train_ids = df_train.iloc[:,:3].copy()
+    df_train.drop(df_train.columns[1], axis=1, inplace=True) # drop the smiles column
+
+    start = "As [+5 valence, one double bond]"
+    stop = "-N=S=O"
+    features_frag = dfu.keep_columns_between(df_train, start, stop, True)
+    cols_frag = features_frag.columns.tolist()    
+                
+    if do_fragment:
+        df_ad_frag = runAD(df_train, df_test, cols_frag, pc.Applicability_Domain_TEST_Fragment_Counts)
+    else:    
+        df_ad_neighbors = runAD(df_train, df_test, None, pc.Applicability_Domain_TEST_All_Descriptors_Euclidean)
+        
+    results=[]
+            
+    for _, row in df_test_ids.iterrows():
+        result=row.to_dict()
+        result["applicability_domains"]=[]
+        
+        # print(row.CID,row.canonicalSmiles)
+        
+        if do_fragment:
+            adResultsFrag = get_ad_frag(row.CID, df_ad_frag) # use the CID because can have 2 rows with same qsarSmiles with list tony provided
+            result["applicability_domains"].append(adResultsFrag)
+        else:
+            
+            adResultsNeighbors = get_ad_test(row.CID, df_train_ids, df_ad_neighbors)        
+            result["applicability_domains"].append(adResultsNeighbors)
+        
+        results.append(result)     
+        
+        if row.CID == "DTXSID101537885":
+            neighbors = result["applicability_domains"][0]["neighbors"]
+            for neighbor in neighbors:
+                print(neighbor["CID"])
+               
+    
+    if do_fragment:
+        out_path = os.path.join(folder, "results_fragments.html")
+        create_webpage(results, out_path,"Fragment Applicability Domain Results for Sophorolipids for Respiratory Irritation Model by Chushak et al. (2025)")
+    else:        
+        out_path = os.path.join(folder, "results_neighbors.html")
+        create_webpage(results, out_path,"Neighbor Applicability Domain Results for Sophorolipids for Respiratory Irritation Model by Chushak et al. (2025)")
+
+
 def runAD(df_training, df_prediction, embedding, ad_measure):
     
     df_ad_output, _ = adu.generate_applicability_domain_with_preselected_descriptors_from_dfs(
@@ -313,7 +370,7 @@ def runAD(df_training, df_prediction, embedding, ad_measure):
         filterColumnsInBothSets=False,
         returnTrainingAD=False)
     
-    print_first_row(df_ad_output)
+    # print_first_row(df_ad_output, 5)
     
     return df_ad_output 
 
@@ -323,11 +380,11 @@ def create_df():
     # file_name_input = "Class_RI.csv"
     # file_name_output = "training_set.tsv"
     
-    # file_name_input = "surfactants.csv"
-    # file_name_output = "test_set.tsv"
+    file_name_input = "surfactants.csv"
+    file_name_output = "test_set.tsv"
 
-    file_name_input = "surfactants2.csv"
-    file_name_output = "test_set2.tsv"
+    # file_name_input = "surfactants2.csv"
+    # file_name_output = "test_set2.tsv"
     
     qsarReadyRuleSet = "qsar-ready_04242025_0"
     omitSalts = False
@@ -390,5 +447,7 @@ def create_df():
 
 if __name__ == '__main__':
     # create_df()
-    determine_ad()
+    # determine_ad()
+    determine_ad_separate(False)
+    # determine_ad_separate(True)
     

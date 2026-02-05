@@ -48,6 +48,13 @@ def print_first_row(df, row=0):
     print(json_str)
 
 def to_json_safe(obj):
+    
+    if isinstance(obj, (bytes, bytearray, memoryview)):
+        b = bytes(obj)
+        try:
+            return b.decode("utf-8")
+        except UnicodeDecodeError:
+            return "base64:" + base64.b64encode(b).decode("ascii")
     if isinstance(obj, (np.integer,)):
         return int(obj)
     if isinstance(obj, (np.floating,)):

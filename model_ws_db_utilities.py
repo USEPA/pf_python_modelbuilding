@@ -41,7 +41,7 @@ from report_creator_dict import ReportCreator
 import webbrowser
 from predict_constants import UnitsConverter
 
-from utils import timer
+from utils import timer, print_first_row
 
 
 # debug = False
@@ -2764,6 +2764,48 @@ def test_get_exp_data():
     # printFirstRowDF(df)
 
 
+def add_model_prediction_to_df(df, model_id, pred_name, add_squared_column=True):
+    mi = ModelInitializer()
+    model = mi.init_model(model_id)
+    json_test_set_kow = call_do_predictions_from_df(df, model)
+    test_set_kow = json.loads(json_test_set_kow)
+    
+    df_kow = pd.DataFrame(test_set_kow).drop(columns=['exp'], errors='ignore').rename(columns={'id':'ID', 'pred':pred_name})
+# Optional: enforce column order
+    df_kow = df_kow[['ID', pred_name]]
+    
+    if add_squared_column:
+        df_kow[f'{pred_name}_squared'] = df_kow[pred_name] ** 2
+    
+# print(test_set_kow[0])
+    df = df.merge(df_kow, on='ID', how='left', validate='m:1')
+    
+    # print(f"{df.iloc[0]['ID']}, ALOGP={df.iloc[0]['ALOGP']}, XLOGP={df.iloc[0]['XLOGP']}, {pred_name}={df.iloc[0][pred_name]}")
+
+    return df
+
+def getLogKowPredictionsForDataset():
+    
+
+    from models import dataset_utilities_db as du
+    dataset_name = "KOC v1 modeling"
+    session = getSession()
+    descriptor_set_name = "WebTEST-default"
+    splitting_name = "RND_REPRESENTATIVE"
+    df_training, df_prediction = du.get_training_prediction_instances(session, dataset_name, descriptor_set_name, splitting_name)
+
+    model_id = str(1069)
+    pred_name = 'LOGP_Martin'
+
+    df_prediction = add_model_prediction_to_df(df_prediction, model_id, pred_name)
+    df_training = add_model_prediction_to_df(df_training, model_id, pred_name)
+    
+    # print_first_row(df_kow)
+    # print_first_row(df_prediction)
+    # print_first_row(df_training)
+
+
+
 def main():
     
     from dotenv import load_dotenv
@@ -2796,4 +2838,5 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    # main()
+    getLogKowPredictionsForDataset()
