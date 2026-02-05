@@ -11,6 +11,8 @@ def run_example():
     
     dataset_name = "KOC v1 modeling"
     run_dataset(dataset_name=dataset_name,qsar_method='rf',feature_selection=False) #OK
+    r = Results()
+    r.summarize_model_stats(dataset_name)
 
 def run_Koc():
 
@@ -82,6 +84,8 @@ def run_fish_tox():
     r.summarize_model_stats(dataset_name)
 
 
+def main():
+    run_Koc()
 
 if __name__ == '__main__':
-    run_example()
+    main()
