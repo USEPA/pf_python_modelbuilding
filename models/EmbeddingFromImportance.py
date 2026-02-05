@@ -9,9 +9,12 @@ from models import df_utilities as DFU
 from sklearn.inspection import permutation_importance
 from sklearn.model_selection import KFold, StratifiedKFold
 from sklearn.feature_selection import RFECV
+from sklearn.model_selection import cross_val_score
 from models import ModelBuilder
 import pandas as pd
 
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
 
 def generateEmbedding(model, df_training, df_prediction, fraction_of_max_importance,min_descriptor_count, max_descriptor_count,
                       num_generations=5, n_threads=4,remove_log_p_descriptors=False,
@@ -151,10 +154,10 @@ def add_new_descriptors(fraction_of_max_importance, max_descriptor_count, min_de
         if importance > fraction_of_max_importance * max_importance:
             count = count + 1
 
-    print("count exceeding fraction:",count)
+    logging.debug(f"count exceeding fraction:{count}")
 
     if count < min_descriptor_count:  # just take the first min_descriptor_count descriptors
-        print("count < min, using min=", min_descriptor_count)
+        logging.debug(f"count < min, using min={min_descriptor_count}")
 
         for index, importance in enumerate(sorted_importances):
             descriptor = sorted_names[index]
@@ -164,7 +167,7 @@ def add_new_descriptors(fraction_of_max_importance, max_descriptor_count, min_de
             if index == min_descriptor_count - 1:
                 break
     elif count > max_descriptor_count:  # just take the first max_descriptor_count descriptors
-        print("count > max, using max=", max_descriptor_count)
+        logging.debug(f"count > max, using max={max_descriptor_count}")
 
         for index, importance in enumerate(sorted_importances):
             descriptor = sorted_names[index]
@@ -174,7 +177,7 @@ def add_new_descriptors(fraction_of_max_importance, max_descriptor_count, min_de
             if index == max_descriptor_count - 1:
                 break
     else:
-        print("min <= count <= max, using count=", count)
+        logging.debug(f"min <= count <= max, using count={count}")
 
         for index, importance in enumerate(sorted_importances): # take the ones exceeding the fraction of the max importance
             if importance > fraction_of_max_importance * max_importance:
@@ -193,26 +196,48 @@ def perform_sequential_feature_selection(model,df_training):
     
     from sklearn.feature_selection import SequentialFeatureSelector
     
-    _, train_labels, train_features, _ = \
-    DFU.prepare_instances2(df_training, model.embedding,True)
+    _, y, X, _ = DFU.prepare_instances2(df_training, model.embedding,True)
+
+
+    pipe = Pipeline([
+        ("scaler", model.model_obj.named_steps['standardizer']),
+        ("estimator", model.model_obj.named_steps['estimator'])
+    ])
+
+    frac = 0.001 # fraction of initial score to add a parameter
 
     if model.is_binary:
         scoring='balanced_accuracy'
+        scores = cross_val_score(pipe, X, y, cv=5, scoring=scoring)
+        initial_ba = np.mean(scores) # TODO: is the sign correct?
+        logging.debug(f"Initial BA before SFS: {initial_ba}")
+        tol = frac * initial_ba #1% improvement in BA         
     else:
         scoring ='neg_mean_squared_error'
+            # Calculate initial cross-validated MSE
+        scores = cross_val_score(pipe, X, y, cv=5, scoring=scoring)
+        initial_mse = -np.mean(scores) # Convert neg_mse to mse
+        logging.debug(f"Initial MSE before SFS: {initial_mse}")
+        tol = frac * initial_mse #1% improvement in neg error
+
+    logging.info(f"tol for SFS: {tol}")
+        
+    #model.model_obj is PMMLPipeline which may not work, convert to Pipeline:
 
     sfs = SequentialFeatureSelector(
-        model.model_obj.steps[1][1], 
+        # model.model_obj.steps[1][1], # this is just the estimator w/o the scalar (needed for knn)
+        estimator=pipe,
         n_features_to_select='auto', # or integer, e.g., 3
-        tol = 0.01,
-        direction='backward',         # 'forward' or 'backward'
+        tol = tol,
+        # direction='backward',         # 'forward' or 'backward'
+        direction='forward',         # 'forward' or 'backward'
         scoring=scoring,
         cv=5,
         n_jobs=-1
     )
     
     # 5. Fit SFS
-    sfs.fit(train_features, train_labels)
+    sfs.fit(X, y)
     
     model.embedding = sfs.get_feature_names_out().tolist()
     
@@ -227,7 +252,8 @@ def perform_iterative_recursive_feature_elimination(model, df_training, n_thread
     while True:  # need to get more aggressive (remove 2 at a time) since first RFE didnt remove enough
         perform_recursive_feature_elimination(model, df_training, n_threads, n_steps)
         
-        print('After RFE iteration, ', len(model.embedding), "descriptors", model.embedding)
+        logging.debug(f"After RFE iteration, {len(model.embedding)}, descriptors: {model.embedding}")
+        
         if len(model.embedding) == len(embedding_old):
             break
         embedding_old = model.embedding
@@ -264,7 +290,17 @@ def perform_recursive_feature_elimination(model, df_training, n_threads, n_steps
 
     # Recursive feature elimination using 5 fold CV:
     # Check if estimator supports feature importance
-    estimator = model.model_obj.steps[1][1]
+    # estimator = model.model_obj.steps[1][1]  #this is the estimator with no scalar
+    
+#    Adding scaling
+
+    #model.model_obj is PMMLPipeline which may not work, convert to Pipeline:
+    pipe = Pipeline([
+        ("scaler", model.model_obj.named_steps['standardizer']),
+        ("estimator", model.model_obj.named_steps['estimator'])
+    ])
+
+    
     estimator_name = model.regressor_name.lower() if hasattr(model, 'regressor_name') else ''
     
     # Define a custom importance getter for models without feature_importances_
@@ -280,7 +316,8 @@ def perform_recursive_feature_elimination(model, df_training, n_threads, n_steps
             return np.ones(est.n_features_in_)
     
     rfecv = RFECV(
-        estimator=estimator,
+        # estimator=estimator,
+        estimator=pipe,
         step=n_steps,
         cv=cv,
         scoring=scoring,

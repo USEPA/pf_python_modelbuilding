@@ -30,7 +30,7 @@ import StatsCalculator as sc
 
 from models.dataset_utilities_db import get_training_prediction_instances, get_training_cv_instances
 
-from utils import print_first_row
+from utils import print_first_row, row_to_json
 
 from applicability_domain import applicability_domain_utilities as  adu
 
@@ -163,6 +163,7 @@ class ParametersGeneticAlgorithm:
     elitism = True
     crossover_probability = 0.9
     mutation_probability = 0.05
+    max_features = 20
 
     use_wards: bool = False
     run_rfe: bool = True
@@ -182,13 +183,15 @@ class ModelBuilder:
     
     def crossvalidate(self, df_cv_dict, params, embedding):
         
+        logging.info(f"Start running CV calculations ...")
+        
         all_df_predictions = []
         
         folds = {}
         for i in range(1, 6):
             splittingName = 'RND_REPRESENTATIVE_CV' + str(i)
             
-            print(f"Running CV split = {splittingName}")
+            logging.debug(f"Running CV split = {splittingName}")
             df_training = df_cv_dict[i]["train"]
             df_prediction = df_cv_dict[i]["pred"]
             folds[i] = {"train": df_training, "pred": df_prediction}
@@ -204,6 +207,9 @@ class ModelBuilder:
         mean_exp_training = df_predictions_all["exp"].mean()
         cv_stats = sc.calculate_continuous_statistics(df_predictions_all, mean_exp_training, "_Test")
         # print('cross validation stats:\n', json.dumps(cv_stats, indent=4))        
+
+        logging.info(f"Done running CV calculations")
+
         
         return df_predictions_all, cv_stats  
         
@@ -791,11 +797,29 @@ def generate_consensus_ad(df_predictions, stats_dict, ad_measure_final):
     
 
 
+def add_log_p_martin_columns(df_training, df_prediction, cross_validate, df_cv_dict=None):
+    """
+    Does adding columns for my LOGP prediction work better than ALOGP and XLOGP?    
+    """
     
+    model_id = str(1069)
+    pred_name = 'LOGP_Martin'
+    from model_ws_db_utilities import add_model_prediction_to_df as add_mp
+    df_prediction = add_mp(df_prediction, model_id, pred_name) # will generate some XGB warnings
+    df_training = add_mp(df_training, model_id, pred_name)
+    
+    if cross_validate:
+        for fold_num in df_cv_dict:
+            fold = df_cv_dict[fold_num]
+            fold["train"] = add_mp(fold["train"], model_id, pred_name)
+            fold["pred"] = add_mp(fold["pred"], model_id, pred_name)
+    
+    return df_training, df_prediction
+
 
 def run_dataset(dataset_name, qsar_method, embedding=None,  folder_embedding=None, cross_validate=True, 
                 run_AD=True, feature_selection=True,fs_previous_embedding=True, params=None,
-                descriptor_set_name = "WebTEST-default"):
+                descriptor_set_name = "WebTEST-default",ad_measure_final=None, add_LOGP_Martin=False):
         
 # TODO: reg model using descriptors from XGB or RF model
 # TODO: gcm model that uses reg with fragment descriptors such that it deletes rows with less than 3 instances and the associated rows
@@ -819,7 +843,7 @@ def run_dataset(dataset_name, qsar_method, embedding=None,  folder_embedding=Non
         with open(file_path_embedding, "r", encoding="utf-8") as f:
             results = json.load(f)
             embedding = results["embedding"] 
-            print(f"from {folder_embedding}:{embedding}")
+            # print(f"from {folder_embedding}:{embedding}")
     else:
         fs_previous_embedding = False
         
@@ -828,7 +852,10 @@ def run_dataset(dataset_name, qsar_method, embedding=None,  folder_embedding=Non
     #     return
 
     # **************************************************************************************************************************
-    ad_measure_final = [pc.Applicability_Domain_TEST_Embedding_Euclidean, pc.Applicability_Domain_TEST_Fragment_Counts]
+    
+    if ad_measure_final is None:    
+        ad_measure_final = [pc.Applicability_Domain_TEST_Embedding_Euclidean, pc.Applicability_Domain_TEST_Fragment_Counts]
+    
     ad_measures = []
     ad_measures.append(pc.Applicability_Domain_TEST_Embedding_Euclidean)
     ad_measures.append(pc.Applicability_Domain_TEST_All_Descriptors_Euclidean)
@@ -855,10 +882,15 @@ def run_dataset(dataset_name, qsar_method, embedding=None,  folder_embedding=Non
     df_training, df_prediction = get_training_prediction_instances(session, dataset_name, descriptor_set_name, splitting_name)
     # print(df_training.shape)
 
+
     df_cv_dict = None 
     if cross_validate:
         df_cv_dict = get_training_cv_instances(session, dataset_name, descriptor_set_name)
-        
+    
+    if add_LOGP_Martin:
+        df_training, df_prediction = add_log_p_martin_columns(df_training, df_prediction, cross_validate, df_cv_dict)
+
+    
     logging.info("done getting dataframes from db")
         
     # ******************************************************************************************************
@@ -875,17 +907,20 @@ def run_dataset(dataset_name, qsar_method, embedding=None,  folder_embedding=Non
     
     if not feature_selection and fs_previous_embedding and qsar_method !='gcm':
 
-        print(f"Before FS, previous embedding has {len(model.embedding)} descriptors: {model.embedding}")
+        logging.info(f"Before FS, previous embedding has {len(model.embedding)} descriptors: {model.embedding}")
         
         if params.run_rfe:
             run_rfe(model, df_training, 1, 1)
+            logging.info(f"After RFE, {len(model.embedding)} descriptors: {model.embedding}")
+
             
         if params.run_sfs:
             run_sfs(model, df_training)
+            logging.info(f"After SFS, {len(model.embedding)} descriptors: {model.embedding}")
 
         # redo model and predictions:
         df_predictions, test_stats, model = mb.build_and_test_model(df_training, df_prediction, params, model.embedding)
-        print(f"After FS, embedding has {len(model.embedding)} descriptors: {model.embedding}")
+        logging.info(f"After FS, embedding has {len(model.embedding)} descriptors: {model.embedding}")
     
     embedding = None # use model.embedding from here on 
     
@@ -895,7 +930,6 @@ def run_dataset(dataset_name, qsar_method, embedding=None,  folder_embedding=Non
     df_cv_predictions = None
     
     if cross_validate:         
-        print("running cross validate")
         df_cv_predictions, cv_stats = mb.crossvalidate(df_cv_dict, params, model.embedding)
         
     # ******************************************************************************************************
@@ -913,8 +947,8 @@ def run_dataset(dataset_name, qsar_method, embedding=None,  folder_embedding=Non
     
     # ******************************************************************************************************
     # look at first prediction to make sure it looks right:
-    print("First row of df_predictions:")
-    print_first_row(df_predictions)
+    logging.debug("First row of df_predictions:")
+    logging.debug(row_to_json(df_predictions))
     # ******************************************************************************************************
     
     # create results file:
@@ -941,6 +975,8 @@ def run_dataset(dataset_name, qsar_method, embedding=None,  folder_embedding=Non
     logging.info(f"test set stats={json.dumps(test_stats, indent=4)}")
     logging.info(f"training cross validation stats={json.dumps(cv_stats, indent=4)}")   
     logging.info(f"test set AD stats={json.dumps( results_dict['test_stats_AD'] , indent=4)}")
+    
+    return results_dict
     
     
     # coeff_dict = model.getOriginalRegressionCoefficients()
@@ -970,7 +1006,7 @@ class Results:
         
         folder_path = os.path.join(*path_segments)
         
-        print(folder_path)
+        logging.info(f"Results folder\n: {folder_path}")
         
         os.makedirs(folder_path, exist_ok=True)
 

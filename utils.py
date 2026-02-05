@@ -34,8 +34,15 @@ import pandas as pd
 from datetime import datetime
 import json
 
-def print_first_row(df):
-    row = df.iloc[0]
+def row_to_json(df, row=0):
+    row = df.iloc[row]
+    row_dict = {col: to_json_safe(val) for col, val in row.items()}
+    json_str = json.dumps(row_dict, indent=4)
+    return json_str
+    
+
+def print_first_row(df, row=0):
+    row = df.iloc[row]
     row_dict = {col: to_json_safe(val) for col, val in row.items()}
     json_str = json.dumps(row_dict, indent=4)
     print(json_str)

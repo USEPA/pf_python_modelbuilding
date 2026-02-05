@@ -108,7 +108,7 @@ def runGA(df_training, model, params):
         estimator=pipe,
         cv=cv,  # TODO needs to use KFoldStratified if model_is_binary == True
         scoring=scoring,  # or 'neg_root_mean_squared_error', 'neg_mean_absolute_error'
-        max_features=20,
+        max_features=params.max_features,
         population_size=params.num_optimizers,  # population size
         crossover_probability=params.crossover_probability,
         mutation_probability=params.mutation_probability,
@@ -132,7 +132,7 @@ def runGA(df_training, model, params):
     # Selected features
     support = selector.support_  # boolean mask of selected features
     selected_columns = train_features.columns[support]
-    print("Selected features:", list(selected_columns))
+    # print("Selected features:", list(selected_columns))
     
     return selected_columns
 
