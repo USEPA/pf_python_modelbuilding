@@ -13,9 +13,27 @@ import json
 
 def run_example():
     dataset_name = "KOC v1 modeling"
-    run_dataset(dataset_name=dataset_name,qsar_method='rf',feature_selection=False) #OK
-    r = Results()
-    r.summarize_model_stats(dataset_name)
+    ad_measure_final = [pc.Applicability_Domain_TEST_Embedding_Euclidean, pc.Applicability_Domain_TEST_Fragment_Counts]
+
+    run_dataset(dataset_name=dataset_name, qsar_method='rf', feature_selection=False, ad_measure_final=ad_measure_final)  # OK
+    run_dataset(dataset_name=dataset_name, qsar_method='rf', feature_selection=True, ad_measure_final=ad_measure_final)  # OK
+    
+    run_dataset(dataset_name=dataset_name, qsar_method='xgb', feature_selection=False, ad_measure_final=ad_measure_final)
+    run_dataset(dataset_name=dataset_name, qsar_method='xgb', feature_selection=True, ad_measure_final=ad_measure_final)  # OK
+    
+    run_dataset(dataset_name=dataset_name, qsar_method='knn', feature_selection=False, ad_measure_final=ad_measure_final)  # OK
+
+    run_dataset(dataset_name=dataset_name, qsar_method='gcm', feature_selection=False, ad_measure_final=ad_measure_final)  # OK
+    
+    run_dataset(dataset_name=dataset_name, qsar_method='reg', folder_embedding="rf_WebTEST-default_fs=True", ad_measure_final=ad_measure_final)  # OK
+
+    # These take a significantly longer time to run due to using GA for feature selection
+    run_dataset(dataset_name=dataset_name, qsar_method='knn', folder_embedding="rf_WebTEST-default_fs=True", ad_measure_final=ad_measure_final)  # OK
+    run_dataset(dataset_name=dataset_name, qsar_method='knn', feature_selection=True, ad_measure_final=ad_measure_final)  # OK
+
+    run_dataset(dataset_name=dataset_name, qsar_method='reg', feature_selection=True, ad_measure_final=ad_measure_final)  # OK
+
+    Results.summarize_model_stats(dataset_name)
 
 
 def run_Koc():
@@ -42,8 +60,7 @@ def run_Koc():
     # run_dataset(dataset_name=dataset_name, qsar_method='rf', feature_selection=True, add_LOGP_Martin=True)  # Martin LOGP will show up in final descriptors, but error isnt lower!
     # run_dataset(dataset_name=dataset_name, qsar_method='knn', feature_selection=True, add_LOGP_Martin=True)  # OK
 
-    r = Results()
-    r.summarize_model_stats(dataset_name)
+    Results.summarize_model_stats(dataset_name)
     
 
 def run_Koc_knn_ga():
@@ -98,12 +115,15 @@ def run_fish_tox():
     # run_dataset(dataset_name=dataset_name, qsar_method='reg', folder_embedding="rf_WebTEST-default_fs=True", ad_measure_final=ad_measure_final)  # OK
     # run_dataset(dataset_name=dataset_name, qsar_method='reg', feature_selection=True, ad_measure_final=ad_measure_final)  # OK
 
-    r = Results()
-    r.summarize_model_stats(dataset_name)
+    Results.summarize_model_stats(dataset_name)
+
+
+def summarize_model_stats(dataset_name="KOC v1 modeling"):
+    Results.summarize_model_stats(dataset_name)
 
 
 def main():
-    run_Koc()
+    summarize_model_stats()
 
 
 if __name__ == '__main__':
