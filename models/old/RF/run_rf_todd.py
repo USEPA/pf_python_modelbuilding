@@ -5,14 +5,15 @@ from numpy import array
 from sklearn.feature_selection import RFECV
 
 import utils
-from models.RF import rf_model_1_3 as rf1_3, rf_model_1_4 as rf1_4, rf_model_1_1 as rf1_1, rf_model_1_2 as rf1_2
+
+from models.old.RF import rf_model_1_3 as rf1_3, rf_model_1_4 as rf1_4, rf_model_1_1 as rf1_1, rf_model_1_2 as rf1_2
 from models import df_utilities as DFU
-from models import GeneticOptimizer as go
+from models import genetic_optimizer as go
 import model_ws_utilities as mwu
 from models import EmbeddingFromImportance as efi
 
 import models.results_utilities as ru
-
+import logging
 
 
 import operator
@@ -276,7 +277,10 @@ def caseStudyExpProp():
     else:
         title = datasetNameShort + ', P=' + splitting
 
-    generatePlot(datasetNameShort, title, df_prediction, None, splitting, predictions)
+    # from models.results_utilities import generatePlot
+    # generatePlot(datasetNameShort, title, df_prediction, None, splitting, predictions)
+
+
 
 
 
@@ -535,111 +539,111 @@ def caseStudyPOD():
     plt.show()
 
 
-def caseStudyOPERA():
-    '''
-    Train model using OPERA prediction set and predict using OPERA's prediction set and then external set from our postgres
-    :return:
-    '''
-
-    # endpoint = 'Octanol water partition coefficient'
-    endpoint = strWaterSolubility
-    # endpoint = strVaporPressure
-    # endpoint = strHenrysLawConstant
-
-    version = 1.3
-    useEmbeddings = False
-    useEmbeddingsJson = False
-    generateEmbedding = True
-
-    # descriptor_software = 'T.E.S.T. 5.1'
-    # descriptor_software = 'PaDEL-default'
-    descriptor_software = 'PaDEL_OPERA'
-
-    folder = '../../datasets/caseStudyOpera'
-    training_file_name = endpoint + ' OPERA_' + descriptor_software + '_OPERA_training.tsv'
-    prediction_file_name = endpoint + ' OPERA_' + descriptor_software + '_OPERA_prediction.tsv'
-    prediction_file_name2 = 'Data from Standard ' + endpoint + ' from exp_prop external to ' + endpoint + ' OPERA_' + descriptor_software + '_full.tsv'
-
-    training_tsv_path = folder + training_file_name
-    prediction_tsv_path = folder + prediction_file_name
-    prediction_tsv_path2 = folder + prediction_file_name2
-
-    if useEmbeddings:
-
-        if generateEmbedding:
-            print('todo')
-        else:
-            if useEmbeddingsJson:
-                descriptor_names = loadEmbedding(folder + endpoint + '_embedding.json')
-            else:
-                if endpoint == strWaterSolubility:
-                    descriptor_names = 'SdCH2 k2 BELv5 BELm7 AN BELm2 BELv6 ATS5p SssssC_acnt xc3 BEHm1 BEHm7'
-
-                    if descriptor_software == 'PaDEL_OPERA':
-                        descriptor_names = 'XLogP	apol	minHsOH	naasC	minHBa	MLFER_A	nHBAcc	maxdNH	MLFER_E	mindNH	MDEO-11'  # OPERA's
-
-                elif endpoint == strVaporPressure:
-                    descriptor_names = 'xp7 Hmax x0 x2 XLOGP xv0 MDEO11 SsOH Qv SsF SdO GATS5m'
-
-                    if descriptor_software == 'PaDEL_OPERA':
-                        descriptor_names = 'MLFER_S	nHBAcc_Lipinski	piPC7	EE_Dt	SHBd	TopoPSA	nHBDon	MLFER_L	MLFER_E	AATSC0v	nssO	MDEC-23'
-
-                elif endpoint == strHenrysLawConstant:
-                    descriptor_names = 'Hmax nN SdO Qv Gmax MATS1v xc4 MATS2m Qs SdssC BEHm1 Hmin'
-
-                    if descriptor_software == 'PaDEL_OPERA':
-                        descriptor_names = 'nHBDon	MLFER_S	GATS1e	ndssC	ATS3m	nHBint6	nHBAcc2	AATSC0i	SpAD_Dzm'
-
-    # print(descriptor_names)
-
-    # Parameters needed to build model:
-    n_threads = 20
-    remove_log_p_descriptors = False
-
-    df_training = DFU.load_df_from_file(training_tsv_path, sep='\t')
-    df_prediction = DFU.load_df_from_file(prediction_tsv_path, sep='\t')
-
-    if version == 1.2:  # doesnt use max samples
-        model = rf1_2.Model(df_training, remove_log_p_descriptors, n_threads)
-        model.build_model()
-    elif version == 1.3:  # uses max samples
-        model = rf1_3.Model(df_training, remove_log_p_descriptors, n_threads)
-        if useEmbeddings:
-            model.build_model_with_preselected_descriptors(descriptor_names)
-        else:
-            model.build_model()
-    elif version == 1.4:
-        model = rf1_4.Model(df_training, remove_log_p_descriptors, n_threads, 1)
-        if useEmbeddings:
-            model.build_model_with_grid_search_with_preselected_descriptors(descriptor_names)
-        else:
-            model.build_model_with_grid_search()
-
-    # TODO store final hyperparameters in the model description...
-    # TODO set optimizer to null before returning model to database
-
-    predictions = model.do_predictions(df_prediction)
-
-    import os
-    isFile = os.path.isfile(prediction_tsv_path2)
-
-    if not os.path.isfile(prediction_tsv_path2):
-        print('external pred file missing')
-        return
-
-    df_prediction2 = DFU.load_df_from_file(prediction_tsv_path2, sep='\t')
-    df_prediction2.Property = df_prediction2.Property * (-1)  # fix units to match opera
-    predictions2 = model.do_predictions(df_prediction2)
-
-    df_preds2 = pd.DataFrame(predictions2, columns=['Prediction'])
-    df_pred2 = df_prediction2[['ID', 'Property']]
-    df_pred2 = pd.merge(df_pred2, df_preds2, how='left', left_index=True, right_index=True)
-
-    # a scatter plot comparing num_children and num_pets
-    # df_pred2.plot(kind='scatter', x='Property', y='Prediction', color='black')
-    # plt.show()
-
-    # print(df_pred2)
+# def caseStudyOPERA():
+#     '''
+#     Train model using OPERA prediction set and predict using OPERA's prediction set and then external set from our postgres
+#     :return:
+#     '''
+#
+#     # endpoint = 'Octanol water partition coefficient'
+#     endpoint = strWaterSolubility
+#     # endpoint = strVaporPressure
+#     # endpoint = strHenrysLawConstant
+#
+#     version = 1.3
+#     useEmbeddings = False
+#     useEmbeddingsJson = False
+#     generateEmbedding = True
+#
+#     # descriptor_software = 'T.E.S.T. 5.1'
+#     # descriptor_software = 'PaDEL-default'
+#     descriptor_software = 'PaDEL_OPERA'
+#
+#     folder = '../../datasets/caseStudyOpera'
+#     training_file_name = endpoint + ' OPERA_' + descriptor_software + '_OPERA_training.tsv'
+#     prediction_file_name = endpoint + ' OPERA_' + descriptor_software + '_OPERA_prediction.tsv'
+#     prediction_file_name2 = 'Data from Standard ' + endpoint + ' from exp_prop external to ' + endpoint + ' OPERA_' + descriptor_software + '_full.tsv'
+#
+#     training_tsv_path = folder + training_file_name
+#     prediction_tsv_path = folder + prediction_file_name
+#     prediction_tsv_path2 = folder + prediction_file_name2
+#
+#     if useEmbeddings:
+#
+#         if generateEmbedding:
+#             print('todo')
+#         else:
+#             if useEmbeddingsJson:
+#                 descriptor_names = loadEmbedding(folder + endpoint + '_embedding.json')
+#             else:
+#                 if endpoint == strWaterSolubility:
+#                     descriptor_names = 'SdCH2 k2 BELv5 BELm7 AN BELm2 BELv6 ATS5p SssssC_acnt xc3 BEHm1 BEHm7'
+#
+#                     if descriptor_software == 'PaDEL_OPERA':
+#                         descriptor_names = 'XLogP	apol	minHsOH	naasC	minHBa	MLFER_A	nHBAcc	maxdNH	MLFER_E	mindNH	MDEO-11'  # OPERA's
+#
+#                 elif endpoint == strVaporPressure:
+#                     descriptor_names = 'xp7 Hmax x0 x2 XLOGP xv0 MDEO11 SsOH Qv SsF SdO GATS5m'
+#
+#                     if descriptor_software == 'PaDEL_OPERA':
+#                         descriptor_names = 'MLFER_S	nHBAcc_Lipinski	piPC7	EE_Dt	SHBd	TopoPSA	nHBDon	MLFER_L	MLFER_E	AATSC0v	nssO	MDEC-23'
+#
+#                 elif endpoint == strHenrysLawConstant:
+#                     descriptor_names = 'Hmax nN SdO Qv Gmax MATS1v xc4 MATS2m Qs SdssC BEHm1 Hmin'
+#
+#                     if descriptor_software == 'PaDEL_OPERA':
+#                         descriptor_names = 'nHBDon	MLFER_S	GATS1e	ndssC	ATS3m	nHBint6	nHBAcc2	AATSC0i	SpAD_Dzm'
+#
+#     # print(descriptor_names)
+#
+#     # Parameters needed to build model:
+#     n_threads = 20
+#     remove_log_p_descriptors = False
+#
+#     df_training = DFU.load_df_from_file(training_tsv_path, sep='\t')
+#     df_prediction = DFU.load_df_from_file(prediction_tsv_path, sep='\t')
+#
+#     if version == 1.2:  # doesnt use max samples
+#         model = rf1_2.Model(df_training, remove_log_p_descriptors, n_threads)
+#         model.build_model()
+#     elif version == 1.3:  # uses max samples
+#         model = rf1_3.Model(df_training, remove_log_p_descriptors, n_threads)
+#         if useEmbeddings:
+#             model.build_model_with_preselected_descriptors(descriptor_names)
+#         else:
+#             model.build_model()
+#     elif version == 1.4:
+#         model = rf1_4.Model(df_training, remove_log_p_descriptors, n_threads, 1)
+#         if useEmbeddings:
+#             model.build_model_with_grid_search_with_preselected_descriptors(descriptor_names)
+#         else:
+#             model.build_model_with_grid_search()
+#
+#     # TODO store final hyperparameters in the model description...
+#     # TODO set optimizer to null before returning model to database
+#
+#     predictions = model.do_predictions(df_prediction)
+#
+#     import os
+#     isFile = os.path.isfile(prediction_tsv_path2)
+#
+#     if not os.path.isfile(prediction_tsv_path2):
+#         print('external pred file missing')
+#         return
+#
+#     df_prediction2 = DFU.load_df_from_file(prediction_tsv_path2, sep='\t')
+#     df_prediction2.Property = df_prediction2.Property * (-1)  # fix units to match opera
+#     predictions2 = model.do_predictions(df_prediction2)
+#
+#     df_preds2 = pd.DataFrame(predictions2, columns=['Prediction'])
+#     df_pred2 = df_prediction2[['ID', 'Property']]
+#     df_pred2 = pd.merge(df_pred2, df_preds2, how='left', left_index=True, right_index=True)
+#
+#     # a scatter plot comparing num_children and num_pets
+#     # df_pred2.plot(kind='scatter', x='Property', y='Prediction', color='black')
+#     # plt.show()
+#
+#     # print(df_pred2)
 
 
 
@@ -1174,7 +1178,7 @@ def runSetWithImportance(endpoint, df_training, df_prediction, qsar_method, num_
         while True:  # need to get more agressive (remove 2 at a time) since first RFE didnt remove enough
             efi.perform_recursive_feature_elimination(model=model, df_training=df_training, n_threads=n_threads,
                                                       n_steps=1)
-            print('After RFE iteration, ', len(model.embedding), "descriptors", model.embedding)
+            logging.info(f"After RFE iteration, {len(model.embedding)} descriptors: {model.embedding}")
             if len(model.embedding) == len(embedding_old):
                 break
             embedding_old = model.embedding
