@@ -3,7 +3,6 @@
 Created on Dec 30, 2025
 @author: TMARTI02
 '''
-from dns.flags import AD
 
 """
 from __future__ import annotations lets you:
@@ -16,7 +15,7 @@ from datetime import datetime
 import os, json
 
 # from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy import create_engine, text, bindparam
+from sqlalchemy import create_engine
 from sqlalchemy.engine import URL
 from sqlalchemy.orm import sessionmaker
 from xlsxwriter.utility import xl_rowcol_to_cell
@@ -33,7 +32,10 @@ import pickle
 import re
 import traceback
 
-import util.database_utilities as dbl
+from sqlalchemy.orm import Session
+from util.database_utilities import DatabaseUtilities
+
+
 
 from model_ws_utilities import call_build_embedding_ga_db, call_build_model_with_preselected_descriptors_from_df, \
     call_do_predictions_from_df, call_build_embedding_importance_from_df
@@ -80,7 +82,6 @@ PROJECT_ROOT = os.getenv("PROJECT_ROOT")
  
 @dataclass
 class ParametersImportance:
-    
     dataset_name: str
     qsar_method: str    
     descriptor_set_name: str
@@ -109,6 +110,7 @@ class ParametersImportance:
     # Derived value (set in __post_init__)
     fraction_of_max_importance: float = field(init=False)
 
+
     def __post_init__(self):
         method = self.qsar_method.lower()
                 
@@ -121,13 +123,13 @@ class ParametersImportance:
         else:
             raise ValueError(f"invalid method: {self.qsar_method}")
 
+
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
     
 
 @dataclass
 class ParametersGroupContribution:
-
     dataset_name: str
     qsar_method: str    
     descriptor_set_name: str
@@ -143,13 +145,13 @@ class ParametersGroupContribution:
     include_standardization_in_pmml: bool = False
     use_pmml_pipeline: bool = False
 
+
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
 
 
 @dataclass
 class ParametersGeneric:
-
     dataset_name: str
     qsar_method: str    
     descriptor_set_name: str
@@ -164,13 +166,13 @@ class ParametersGeneric:
     include_standardization_in_pmml: bool = False
     use_pmml_pipeline: bool = False
 
+
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
 
 
 @dataclass
 class ParametersGeneticAlgorithm:
-
     dataset_name: str
     qsar_method: str    
     descriptor_set_name: str
@@ -205,15 +207,13 @@ class ParametersGeneticAlgorithm:
     include_standardization_in_pmml: bool = False
     use_pmml_pipeline: bool = False
 
+
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
 
 
-from typing import Mapping
-from sqlalchemy.orm import Session
-from util.database_utilities import DatabaseLoader
 
-dbl = DatabaseLoader(default_schema="qsar_models")
+dbl = DatabaseUtilities(default_schema="qsar_models")
 
 
 class ModelLoader():
@@ -330,10 +330,9 @@ class ModelLoader():
             "updated_at":created_at}
         # print(json.dumps(to_json_safe(model_row)))
         # print(json.dumps(model_row,indent=4))
-        fk_model_id = self.create_model(session, model_row)
-        return fk_model_id
-
-
+        new_id = dbl.create_row(session, table="models", record=model_row)
+        session.commit()
+        return new_id
 
     def create_model_bytes(self, session: Session, bytes_list):
     
@@ -417,23 +416,26 @@ class ModelLoader():
             return
         
         # ---- store model into the models table:----
-        # fk_model_id = self.load_model_from_object(session, user, model, params, fk_descriptor_embedding_id, fk_method_id, fk_ad_method)
+        fk_model_id = self.load_model_from_object(
+            session, 
+            user, 
+            model, 
+            params, 
+            fk_descriptor_embedding_id, 
+            fk_method_id, 
+            fk_ad_method,
+        )
 
-        fk_model_id = 1638
-        
         if fk_model_id is None:
             logging.error(f"Cant create model")
             return
         logging.info(f"fk_model_id:{fk_model_id}")
         
         # ---- store model_bytes into the model_bytes table:----
-        # self.load_model_bytes(session, user, model, fk_model_id)
-
+        self.load_model_bytes(session, user, model, fk_model_id)
 
         # ---- store model_statistics into the model_statistics table:----        
-        # self.load_stats(session, results, user, fk_model_id)
-        
-        
+        self.load_stats(session, results, user, fk_model_id)
         
         """
         TODO store predictions for:
@@ -456,8 +458,6 @@ class ModelLoader():
         name_cols = [params["dataset_name"], params["descriptor_set_name"], str(epoch_ms)]
         embedding_name = "_".join(name_cols)  # give it a unique name
         
-        
-        
         descriptor_embedding = {
             "name": embedding_name,
             "description": "Genetic algorithm with RFE and SFS",
@@ -472,113 +472,15 @@ class ModelLoader():
             "created_at": created_at,
             "updated_at": created_at,
         }
-
+        
         new_id = dbl.create_row(session, table="descriptor_embeddings", record=descriptor_embedding)
         session.commit()
         return new_id
-    
-    def create_descriptor_embedding(self, session: Session, descriptor_embedding_dict: Mapping[str, Any]):
-        new_id = dbl.create_row(session, table="descriptor_embeddings", record=descriptor_embedding_dict)
-        session.commit()
-        # print(new_id)  # typically an integer or UUID
-        return new_id
 
-
-
-    
-    def create_model(self, session: Session, model_dict: Mapping[str, Any]):
-        new_id = dbl.create_row(session, table="models", record=model_dict)
-        session.commit()
-        # print(new_id)  # typically an integer or UUID
-        return new_id
-    
-   
-    def test_create_model(self):
-    
-        from predict_constants import PredictConstants
-        pc=PredictConstants    
-        from model_ws_db_utilities import getSession    
-        session = getSession()
-                
-        user = 'tmarti02'
-        qsar_method = 'knn'
-        embedding=["col1","col2"]
-        dataset_name = "KOC v1 modeling"
-        descriptor_set_name = pc.DESCRIPTOR_SET_WEBTEST
-        splitting_name = pc.SPLITTING_RND_REPRESENTATIVE
-        
-        epoch_ms = time.time_ns() // 1_000_000
-        name_cols = [dataset_name, descriptor_set_name, str(epoch_ms)]
-        embedding_name = "_".join(name_cols) # give it a unique name
-        from datetime import datetime
-        
-        created_at = datetime.now()
-        
-        descriptor_embedding = {
-            "name": embedding_name,
-            "description": "Genetic algorithm with RFE and SFS",
-            "dataset_name": dataset_name,
-            "descriptor_set_name": descriptor_set_name,
-            "qsar_method": qsar_method,
-            "splitting_name": splitting_name,
-            "embedding_tsv": "\t".join(embedding),
-            "importance_tsv": "Not used",
-            "created_by": user,
-            "updated_by": user,
-            "created_at": created_at,
-            "updated_at": created_at,
-        }
-        
-        
-        from utils import to_json_safe
-        # print(to_json_safe(descriptor_embedding))
-            
-        fk_descriptor_embedding_id = self.create_descriptor_embedding(session, descriptor_embedding)
-        
-        # fk_descriptor_embedding_id = 276
-    
-        from models.ModelBuilder import Model
-        
-        model = Model()
-        model.hyperparameter_grid = {"n_estimators": 500, "max_depth": 20}
-        model.hyperparameters= {"n_estimators": 500, "max_depth": 20}
-    
-        model_name = user+"_"+str(epoch_ms)
-    
-        fk_method_id = self.get_method_id(session, qsar_method) #use the generic method_id that doesnt have a version so can set the hyperparameter_grid
-        
-    
-        model_row = {
-            "name": model_name,
-            "dataset_name": dataset_name,
-            "descriptor_set_name": descriptor_set_name,
-            "splitting_name": splitting_name,
-            "fk_method_id": fk_method_id, #todo lookup from qsar_method, use general method instead of versioned
-            "fk_descriptor_embedding_id": fk_descriptor_embedding_id,
-            "fk_source_id": 3, #cheminformatics modules, TODO lookup from sources table
-            "fk_ad_method": 7, #lookup from ad_methods table using ad_method_name currently cant have multiple AD methods the way the db is configured        
-            "hyperparameter_grid": json.dumps(model.hyperparameter_grid),
-            "hyperparameters": json.dumps(model.hyperparameters),  # JSON/JSONB column
-            "details": model.get_model_description().encode("utf-8"),  #this column is bytes in the database. In the future that column should be converted to text field
-            "is_public": False,
-            "name_ccd": model_name,
-            "has_qmrf": False,
-            "created_by": user,
-            "updated_by": user,
-            "created_at": created_at,
-            "updated_at": created_at,
-        }
-        
-        print(json.dumps(to_json_safe(model_row)))
-        
-        # print(json.dumps(model_row,indent=4))
-        fk_model_id = self.create_model(session, model_row)
-        
 
 class ModelBuilder:
-    
-    def crossvalidate(self, df_cv_dict, params, embedding):
-        
+    @staticmethod
+    def crossvalidate(df_cv_dict, params, embedding):
         logging.info(f"Start running CV calculations ...")
         
         all_df_predictions = []
@@ -592,7 +494,7 @@ class ModelBuilder:
             df_prediction = df_cv_dict[i]["pred"]
             folds[i] = {"train": df_training, "pred": df_prediction}
             
-            df_predictions = self.build_and_test_model2(df_training.copy(), df_prediction.copy(), params, embedding)
+            df_predictions = ModelBuilder.build_and_test_model2(df_training.copy(), df_prediction.copy(), params, embedding)
             all_df_predictions.append(df_predictions)
         
         df_predictions_all = pd.concat(all_df_predictions, ignore_index=True)
@@ -605,10 +507,10 @@ class ModelBuilder:
         # print('cross validation stats:\n', json.dumps(cv_stats, indent=4))        
 
         logging.info(f"Done running CV calculations")
-        
         return df_predictions_all, cv_stats  
         
         # logging.info(f"MAE_TRAINING_CV = {cv_stats['MAE_Test']:.3f}")
+
 
     # def buildModelNoEmbedding(self, session, df_training, df_prediction, dataset_name, descriptorSetName,
     #                           qsar_method, hyperparameter_grid=None):
@@ -634,8 +536,9 @@ class ModelBuilder:
         
         # self.crossvalidate(session, dataset_name, descriptorSetName, params, embedding)
     
-    def build_and_test_model(self, df_training, df_prediction, params, embedding):
-        
+
+    @staticmethod
+    def build_and_test_model(df_training, df_prediction, params, embedding):
         model = call_build_model_with_preselected_descriptors_from_df(params, df_training.copy(), df_prediction.copy(),
                                                                       descriptor_names_tsv=embedding,
                                                                       filterColumnsInBothSets=True)
@@ -658,9 +561,10 @@ class ModelBuilder:
         return df_predictions, training_stats, test_stats, model
                 
         # logging.info(f"MAE_TEST = {test_stats['MAE_Test']:.3f}")
-
-    def build_and_test_model2(self, df_training, df_prediction, params, embedding):
-
+    
+    
+    @staticmethod
+    def build_and_test_model2(df_training, df_prediction, params, embedding):
         model = call_build_model_with_preselected_descriptors_from_df(params, df_training, df_prediction,
                                                   descriptor_names_tsv=embedding, filterColumnsInBothSets=True)
         # generate predictions for test set:
@@ -674,9 +578,8 @@ class ModelBuilder:
 
 
 class EmbeddingGenerator:
-    
-    def feature_selection(self, df_training, df_prediction, params):
-        
+    @staticmethod
+    def feature_selection(df_training, df_prediction, params):
         # ga_methods = ['knn', 'reg','las']
         # imp_methods = ['rf', 'xgb']
         
@@ -734,6 +637,7 @@ def prepare_df(df):
         raise ValueError("No valid rows to plot after cleaning.")
     df["abs_diff"] = abs(df["exp"] - df["pred"])
     df = df.sort_values("abs_diff", ascending=False).reset_index(drop=True)
+    
     return df
     
     # statistics_AD = None
@@ -742,8 +646,8 @@ def prepare_df(df):
 
 
 class ExcelCreator:
-
-    def add_subtotal_count_fraction_and_visible(self, ws, df, column_name='abs_diff'):
+    @staticmethod
+    def add_subtotal_count_fraction_and_visible(ws, df, column_name='abs_diff'):
         """
         Add rows below the data with formulas in the target column and place labels
         in the adjacent column (next to the formula cells):
@@ -801,8 +705,8 @@ class ExcelCreator:
             ws.write(visible_row, col_idx, 0)
             return [0, 0, 0]
     
-    def add_filter(self, writer, sheet_name, df):
-        
+    @staticmethod
+    def add_filter(writer, sheet_name, df):
         # Get the worksheet object
         ws = writer.sheets[sheet_name]
 
@@ -815,7 +719,9 @@ class ExcelCreator:
         # Optional: freeze the header row
         ws.freeze_panes(1, 0)
     
-    def nice_integer_major_unit(self, span: int, target_ticks: int=5) -> int:
+
+    @staticmethod
+    def nice_integer_major_unit(span: int, target_ticks: int=5) -> int:
         raw = max(1, int(math.ceil(span / max(1, target_ticks))))
         exp = int(math.floor(math.log10(raw))) if raw > 0 else 0
         base = raw / (10 ** exp)
@@ -829,14 +735,15 @@ class ExcelCreator:
             step_base = 10
         return int(step_base * (10 ** exp))
 
-    def compute_equal_axis_bounds(self,
+
+    @staticmethod
+    def compute_equal_axis_bounds(
         x_values: Iterable[float],
         y_values: Iterable[float],
         pad_ratio: float=0.02,
         integer_ticks: bool=True,
         target_ticks: int=5,
     ) -> Tuple[float, float, Optional[float]]:
-        
         xs = [float(v) for v in x_values if v is not None and v == v]
         ys = [float(v) for v in y_values if v is not None and v == v]
         if not xs or not ys:
@@ -859,46 +766,48 @@ class ExcelCreator:
             if int_min == int_max:
                 int_min -= 1
                 int_max += 1
-            major_unit = self.nice_integer_major_unit(int_max - int_min, target_ticks=target_ticks)
+            major_unit = ExcelCreator.nice_integer_major_unit(int_max - int_min, target_ticks=target_ticks)
             return float(int_min), float(int_max), float(major_unit)
     
         return mn, mx, None
 
-    def add_plot(self, df, sheet_name, sheet_name_plot, chart_size_px, pad_ratio, integer_ticks, yx_offset_rows, writer, workbook):
+
+    @staticmethod
+    def add_plot(df, sheet_name, sheet_name_plot, chart_size_px, pad_ratio, integer_ticks, yx_offset_rows, writer, workbook):
         worksheet = writer.sheets[sheet_name]
         worksheet_plot = writer.sheets[sheet_name_plot]
-    # Hide worksheet gridlines (screen + print)
+        # Hide worksheet gridlines (screen + print)
         worksheet.hide_gridlines(2)
         nrows = len(df)
-    # Compute unified bounds (also used for y=x line)
-        mn, mx, major_unit = self.compute_equal_axis_bounds(
+        # Compute unified bounds (also used for y=x line)
+        mn, mx, major_unit = ExcelCreator.compute_equal_axis_bounds(
             df["exp"], df["pred"], pad_ratio=pad_ratio, integer_ticks=integer_ticks, target_ticks=5)
-    # Create scatter chart with markers
+        # Create scatter chart with markers
         chart = workbook.add_chart({"type":"scatter", "subtype":"straight_with_markers"})
         chart.set_title({"name":"Predicted vs Experimental"})
         chart.set_style(10)
-    # Series 1: data points (markers only)
-    # exp is column B (index 1), pred is column C (index 2) even after adding abs_diff (column D)
+        # Series 1: data points (markers only)
+        # exp is column B (index 1), pred is column C (index 2) even after adding abs_diff (column D)
         chart.add_series({
                 "name":"Pred vs Exp",
                 "categories":[sheet_name, 1, 1, nrows, 1],  # B2..B(nrows+1)
                 "values":[sheet_name, 1, 2, nrows, 2],  # C2..C(nrows+1)
                 "marker":{"type":"circle", "size":6},
                 "line":{"none":True}})
-    # Write y = x helper points a few rows below the data, in columns B/C
+        # Write y = x helper points a few rows below the data, in columns B/C
         yx_row_start = nrows + 1 + yx_offset_rows  # 0-based row index after header
         worksheet.write_number(yx_row_start, 1, mn)  # B{yx_row_start+1}
         worksheet.write_number(yx_row_start, 2, mn)  # C{yx_row_start+1}
         worksheet.write_number(yx_row_start + 1, 1, mx)  # B{yx_row_start+2}
         worksheet.write_number(yx_row_start + 1, 2, mx)  # C{yx_row_start+2}
-    # Series 2: y = x line (dark blue, solid, no markers)
+        # Series 2: y = x line (dark blue, solid, no markers)
         chart.add_series({
                 "name":"y = x",
                 "categories":[sheet_name, yx_row_start, 1, yx_row_start + 1, 1],  # B(r)..B(r+1)
                 "values":[sheet_name, yx_row_start, 2, yx_row_start + 1, 2],  # C(r)..C(r+1)
                 "marker":{"type":"none"},
                 "line":{"color":"#1f4e79", "width":2.25}})  # dark blue
-    # Axes with same bounds, integer labels, no gridlines
+        # Axes with same bounds, integer labels, no gridlines
         x_axis_opts = {
             "name":"exp",
             "min":mn, "max":mx,
@@ -920,9 +829,9 @@ class ExcelCreator:
         chart.set_x_axis(x_axis_opts)
         chart.set_y_axis(y_axis_opts)
                 
-    # Make the chart square
+        # Make the chart square
         chart.set_size({"width":chart_size_px, "height":chart_size_px})
-    # Plot area: border + margins so axis titles/labels aren't overlapped
+        # Plot area: border + margins so axis titles/labels aren't overlapped
         chart.set_plotarea({
                 "fill":{"none":True},
                 "border":{"color":"#666666", "width":1.0},
@@ -931,17 +840,18 @@ class ExcelCreator:
                     "y":0.10,  # top padding for chart title
                     "width":0.84,  # reduce width so right edge doesn't crowd labels/legend
                     "height":0.80}})  # reduce height to leave room for x-axis title
-    # Legend: bottom-right, overlaid, explicit size to avoid warnings
+        # Legend: bottom-right, overlaid, explicit size to avoid warnings
         chart.set_legend({
                 "overlay":True,
                 "layout":{"x":0.7, "y":0.75, "width":0.25, "height":0.1}})
-    # Insert chart
-        if sheet_name == sheet_name_plot: 
+        if sheet_name == sheet_name_plot:        
             worksheet_plot.insert_chart("E2", chart, {"x_offset":20, "y_offset":10})
         else:
             worksheet_plot.insert_chart(0, 0, chart, {'x_scale': 1.0, 'y_scale': 1.0})
 
-    def writeModelCoefficients(self, results_dict, writer, workbook): 
+
+    @staticmethod
+    def writeModelCoefficients(results_dict, writer, workbook): 
         if results_dict and "model_coefficients" in results_dict:
             sheet_name = "model coefficients"
             df = pd.DataFrame(results_dict["model_coefficients"], columns=["name", "coefficient", "std_error"])
@@ -953,8 +863,11 @@ class ExcelCreator:
             # Header is row 0; data starts at row 1 in XlsxWriter's 0-based indexing.
             for i, val in enumerate(df["name"], start=1):
                 worksheet.write_string(i, name_col_idx, val, text_fmt)
+            ExcelCreator.set_column_width(writer, sheet_name=sheet_name, df=df, col_width_pad=4, min_col_width=5, how="header")
 
-    def writeDescriptors(self, sheet_name, df, writer, workbook):
+
+    @staticmethod
+    def writeDescriptors(sheet_name, df, writer, workbook):
         if df is not None:
             # df.to_excel(writer, sheet_name="training set descriptors", index=False)
             
@@ -972,7 +885,8 @@ class ExcelCreator:
             for col_idx, col_name in enumerate(safe_cols, start=start_col + col_offset):
                 worksheet.write_string(start_row, col_idx, col_name, header_fmt)
 
-    def add_summary_stats_to_ws(self, ws, source_ws, summary_stats, start_row=2, start_col=10):
+    @staticmethod
+    def add_summary_stats_to_ws(ws, source_ws, summary_stats, start_row=2, start_col=10, col_width=15):
         """
         Adds summary statistics from source_ws to ws at the given position.
         
@@ -999,8 +913,34 @@ class ExcelCreator:
             ws.write(row, start_col, label)
             ws.write_formula(row, start_col + 1, formula)
             row += 1
+        ws.set_column(start_col, start_col+1, col_width)    
 
-    def create_excel(self,
+    @staticmethod
+    def set_column_width(writer, sheet_name: str, df: pd.DataFrame, col_width_pad: int=4, min_col_width: int=5, how: str="header"):
+        worksheet = writer.sheets[sheet_name]
+        for col_idx in range(len(df.columns)):
+            if how == "header":
+                header_entry = df.columns[col_idx]
+                header_width = len(header_entry)
+                col_width = max(header_width, min_col_width) + col_width_pad
+                worksheet.set_column(col_idx, col_idx, col_width)
+            elif how == "full":
+                # Find the maximum width needed for data in this column
+                header_entry = df.columns[col_idx]
+                header_width = len(header_entry)
+                col_width = max(header_width, min_col_width)
+                max_width = col_width
+                for row_idx in range(df.shape[0]):
+                    cell_value = df.iloc[row_idx, col_idx]
+                    if cell_value is not None:
+                        cell_value = str(cell_value)
+                        max_width = max(max_width, len(cell_value))
+                col_width = max_width + col_width_pad
+                worksheet.set_column(col_idx, col_idx, col_width)
+    
+
+    @staticmethod
+    def create_excel(
         df_test: pd.DataFrame,
         df_training_cv: pd.DataFrame,
         df_test_model: pd.DataFrame=None,
@@ -1010,6 +950,8 @@ class ExcelCreator:
         pad_ratio: float=0.02,
         integer_ticks: bool=True,
         yx_offset_rows: int=3,  # empty rows between data and y=x helper points
+        col_width_pad: int=4,
+        min_col_width: int=5
     ):
         # TODO: Change file names for output Excel files under data directory
         with pd.ExcelWriter(excel_path, engine="xlsxwriter") as writer:
@@ -1019,31 +961,37 @@ class ExcelCreator:
             if df_training_cv is not None:
                 sheet_name_cv = "training cv predictions"
                 df_training_cv.to_excel(writer, sheet_name=sheet_name_cv, index=False)
-                self.add_plot(df_training_cv, sheet_name_cv, sheet_name_cv, chart_size_px, pad_ratio, integer_ticks, yx_offset_rows, writer, workbook)
-                self.add_filter(writer, sheet_name_cv, df_training_cv)
+                ExcelCreator.add_plot(df_training_cv, sheet_name_cv, sheet_name_cv, chart_size_px, pad_ratio, integer_ticks, yx_offset_rows, writer, workbook)
+                ExcelCreator.add_filter(writer, sheet_name_cv, df_training_cv)
+                ExcelCreator.set_column_width(writer, sheet_name=sheet_name_cv, df=df_training_cv, col_width_pad=col_width_pad, min_col_width=min_col_width, how="header")
 
             sheet_name_test = "test set predictions"
             df_test.to_excel(writer, sheet_name=sheet_name_test, index=False)
-            self.add_filter(writer, sheet_name_test, df_test)
+            ExcelCreator.add_filter(writer, sheet_name_test, df_test)
             ws = writer.sheets[sheet_name_test]
-            summary_stats = self.add_subtotal_count_fraction_and_visible(ws, df_test, column_name='abs_diff')
+            summary_stats = ExcelCreator.add_subtotal_count_fraction_and_visible(ws, df_test, column_name='abs_diff')
+            ExcelCreator.set_column_width(writer, sheet_name=sheet_name_test, df=df_test, col_width_pad=col_width_pad, min_col_width=min_col_width, how="header")
 
-            # self.add_plot(df_test, sheet_name_test, chart_size_px, pad_ratio, integer_ticks, yx_offset_rows, writer, workbook)
+            # ExcelCreator.add_plot(df_test, sheet_name_test, chart_size_px, pad_ratio, integer_ticks, yx_offset_rows, writer, workbook)
             
             # Create a dedicated sheet for the test set plot
             chart_sheet_name_test = "test set plot"
             # Add the worksheet explicitly and register it with writer.sheets
             chart_ws = workbook.add_worksheet(chart_sheet_name_test)
             writer.sheets[chart_sheet_name_test] = chart_ws
-            self.add_plot(df_test, sheet_name_test, chart_sheet_name_test, chart_size_px, pad_ratio, integer_ticks, yx_offset_rows, writer, workbook)
-            self.add_summary_stats_to_ws(chart_ws, sheet_name_test, summary_stats, start_row=2, start_col=10)
+            ExcelCreator.add_plot(df_test, sheet_name_test, chart_sheet_name_test, chart_size_px, pad_ratio, integer_ticks, yx_offset_rows, writer, workbook)
+            summary_row = 2
+            summary_col = 10
+            summary_col_width = 15
+            ExcelCreator.add_summary_stats_to_ws(chart_ws, sheet_name_test, summary_stats, start_row=summary_row, start_col=summary_col, col_width=summary_col_width)
 
-            self.writeDescriptors("test set descriptors", df_test_model, writer, workbook)
-            self.writeModelCoefficients(results_dict, writer, workbook)
+            sheet_name_descriptors = "test set descriptors"
+            ExcelCreator.writeDescriptors(sheet_name_descriptors, df_test_model, writer, workbook)
+            ExcelCreator.writeModelCoefficients(results_dict, writer, workbook)
+            ExcelCreator.set_column_width(writer, sheet_name=sheet_name_descriptors, df=df_test_model, col_width_pad=col_width_pad, min_col_width=min_col_width, how="header")
         
 
 def set_hyper_parameters(qsar_method, feature_selection, descriptor_set_name, splitting_name, dataset_name, ad_measure):
-
     params = None    
         
     if qsar_method == "xgb":
@@ -1070,7 +1018,7 @@ def set_hyper_parameters(qsar_method, feature_selection, descriptor_set_name, sp
         params = ParametersImportance(qsar_method=qsar_method, feature_selection=feature_selection, hyperparameter_grid=grid,
                                       descriptor_set_name=descriptor_set_name, dataset_name=dataset_name,
                                       splitting_name=splitting_name, ad_measure=ad_measure)
-
+    
     elif qsar_method == "knn": 
         # grid = {'estimator__n_neighbors': [5], 'estimator__weights': ['distance']}  # default, same as OPERA
         
@@ -1079,11 +1027,6 @@ def set_hyper_parameters(qsar_method, feature_selection, descriptor_set_name, sp
         params = ParametersGeneticAlgorithm(qsar_method=qsar_method, hyperparameter_grid=grid, feature_selection=feature_selection,
                                             descriptor_set_name=descriptor_set_name, dataset_name=dataset_name,
                                             splitting_name=splitting_name, ad_measure=ad_measure)
-        
-        # params.num_generations=1
-        # params.num_optimizers=1
-        # params.run_rfe = False #doesnt work for knn 
-
     elif qsar_method == "reg": 
         grid = {}  # default, same as OPERA
         params = ParametersGeneticAlgorithm(qsar_method=qsar_method, hyperparameter_grid=grid, feature_selection=feature_selection,
@@ -1118,7 +1061,6 @@ def set_hyper_parameters(qsar_method, feature_selection, descriptor_set_name, sp
         
 
 def runAD(df_training, df_prediction, params, embedding, df_predictions, ad_measure, stats_dict):
-    
     df_ad_output, _ = adu.generate_applicability_domain_with_preselected_descriptors_from_dfs(
         train_df=df_training.copy(), test_df=df_prediction.copy(),
         remove_log_p=params.remove_log_p_descriptors,
@@ -1155,7 +1097,6 @@ def runAD(df_training, df_prediction, params, embedding, df_predictions, ad_meas
 
 
 def generate_consensus_ad(df_predictions, stats_dict, ad_measure_final):
-    
     # Build list of AD columns
     colsAD = [f"AD_{ad.replace(' ', '_')}" for ad in ad_measure_final]
 
@@ -1189,7 +1130,6 @@ def add_log_p_martin_columns(df_training, df_prediction, cross_validate, df_cv_d
     """
     Does adding columns for my LOGP prediction work better than ALOGP and XLOGP?    
     """
-    
     model_id = str(1069)
     pred_name = 'LOGP_Martin'
     from model_ws_db_utilities import add_model_prediction_to_df as add_mp
@@ -1209,6 +1149,10 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
                 run_AD=True, feature_selection=True, fs_previous_embedding=True, params=None,
                 descriptor_set_name="WebTEST-default", splitting_name="RND_REPRESENTATIVE",
                 ad_measure_model=None, add_LOGP_Martin=False, write_to_db=False, user="tmarti02"):
+    # TODO: reg model using descriptors from XGB or RF model
+    # TODO: gcm model that uses reg with fragment descriptors such that it deletes rows with less than 3 instances and the associated rows
+    # TODO does add the LOGP predicted from my LOGP model improve the results?
+    splitting_name = "RND_REPRESENTATIVE"
     
     try:
                    
@@ -1246,6 +1190,7 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         ad_measures.append(pc.Applicability_Domain_TEST_Fragment_Counts)
         ad_measures.append(pc.Applicability_Domain_OPERA_local_index)
         # ad_measures.append(pc.Applicability_Domain_OPERA_global_index) # Turn off when not doing feature selection on knn, fails due to a matrix singularity
+        
         # ******************************************************************************************************
         # Print main info:
         logging.info(f"dataset_name={dataset_name}")
@@ -1256,14 +1201,17 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         # ******************************************************************************************************
         
         if params is None: 
-            params = set_hyper_parameters(qsar_method, feature_selection, descriptor_set_name, splitting_name, dataset_name, ad_measure_model)
+            params = set_hyper_parameters(
+                qsar_method=qsar_method, 
+                feature_selection=feature_selection,
+                descriptor_set_name=descriptor_set_name,
+                splitting_name=splitting_name,
+                dataset_name=dataset_name,
+                ad_measure=ad_measure_model)
         # hyperparameter_grid = None # use default
         # ******************************************************************************************************
     
         session = getSession()
-        mb = ModelBuilder()
-        eg = EmbeddingGenerator()
-    
         logging.info("start getting dataframes from db")
     
         df_training, df_prediction = get_training_prediction_instances(session, dataset_name, descriptor_set_name, params.splitting_name)
@@ -1280,10 +1228,10 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         # ******************************************************************************************************
     
         if feature_selection:
-            embedding = eg.feature_selection(df_training, df_prediction, params)
+            embedding = EmbeddingGenerator.feature_selection(df_training, df_prediction, params)
             
-        df_predictions, training_stats, test_stats, model = mb.build_and_test_model(df_training, df_prediction, params, embedding)
-        
+        df_predictions, training_stats, test_stats, model = ModelBuilder.build_and_test_model(df_training, df_prediction, params, embedding)
+                
         if not feature_selection and fs_previous_embedding and qsar_method != 'gcm':
     
             logging.info(f"Before FS, previous embedding has {len(model.embedding)} descriptors: {model.embedding}")
@@ -1297,19 +1245,39 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
                 logging.info(f"After SFS, {len(model.embedding)} descriptors: {model.embedding}")
     
             # redo model and predictions:
-            df_predictions, training_stats, test_stats, model = mb.build_and_test_model(df_training, df_prediction, params, model.embedding)
+            df_predictions, training_stats, test_stats, model = ModelBuilder.build_and_test_model(df_training, df_prediction, params, model.embedding)
             logging.info(f"After FS, embedding has {len(model.embedding)} descriptors: {model.embedding}")
-        
-        embedding = None  # use model.embedding from here on 
+    
+
+        # ******************************************************************************************************
+        # Print main info:
+        logging.info(f"dataset_name={dataset_name}")
+        logging.info(f"qsar_method={qsar_method}")
+        logging.info(f"descriptor_set_name={descriptor_set_name}")
+        logging.info(f"feature_selection={feature_selection}")
+        logging.info(f"cross_validate={cross_validate}")
         
         # ******************************************************************************************************
-        # Cross validation calculations
-        cv_stats = None
-        df_cv_predictions = None
+    
+        session = getSession()
+        logging.info("start getting dataframes from db")
+    
+        df_training, df_prediction = get_training_prediction_instances(session, dataset_name, descriptor_set_name, splitting_name)
+        # print(df_training.shape)
+    
+        df_cv_dict = None 
+        if cross_validate:
+            df_cv_dict = get_training_cv_instances(session, dataset_name, descriptor_set_name)
         
+        if add_LOGP_Martin:
+            df_training, df_prediction = add_log_p_martin_columns(df_training, df_prediction, cross_validate, df_cv_dict)
+        
+        logging.info("done getting dataframes from db")
+
         if cross_validate: 
-            df_cv_predictions, cv_stats = mb.crossvalidate(df_cv_dict, params, model.embedding)
+            df_cv_predictions, cv_stats = ModelBuilder.crossvalidate(df_cv_dict, params, model.embedding)
             
+        
         # ******************************************************************************************************
         # Applicability domain calcs:
         stats_dict = {}
@@ -1322,17 +1290,20 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
     
             # print(json.dumps(stats_dict,indent=4))
         
+
+        print("After AD calcs: ", row_to_json(df_predictions))
+        
+        
         # ******************************************************************************************************
         # look at first prediction to make sure it looks right:
         logging.debug("First row of df_predictions:")
         logging.debug(row_to_json(df_predictions))
+        # print(df_predictions.head())
         # ******************************************************************************************************
         
         # create results file:
         
-        r = Results()
-        
-        results_dict = r.create_results_dict(
+        results_dict = Results.create_results_dict(
             ad_measure_model=ad_measure_model,
             df_training=df_training,
             params=params,
@@ -1348,8 +1319,9 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
             columns.insert(0, "Property")
             columns.insert(0, "ID")
             df_test_model = df_prediction[columns]
-            
-        r.save_results(results_dict, df_predictions, df_cv_predictions, df_test_model, folder_embedding)
+        
+    
+        Results.save_results(results_dict, df_predictions, df_cv_predictions, df_test_model, folder_embedding)
         logging.info(f"test set stats={json.dumps(test_stats, indent=4)}")
         logging.info(f"training cross validation stats={json.dumps(cv_stats, indent=4)}")   
         logging.info(f"test set AD stats={json.dumps( results_dict['test_stats_AD'] , indent=4)}")
@@ -1363,15 +1335,12 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
     except Exception:
         # Print the exception traceback to standard error
         traceback.print_exc()
-        
-    # coeff_dict = model.getOriginalRegressionCoefficients()
-    # logging.debug(f"coeffs{coeff_dict}")
+        return None
 
-    
+
 class Results:
-    
-    def save_results(self, results_dict, df_predictions, df_cv_predictions=None, df_test_model=None, folder_embedding=None):
-    
+    @staticmethod
+    def save_results(results_dict, df_predictions, df_cv_predictions=None, df_test_model=None, folder_embedding=None):
         params = results_dict["params"]
         
         # print (json.dumps(params))
@@ -1407,7 +1376,8 @@ class Results:
         with open(json_path, 'w') as json_file:
             json.dump(results_dict, json_file, indent=4)
     
-    def create_results_dict(self, ad_measure_model, df_training, params, model, training_stats, test_stats, cv_stats, stats_dict):
+    @staticmethod
+    def create_results_dict(ad_measure_model, df_training, params, model, training_stats, test_stats, cv_stats, stats_dict):
     
         results_dict = {"params":params.to_dict()}
         
@@ -1445,7 +1415,9 @@ class Results:
         
         return results_dict
     
-    def summarize_model_stats(self, dataset_name, excel_name="model_stats.xlsx", sheet_name="stats"):
+
+    @staticmethod
+    def summarize_model_stats(dataset_name, excel_name="model_stats.xlsx", sheet_name="stats", col_width_pad=4, min_col_width=5):
         """
         Iterate subfolders, print model stats, collect them into a DataFrame,
         and save to an Excel file in that folder.
@@ -1484,6 +1456,12 @@ class Results:
                                 lenEmbedding = len(results["embedding"])
                             else:
                                 lenEmbedding = None
+                            
+                            embedding = None
+                            if lenEmbedding is not None and lenEmbedding < 20:
+                                embedding = results.get("embedding", [])
+                                embedding = ", ".join(embedding) if isinstance(embedding, (list, tuple)) else str(embedding)
+                            
     
                             # Format for printing (and store as strings to match the print)
                             mae_test_str = f"{mae_test_val:.3f}" if isinstance(mae_test_val, (int, float)) else "N/A"
@@ -1494,16 +1472,17 @@ class Results:
     
                             rows.append({
                                 "Run": entry.name,
-                                "MAE_Test": mae_test_str,
-                                "MAE_Training_CV": mae_cv_str,
-                                "#_variables": lenEmb_str
+                                "MAE_Test": float(mae_test_str) if mae_test_str != "N/A" else None,
+                                "MAE_Training_CV": float(mae_cv_str) if mae_cv_str != "N/A" else None,
+                                "#_variables": int(lenEmb_str) if lenEmb_str != "N/A" else None,
+                                "Embedding": embedding if embedding is not None else None
                             })
     
                     except json.JSONDecodeError as e:
                         print(f"Skipping {json_path}: invalid JSON ({e})")
     
         # Save the collected results to Excel in the same folder
-        df_stats = pd.DataFrame(rows, columns=["Run", "MAE_Test", "MAE_Training_CV", "#_variables"])
+        df_stats = pd.DataFrame(rows, columns=["Run", "MAE_Test", "MAE_Training_CV", "#_variables", "Embedding"])
         excel_path = os.path.join(folder, excel_name)
     
         with pd.ExcelWriter(excel_path, engine="xlsxwriter") as writer:
@@ -1514,14 +1493,7 @@ class Results:
             nrows, ncols = df_stats.shape
             ws.autofilter(0, 0, nrows, ncols - 1)
             ws.freeze_panes(1, 0)
+            ExcelCreator.set_column_width(writer, sheet_name=sheet_name, df=df_stats, col_width_pad=col_width_pad, min_col_width=min_col_width, how="full")
     
         print(f"Saved summary to: {excel_path}")
-        return df_stats, excel_path
-
-
-
-if __name__ == '__main__':
-    
-    ml=ModelLoader()
-    ml.test_create_model()
-    
+        return df_stats, excel_path    

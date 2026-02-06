@@ -33,6 +33,7 @@ import numpy as np
 import pandas as pd
 from datetime import datetime
 import json
+import base64
 
 def row_to_json(df, row=0):
     row = df.iloc[row]
