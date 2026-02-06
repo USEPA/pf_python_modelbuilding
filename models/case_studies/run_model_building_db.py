@@ -3,7 +3,7 @@
 Created on Dec 30, 2025
 @author: TMARTI02
 '''
-
+from dns.flags import AD
 
 """
 from __future__ import annotations lets you:
@@ -12,6 +12,7 @@ from __future__ import annotations lets you:
 -Speed up imports and reduce circular-import issues
 """
 
+from datetime import datetime
 import os, json
 
 # from sqlalchemy.exc import SQLAlchemyError
@@ -19,13 +20,16 @@ from sqlalchemy import create_engine, text, bindparam
 from sqlalchemy.engine import URL
 from sqlalchemy.orm import sessionmaker
 from xlsxwriter.utility import xl_rowcol_to_cell
+from sqlalchemy.exc import SQLAlchemyError
 
 import numpy as np
 import pandas as pd
 from io import StringIO
 import math
 from pathlib import Path
-from time import time
+import time
+
+import pickle 
 import re
 import traceback
 
@@ -41,7 +45,7 @@ import StatsCalculator as sc
 
 from models.dataset_utilities_db import get_training_prediction_instances, get_training_cv_instances
 
-from utils import print_first_row, row_to_json
+from utils import print_first_row, row_to_json, to_json_safe
 
 from applicability_domain import applicability_domain_utilities as  adu
 
@@ -72,6 +76,7 @@ from predict_constants import PredictConstants as pc
 
 # PROJECT_ROOT=r"C:\Users\TMARTI02\OneDrive - Environmental Protection Agency (EPA)\0 python\modeling services\pf_python_modelbuilding"    
 PROJECT_ROOT = os.getenv("PROJECT_ROOT")
+
  
 @dataclass
 class ParametersImportance:
@@ -79,6 +84,9 @@ class ParametersImportance:
     dataset_name: str
     qsar_method: str    
     descriptor_set_name: str
+    ad_measure: list[str]
+
+    splitting_name: str = "RND_REPRESENTATIVE"
     feature_selection_method: str = feature_selection_method_importance
     hyperparameter_grid: Optional[Dict[str, Any]] = None
     feature_selection: bool = False
@@ -96,7 +104,7 @@ class ParametersImportance:
 
     include_standardization_in_pmml: bool = False
     use_pmml_pipeline: bool = False
-    n_threads: Optional[int] = 4 # Set to n/2 where n is the number of logical processors on your computer
+    n_threads: Optional[int] = 4  # Set to n/2 where n is the number of logical processors on your computer
 
     # Derived value (set in __post_init__)
     fraction_of_max_importance: float = field(init=False)
@@ -109,7 +117,7 @@ class ParametersImportance:
         elif method == "xgb":
             self.fraction_of_max_importance = 0.03
         elif method == "lgb":
-            self.fraction_of_max_importance = 0.03 #TODO this needs checking
+            self.fraction_of_max_importance = 0.03  # TODO this needs checking
         else:
             raise ValueError(f"invalid method: {self.qsar_method}")
 
@@ -123,6 +131,9 @@ class ParametersGroupContribution:
     dataset_name: str
     qsar_method: str    
     descriptor_set_name: str
+    ad_measure: list[str]
+    splitting_name: str = "RND_REPRESENTATIVE"
+    
     feature_selection_method: str = feature_selection_method_group_contribution 
     hyperparameter_grid: Optional[Dict[str, Any]] = None
     feature_selection: bool = True
@@ -142,6 +153,10 @@ class ParametersGeneric:
     dataset_name: str
     qsar_method: str    
     descriptor_set_name: str
+    ad_measure: list[str]
+
+    splitting_name: str = "RND_REPRESENTATIVE"
+    
     hyperparameter_grid: Optional[Dict[str, Any]] = None
     feature_selection: bool = False
     remove_log_p_descriptors: bool = False
@@ -159,6 +174,10 @@ class ParametersGeneticAlgorithm:
     dataset_name: str
     qsar_method: str    
     descriptor_set_name: str
+    ad_measure: list[str]
+
+    splitting_name: str = "RND_REPRESENTATIVE"
+
     feature_selection_method: str = feature_selection_method_genetic_algorithm 
     hyperparameter_grid: Optional[Dict[str, Any]] = None
     feature_selection: bool = False
@@ -196,29 +215,365 @@ from util.database_utilities import DatabaseLoader
 
 dbl = DatabaseLoader(default_schema="qsar_models")
 
+
 class ModelLoader():
+
+    def add_model_statistics(self, user, fk_model_id, stats_dict_name, results, stats_lookup, created_at,  model_statistics_rows):        
+        
+        stats = results[stats_dict_name]
+        
+        for stat_name in stats:
+        
+            if "AD" not in stats_dict_name and "Coverage" in stat_name:
+                continue
+        
+            if stat_name =="ad_measure" or stat_name=="mae_ratio":
+                continue
+        
+            if stat_name in stats_lookup:
+                fk_statistic_id = stats_lookup[stat_name]
+                # print(stat_name,fk_statistic_id)
+                model_statistics_row = {
+                    "statistic_value":stats[stat_name], 
+                    "fk_model_id":fk_model_id, 
+                    "fk_statistic_id":fk_statistic_id, 
+                    "created_by":user, 
+                    "updated_by":user, 
+                    "created_at":created_at, 
+                    "updated_at":created_at}
+                model_statistics_rows.append(model_statistics_row)                
+                # print(stat_name,"\n",json.dumps(to_json_safe(model_statistics_row),indent=4))
+                
+                # print(stat_name,stats[stat_name],fk_statistic_id)
+                
+            else:
+                print(stat_name, "Skipping loading stat")
+
+    def load_stats(self,session, results, user, fk_model_id):
+        
+        stats_rows = dbl.get_rows(session,"statistics")
+        stats_lookup={} #lookup for the fk_statistic_id
+        for stat_row in stats_rows:
+            stats_lookup[stat_row.name]=stat_row.id
+
+        # dbl.print_rows_as_json(stats_rows)
+        # print(json.dumps(stats_dict, indent=4))
+        # dbl.print_rows_as_json(stats_rows)
+        
+        created_at = datetime.now()
+        model_statistics_rows=[]
+        
+        dict_list = ["training_stats","test_stats","cv_stats","test_stats_AD"]
+        
+        for dict_name in dict_list:                
+            self.add_model_statistics(
+                user=user,
+                fk_model_id=fk_model_id,
+                stats_dict_name=dict_name,
+                results=results, 
+                stats_lookup=stats_lookup,
+                created_at = created_at,
+                model_statistics_rows=model_statistics_rows,
+            )
+        # print(json.dumps(model_statistics_rows,indent=4))
+        
+        stats_row_ids = dbl.create_many(session, "model_statistics", model_statistics_rows)
+        session.commit()
+        
+        # for stats_row_id in stats_row_ids:
+        #     print(stats_row_id)
+
+    from typing import List, Union
     
-    def create_descriptor_embedding(self, session: Session, descriptor_embedding: Mapping[str, Any]):
+    def divide_array(self, source: Union[bytes, bytearray], chunksize: int = 26214400) -> List[Union[bytes, bytearray]]:
+        """
+        Split a bytes-like object into chunks of size `chunksize`.
+        Returns a list of slices (copies). Last chunk may be shorter.
+        """
+        parts = [source[i:i + chunksize] for i in range(0, len(source), chunksize)]
+    
+        # Optional: mimic the Java prints
+        print(f"Size of model bytes={len(source)}")
+        print(f"# Parts = {len(parts)}")
+    
+        total = sum(len(p) for p in parts)
+        if total != len(source):
+            print(f"byte length mismatch:{total}\t{len(source)}")
+            return None
+    
+        return parts
+
+    def load_model_from_object(self, session, user, model, params, fk_descriptor_embedding_id, fk_method_id, fk_ad_method):
+
+        epoch_ms = time.time_ns() // 1_000_000
+        created_at = datetime.now()
+
+        model_name = user + "_" + str(epoch_ms)
+        model_row = {
+            "name":model_name,
+            "dataset_name":params["dataset_name"],
+            "descriptor_set_name":params["descriptor_set_name"],
+            "splitting_name":params["splitting_name"],
+            "fk_method_id":fk_method_id,  # todo lookup from qsar_method, use general method instead of versioned
+            "fk_descriptor_embedding_id":fk_descriptor_embedding_id,
+            "fk_source_id":3,  # cheminformatics modules, TODO lookup from sources table
+            "fk_ad_method":fk_ad_method,  # lookup from ad_methods table using ad_method_name currently cant have multiple AD methods the way the db is configured
+            "hyperparameter_grid":json.dumps(model.hyperparameter_grid),
+            "hyperparameters":json.dumps(model.hyperparameters),  # JSON/JSONB column
+            "details":model.get_model_description().encode("utf-8"),  # this column is bytes in the database. In the future that column should be converted to text field
+            "is_public":False,
+            "name_ccd":model_name,
+            "has_qmrf":False,
+            "created_by":user,
+            "updated_by":user,
+            "created_at":created_at,
+            "updated_at":created_at}
+        # print(json.dumps(to_json_safe(model_row)))
+        # print(json.dumps(model_row,indent=4))
+        fk_model_id = self.create_model(session, model_row)
+        return fk_model_id
+
+
+
+    def create_model_bytes(self, session: Session, bytes_list):
+    
+        try:
+            # Insert records
+            result = dbl.create_many(session, table="model_bytes", records=bytes_list)
+            # Ensure SQL is sent and constraints checked before commit
+            session.flush()
+            # Commit the transaction
+            session.commit()
+            # At this point, success if we reached here without exception
+        
+            print("Model bytes loaded")
+            
+            return result
+        except SQLAlchemyError:
+            # Roll back on any DB/SQLAlchemy error
+            session.rollback()
+            # Re-raise or log the error
+            raise        
+
+
+    def load_model_bytes(self, session, user, model, fk_model_id):
+        model_bytes = pickle.dumps(model)
+        bytes_list = self.divide_array(model_bytes)
+
+        created_at = datetime.now()
+        bytes_rows = [
+            {
+                "fk_model_id": fk_model_id,
+                "bytes": chunk,
+                "created_by": user,
+                "updated_by": user,
+                "created_at": created_at,
+                "updated_at": created_at,
+            }
+            for chunk in bytes_list
+        ]
+
+        # Insert
+        return self.create_model_bytes(session, bytes_rows)
+        
+
+    def load_model(self, session, user, model, results, df_predictions, test_stats):
+
+        params = results["params"]
+
+        # ---- get fk_descriptor_embedding_id ----
+        embedding_tsv = "\t".join(results["embedding"])
+        # print(embedding_tsv)
+        embedding_row = dbl.get_row(session, "descriptor_embeddings", embedding_tsv=embedding_tsv, dataset_name=params["dataset_name"])
+        if embedding_row is None:
+            fk_descriptor_embedding_id = self.create_descriptor_embedding_from_params(session, user, results)
+            logging.info(f"descriptor_embedding created: {fk_descriptor_embedding_id}")
+        else:
+            fk_descriptor_embedding_id = embedding_row.id
+            logging.info(f"descriptor_embedding in database: {fk_descriptor_embedding_id}")
+        
+        # fk_descriptor_embedding_id=281
+        if fk_descriptor_embedding_id is None:
+            logging.error("Cant create embedding")
+            return
+        
+        # ---- get fk_method_id ----
+        row_method = dbl.get_row(session, "methods", name=params["qsar_method"])
+        if row_method is not None:
+            fk_method_id = row_method.id
+        else:    
+            logging.error(f"Cant find fk for qsar_method={params['qsar_method']}")
+            return
+        logging.info(f"fk_method_id:{fk_method_id}")
+        
+        # ---- get fk_ad_method_id ----
+        ad_measure = " and ".join(params["ad_measure"])
+        row_ad_method = dbl.get_row(session, "ad_methods", name=ad_measure)
+        if row_ad_method is not None:
+            fk_ad_method = row_ad_method.id
+            logging.info(f"fk_ad_method:{fk_ad_method}")
+        else:
+            logging.error(f"Cant find fk for ad_measure={ad_measure}")
+            return
+        
+        # ---- store model into the models table:----
+        # fk_model_id = self.load_model_from_object(session, user, model, params, fk_descriptor_embedding_id, fk_method_id, fk_ad_method)
+
+        fk_model_id = 1638
+        
+        if fk_model_id is None:
+            logging.error(f"Cant create model")
+            return
+        logging.info(f"fk_model_id:{fk_model_id}")
+        
+        # ---- store model_bytes into the model_bytes table:----
+        # self.load_model_bytes(session, user, model, fk_model_id)
+
+
+        # ---- store model_statistics into the model_statistics table:----        
+        # self.load_stats(session, results, user, fk_model_id)
+        
+        
+        
+        """
+        TODO store predictions for:
+        1. Test set
+        2. Prediction set
+        3. Cross-validation of training set
+        4. Training set for completeness?
+        """
+
+        
+    
+    def create_descriptor_embedding_from_params(self, session, user, results):
+        
+        params = results["params"]
+
+
+        epoch_ms = time.time_ns() // 1_000_000
+        created_at = datetime.now()
+        
+        name_cols = [params["dataset_name"], params["descriptor_set_name"], str(epoch_ms)]
+        embedding_name = "_".join(name_cols)  # give it a unique name
+        
+        
+        
+        descriptor_embedding = {
+            "name": embedding_name,
+            "description": "Genetic algorithm with RFE and SFS",
+            "dataset_name": params["dataset_name"],
+            "descriptor_set_name": params["descriptor_set_name"],
+            "qsar_method": params["qsar_method"],
+            "splitting_name": params["splitting_name"],
+            "embedding_tsv": "\t".join(results["embedding"]),
+            "importance_tsv": "Not used",
+            "created_by": user,
+            "updated_by": user,
+            "created_at": created_at,
+            "updated_at": created_at,
+        }
+
         new_id = dbl.create_row(session, table="descriptor_embeddings", record=descriptor_embedding)
         session.commit()
-        # print(new_id)  # typically an integer or UUID
         return new_id
     
-    def create_model(self, session: Session, model: Mapping[str, Any]):
-        new_id = dbl.create_row(session, table="models", record=model)
+    def create_descriptor_embedding(self, session: Session, descriptor_embedding_dict: Mapping[str, Any]):
+        new_id = dbl.create_row(session, table="descriptor_embeddings", record=descriptor_embedding_dict)
+        session.commit()
+        # print(new_id)  # typically an integer or UUID
+        return new_id
+
+
+
+    
+    def create_model(self, session: Session, model_dict: Mapping[str, Any]):
+        new_id = dbl.create_row(session, table="models", record=model_dict)
         session.commit()
         # print(new_id)  # typically an integer or UUID
         return new_id
     
-    def get_method_id(self, session, qsar_method: str):
-        sql = text("""
-            select m.id
-            from qsar_models.methods m
-            where m.name = :qsar_method
-            -- limit 1  -- uncomment if name is not unique
-        """)
-        return session.execute(sql, {"qsar_method": qsar_method}).scalar_one_or_none()
-
+   
+    def test_create_model(self):
+    
+        from predict_constants import PredictConstants
+        pc=PredictConstants    
+        from model_ws_db_utilities import getSession    
+        session = getSession()
+                
+        user = 'tmarti02'
+        qsar_method = 'knn'
+        embedding=["col1","col2"]
+        dataset_name = "KOC v1 modeling"
+        descriptor_set_name = pc.DESCRIPTOR_SET_WEBTEST
+        splitting_name = pc.SPLITTING_RND_REPRESENTATIVE
+        
+        epoch_ms = time.time_ns() // 1_000_000
+        name_cols = [dataset_name, descriptor_set_name, str(epoch_ms)]
+        embedding_name = "_".join(name_cols) # give it a unique name
+        from datetime import datetime
+        
+        created_at = datetime.now()
+        
+        descriptor_embedding = {
+            "name": embedding_name,
+            "description": "Genetic algorithm with RFE and SFS",
+            "dataset_name": dataset_name,
+            "descriptor_set_name": descriptor_set_name,
+            "qsar_method": qsar_method,
+            "splitting_name": splitting_name,
+            "embedding_tsv": "\t".join(embedding),
+            "importance_tsv": "Not used",
+            "created_by": user,
+            "updated_by": user,
+            "created_at": created_at,
+            "updated_at": created_at,
+        }
+        
+        
+        from utils import to_json_safe
+        # print(to_json_safe(descriptor_embedding))
+            
+        fk_descriptor_embedding_id = self.create_descriptor_embedding(session, descriptor_embedding)
+        
+        # fk_descriptor_embedding_id = 276
+    
+        from models.ModelBuilder import Model
+        
+        model = Model()
+        model.hyperparameter_grid = {"n_estimators": 500, "max_depth": 20}
+        model.hyperparameters= {"n_estimators": 500, "max_depth": 20}
+    
+        model_name = user+"_"+str(epoch_ms)
+    
+        fk_method_id = self.get_method_id(session, qsar_method) #use the generic method_id that doesnt have a version so can set the hyperparameter_grid
+        
+    
+        model_row = {
+            "name": model_name,
+            "dataset_name": dataset_name,
+            "descriptor_set_name": descriptor_set_name,
+            "splitting_name": splitting_name,
+            "fk_method_id": fk_method_id, #todo lookup from qsar_method, use general method instead of versioned
+            "fk_descriptor_embedding_id": fk_descriptor_embedding_id,
+            "fk_source_id": 3, #cheminformatics modules, TODO lookup from sources table
+            "fk_ad_method": 7, #lookup from ad_methods table using ad_method_name currently cant have multiple AD methods the way the db is configured        
+            "hyperparameter_grid": json.dumps(model.hyperparameter_grid),
+            "hyperparameters": json.dumps(model.hyperparameters),  # JSON/JSONB column
+            "details": model.get_model_description().encode("utf-8"),  #this column is bytes in the database. In the future that column should be converted to text field
+            "is_public": False,
+            "name_ccd": model_name,
+            "has_qmrf": False,
+            "created_by": user,
+            "updated_by": user,
+            "created_at": created_at,
+            "updated_at": created_at,
+        }
+        
+        print(json.dumps(to_json_safe(model_row)))
+        
+        # print(json.dumps(model_row,indent=4))
+        fk_model_id = self.create_model(session, model_row)
+        
 
 class ModelBuilder:
     
@@ -246,11 +601,10 @@ class ModelBuilder:
         # print(df_predictions_all.shape)
         
         mean_exp_training = df_predictions_all["exp"].mean()
-        cv_stats = sc.calculate_continuous_statistics(df_predictions_all, mean_exp_training, "_Test")
+        cv_stats = sc.calculate_continuous_statistics(df_predictions_all, mean_exp_training, "_CV_Training")
         # print('cross validation stats:\n', json.dumps(cv_stats, indent=4))        
 
         logging.info(f"Done running CV calculations")
-
         
         return df_predictions_all, cv_stats  
         
@@ -288,8 +642,10 @@ class ModelBuilder:
         
         # generate predictions for test set:
         json_predictions = call_do_predictions_from_df(df_prediction, model)
+        json_predictions_training = call_do_predictions_from_df(df_training, model)
         
         df_predictions = pd.read_json(StringIO(json_predictions), orient="records")
+        df_predictions_training = pd.read_json(StringIO(json_predictions_training), orient="records")
         
         # first_row_dict = df_predictions.loc[0].to_dict()
         # print(json.dumps(first_row_dict, indent=4))
@@ -297,8 +653,9 @@ class ModelBuilder:
         # calculate stats for test set
         mean_exp_training = df_training["Property"].mean()
         test_stats = sc.calculate_continuous_statistics(df_predictions, mean_exp_training, "_Test")
+        training_stats = sc.calculate_continuous_statistics(df_predictions_training, mean_exp_training, "_Training")
                 
-        return df_predictions, test_stats, model
+        return df_predictions, training_stats, test_stats, model
                 
         # logging.info(f"MAE_TEST = {test_stats['MAE_Test']:.3f}")
 
@@ -335,7 +692,7 @@ class EmbeddingGenerator:
 
         elif params.feature_selection_method == feature_selection_method_group_contribution:
             # embedding = call_build_embedding_group_contribution_from_df(df_training, params.min_count)
-            embedding = None #determine during model building
+            embedding = None  # determine during model building
         
         else:
             print("cant do feature selection for " + params.qsar_method)
@@ -344,7 +701,6 @@ class EmbeddingGenerator:
         # logging.info(f"qsar_method={params.qsar_method}, embedding generated with {len(embedding)} descriptors: {embedding}")
 
         return embedding
-    
 
 
 def getSession():
@@ -379,9 +735,6 @@ def prepare_df(df):
     df["abs_diff"] = abs(df["exp"] - df["pred"])
     df = df.sort_values("abs_diff", ascending=False).reset_index(drop=True)
     return df
-
-        
-
     
     # statistics_AD = None
     # if doAD:
@@ -389,7 +742,6 @@ def prepare_df(df):
 
 
 class ExcelCreator:
-    
 
     def add_subtotal_count_fraction_and_visible(self, ws, df, column_name='abs_diff'):
         """
@@ -414,21 +766,21 @@ class ExcelCreator:
         # Rows (0-based): header at 0, data 1..nrows
         subtotal_row = nrows + 2
         fraction_row = nrows + 3
-        visible_row  = nrows + 4
+        visible_row = nrows + 4
     
         # Label column: place next to the formula cells
         label_col = col_idx - 1 if col_idx > 0 else col_idx + 1
     
         # Write labels next to the formula cells
-        ws.write(subtotal_row, label_col, 'MAE')         # numeric visible count
+        ws.write(subtotal_row, label_col, 'MAE')  # numeric visible count
         ws.write(fraction_row, label_col, 'fraction_inside')  # visible_count / numeric_count
-        ws.write(visible_row,  label_col, 'count_inside')    # visible non-empty count
+        ws.write(visible_row, label_col, 'count_inside')  # visible non-empty count
     
         if nrows > 0:
             # Range for the target column (data rows only)
             first_cell = xl_rowcol_to_cell(1, col_idx)
-            last_cell  = xl_rowcol_to_cell(nrows, col_idx)
-            range_ref  = f"{first_cell}:{last_cell}"
+            last_cell = xl_rowcol_to_cell(nrows, col_idx)
+            range_ref = f"{first_cell}:{last_cell}"
     
             # Numeric visible count (ignores filtered-out rows)
             count_numeric_formula = f"=SUBTOTAL(101,{range_ref})"
@@ -446,9 +798,8 @@ class ExcelCreator:
             # No data rows; write zeros
             ws.write(subtotal_row, col_idx, 0)
             ws.write(fraction_row, col_idx, 0)
-            ws.write(visible_row,  col_idx, 0)
+            ws.write(visible_row, col_idx, 0)
             return [0, 0, 0]
-
     
     def add_filter(self, writer, sheet_name, df):
         
@@ -585,11 +936,10 @@ class ExcelCreator:
                 "overlay":True,
                 "layout":{"x":0.7, "y":0.75, "width":0.25, "height":0.1}})
     # Insert chart
-        if sheet_name == sheet_name_plot:        
+        if sheet_name == sheet_name_plot: 
             worksheet_plot.insert_chart("E2", chart, {"x_offset":20, "y_offset":10})
         else:
             worksheet_plot.insert_chart(0, 0, chart, {'x_scale': 1.0, 'y_scale': 1.0})
-
 
     def writeModelCoefficients(self, results_dict, writer, workbook): 
         if results_dict and "model_coefficients" in results_dict:
@@ -622,7 +972,6 @@ class ExcelCreator:
             for col_idx, col_name in enumerate(safe_cols, start=start_col + col_offset):
                 worksheet.write_string(start_row, col_idx, col_name, header_fmt)
 
-
     def add_summary_stats_to_ws(self, ws, source_ws, summary_stats, start_row=2, start_col=10):
         """
         Adds summary statistics from source_ws to ws at the given position.
@@ -644,13 +993,12 @@ class ExcelCreator:
         # Write each statistic label and formula/value
         row = start_row
         for label, formula in zip(
-            ["MAE", "fraction_inside", "count_inside"],
+            ["MAE", "Coverage_Test", "count_inside"],
             summary_stats
         ):
             ws.write(row, start_col, label)
             ws.write_formula(row, start_col + 1, formula)
             row += 1
-    
 
     def create_excel(self,
         df_test: pd.DataFrame,
@@ -694,21 +1042,23 @@ class ExcelCreator:
             self.writeModelCoefficients(results_dict, writer, workbook)
         
 
-def set_hyper_parameters(qsar_method, feature_selection, descriptor_set_name, dataset_name):
+def set_hyper_parameters(qsar_method, feature_selection, descriptor_set_name, splitting_name, dataset_name, ad_measure):
 
     params = None    
         
     if qsar_method == "xgb":
         grid = {'estimator__booster': ['gbtree']}
         params = ParametersImportance(qsar_method=qsar_method, feature_selection=feature_selection, hyperparameter_grid=grid,
-                                      descriptor_set_name=descriptor_set_name, dataset_name=dataset_name)
+                                      descriptor_set_name=descriptor_set_name, dataset_name=dataset_name,
+                                      splitting_name=splitting_name, ad_measure=ad_measure)
         
         # print(params.dataset_name)
         
     elif qsar_method == "lgb":
         grid = {}        
         params = ParametersImportance(qsar_method=qsar_method, feature_selection=feature_selection, hyperparameter_grid=grid,
-                                      descriptor_set_name=descriptor_set_name, dataset_name=dataset_name)
+                                      descriptor_set_name=descriptor_set_name, dataset_name=dataset_name,
+                                      splitting_name=splitting_name, ad_measure=ad_measure)
     
     elif qsar_method == "rf":
         # grid = {'estimator__max_features': ['sqrt', 'log2'],
@@ -718,84 +1068,84 @@ def set_hyper_parameters(qsar_method, feature_selection, descriptor_set_name, da
         grid = {"estimator__max_features": ["sqrt", "log2"]}
 
         params = ParametersImportance(qsar_method=qsar_method, feature_selection=feature_selection, hyperparameter_grid=grid,
-                                      descriptor_set_name=descriptor_set_name, dataset_name=dataset_name)
-        
-        
-        
+                                      descriptor_set_name=descriptor_set_name, dataset_name=dataset_name,
+                                      splitting_name=splitting_name, ad_measure=ad_measure)
 
     elif qsar_method == "knn": 
         # grid = {'estimator__n_neighbors': [5], 'estimator__weights': ['distance']}  # default, same as OPERA
         
-        grid = {'estimator__n_neighbors': [3], 'estimator__weights': ['distance']} # matches AD in terms of using 3
+        grid = {'estimator__n_neighbors': [3], 'estimator__weights': ['distance']}  # matches AD in terms of using 3
         
-        params = ParametersGeneticAlgorithm(qsar_method=qsar_method, hyperparameter_grid=grid,feature_selection=feature_selection,
-                                            descriptor_set_name=descriptor_set_name, dataset_name=dataset_name)
+        params = ParametersGeneticAlgorithm(qsar_method=qsar_method, hyperparameter_grid=grid, feature_selection=feature_selection,
+                                            descriptor_set_name=descriptor_set_name, dataset_name=dataset_name,
+                                            splitting_name=splitting_name, ad_measure=ad_measure)
         
         # params.num_generations=1
         # params.num_optimizers=1
         # params.run_rfe = False #doesnt work for knn 
-        
 
     elif qsar_method == "reg": 
         grid = {}  # default, same as OPERA
-        params = ParametersGeneticAlgorithm(qsar_method=qsar_method, hyperparameter_grid=grid,feature_selection=feature_selection,
-                                            descriptor_set_name=descriptor_set_name, dataset_name=dataset_name)
+        params = ParametersGeneticAlgorithm(qsar_method=qsar_method, hyperparameter_grid=grid, feature_selection=feature_selection,
+                                            descriptor_set_name=descriptor_set_name, dataset_name=dataset_name,
+                                            splitting_name=splitting_name, ad_measure=ad_measure)
         
         params.remove_fragment_descriptors = True
         params.remove_acnt_descriptors = True        
 
-
     elif qsar_method == "las": 
         grid = {'estimator__alpha': [np.round(i, 5) for i in np.logspace(-4, 0, num=20)],
                                     'estimator__max_iter': [1000000]}
-        params = ParametersGeneticAlgorithm(qsar_method=qsar_method, hyperparameter_grid=grid,feature_selection=feature_selection,
-                                            descriptor_set_name=descriptor_set_name, dataset_name=dataset_name)
+        params = ParametersGeneticAlgorithm(qsar_method=qsar_method, hyperparameter_grid=grid, feature_selection=feature_selection,
+                                            descriptor_set_name=descriptor_set_name, dataset_name=dataset_name,
+                                            splitting_name=splitting_name, ad_measure=ad_measure)
     elif qsar_method == "gcm":
         grid = {}        
-        params = ParametersGroupContribution(qsar_method=qsar_method, hyperparameter_grid=grid,feature_selection=feature_selection,
-                                             descriptor_set_name=descriptor_set_name, dataset_name=dataset_name)
+        params = ParametersGroupContribution(qsar_method=qsar_method, hyperparameter_grid=grid, feature_selection=feature_selection,
+                                             descriptor_set_name=descriptor_set_name, dataset_name=dataset_name,
+                                             splitting_name=splitting_name, ad_measure=ad_measure)
 
     elif qsar_method == "svm":
         grid = {}        
-        params = ParametersGeneric(qsar_method=qsar_method, hyperparameter_grid=grid,feature_selection=feature_selection,
-                                             descriptor_set_name=descriptor_set_name, dataset_name=dataset_name)
+        params = ParametersGeneric(qsar_method=qsar_method, hyperparameter_grid=grid, feature_selection=feature_selection,
+                                             descriptor_set_name=descriptor_set_name, dataset_name=dataset_name,
+                                             splitting_name=splitting_name, ad_measure=ad_measure)
     else:
         print('qsar_method not handled:', qsar_method)
         return None
 
     return params
-
         
 
 def runAD(df_training, df_prediction, params, embedding, df_predictions, ad_measure, stats_dict):
     
     df_ad_output, _ = adu.generate_applicability_domain_with_preselected_descriptors_from_dfs(
-        train_df=df_training.copy(), test_df=df_prediction.copy(), 
-        remove_log_p=params.remove_log_p_descriptors, 
-        embedding=embedding, applicability_domain=ad_measure, 
-        filterColumnsInBothSets=False, 
+        train_df=df_training.copy(), test_df=df_prediction.copy(),
+        remove_log_p=params.remove_log_p_descriptors,
+        embedding=embedding, applicability_domain=ad_measure,
+        filterColumnsInBothSets=False,
         returnTrainingAD=False)
     
     count = df_ad_output.shape[0]
     count_inside = df_ad_output['AD'].eq(True).sum()
-    coverage = count_inside/count
+    coverage = count_inside / count
     
     # print_first_row(df_ad_output)
     colAD = "AD_" + ad_measure.replace(" ", "_")
     
-    #append the AD to the predictions dataframe:
+    # append the AD to the predictions dataframe:
     df_predictions = df_predictions.merge(df_ad_output.rename(columns={'idTest':'id'})[['id', 'AD']], on='id', how='left').rename(columns={'AD':colAD})
  
     mae_inside = (df_predictions.loc[df_predictions[colAD].eq(True), 'exp'] 
-              - df_predictions.loc[df_predictions[colAD].eq(True), 'pred']).abs().mean()
+              -df_predictions.loc[df_predictions[colAD].eq(True), 'pred']).abs().mean()
 
     mae_outside = (df_predictions.loc[df_predictions[colAD].eq(False), 'exp'] 
-              - df_predictions.loc[df_predictions[colAD].eq(False), 'pred']).abs().mean()
+              -df_predictions.loc[df_predictions[colAD].eq(False), 'pred']).abs().mean()
 
     mae_ratio = mae_outside / mae_inside
        
-    stats = {"ad_measure":ad_measure, "mae_test_inside": mae_inside, "mae_test_outside": mae_outside, "mae_ratio": mae_ratio,
-             "fraction_inside":coverage}    
+    stats = {"ad_measure":ad_measure, "MAE_Test_inside_AD": mae_inside, "MAE_Test_outside_AD": mae_outside, "mae_ratio": mae_ratio,
+             "Coverage_Test":coverage}    
     stats_dict[ad_measure] = stats
 
     # product = mae_ratio * coverage
@@ -813,14 +1163,14 @@ def generate_consensus_ad(df_predictions, stats_dict, ad_measure_final):
     mask_all_true = df_predictions[colsAD].eq(True).all(axis=1)
 
     # MAE inside the consensus AD
-    mae_inside = (df_predictions.loc[mask_all_true, 'exp'] -
+    mae_inside = (df_predictions.loc[mask_all_true, 'exp'] - 
                   df_predictions.loc[mask_all_true, 'pred']).abs().mean()
 
     # Rows outside consensus AD: at least one AD flag is False
     mask_outside = ~mask_all_true
 
     # MAE outside the consensus AD
-    mae_outside = (df_predictions.loc[mask_outside, 'exp'] -
+    mae_outside = (df_predictions.loc[mask_outside, 'exp'] - 
                    df_predictions.loc[mask_outside, 'pred']).abs().mean()
                                       
     mae_ratio = mae_outside / mae_inside
@@ -829,13 +1179,10 @@ def generate_consensus_ad(df_predictions, stats_dict, ad_measure_final):
     
     total_rows = len(df_predictions)
     coverage = (mask_all_true.sum() / total_rows) if total_rows > 0 else float('nan')
-
     
-    stats = {"ad_measure":ad_measure, "mae_test_inside": mae_inside, "mae_test_outside": mae_outside, "mae_ratio": mae_ratio,
-             "fraction_inside":coverage}    
+    stats = {"ad_measure":ad_measure, "MAE_Test_inside_AD": mae_inside, "MAE_Test_outside_AD": mae_outside, "mae_ratio": mae_ratio,
+             "Coverage_Test":coverage}    
     stats_dict[ad_measure] = stats
-
-    
 
 
 def add_log_p_martin_columns(df_training, df_prediction, cross_validate, df_cv_dict=None):
@@ -846,7 +1193,7 @@ def add_log_p_martin_columns(df_training, df_prediction, cross_validate, df_cv_d
     model_id = str(1069)
     pred_name = 'LOGP_Martin'
     from model_ws_db_utilities import add_model_prediction_to_df as add_mp
-    df_prediction = add_mp(df_prediction, model_id, pred_name) # will generate some XGB warnings
+    df_prediction = add_mp(df_prediction, model_id, pred_name)  # will generate some XGB warnings
     df_training = add_mp(df_training, model_id, pred_name)
     
     if cross_validate:
@@ -858,168 +1205,168 @@ def add_log_p_martin_columns(df_training, df_prediction, cross_validate, df_cv_d
     return df_training, df_prediction
 
 
-def run_dataset(dataset_name, qsar_method, embedding=None,  folder_embedding=None, cross_validate=True, 
-                run_AD=True, feature_selection=True,fs_previous_embedding=True, params=None,
-                descriptor_set_name = "WebTEST-default",ad_measure_final=None, add_LOGP_Martin=False):
-        
-# TODO: reg model using descriptors from XGB or RF model
-# TODO: gcm model that uses reg with fragment descriptors such that it deletes rows with less than 3 instances and the associated rows
-
-    #TODO does add the LOGP predicted from my LOGP model improve the results?
-    splitting_name = "RND_REPRESENTATIVE"
-
+def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None, cross_validate=True,
+                run_AD=True, feature_selection=True, fs_previous_embedding=True, params=None,
+                descriptor_set_name="WebTEST-default", splitting_name="RND_REPRESENTATIVE",
+                ad_measure_model=None, add_LOGP_Martin=False, write_to_db=False, user="tmarti02"):
     
-    if qsar_method == 'gcm' or qsar_method=='svm':
-        feature_selection = False
-    
-    if embedding is not None:
-        folder_embedding = 'custom'
-        feature_selection = False
-    elif folder_embedding is not None:
-        feature_selection = False
-        file_name_embedding="results.json"
-        file_path_embedding=os.path.join(PROJECT_ROOT,"data/models", dataset_name, folder_embedding, file_name_embedding)
+    try:
+                   
+        if qsar_method == 'gcm' or qsar_method == 'svm':
+            feature_selection = False
         
-        with open(file_path_embedding, "r", encoding="utf-8") as f:
-            results = json.load(f)
-            embedding = results["embedding"] 
-            # print(f"from {folder_embedding}:{embedding}")
-    else:
-        fs_previous_embedding = False
+        if embedding is not None:
+            folder_embedding = 'custom'
+            feature_selection = False
+        elif folder_embedding is not None:
+            feature_selection = False
+            file_name_embedding = "results.json"
+            file_path_embedding = os.path.join(PROJECT_ROOT, "data/models", dataset_name, folder_embedding, file_name_embedding)
+            
+            with open(file_path_embedding, "r", encoding="utf-8") as f:
+                results = json.load(f)
+                embedding = results["embedding"] 
+                # print(f"from {folder_embedding}:{embedding}")
+        else:
+            fs_previous_embedding = False
+                    
+        # if True:
+        #     return
+    
+        # **************************************************************************************************************************
+        
+        if ad_measure_model is None: 
+            ad_measure_model = [pc.Applicability_Domain_TEST_Embedding_Euclidean, pc.Applicability_Domain_TEST_Fragment_Counts]
+        
+        ad_measures = [] # list of measures for comparison purposes
+        ad_measures.append(pc.Applicability_Domain_TEST_Embedding_Euclidean)
+        ad_measures.append(pc.Applicability_Domain_TEST_All_Descriptors_Euclidean)
+        # ad_measures.append(pc.Applicability_Domain_TEST_Embedding_Cosine)
+        # ad_measures.append(pc.Applicability_Domain_TEST_All_Descriptors_Cosine)
+        ad_measures.append(pc.Applicability_Domain_TEST_Fragment_Counts)
+        ad_measures.append(pc.Applicability_Domain_OPERA_local_index)
+        # ad_measures.append(pc.Applicability_Domain_OPERA_global_index) # Turn off when not doing feature selection on knn, fails due to a matrix singularity
+        # ******************************************************************************************************
+        # Print main info:
+        logging.info(f"dataset_name={dataset_name}")
+        logging.info(f"qsar_method={qsar_method}")
+        logging.info(f"descriptor_set_name={descriptor_set_name}")
+        logging.info(f"feature_selection={feature_selection}")
+        logging.info(f"cross_validate={cross_validate}")
+        # ******************************************************************************************************
+        
+        if params is None: 
+            params = set_hyper_parameters(qsar_method, feature_selection, descriptor_set_name, splitting_name, dataset_name, ad_measure_model)
+        # hyperparameter_grid = None # use default
+        # ******************************************************************************************************
+    
+        session = getSession()
+        mb = ModelBuilder()
+        eg = EmbeddingGenerator()
+    
+        logging.info("start getting dataframes from db")
+    
+        df_training, df_prediction = get_training_prediction_instances(session, dataset_name, descriptor_set_name, params.splitting_name)
+        # print(df_training.shape)
+    
+        df_cv_dict = None 
+        if cross_validate:
+            df_cv_dict = get_training_cv_instances(session, dataset_name, descriptor_set_name)
+        
+        if add_LOGP_Martin:
+            df_training, df_prediction = add_log_p_martin_columns(df_training, df_prediction, cross_validate, df_cv_dict)
+        
+        logging.info("done getting dataframes from db")
+        # ******************************************************************************************************
+    
+        if feature_selection:
+            embedding = eg.feature_selection(df_training, df_prediction, params)
+            
+        df_predictions, training_stats, test_stats, model = mb.build_and_test_model(df_training, df_prediction, params, embedding)
+        
+        if not feature_selection and fs_previous_embedding and qsar_method != 'gcm':
+    
+            logging.info(f"Before FS, previous embedding has {len(model.embedding)} descriptors: {model.embedding}")
+            
+            if params.run_rfe:
+                run_rfe(model, df_training, 1, 1)
+                logging.info(f"After RFE, {len(model.embedding)} descriptors: {model.embedding}")
                 
-    # if True:
-    #     return
-
-    # **************************************************************************************************************************
+            if params.run_sfs:
+                run_sfs(model, df_training)
+                logging.info(f"After SFS, {len(model.embedding)} descriptors: {model.embedding}")
     
-    if ad_measure_final is None:    
-        ad_measure_final = [pc.Applicability_Domain_TEST_Embedding_Euclidean, pc.Applicability_Domain_TEST_Fragment_Counts]
-    
-    ad_measures = []
-    ad_measures.append(pc.Applicability_Domain_TEST_Embedding_Euclidean)
-    ad_measures.append(pc.Applicability_Domain_TEST_All_Descriptors_Euclidean)
-    # ad_measures.append(pc.Applicability_Domain_TEST_Embedding_Cosine)
-    # ad_measures.append(pc.Applicability_Domain_TEST_All_Descriptors_Cosine)
-    ad_measures.append(pc.Applicability_Domain_TEST_Fragment_Counts)
-    ad_measures.append(pc.Applicability_Domain_OPERA_local_index)
-    # ad_measures.append(pc.Applicability_Domain_OPERA_global_index) # Turn off when not doing feature selection on knn, fails due to a matrix singularity
-    # ******************************************************************************************************
-    # Print main info:
-    logging.info(f"dataset_name={dataset_name}")
-    logging.info(f"qsar_method={qsar_method}")
-    logging.info(f"descriptor_set_name={descriptor_set_name}")
-    logging.info(f"feature_selection={feature_selection}")
-    logging.info(f"cross_validate={cross_validate}")
-    # ******************************************************************************************************
-
-    session = getSession()
-    mb = ModelBuilder()
-    eg = EmbeddingGenerator()
-
-    logging.info("start getting dataframes from db")
-
-    df_training, df_prediction = get_training_prediction_instances(session, dataset_name, descriptor_set_name, splitting_name)
-    # print(df_training.shape)
-
-
-    df_cv_dict = None 
-    if cross_validate:
-        df_cv_dict = get_training_cv_instances(session, dataset_name, descriptor_set_name)
-    
-    if add_LOGP_Martin:
-        df_training, df_prediction = add_log_p_martin_columns(df_training, df_prediction, cross_validate, df_cv_dict)
-
-    
-    logging.info("done getting dataframes from db")
+            # redo model and predictions:
+            df_predictions, training_stats, test_stats, model = mb.build_and_test_model(df_training, df_prediction, params, model.embedding)
+            logging.info(f"After FS, embedding has {len(model.embedding)} descriptors: {model.embedding}")
         
-    # ******************************************************************************************************
-    
-    if params is None:    
-        params = set_hyper_parameters(qsar_method, feature_selection, descriptor_set_name, dataset_name)
-    # hyperparameter_grid = None # use default
-    # ******************************************************************************************************
-
-    if feature_selection:
-        embedding = eg.feature_selection(df_training, df_prediction, params)
+        embedding = None  # use model.embedding from here on 
         
-    df_predictions, test_stats, model = mb.build_and_test_model(df_training, df_prediction, params, embedding)
-    
-    if not feature_selection and fs_previous_embedding and qsar_method !='gcm':
-
-        logging.info(f"Before FS, previous embedding has {len(model.embedding)} descriptors: {model.embedding}")
+        # ******************************************************************************************************
+        # Cross validation calculations
+        cv_stats = None
+        df_cv_predictions = None
         
-        if params.run_rfe:
-            run_rfe(model, df_training, 1, 1)
-            logging.info(f"After RFE, {len(model.embedding)} descriptors: {model.embedding}")
-
+        if cross_validate: 
+            df_cv_predictions, cv_stats = mb.crossvalidate(df_cv_dict, params, model.embedding)
             
-        if params.run_sfs:
-            run_sfs(model, df_training)
-            logging.info(f"After SFS, {len(model.embedding)} descriptors: {model.embedding}")
-
-        # redo model and predictions:
-        df_predictions, test_stats, model = mb.build_and_test_model(df_training, df_prediction, params, model.embedding)
-        logging.info(f"After FS, embedding has {len(model.embedding)} descriptors: {model.embedding}")
+        # ******************************************************************************************************
+        # Applicability domain calcs:
+        stats_dict = {}
+        if run_AD:
+            for ad_measure in ad_measures:
+                df_predictions = runAD(df_training, df_prediction, params, model.embedding, df_predictions, ad_measure, stats_dict)
     
-    embedding = None # use model.embedding from here on 
+            if len(ad_measure) > 1:
+                generate_consensus_ad(df_predictions, stats_dict, ad_measure_model)
     
-    # ******************************************************************************************************
-    # Cross validation calculations
-    cv_stats = None
-    df_cv_predictions = None
-    
-    if cross_validate:         
-        df_cv_predictions, cv_stats = mb.crossvalidate(df_cv_dict, params, model.embedding)
+            # print(json.dumps(stats_dict,indent=4))
         
-    # ******************************************************************************************************
-    # Applicability domain calcs:
-    stats_dict={}
-    if run_AD:
-        for ad_measure in ad_measures:
-            df_predictions = runAD(df_training, df_prediction, params, model.embedding, df_predictions, ad_measure, stats_dict)
-
-        if len(ad_measure_final)>1:
-            generate_consensus_ad(df_predictions, stats_dict, ad_measure_final)
+        # ******************************************************************************************************
+        # look at first prediction to make sure it looks right:
+        logging.debug("First row of df_predictions:")
+        logging.debug(row_to_json(df_predictions))
+        # ******************************************************************************************************
         
-
-        # print(json.dumps(stats_dict,indent=4))
-    
-    # ******************************************************************************************************
-    # look at first prediction to make sure it looks right:
-    logging.debug("First row of df_predictions:")
-    logging.debug(row_to_json(df_predictions))
-    # ******************************************************************************************************
-    
-    # create results file:
-    
-    r=Results()
-    
-    results_dict = r.create_results_dict(
-        ad_measure_final=ad_measure_final, 
-        df_training=df_training, 
-        params=params, 
-        model=model, 
-        test_stats=test_stats,
-        cv_stats=cv_stats, 
-        stats_dict=stats_dict
-        )
+        # create results file:
+        
+        r = Results()
+        
+        results_dict = r.create_results_dict(
+            ad_measure_model=ad_measure_model,
+            df_training=df_training,
+            params=params,
+            model=model,
+            training_stats=training_stats,
+            test_stats=test_stats,
+            cv_stats=cv_stats,
+            stats_dict=stats_dict
+            )
+                
+        if model.embedding:
+            columns = model.embedding.copy()
+            columns.insert(0, "Property")
+            columns.insert(0, "ID")
+            df_test_model = df_prediction[columns]
             
-    if model.embedding:
-        columns = model.embedding.copy()
-        columns.insert(0, "Property")
-        columns.insert(0, "ID")
-        df_test_model = df_prediction[columns]
+        r.save_results(results_dict, df_predictions, df_cv_predictions, df_test_model, folder_embedding)
+        logging.info(f"test set stats={json.dumps(test_stats, indent=4)}")
+        logging.info(f"training cross validation stats={json.dumps(cv_stats, indent=4)}")   
+        logging.info(f"test set AD stats={json.dumps( results_dict['test_stats_AD'] , indent=4)}")
         
-    r.save_results(results_dict, df_predictions, df_cv_predictions, df_test_model, folder_embedding)
-    logging.info(f"test set stats={json.dumps(test_stats, indent=4)}")
-    logging.info(f"training cross validation stats={json.dumps(cv_stats, indent=4)}")   
-    logging.info(f"test set AD stats={json.dumps( results_dict['test_stats_AD'] , indent=4)}")
+        if write_to_db:
+            ml = ModelLoader()
+            ml.load_model(session, user, model, results_dict, df_predictions, test_stats)
+        
+        return results_dict
     
-    return results_dict
-    
-    
+    except Exception:
+        # Print the exception traceback to standard error
+        traceback.print_exc()
+        
     # coeff_dict = model.getOriginalRegressionCoefficients()
     # logging.debug(f"coeffs{coeff_dict}")
+
     
 class Results:
     
@@ -1033,13 +1380,11 @@ class Results:
         
         if df_cv_predictions is not None:
             df_cv_predictions = prepare_df(df_cv_predictions)
-         
     
         subfolder = params["qsar_method"] + "_" + params["descriptor_set_name"] + "_fs=" + str(params["feature_selection"])
     
         if folder_embedding is not None:
-            subfolder = subfolder +"_"+ folder_embedding
-        
+            subfolder = subfolder + "_" + folder_embedding
         
         path_segments = [PROJECT_ROOT, "data", "models", params["dataset_name"], subfolder]
         
@@ -1049,7 +1394,7 @@ class Results:
         
         os.makedirs(folder_path, exist_ok=True)
 
-        identifier = int(time() * 1000) # time in ms as identifier
+        identifier = int(time.time() * 1000)  # time in ms as identifier
         
         prediction_csv_path = os.path.join(folder_path, f"predictions_{identifier}.csv")    
         df_predictions.to_csv(prediction_csv_path, index=False)
@@ -1062,8 +1407,7 @@ class Results:
         with open(json_path, 'w') as json_file:
             json.dump(results_dict, json_file, indent=4)
     
-    
-    def create_results_dict(self, ad_measure_final, df_training, params, model,test_stats, cv_stats, stats_dict):
+    def create_results_dict(self, ad_measure_model, df_training, params, model, training_stats, test_stats, cv_stats, stats_dict):
     
         results_dict = {"params":params.to_dict()}
         
@@ -1074,7 +1418,6 @@ class Results:
         
         results_dict["len(embedding)"] = len(model.embedding)
             
-            
         qsar_method = params.qsar_method
         
         if qsar_method == 'reg' or qsar_method == 'las' or qsar_method == 'gcm':
@@ -1083,15 +1426,22 @@ class Results:
             X = df_training[model.embedding]
             results_dict['model_coefficients'] = json.loads(model.getOriginalRegressionCoefficients2(X, y))
         
-        results_dict["test_stats"] = test_stats
         
-        if len(stats_dict)>0:
-            str_ad_measure_final = " and ".join(ad_measure_final)                        
-            results_dict["test_stats_AD"] = stats_dict[str_ad_measure_final]
+        if len(stats_dict) > 0:
             results_dict["test_stats_all_AD"] = stats_dict
+
+        results_dict["training_stats"] = training_stats
         
         if cv_stats:
             results_dict["cv_stats"] = cv_stats
+
+        results_dict["test_stats"] = test_stats
+
+        if len(stats_dict) > 0:
+            str_ad_measure_final = " and ".join(ad_measure_model)                        
+            results_dict["test_stats_AD"] = stats_dict[str_ad_measure_final]
+            results_dict["test_stats_all_AD"] = stats_dict
+        
         
         return results_dict
     
@@ -1105,8 +1455,7 @@ class Results:
             excel_path (str): Path to the saved Excel file.
         """
         
-        
-        folder = os.path.join(PROJECT_ROOT, "data","models", dataset_name)
+        folder = os.path.join(PROJECT_ROOT, "data", "models", dataset_name)
         os.makedirs(folder, exist_ok=True)
         
         print(folder)
@@ -1126,7 +1475,7 @@ class Results:
     
                             # Extract values safely
                             mae_test_val = results.get("test_stats", {}).get("MAE_Test", None)
-                            mae_cv_val   = results.get("cv_stats", {}).get("MAE_Test", None)
+                            mae_cv_val = results.get("cv_stats", {}).get("MAE_Test", None)
     
                             # Embedding length
                             if "len(embedding)" in results:
@@ -1138,8 +1487,8 @@ class Results:
     
                             # Format for printing (and store as strings to match the print)
                             mae_test_str = f"{mae_test_val:.3f}" if isinstance(mae_test_val, (int, float)) else "N/A"
-                            mae_cv_str   = f"{mae_cv_val:.3f}"   if isinstance(mae_cv_val, (int, float)) else "N/A"
-                            lenEmb_str   = str(lenEmbedding) if lenEmbedding is not None else "N/A"
+                            mae_cv_str = f"{mae_cv_val:.3f}"   if isinstance(mae_cv_val, (int, float)) else "N/A"
+                            lenEmb_str = str(lenEmbedding) if lenEmbedding is not None else "N/A"
     
                             print(f"{entry.name}\t{mae_test_str}\t{mae_cv_str}\t{lenEmb_str}")
     
@@ -1168,3 +1517,11 @@ class Results:
     
         print(f"Saved summary to: {excel_path}")
         return df_stats, excel_path
+
+
+
+if __name__ == '__main__':
+    
+    ml=ModelLoader()
+    ml.test_create_model()
+    
