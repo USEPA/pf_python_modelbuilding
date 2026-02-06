@@ -1162,6 +1162,12 @@ class Results:
                                 lenEmbedding = len(results["embedding"])
                             else:
                                 lenEmbedding = None
+                            
+                            embedding = None
+                            if lenEmbedding is not None and lenEmbedding < 20:
+                                embedding = results.get("embedding", [])
+                                embedding = ", ".join(embedding) if isinstance(embedding, (list, tuple)) else str(embedding)
+                            
     
                             # Format for printing (and store as strings to match the print)
                             mae_test_str = f"{mae_test_val:.3f}" if isinstance(mae_test_val, (int, float)) else "N/A"
@@ -1174,14 +1180,15 @@ class Results:
                                 "Run": entry.name,
                                 "MAE_Test": float(mae_test_str) if mae_test_str != "N/A" else None,
                                 "MAE_Training_CV": float(mae_cv_str) if mae_cv_str != "N/A" else None,
-                                "#_variables": int(lenEmb_str) if lenEmb_str != "N/A" else None
+                                "#_variables": int(lenEmb_str) if lenEmb_str != "N/A" else None,
+                                "Embedding": embedding if embedding is not None else None
                             })
     
                     except json.JSONDecodeError as e:
                         print(f"Skipping {json_path}: invalid JSON ({e})")
     
         # Save the collected results to Excel in the same folder
-        df_stats = pd.DataFrame(rows, columns=["Run", "MAE_Test", "MAE_Training_CV", "#_variables"])
+        df_stats = pd.DataFrame(rows, columns=["Run", "MAE_Test", "MAE_Training_CV", "#_variables", "Embedding"])
         excel_path = os.path.join(folder, excel_name)
     
         with pd.ExcelWriter(excel_path, engine="xlsxwriter") as writer:
