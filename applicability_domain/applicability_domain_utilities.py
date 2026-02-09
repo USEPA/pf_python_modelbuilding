@@ -74,8 +74,9 @@ def generate_applicability_domain_with_preselected_descriptors_from_dfs(train_df
         ad = adm.KernelDensityApplicabilityDomain(train_df, test_df, is_binary)
         ad.set_parameters({'fractionTrainingSetInsideAD': 0.95, 'train_column_names': train_column_names})
         output = ad.evaluate(embedding=embedding)
+    else:
+        raise(f"invalid applicability domain:{applicability_domain}")
         
-
     df_results_inside = output.loc[output['AD'] == True]
     # print('inside shape=', df_results_inside.shape)
     coverage = df_results_inside.shape[0] / output.shape[0]

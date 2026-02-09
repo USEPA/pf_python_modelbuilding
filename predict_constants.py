@@ -134,7 +134,7 @@ class PredictConstants:
     OH = "Atmospheric hydroxylation rate"  # OPERA
     
     LOG_KOC = "LogKOC"  # OLD OPERA
-    KOC = "Soil Adsorption Coefficient (Koc)"  # OPERA
+    KOC = "Soil Adsorp. Coeff. (Koc)"  # OPERA
     
     LOG_HALF_LIFE = "LogHalfLife"  # OLD OPERA
     BIODEG_HL_HC = "Biodegradation half-life for hydrocarbons"  # OPERA

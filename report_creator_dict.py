@@ -262,7 +262,7 @@ class ReportCreator:
                 # b("AD measure: "), span("If the avg. Euclidean distance of training set analogs  < "+format2(ad['AD_Cutoff'])+" (in terms of model variables"), br()
                 b("AD measure: "), span("Avg. distance to training set analogs < cutoff value"), br()
             else:
-                print("TODO in addAnalogADTable(), handle", pc.Applicability_Domain_TEST_Embedding_Euclidean)
+                print("TODO in addAnalogADTable(), handle", md["applicabilityDomainName"])
             
             with span() as container:
                 container.add(b("AD result: "))
