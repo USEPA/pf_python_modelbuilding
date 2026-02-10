@@ -391,7 +391,7 @@ def getSessionDsstox():
     return session
 
 
-class ExpDataGetter:
+class ExpDataGetter:    
     
     def getSqlPropertyValues(self):
         sqlPropertyValues = text("""    
@@ -2096,12 +2096,8 @@ class ModelPredictor:
                 
         json_predictions = call_do_predictions_from_df(df_prediction, model)        
         # print(json_predictions)
-        
         pred_results = json.loads(json_predictions)
-        
         pred_value = pred_results[0]['pred']
-
-        print(f"model.applicabilityDomainName:{model.applicabilityDomainName}")
         
         # applicability domain calcs:
         if model.applicabilityDomainName:
@@ -2151,6 +2147,9 @@ class ModelPredictor:
 
         if generate_report:
             report.neighborResultsTraining, report.neighborResultsPrediction = self.addNeighborsFromSets(model, modelResults, df_prediction)
+            
+            # TODO make it so that it instead gets the fragment AD from the adu helper class
+
             self.getFragmentAD(df_prediction, model.df_training, modelResults)
             # print(useFileAPI)
             
@@ -2684,8 +2683,8 @@ def runExample():
 #     return report
 
 
-def runChemical(mp, model_id, smiles, folder_path):
     
+def runChemical(mp, model_id, smiles, folder_path):
     output, code = mp.predict_model_smiles(model_id, smiles)
 
     report = json.loads(output)
@@ -2911,8 +2910,8 @@ def main():
     ######################################################################################################
     # test_get_exp_data()
     ######################################################################################################
-    pc = PlotCreator()
-    pc.createTrainingTestPlotsForReports()
+    # pc = PlotCreator()
+    # pc.createTrainingTestPlotsForReports()
     # pc.display_image(1065, 3, getSession())
     # pc.display_image(1065, 4, getSession())
     ######################################################################################################
@@ -2926,5 +2925,5 @@ def main():
 
 
 if __name__ == '__main__':
-    # main()
-    getLogKowPredictionsForDataset()
+    main()
+    # getLogKowPredictionsForDataset()

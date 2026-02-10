@@ -458,7 +458,8 @@ class Model:
     
     def get_model_description_dict(self):
         modelDescription = ModelDescription(self)
-        return modelDescription.__dict__
+        return to_json_safe(modelDescription.__dict__)
+        # return modelDescription.__dict__
 
 
     def get_model_description_pretty(self):
@@ -990,9 +991,9 @@ class REG(Model):
         Model.__init__(self, df_training, remove_log_p_descriptors, n_jobs=n_jobs)
         self.regressor_name = 'reg'
         self.version = '1.0'
-        self.hyperparameter_grid = {}  # keep it consistent between endpoints, match OPERA
+        self.hyperparameter_grid = {}  
         self.description = 'python implementation of regression'
-        self.description_url = 'https://scikit-learn.org/stable/modules/classes.html#module-sklearn.linear_model'
+        self.description_url = 'https://scikit-learn.org/stable/modules/generated/sklearn.linear_model.LinearRegression.html'
 
 
 
@@ -1002,9 +1003,9 @@ class GCM(Model):
         Model.__init__(self, df_training, remove_log_p_descriptors, n_jobs=n_jobs)
         self.regressor_name = 'gcm'
         self.version = '1.0'
-        self.hyperparameter_grid = {}  # keep it consistent between endpoints, match OPERA
+        self.hyperparameter_grid = {}  
         self.description = 'group contribution model multilinear regression model with frag descriptors >= min_count'
-        self.description_url = 'https://scikit-learn.org/stable/modules/classes.html#module-sklearn.linear_model'
+        self.description_url = 'https://scikit-learn.org/stable/modules/generated/sklearn.linear_model.LinearRegression.html'
 
 
 class LAS(Model):
