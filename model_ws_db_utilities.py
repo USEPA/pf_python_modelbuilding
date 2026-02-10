@@ -342,7 +342,7 @@ lock = threading.Lock()
 #     return output.to_json(orient='records', lines=False)  # gives an array instead of each object on separate line
 
 
-def getSession():
+def getEngine():
     connect_url = URL.create(
         drivername='postgresql+psycopg2',
         username=os.getenv('DEV_QSAR_USER'),
@@ -355,6 +355,11 @@ def getSession():
     # print(connect_url)    
     
     engine = create_engine(connect_url, echo=False)
+    return engine
+
+
+def getSession():
+    engine = getEngine()
     Session = sessionmaker(bind=engine)
     session = Session()
     return session
@@ -2374,6 +2379,7 @@ class ModelPredictor:
 
         # print(json.dumps(dicts,indent=4))
         return results  # gives an array instead of each object on separate line
+
 
 # def createHmtlReportFromJson():
 #
