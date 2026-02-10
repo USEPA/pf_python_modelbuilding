@@ -194,8 +194,7 @@ class Model:
         self.applicabilityDomainDescription = None
         self.omitSalts = None
         self.qsarReadyRuleSet = None
-                
-
+         
         self.df_dsstoxRecords = None
         self.df_training = df_training
         self.df_prediction = None
@@ -1175,6 +1174,9 @@ class ModelDescription:
         self.descriptorService = model.descriptorService
         self.splittingName = model.splittingName
         self.applicabilityDomainName = model.applicabilityDomainName
+        
+        self.numTraining = model.num_training
+        self.numPrediction = model.num_prediction
         
         self.omitSalts = model.omitSalts
         self.qsarReadyRuleSet = model.qsarReadyRuleSet

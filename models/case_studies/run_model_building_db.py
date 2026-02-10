@@ -304,13 +304,56 @@ class ModelLoader():
           AND keep = TRUE
         """)
 
+
+
     def getMappedPropertyValues(self, session, dataset_name):
         
-        logging.info(f"Getting property data for {dataset_name}")
-        df_pv = pd.read_sql(ml.getSqlPropertyValuesForDataset(), con=session.get_bind(), params={"dataset_name": dataset_name})
+        logging.info(f"Getting mapped property values for {dataset_name}")
+        df_pv = pd.read_sql(self.getSqlPropertyValuesForDataset(), con=session.get_bind(), params={"dataset_name": dataset_name})
         df_pv = df_pv.replace('', np.nan).dropna(axis=1, how='all')  # drop the columns with no data
         logging.info(f"Done")
         return df_pv
+    
+    
+    def getSqlMappedDataPoints(self):
+        
+        return text("""
+        WITH filtered_dp AS (
+          SELECT
+            dp.canon_qsar_smiles,
+            dp.qsar_exp_prop_property_values_id,
+            dp.qsar_dtxcid,
+            TRIM(SPLIT_PART(dp.qsar_exp_prop_property_values_id, '|', 1)) AS qsar_exp_prop_property_values_id_first,
+            TRIM(SPLIT_PART(dp.qsar_dtxcid, '|', 1)) AS dtxcid
+          FROM qsar_datasets.data_points AS dp
+          JOIN qsar_datasets.datasets AS d
+            ON dp.fk_dataset_id = d.id
+          WHERE d.name = :dataset_name
+        )
+        SELECT
+          fdp.canon_qsar_smiles,
+          --fdp.qsar_exp_prop_property_values_id,
+          fdp.qsar_exp_prop_property_values_id_first,
+          --fdp.qsar_dtxcid,
+          fdp.dtxcid,
+          r.dtxsid,
+          r.casrn,
+          r.preferred_name,
+          r.smiles,
+          r.mol_weight
+        FROM filtered_dp AS fdp
+        LEFT JOIN qsar_models.dsstox_records AS r
+          ON r.dtxcid = fdp.dtxcid
+         AND r.fk_dsstox_snapshot_id = 4;
+        """)
+    
+    def getMappedDatapoints(self,session, dataset_name):
+        logging.info(f"Getting mapped datapoints for {dataset_name}")
+        df_pv = pd.read_sql(self.getSqlMappedDataPoints(), con=session.get_bind(), params={"dataset_name": dataset_name})
+        df_pv = df_pv.replace('', np.nan).dropna(axis=1, how='all')  # drop the columns with no data
+        logging.info(f"Done")
+        return df_pv
+    
 
     def upload_image_to_db_with_insert(self, file_path, username, fk_model_id, fk_file_type_id, session):
 
@@ -942,7 +985,7 @@ def getSession():
 
 def prepare_df(df):
     # Validate required columns
-    required_cols = {"id", "exp", "pred"}
+    required_cols = {"canon_qsar_smiles", "exp", "pred"}
     if not required_cols.issubset(df.columns):
         missing = list(required_cols - set(df.columns))
         raise ValueError(f"Missing required columns: {missing}")
@@ -1257,6 +1300,7 @@ class ExcelCreator:
         df_test: pd.DataFrame,
         df_training_cv: pd.DataFrame,
         df_test_model: pd.DataFrame=None,
+        df_pv: pd.DataFrame=None,
         results_dict=None,
         excel_path: str="report.xlsx",
         chart_size_px: int=520,  # square chart size
@@ -1284,6 +1328,9 @@ class ExcelCreator:
             ws = writer.sheets[sheet_name_test]
             summary_stats = ExcelCreator.add_subtotal_count_fraction_and_visible(ws, df_test, column_name='abs_diff')
             ExcelCreator.set_column_width(writer, sheet_name=sheet_name_test, df=df_test, col_width_pad=col_width_pad, min_col_width=min_col_width, how="header")
+
+            sheet_name_records = "records"
+            df_pv.to_excel(writer, sheet_name=sheet_name_records, index=False)
 
             # ExcelCreator.add_plot(df_test, sheet_name_test, chart_size_px, pad_ratio, integer_ticks, yx_offset_rows, writer, workbook)
             
@@ -1606,7 +1653,8 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         model.datasetName = dataset_name
         model.omitSalts = dsstox_mapping_strategy["omitSalts"]
         model.applicabilityDomainName = " and ".join(params.ad_measure)
-        
+        model.num_training = df_training.shape[0]
+        model.num_prediction = df_prediction.shape[0]
         
         
         results_dict = Results.create_results_dict(
@@ -1626,8 +1674,23 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
             columns.insert(0, "ID")
             df_test_model = df_prediction[columns]
 
-        # print_first_row(df_pred_test)
+        df_pv = ml.getMappedPropertyValues(session, dataset_name)
+        print_first_row(df_pv, row=1)
+        
+        
+
+        df_dps = ml.getMappedDatapoints(session, dataset_name)
+
+        df_pred_test.rename(columns={'id': 'canon_qsar_smiles'}, inplace=True)
+        df_pred_test = df_pred_test.merge(df_dps, on='canon_qsar_smiles', how='left')
+        df_pred_test.rename(columns={'qsar_exp_prop_property_values_id_first': 'exp_prop_id'}, inplace=True)
+        print_first_row(df_pred_test)
+
         # print_first_row(df_pred_cv)
+        df_pred_cv.rename(columns={'id': 'canon_qsar_smiles'}, inplace=True)
+        df_pred_cv = df_pred_cv.merge(df_dps, on='canon_qsar_smiles', how='left')
+        df_pred_cv.rename(columns={'qsar_exp_prop_property_values_id_first': 'exp_prop_id'}, inplace=True)
+        print_first_row(df_pred_cv)
         
         #
         # mtp.generateHistogram2(fileOutHistogram=filePathOutHistogram, property_name=model.propertyName, unit_name=model.unitsModel,
@@ -1643,6 +1706,7 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
             df_pred_training=df_pred_training,
             df_pred_cv=df_pred_cv,
             df_test_model=df_test_model,
+            df_pv=df_pv,
             folder_embedding=folder_embedding,
         )
 
@@ -1664,7 +1728,7 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
 class Results:
 
     @staticmethod
-    def save_results(model, results_dict, df_pred_test, df_pred_training, df_pred_cv=None, df_test_model=None,
+    def save_results(model, results_dict, df_pred_test, df_pred_training, df_pred_cv=None, df_test_model=None, df_pv=None,
                      folder_embedding=None):
         params = results_dict["params"]
         
@@ -1695,7 +1759,7 @@ class Results:
         
         prediction_excel_path = os.path.join(folder_path, f"predictions_{identifier}.xlsx")
         ec = ExcelCreator()
-        ec.create_excel(df_pred_test, df_pred_cv, df_test_model, results_dict, prediction_excel_path)
+        ec.create_excel(df_pred_test, df_pred_cv, df_test_model, df_pv, results_dict, prediction_excel_path)
         
         json_path = os.path.join(folder_path, "results.json")
         with open(json_path, 'w') as json_file:
@@ -1868,3 +1932,5 @@ if __name__ == '__main__':
     df_pv = ml.getMappedPropertyValues(session, dataset_name)
     print_first_row(df_pv, row=1)
     
+    df_dps = ml.getMappedDatapoints(session, dataset_name)
+    print_first_row(df_dps, row=1)
