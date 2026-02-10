@@ -5,7 +5,7 @@ Created on Feb 3, 2026
 '''
 
 from models.case_studies.run_model_building_db import run_dataset, Results, ParametersGeneticAlgorithm
-from predict_constants import PredictConstants as pc
+from util.predict_constants import PredictConstants as pc
 import logging
 import json
 from xgboost.dask import da

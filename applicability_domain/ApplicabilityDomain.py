@@ -4,12 +4,10 @@ Created on Thu Apr 21 19:40:56 2022
 
 @author: NCHAREST
 """
-import json
 import time
 
 from sklearn.neighbors import NearestNeighbors
 from sklearn.preprocessing import StandardScaler
-from sklearn.feature_selection import mutual_info_regression
 import numpy as np
 from scipy.stats import pearsonr
 from sklearn.neighbors import KernelDensity
@@ -17,8 +15,6 @@ from sklearn.metrics import balanced_accuracy_score
 import pandas as pd
 # from afxres import AFX_IDS_COMPANY_NAME
 
-from predict_constants import PredictConstants
-from pandas.io.clipboard import init_klipper_clipboard
 
 debug = False
 

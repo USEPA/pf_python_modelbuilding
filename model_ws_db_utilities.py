@@ -20,7 +20,7 @@ from API_Utilities import QsarSmilesAPI, DescriptorsAPI
 
 # from db.mongo_cache import get_cached_prediction, cache_prediction
 
-from predict_constants import PredictConstants
+from util.predict_constants import PredictConstants
 
 from model_ws_utilities import call_do_predictions_from_df, models
 from models import df_utilities as dfu
@@ -39,7 +39,7 @@ import numpy as np
 from report_creator_dict import ReportCreator
 
 import webbrowser
-from predict_constants import UnitsConverter
+from util.units_converter import UnitsConverter
 
 from utils import timer, print_first_row
 from applicability_domain import applicability_domain_utilities as adu

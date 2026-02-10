@@ -76,7 +76,7 @@ feature_selection_method_genetic_algorithm = "Genetic algorithm"
 feature_selection_method_group_contribution = "Group contribution" 
 feature_selection_method_importance = "Importance"
 
-from predict_constants import PredictConstants as pc
+from util.predict_constants import PredictConstants as pc
 
 # PROJECT_ROOT=r"C:\Users\TMARTI02\OneDrive - Environmental Protection Agency (EPA)\0 python\modeling services\pf_python_modelbuilding"    
 PROJECT_ROOT = os.getenv("PROJECT_ROOT")

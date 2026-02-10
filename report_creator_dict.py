@@ -21,7 +21,7 @@ from decimal import Decimal, getcontext, ROUND_HALF_UP, InvalidOperation
 
 # from indigo import Indigo
 # from indigo.renderer import IndigoRenderer
-from predict_constants import PredictConstants as pc
+from util.predict_constants import PredictConstants as pc
 # import tempfile
 
 urlChemicalDetails = "https://comptox.epa.gov/dashboard/chemical/details/"
