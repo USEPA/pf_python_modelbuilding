@@ -927,7 +927,7 @@ class ExcelCreator:
             elif how == "full":
                 # Find the maximum width needed for data in this column
                 header_entry = df.columns[col_idx]
-                header_width = len(header_entry)
+                header_width = len(str(header_entry))
                 col_width = max(header_width, min_col_width)
                 max_width = col_width
                 for row_idx in range(df.shape[0]):
