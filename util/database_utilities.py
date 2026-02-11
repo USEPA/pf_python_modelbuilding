@@ -202,23 +202,43 @@ class DatabaseUtilities:
         for i in range(0, len(seq), size):
             yield seq[i:i + size]
     
-    def create_many_chunked(self, session: Session, table: str, records: Sequence[Mapping[str, Any]], chunk_size: int = 1000) -> int:
+
+    def create_many_chunked(
+        self,
+        session: Session,
+        table: str,
+        records: Sequence[Mapping[str, Any]],
+        chunk_size: int = 1000,
+    ) -> int:
         """
         Insert records into `table` in chunks using dbl.create_many.
-        Runs as a single transaction (atomic): either all chunks succeed, or none.
+    
+        Transaction behavior:
+          - If no transaction is active on the Session, open one and commit on success.
+          - If a transaction is already active, do not start a new one; rely on the outer transaction.
+    
         Returns the total number of inserted records.
         """
         if chunk_size <= 0:
             raise ValueError("chunk_size must be positive")
     
+        if not records:
+            return 0
+    
         try:
-            with session.begin():  # atomic transaction; auto-commit on success
+            if session.in_transaction():
+                # Already in a transaction; just execute within the existing one.
                 for batch in self.chunked(records, chunk_size):
-                    # Adjust 'records=' to 'record=' if your dbl.create_many expects a single keyword name
                     self.create_many(session, table=table, records=batch)
+            else:
+                # No transaction active; manage one here.
+                with session.begin():
+                    for batch in self.chunked(records, chunk_size):
+                        self.create_many(session, table=table, records=batch)
             return len(records)
         except SQLAlchemyError:
-            # session.begin() will auto-rollback on exception
+            # If we started the transaction, it will auto-rollback on exception.
+            # If a caller started the transaction, the exception will propagate and they can decide to rollback.
             raise
         
     #cant make static if want to make use of default schema set in the class constructor 
@@ -268,18 +288,15 @@ if __name__ == '__main__':
     # print(os.getenv('DEV_QSAR_HOST'))
         
     session = getSession()
-    dl=DatabaseLoader("qsar_models")
+    dl=DatabaseUtilities("qsar_models")
     
-        # Actual tab stored in DB
+    # Get row in database using filter:
     row = dl.get_row(session=session, table="descriptor_embeddings", embedding_tsv="col1\tcol2", dataset_name="KOC v1 modeling")
 
     dl.print_row_as_json(row)
-    
-     
-    # descriptor_embedding = dl.get_row_by_columns(session, "descriptor_embeddings", embedding_tsv="col1    col2", dataset_name="KOC v1 modeling")
-    
-    # rows = dl.get_rows(session, "descriptor_embeddings", dataset_name="KOC v1 modeling")    
-    # dl.print_rows_as_json(rows)
+            
+    rows = dl.get_rows(session, "descriptor_embeddings", dataset_name="KOC v1 modeling")    
+    dl.print_rows_as_json(rows)
     
     # row = dl.get_rows(session, "descriptor_embeddings", dataset_name="KOC v1 modeling", embedding_tsv="col1\tcol2")    
     # dl.print_row_as_json(row)

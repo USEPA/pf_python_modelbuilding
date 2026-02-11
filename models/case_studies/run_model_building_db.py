@@ -20,6 +20,7 @@ from sqlalchemy.engine import URL
 from sqlalchemy.orm import sessionmaker
 from xlsxwriter.utility import xl_rowcol_to_cell
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy import text, bindparam
 
 import numpy as np
 import pandas as pd
@@ -35,7 +36,7 @@ import traceback
 from sqlalchemy.orm import Session
 from util.database_utilities import DatabaseUtilities
 
-
+from models import make_test_plots as mtp 
 
 from model_ws_utilities import call_build_embedding_ga_db, call_build_model_with_preselected_descriptors_from_df, \
     call_do_predictions_from_df, call_build_embedding_importance_from_df
@@ -74,7 +75,7 @@ feature_selection_method_genetic_algorithm = "Genetic algorithm"
 feature_selection_method_group_contribution = "Group contribution" 
 feature_selection_method_importance = "Importance"
 
-from predict_constants import PredictConstants as pc
+from util.predict_constants import PredictConstants as pc
 
 # PROJECT_ROOT=r"C:\Users\TMARTI02\OneDrive - Environmental Protection Agency (EPA)\0 python\modeling services\pf_python_modelbuilding"    
 PROJECT_ROOT = os.getenv("PROJECT_ROOT")
@@ -110,7 +111,6 @@ class ParametersImportance:
     # Derived value (set in __post_init__)
     fraction_of_max_importance: float = field(init=False)
 
-
     def __post_init__(self):
         method = self.qsar_method.lower()
                 
@@ -122,7 +122,6 @@ class ParametersImportance:
             self.fraction_of_max_importance = 0.03  # TODO this needs checking
         else:
             raise ValueError(f"invalid method: {self.qsar_method}")
-
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -145,7 +144,6 @@ class ParametersGroupContribution:
     include_standardization_in_pmml: bool = False
     use_pmml_pipeline: bool = False
 
-
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
 
@@ -165,7 +163,6 @@ class ParametersGeneric:
     n_threads: int = 10
     include_standardization_in_pmml: bool = False
     use_pmml_pipeline: bool = False
-
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -207,39 +204,275 @@ class ParametersGeneticAlgorithm:
     include_standardization_in_pmml: bool = False
     use_pmml_pipeline: bool = False
 
-
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
-
 
 
 dbl = DatabaseUtilities(default_schema="qsar_models")
 
 
 class ModelLoader():
-
-    def add_model_statistics(self, user, fk_model_id, stats_dict_name, results, stats_lookup, created_at,  model_statistics_rows):        
+    
+    
+    def getSqlPropertyValuesForDataset(self):
         
-        stats = results[stats_dict_name]
+        # TODO could get additional mapped identifiers from dsstox by doing a join to qsar_models.dsstox_records
+
+        return text("""
+        SELECT
+            pv.id AS prop_value_id,
+            dp.canon_qsar_smiles,
+            sc.source_dtxsid,
+            sc.source_casrn,
+            sc.source_chemical_name,
+            sc.source_smiles,
+            dpc.dtxsid AS mapped_dtxsid,
+            dpc.dtxcid AS mapped_dtxcid,
+            -- dpc.chemical_name AS mapped_chemical_name,
+            dpc.smiles AS mapped_smiles,
+            p.name_ccd AS prop_name,
+            'experimental' AS prop_type,
+            pc.name AS prop_category,
+            d."name" AS dataset,
+            dpc.property_value AS prop_value,--use the dpc value rather than the pv value fields because it's in the right units
+            u.abbreviation_ccd AS prop_unit,
+            dp.qsar_property_value,
+            u2.abbreviation_ccd AS qsar_property_unit,
+            pv.value_original AS prop_value_original,
+            pv.value_text AS prop_value_text,
+            pvT.value_point_estimate AS exp_details_temperature_c,
+            pvP.value_point_estimate AS exp_details_pressure_mmHg,
+            pvpH.value_point_estimate AS exp_details_pH, -- note: will convert to lower case
+            pvRS.value_text AS exp_details_response_site, -- for BCF, fish tox
+            pvSL.value_text AS exp_details_species_latin, -- for BCF, fish tox
+            pvSC.value_text AS exp_details_species_common,
+            pvSS.value_text AS exp_details_species_supercategory,
+            --CASE WHEN ps.name IS NOT NULL THEN ps.name ELSE ls.name END AS source_name,
+            --CASE WHEN ps.name IS NOT NULL THEN ps.description ELSE ls.citation END AS source_description,
+            --CASE WHEN ps.name IS NOT NULL THEN ps.url ELSE ls.doi END AS source_url,
+            ps."name" AS public_source_name,
+            ps.description AS public_source_description,
+            ps.url AS public_source_url,
+            pv.page_url AS direct_url,
+            ls."name" AS literature_source_name,
+            ls.citation AS literature_source_citation,
+            ls.doi AS literature_source_doi,
+            pv.document_name AS brief_citation, -- From OPERA2.9 usually
+            ps2."name" AS public_source_original_name, -- For sources like toxval, pubchem, sander
+            ps2.description AS public_source_original_description,
+            ps2.url AS public_source_original_url
+        FROM qsar_datasets.data_points AS dp
+        JOIN qsar_datasets.data_point_contributors AS dpc
+            ON dpc.fk_data_point_id = dp.id
+        JOIN exp_prop.property_values AS pv
+            ON dpc.exp_prop_property_values_id = pv.id
+        LEFT JOIN exp_prop.literature_sources AS ls
+            ON pv.fk_literature_source_id = ls.id
+        LEFT JOIN exp_prop.public_sources AS ps
+            ON pv.fk_public_source_id = ps.id
+        LEFT JOIN exp_prop.public_sources AS ps2
+            ON pv.fk_public_source_original_id = ps2.id
+        LEFT JOIN exp_prop.parameter_values AS pvT
+            ON pvT.fk_property_value_id = pv.id AND pvT.fk_parameter_id = 2
+        LEFT JOIN exp_prop.parameter_values AS pvP
+            ON pvP.fk_property_value_id = pv.id AND pvP.fk_parameter_id = 1
+        LEFT JOIN exp_prop.parameter_values AS pvpH
+            ON pvpH.fk_property_value_id = pv.id AND pvpH.fk_parameter_id = 3
+        LEFT JOIN exp_prop.parameter_values AS pvRS
+            ON pvRS.fk_property_value_id = pv.id AND pvRS.fk_parameter_id = 22
+        LEFT JOIN exp_prop.parameter_values AS pvSS
+            ON pvSS.fk_property_value_id = pv.id AND pvSS.fk_parameter_id = 38
+        LEFT JOIN exp_prop.parameter_values AS pvSL
+            ON pvSL.fk_property_value_id = pv.id AND pvSL.fk_parameter_id = 21
+        LEFT JOIN exp_prop.parameter_values AS pvSC
+            ON pvSC.fk_property_value_id = pv.id AND pvSC.fk_parameter_id = 11
+        JOIN exp_prop.source_chemicals AS sc
+            ON sc.id = pv.fk_source_chemical_id
+        JOIN qsar_datasets.datasets AS d
+            ON dp.fk_dataset_id = d.id
+        JOIN qsar_datasets.properties AS p
+            ON d.fk_property_id = p.id
+        JOIN qsar_datasets.units AS u
+            ON u.id = d.fk_unit_id_contributor
+        JOIN qsar_datasets.units AS u2
+            ON u2.id = d.fk_unit_id
+        LEFT JOIN qsar_datasets.properties_in_categories AS pic
+            ON p.id = pic.fk_property_id
+        LEFT JOIN qsar_datasets.property_categories AS pc
+            ON pic.fk_property_category_id = pc.id
+        WHERE d.name = :dataset_name
+          AND keep = TRUE
+        """)
+
+
+
+    def getMappedPropertyValues(self, session, dataset_name):
+        
+        logging.info(f"Getting mapped property values for {dataset_name}")
+        df_pv = pd.read_sql(self.getSqlPropertyValuesForDataset(), con=session.get_bind(), params={"dataset_name": dataset_name})
+        df_pv = df_pv.replace('', np.nan).dropna(axis=1, how='all')  # drop the columns with no data
+        logging.info(f"Done")
+        return df_pv
+    
+    
+    def getSqlMappedDataPoints(self):
+        
+        return text("""
+        WITH filtered_dp AS (
+          SELECT
+            dp.canon_qsar_smiles,
+            dp.qsar_exp_prop_property_values_id,
+            dp.qsar_dtxcid,
+            TRIM(SPLIT_PART(dp.qsar_exp_prop_property_values_id, '|', 1)) AS qsar_exp_prop_property_values_id_first,
+            TRIM(SPLIT_PART(dp.qsar_dtxcid, '|', 1)) AS dtxcid
+          FROM qsar_datasets.data_points AS dp
+          JOIN qsar_datasets.datasets AS d
+            ON dp.fk_dataset_id = d.id
+          WHERE d.name = :dataset_name
+        )
+        SELECT
+          fdp.canon_qsar_smiles,
+          --fdp.qsar_exp_prop_property_values_id,
+          fdp.qsar_exp_prop_property_values_id_first,
+          --fdp.qsar_dtxcid,
+          fdp.dtxcid,
+          r.dtxsid,
+          r.casrn,
+          r.preferred_name,
+          r.smiles,
+          r.mol_weight
+        FROM filtered_dp AS fdp
+        LEFT JOIN qsar_models.dsstox_records AS r
+          ON r.dtxcid = fdp.dtxcid
+         AND r.fk_dsstox_snapshot_id = 4;
+        """)
+    
+    def getMappedDatapoints(self,session, dataset_name):
+        logging.info(f"Getting mapped datapoints for {dataset_name}")
+        df_pv = pd.read_sql(self.getSqlMappedDataPoints(), con=session.get_bind(), params={"dataset_name": dataset_name})
+        df_pv = df_pv.replace('', np.nan).dropna(axis=1, how='all')  # drop the columns with no data
+        logging.info(f"Done")
+        return df_pv
+    
+
+    def upload_image_to_db_with_insert(self, file_path, username, fk_model_id, fk_file_type_id, session):
+
+        try:
+        # Read the image file as binary
+            with open(file_path, 'rb') as file:
+                binary_data = file.read()
+        
+            # Prepare the SQL query
+            insert_query = text("""
+            INSERT INTO qsar_models.model_files (created_at, created_by, file, updated_at, updated_by, fk_file_type_id, fk_model_id)
+            VALUES (:created_at, :created_by, :file, :updated_at, :updated_by, :fk_file_type_id, :fk_model_id)
+            """)
+        
+            # Data to insert
+            data = {
+                'created_at': datetime.now(),
+                'created_by': username,
+                'file': binary_data,
+                'updated_at': datetime.now(),
+                'updated_by': username,
+                'fk_file_type_id': fk_file_type_id,  # Example foreign key value
+                'fk_model_id': fk_model_id  # Example foreign key value
+            }
+        
+            session.execute(insert_query, data)
+            session.commit()
+            
+        except Exception as e:
+            session.rollback()
+            print(f"An error occurred: {e}")
+            
+    def upload_image_to_db(self, file_path, username, fk_model_id, fk_file_type_id, session):
+
+        try:
+        # Read the image file as binary
+            with open(file_path, 'rb') as file:
+                binary_data = file.read()
+        
+            # Data to insert
+            record = {
+                'created_at': datetime.now(),
+                'created_by': username,
+                'file': binary_data,
+                'updated_at': datetime.now(),
+                'updated_by': username,
+                'fk_file_type_id': fk_file_type_id,  # Example foreign key value
+                'fk_model_id': fk_model_id  # Example foreign key value
+            }
+        
+            new_id = dbl.create_row(session, table="model_files", record=record)
+            session.commit()
+            return new_id
+
+        except Exception as e:
+            session.rollback()
+            print(f"An error occurred: {e}")
+    
+    def get_dataset_details(self, session, dataset_name):
+        """
+        Gets m meta data (except training and test set tsvs).
+        TODO Should this info be stored directly in m object and then for new models we won't need to query the db since will be already in the pickled object?
+        """
+        try:
+            
+            query = """
+            SELECT 
+                d.id,
+                d.name,
+                u.abbreviation_ccd AS units_model,
+                u2.abbreviation_ccd AS units_display,
+                d.dsstox_mapping_strategy,
+                p.name_ccd as property_name,
+                p.description as property_description
+            FROM qsar_datasets.datasets AS d
+            LEFT JOIN qsar_datasets.units AS u ON d.fk_unit_id = u.id
+            LEFT JOIN qsar_datasets.units AS u2 ON d.fk_unit_id_contributor = u2.id
+            LEFT JOIN qsar_datasets.properties AS p ON d.fk_property_id = p.id
+            """
+                        # SQL query to retrieve m details
+            sql = text(query + "\nWHERE d.name = :dataset_name")
+
+            # Use left joins so can still get a result if something is missing (like fk_ad_method was not set for m)
+            # print(sql)
+
+            # Execute the query
+            row = session.execute(sql, {'dataset_name': dataset_name}).fetchone()
+
+            row_dict = dict(row._mapping) if row is not None else None
+
+            # Process the result
+            return row_dict
+
+        except Exception as ex:
+            ex.with_traceback()
+            print(f"Exception occurred: {ex}")
+
+    def add_model_statistics(self, user, fk_model_id, stats_dict_name, model_statistics_dict, stats_lookup, created_at, model_statistics_rows): 
+        
+        stats = model_statistics_dict[stats_dict_name]
         
         for stat_name in stats:
         
             if "AD" not in stats_dict_name and "Coverage" in stat_name:
                 continue
         
-            if stat_name =="ad_measure" or stat_name=="mae_ratio":
+            if stat_name == "ad_measure" or stat_name == "mae_ratio":
                 continue
         
             if stat_name in stats_lookup:
                 fk_statistic_id = stats_lookup[stat_name]
                 # print(stat_name,fk_statistic_id)
                 model_statistics_row = {
-                    "statistic_value":stats[stat_name], 
-                    "fk_model_id":fk_model_id, 
-                    "fk_statistic_id":fk_statistic_id, 
-                    "created_by":user, 
-                    "updated_by":user, 
-                    "created_at":created_at, 
+                    "statistic_value":stats[stat_name],
+                    "fk_model_id":fk_model_id,
+                    "fk_statistic_id":fk_statistic_id,
+                    "created_by":user,
+                    "updated_by":user,
+                    "created_at":created_at,
                     "updated_at":created_at}
                 model_statistics_rows.append(model_statistics_row)                
                 # print(stat_name,"\n",json.dumps(to_json_safe(model_statistics_row),indent=4))
@@ -249,30 +482,30 @@ class ModelLoader():
             else:
                 print(stat_name, "Skipping loading stat")
 
-    def load_stats(self,session, results, user, fk_model_id):
+    def load_stats(self, session, results, user, fk_model_id):
         
-        stats_rows = dbl.get_rows(session,"statistics")
-        stats_lookup={} #lookup for the fk_statistic_id
+        stats_rows = dbl.get_rows(session, "statistics")
+        stats_lookup = {}  # lookup for the fk_statistic_id
         for stat_row in stats_rows:
-            stats_lookup[stat_row.name]=stat_row.id
+            stats_lookup[stat_row.name] = stat_row.id
 
         # dbl.print_rows_as_json(stats_rows)
         # print(json.dumps(stats_dict, indent=4))
         # dbl.print_rows_as_json(stats_rows)
         
         created_at = datetime.now()
-        model_statistics_rows=[]
+        model_statistics_rows = []
         
-        dict_list = ["training_stats","test_stats","cv_stats","test_stats_AD"]
+        dict_list = ["training_stats", "test_stats", "cv_stats", "test_stats_AD"]
         
-        for dict_name in dict_list:                
+        for dict_name in dict_list: 
             self.add_model_statistics(
                 user=user,
                 fk_model_id=fk_model_id,
                 stats_dict_name=dict_name,
-                results=results, 
+                model_statistics_dict=results["model_statistics"],
                 stats_lookup=stats_lookup,
-                created_at = created_at,
+                created_at=created_at,
                 model_statistics_rows=model_statistics_rows,
             )
         # print(json.dumps(model_statistics_rows,indent=4))
@@ -285,7 +518,7 @@ class ModelLoader():
 
     from typing import List, Union
     
-    def divide_array(self, source: Union[bytes, bytearray], chunksize: int = 26214400) -> List[Union[bytes, bytearray]]:
+    def divide_array(self, source: Union[bytes, bytearray], chunksize: int=26214400) -> List[Union[bytes, bytearray]]:
         """
         Split a bytes-like object into chunks of size `chunksize`.
         Returns a list of slices (copies). Last chunk may be shorter.
@@ -305,12 +538,10 @@ class ModelLoader():
 
     def load_model_from_object(self, session, user, model, params, fk_descriptor_embedding_id, fk_method_id, fk_ad_method):
 
-        epoch_ms = time.time_ns() // 1_000_000
         created_at = datetime.now()
-
-        model_name = user + "_" + str(epoch_ms)
+                
         model_row = {
-            "name":model_name,
+            "name":model.modelName,
             "dataset_name":params["dataset_name"],
             "descriptor_set_name":params["descriptor_set_name"],
             "splitting_name":params["splitting_name"],
@@ -322,7 +553,7 @@ class ModelLoader():
             "hyperparameters":json.dumps(model.hyperparameters),  # JSON/JSONB column
             "details":model.get_model_description().encode("utf-8"),  # this column is bytes in the database. In the future that column should be converted to text field
             "is_public":False,
-            "name_ccd":model_name,
+            "name_ccd":model.modelName,
             "has_qmrf":False,
             "created_by":user,
             "updated_by":user,
@@ -354,7 +585,6 @@ class ModelLoader():
             # Re-raise or log the error
             raise        
 
-
     def load_model_bytes(self, session, user, model, fk_model_id):
         model_bytes = pickle.dumps(model)
         bytes_list = self.divide_array(model_bytes)
@@ -374,14 +604,101 @@ class ModelLoader():
 
         # Insert
         return self.create_model_bytes(session, bytes_rows)
+    
+    def load_predictions(
+        self,
+        session: Session,
+        user: str,
+        set: str,
+        df: pd.DataFrame,
+        fk_model_id: int,
+        fk_splitting_id: Optional[int]=None,
+        chunk_size: int=1000,
+    ) -> int:
+        """
+        Insert prediction rows into qsar_models.predictions using self.create_many_chunked.
+    
+        DataFrame must contain:
+          - id   -> mapped to canon_qsar_smiles
+          - pred -> mapped to qsar_predicted_value
+    
+        cv_fold handling:
+          - If 'cv_fold' is present in df, fk_splitting_id is set per row as (cv_fold + 1).
+          - If any cv_fold value is missing/non-numeric, it falls back to the provided fk_splitting_id.
+          - If cv_fold is absent entirely, fk_splitting_id must be provided as an argument.
+    
+        Method arguments applied uniformly:
+          - fk_model_id
+          - created_at (also used for updated_at)
+          - user (sets both created_by and updated_by)
+    
+        Returns:
+          Number of inserted rows.
+        """
+        # Basic validation
+        required_cols = ["id", "pred"]
+        missing = [c for c in required_cols if c not in df.columns]
+        if missing:
+            raise ValueError(f"DataFrame missing required columns: {missing}")
+        if not user:
+            raise ValueError("A non-empty 'user' must be provided to set created_by/updated_by.")
+        if fk_model_id is None:
+            raise ValueError("fk_model_id must be provided.")
         
+        created_at = datetime.now()
+    
+        # Prepare per-row values (id -> canon_qsar_smiles, pred -> qsar_predicted_value)
+        rows_df = pd.DataFrame({
+            "canon_qsar_smiles": df["id"].astype(str),
+            "qsar_predicted_value": pd.to_numeric(df["pred"], errors="coerce"),
+        })
+    
+        # Compute fk_splitting_id
+        if "cv_fold" in df.columns:
+            cv = pd.to_numeric(df["cv_fold"], errors="coerce")
+            fk_split_series = cv.add(1)  # fk_splitting_id = cv_fold + 1:            
+            # 2    RND_REPRESENTATIVE_CV1
+            # 3    RND_REPRESENTATIVE_CV2
+            # 4    RND_REPRESENTATIVE_CV3
+            # 5    RND_REPRESENTATIVE_CV4
+            # 6    RND_REPRESENTATIVE_CV5
+            
+            # If still missing, error out
+            if fk_split_series.isna().any():
+                raise ValueError("cv_fold contains null/non-numeric values")
+            rows_df["fk_splitting_id"] = fk_split_series.astype(int)
+        else:
+            if fk_splitting_id is None:
+                raise ValueError("fk_splitting_id must be provided when 'cv_fold' is not in the DataFrame.")
+            rows_df["fk_splitting_id"] = fk_splitting_id
+    
+        # Inject uniform constants; updated_at uses the same value as created_at
+        rows_df = rows_df.assign(
+            fk_model_id=fk_model_id,
+            created_at=created_at,
+            updated_at=created_at,
+            created_by=user,
+            updated_by=user,
+        )
+    
+        # Convert NaN to None for DB compatibility and to list-of-dicts
+        records = rows_df.replace({np.nan: None}).to_dict(orient="records")
+        # print_first_row(rows_df, row=0)
+    
+        # Use your chunked inserter (single atomic transaction)
+        count = dbl.create_many_chunked(session=session, table="predictions", records=records, chunk_size=chunk_size)        
+        logging.info(f"For {set} set, # predictions loaded: {count}")
+        
+        session.commit()
+        return count
 
-    def load_model(self, session, user, model, results, df_predictions, test_stats):
+    def load_model(self, session, user, model, results, df_pred_training, df_pred_test, df_pred_cv, folder_path):
 
         params = results["params"]
 
         # ---- get fk_descriptor_embedding_id ----
-        embedding_tsv = "\t".join(results["embedding"])
+        embedding_tsv = "\t".join(results["model_details"]["embedding"])
+        
         # print(embedding_tsv)
         embedding_row = dbl.get_row(session, "descriptor_embeddings", embedding_tsv=embedding_tsv, dataset_name=params["dataset_name"])
         if embedding_row is None:
@@ -400,7 +717,7 @@ class ModelLoader():
         row_method = dbl.get_row(session, "methods", name=params["qsar_method"])
         if row_method is not None:
             fk_method_id = row_method.id
-        else:    
+        else: 
             logging.error(f"Cant find fk for qsar_method={params['qsar_method']}")
             return
         logging.info(f"fk_method_id:{fk_method_id}")
@@ -415,42 +732,50 @@ class ModelLoader():
             logging.error(f"Cant find fk for ad_measure={ad_measure}")
             return
         
-        # ---- store model into the models table:----
+        # ---- store model into the models table ----
         fk_model_id = self.load_model_from_object(
-            session, 
-            user, 
-            model, 
-            params, 
-            fk_descriptor_embedding_id, 
-            fk_method_id, 
+            session,
+            user,
+            model,
+            params,
+            fk_descriptor_embedding_id,
+            fk_method_id,
             fk_ad_method,
         )
-
+        # fk_model_id=1642
+        
         if fk_model_id is None:
             logging.error(f"Cant create model")
             return
         logging.info(f"fk_model_id:{fk_model_id}")
         
+        model.modelId = fk_model_id
+        
         # ---- store model_bytes into the model_bytes table:----
         self.load_model_bytes(session, user, model, fk_model_id)
-
+        
         # ---- store model_statistics into the model_statistics table:----        
         self.load_stats(session, results, user, fk_model_id)
         
-        """
-        TODO store predictions for:
-        1. Test set
-        2. Prediction set
-        3. Cross-validation of training set
-        4. Training set for completeness?
-        """
-
+        # ---- store predictions into prediction table ----
+        self.load_predictions(session, user, "training", df_pred_training, fk_model_id, fk_splitting_id=1)
+        self.load_predictions(session, user, "test", df_pred_test, fk_model_id, fk_splitting_id=1)
+        self.load_predictions(session, user, "training cv", df_pred_cv, fk_model_id)
         
+        # ---- store plots in model_files table ----     
+        filePathOutScatter = os.path.join(folder_path, "scatter_plot.png")
+        image_id = self.upload_image_to_db(filePathOutScatter, user, fk_model_id, 3, session)
+        logging.info(f"Scatter plot loaded to db with id: {image_id}")
+        
+        filePathOutHistogram = os.path.join(folder_path, "histogram.png")
+        image_id = self.upload_image_to_db(filePathOutHistogram, user, fk_model_id, 4, session)
+        image_id = logging.info(f"Histogram plot loaded to db with id: {image_id}")
+        
+        # TODO: created detailed spreadsheet and store in the database
     
     def create_descriptor_embedding_from_params(self, session, user, results):
         
         params = results["params"]
-
 
         epoch_ms = time.time_ns() // 1_000_000
         created_at = datetime.now()
@@ -465,7 +790,7 @@ class ModelLoader():
             "descriptor_set_name": params["descriptor_set_name"],
             "qsar_method": params["qsar_method"],
             "splitting_name": params["splitting_name"],
-            "embedding_tsv": "\t".join(results["embedding"]),
+            "embedding_tsv": "\t".join(results["model_details"]["embedding"]),
             "importance_tsv": "Not used",
             "created_by": user,
             "updated_by": user,
@@ -479,38 +804,75 @@ class ModelLoader():
 
 
 class ModelBuilder:
+    
+    # @staticmethod
+    # def crossvalidate(df_cv_dict, params, embedding):
+    #     logging.info(f"Start running CV calculations ...")
+    #
+    #     all_df_predictions = []
+    #
+    #     folds = {}
+    #     for i in range(1, 6):
+    #         splittingName = 'RND_REPRESENTATIVE_CV' + str(i)
+    #
+    #         logging.debug(f"Running CV split = {splittingName}")
+    #         df_training = df_cv_dict[i]["train"]
+    #         df_prediction = df_cv_dict[i]["pred"]
+    #         folds[i] = {"train": df_training, "pred": df_prediction}
+    #
+    #         df_predictions = ModelBuilder.build_and_test_model2(df_training.copy(), df_prediction.copy(), params, embedding)
+    #         all_df_predictions.append(df_predictions)
+    #
+    #         # if i==1:
+    #         #     print_first_row(df_predictions)
+    #
+    #     df_predictions_all = pd.concat(all_df_predictions, ignore_index=True)
+    #
+    #     # print(all_df_predictions.shape)
+    #     # print(df_predictions_all.shape)
+    #
+    #     mean_exp_training = df_predictions_all["exp"].mean()
+    #     cv_stats = sc.calculate_continuous_statistics(df_predictions_all, mean_exp_training, "_CV_Training")
+    #     # print('cross validation stats:\n', json.dumps(cv_stats, indent=4))        
+    #
+    #     logging.info(f"Done running CV calculations")
+    #     return df_predictions_all, cv_stats  
+    
     @staticmethod
     def crossvalidate(df_cv_dict, params, embedding):
-        logging.info(f"Start running CV calculations ...")
+        logging.info("Start running CV calculations ...")
+    
+        def _fold_predictions():
+            for i in range(1, 6):
+                splittingName = f"RND_REPRESENTATIVE_CV{i}"
+                logging.debug(f"Running CV split = {splittingName}")
+    
+                df_training = df_cv_dict[i]["train"]
+                df_prediction = df_cv_dict[i]["pred"]
+    
+                df_predictions = ModelBuilder.build_and_test_model2(
+                    df_training.copy(),
+                    df_prediction.copy(),
+                    params,
+                    embedding
+                )
+    
+                # Add the fold index as a column
+                yield df_predictions.assign(cv_fold=i)
+    
+        df_predictions_all = pd.concat(_fold_predictions(), ignore_index=True)
         
-        all_df_predictions = []
-        
-        folds = {}
-        for i in range(1, 6):
-            splittingName = 'RND_REPRESENTATIVE_CV' + str(i)
-            
-            logging.debug(f"Running CV split = {splittingName}")
-            df_training = df_cv_dict[i]["train"]
-            df_prediction = df_cv_dict[i]["pred"]
-            folds[i] = {"train": df_training, "pred": df_prediction}
-            
-            df_predictions = ModelBuilder.build_and_test_model2(df_training.copy(), df_prediction.copy(), params, embedding)
-            all_df_predictions.append(df_predictions)
-        
-        df_predictions_all = pd.concat(all_df_predictions, ignore_index=True)
-
-        # print(all_df_predictions.shape)
-        # print(df_predictions_all.shape)
-        
+        # print_first_row(df_predictions_all)
+    
         mean_exp_training = df_predictions_all["exp"].mean()
-        cv_stats = sc.calculate_continuous_statistics(df_predictions_all, mean_exp_training, "_CV_Training")
-        # print('cross validation stats:\n', json.dumps(cv_stats, indent=4))        
-
-        logging.info(f"Done running CV calculations")
-        return df_predictions_all, cv_stats  
-        
+        cv_stats = sc.calculate_continuous_statistics(
+            df_predictions_all, mean_exp_training, "_CV_Training"
+        )
+    
+        logging.info("Done running CV calculations")
+        return df_predictions_all, cv_stats
+            
         # logging.info(f"MAE_TRAINING_CV = {cv_stats['MAE_Test']:.3f}")
-
 
     # def buildModelNoEmbedding(self, session, df_training, df_prediction, dataset_name, descriptorSetName,
     #                           qsar_method, hyperparameter_grid=None):
@@ -535,7 +897,6 @@ class ModelBuilder:
     #     self.build_and_test_model(df_training, df_prediction, params, embedding)
         
         # self.crossvalidate(session, dataset_name, descriptorSetName, params, embedding)
-    
 
     @staticmethod
     def build_and_test_model(df_training, df_prediction, params, embedding):
@@ -547,7 +908,7 @@ class ModelBuilder:
         json_predictions = call_do_predictions_from_df(df_prediction, model)
         json_predictions_training = call_do_predictions_from_df(df_training, model)
         
-        df_predictions = pd.read_json(StringIO(json_predictions), orient="records")
+        df_predictions_test = pd.read_json(StringIO(json_predictions), orient="records")
         df_predictions_training = pd.read_json(StringIO(json_predictions_training), orient="records")
         
         # first_row_dict = df_predictions.loc[0].to_dict()
@@ -555,13 +916,12 @@ class ModelBuilder:
     
         # calculate stats for test set
         mean_exp_training = df_training["Property"].mean()
-        test_stats = sc.calculate_continuous_statistics(df_predictions, mean_exp_training, "_Test")
+        test_stats = sc.calculate_continuous_statistics(df_predictions_test, mean_exp_training, "_Test")
         training_stats = sc.calculate_continuous_statistics(df_predictions_training, mean_exp_training, "_Training")
                 
-        return df_predictions, training_stats, test_stats, model
+        return df_predictions_training, df_predictions_test, training_stats, test_stats, model
                 
         # logging.info(f"MAE_TEST = {test_stats['MAE_Test']:.3f}")
-    
     
     @staticmethod
     def build_and_test_model2(df_training, df_prediction, params, embedding):
@@ -578,6 +938,7 @@ class ModelBuilder:
 
 
 class EmbeddingGenerator:
+
     @staticmethod
     def feature_selection(df_training, df_prediction, params):
         # ga_methods = ['knn', 'reg','las']
@@ -624,7 +985,7 @@ def getSession():
 
 def prepare_df(df):
     # Validate required columns
-    required_cols = {"id", "exp", "pred"}
+    required_cols = {"canon_qsar_smiles", "exp", "pred"}
     if not required_cols.issubset(df.columns):
         missing = list(required_cols - set(df.columns))
         raise ValueError(f"Missing required columns: {missing}")
@@ -646,6 +1007,7 @@ def prepare_df(df):
 
 
 class ExcelCreator:
+
     @staticmethod
     def add_subtotal_count_fraction_and_visible(ws, df, column_name='abs_diff'):
         """
@@ -718,7 +1080,6 @@ class ExcelCreator:
 
         # Optional: freeze the header row
         ws.freeze_panes(1, 0)
-    
 
     @staticmethod
     def nice_integer_major_unit(span: int, target_ticks: int=5) -> int:
@@ -734,7 +1095,6 @@ class ExcelCreator:
         else:
             step_base = 10
         return int(step_base * (10 ** exp))
-
 
     @staticmethod
     def compute_equal_axis_bounds(
@@ -770,7 +1130,6 @@ class ExcelCreator:
             return float(int_min), float(int_max), float(major_unit)
     
         return mn, mx, None
-
 
     @staticmethod
     def add_plot(df, sheet_name, sheet_name_plot, chart_size_px, pad_ratio, integer_ticks, yx_offset_rows, writer, workbook):
@@ -844,11 +1203,10 @@ class ExcelCreator:
         chart.set_legend({
                 "overlay":True,
                 "layout":{"x":0.7, "y":0.75, "width":0.25, "height":0.1}})
-        if sheet_name == sheet_name_plot:        
+        if sheet_name == sheet_name_plot: 
             worksheet_plot.insert_chart("E2", chart, {"x_offset":20, "y_offset":10})
         else:
             worksheet_plot.insert_chart(0, 0, chart, {'x_scale': 1.0, 'y_scale': 1.0})
-
 
     @staticmethod
     def writeModelCoefficients(results_dict, writer, workbook): 
@@ -864,7 +1222,6 @@ class ExcelCreator:
             for i, val in enumerate(df["name"], start=1):
                 worksheet.write_string(i, name_col_idx, val, text_fmt)
             ExcelCreator.set_column_width(writer, sheet_name=sheet_name, df=df, col_width_pad=4, min_col_width=5, how="header")
-
 
     @staticmethod
     def writeDescriptors(sheet_name, df, writer, workbook):
@@ -913,7 +1270,7 @@ class ExcelCreator:
             ws.write(row, start_col, label)
             ws.write_formula(row, start_col + 1, formula)
             row += 1
-        ws.set_column(start_col, start_col+1, col_width)    
+        ws.set_column(start_col, start_col + 1, col_width)    
 
     @staticmethod
     def set_column_width(writer, sheet_name: str, df: pd.DataFrame, col_width_pad: int=4, min_col_width: int=5, how: str="header"):
@@ -937,13 +1294,13 @@ class ExcelCreator:
                         max_width = max(max_width, len(cell_value))
                 col_width = max_width + col_width_pad
                 worksheet.set_column(col_idx, col_idx, col_width)
-    
 
     @staticmethod
     def create_excel(
         df_test: pd.DataFrame,
         df_training_cv: pd.DataFrame,
         df_test_model: pd.DataFrame=None,
+        df_pv: pd.DataFrame=None,
         results_dict=None,
         excel_path: str="report.xlsx",
         chart_size_px: int=520,  # square chart size
@@ -971,6 +1328,9 @@ class ExcelCreator:
             ws = writer.sheets[sheet_name_test]
             summary_stats = ExcelCreator.add_subtotal_count_fraction_and_visible(ws, df_test, column_name='abs_diff')
             ExcelCreator.set_column_width(writer, sheet_name=sheet_name_test, df=df_test, col_width_pad=col_width_pad, min_col_width=min_col_width, how="header")
+
+            sheet_name_records = "records"
+            df_pv.to_excel(writer, sheet_name=sheet_name_records, index=False)
 
             # ExcelCreator.add_plot(df_test, sheet_name_test, chart_size_px, pad_ratio, integer_ticks, yx_offset_rows, writer, workbook)
             
@@ -1155,7 +1515,9 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
     splitting_name = "RND_REPRESENTATIVE"
     
     try:
-                   
+        session = getSession()
+        ml = ModelLoader()
+
         if qsar_method == 'gcm' or qsar_method == 'svm':
             feature_selection = False
         
@@ -1182,7 +1544,7 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         if ad_measure_model is None: 
             ad_measure_model = [pc.Applicability_Domain_TEST_Embedding_Euclidean, pc.Applicability_Domain_TEST_Fragment_Counts]
         
-        ad_measures = [] # list of measures for comparison purposes
+        ad_measures = []  # list of measures for comparison purposes
         ad_measures.append(pc.Applicability_Domain_TEST_Embedding_Euclidean)
         ad_measures.append(pc.Applicability_Domain_TEST_All_Descriptors_Euclidean)
         # ad_measures.append(pc.Applicability_Domain_TEST_Embedding_Cosine)
@@ -1202,16 +1564,16 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         
         if params is None: 
             params = set_hyper_parameters(
-                qsar_method=qsar_method, 
+                qsar_method=qsar_method,
                 feature_selection=feature_selection,
                 descriptor_set_name=descriptor_set_name,
                 splitting_name=splitting_name,
                 dataset_name=dataset_name,
                 ad_measure=ad_measure_model)
         # hyperparameter_grid = None # use default
+        
         # ******************************************************************************************************
-    
-        session = getSession()
+        # ---- Get dataframes from the database ----
         logging.info("start getting dataframes from db")
     
         df_training, df_prediction = get_training_prediction_instances(session, dataset_name, descriptor_set_name, params.splitting_name)
@@ -1225,12 +1587,13 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
             df_training, df_prediction = add_log_p_martin_columns(df_training, df_prediction, cross_validate, df_cv_dict)
         
         logging.info("done getting dataframes from db")
+        
         # ******************************************************************************************************
-    
+        # ---- Run feature selection and build model ----
         if feature_selection:
             embedding = EmbeddingGenerator.feature_selection(df_training, df_prediction, params)
             
-        df_predictions, training_stats, test_stats, model = ModelBuilder.build_and_test_model(df_training, df_prediction, params, embedding)
+        df_pred_training, df_pred_test, training_stats, test_stats, model = ModelBuilder.build_and_test_model(df_training, df_prediction, params, embedding)
                 
         if not feature_selection and fs_previous_embedding and qsar_method != 'gcm':
     
@@ -1245,63 +1608,54 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
                 logging.info(f"After SFS, {len(model.embedding)} descriptors: {model.embedding}")
     
             # redo model and predictions:
-            df_predictions, training_stats, test_stats, model = ModelBuilder.build_and_test_model(df_training, df_prediction, params, model.embedding)
+            df_pred_training, df_pred_test, training_stats, test_stats, model = ModelBuilder.build_and_test_model(df_training, df_prediction, params, model.embedding)
             logging.info(f"After FS, embedding has {len(model.embedding)} descriptors: {model.embedding}")
-    
-
-        # ******************************************************************************************************
-        # Print main info:
-        logging.info(f"dataset_name={dataset_name}")
-        logging.info(f"qsar_method={qsar_method}")
-        logging.info(f"descriptor_set_name={descriptor_set_name}")
-        logging.info(f"feature_selection={feature_selection}")
-        logging.info(f"cross_validate={cross_validate}")
-        
-        # ******************************************************************************************************
-    
-        session = getSession()
-        logging.info("start getting dataframes from db")
-    
-        df_training, df_prediction = get_training_prediction_instances(session, dataset_name, descriptor_set_name, splitting_name)
-        # print(df_training.shape)
-    
-        df_cv_dict = None 
-        if cross_validate:
-            df_cv_dict = get_training_cv_instances(session, dataset_name, descriptor_set_name)
-        
-        if add_LOGP_Martin:
-            df_training, df_prediction = add_log_p_martin_columns(df_training, df_prediction, cross_validate, df_cv_dict)
-        
-        logging.info("done getting dataframes from db")
 
         if cross_validate: 
-            df_cv_predictions, cv_stats = ModelBuilder.crossvalidate(df_cv_dict, params, model.embedding)
-            
+            df_pred_cv, cv_stats = ModelBuilder.crossvalidate(df_cv_dict, params, model.embedding)
         
         # ******************************************************************************************************
+        # ---- Run applicability domain calculations ----
         # Applicability domain calcs:
         stats_dict = {}
         if run_AD:
             for ad_measure in ad_measures:
-                df_predictions = runAD(df_training, df_prediction, params, model.embedding, df_predictions, ad_measure, stats_dict)
+                df_pred_test = runAD(df_training, df_prediction, params, model.embedding, df_pred_test, ad_measure, stats_dict)
     
             if len(ad_measure) > 1:
-                generate_consensus_ad(df_predictions, stats_dict, ad_measure_model)
+                generate_consensus_ad(df_pred_test, stats_dict, ad_measure_model)
     
             # print(json.dumps(stats_dict,indent=4))
-        
 
-        print("After AD calcs: ", row_to_json(df_predictions))
-        
+        # print("After AD calcs: ", row_to_json(df_pred_test))
         
         # ******************************************************************************************************
         # look at first prediction to make sure it looks right:
-        logging.debug("First row of df_predictions:")
-        logging.debug(row_to_json(df_predictions))
-        # print(df_predictions.head())
+        logging.debug("First row of df_pred_test:")
+        logging.debug(row_to_json(df_pred_test))
+        # print(df_pred_test.head())
+
         # ******************************************************************************************************
-        
+        # ---- Save results ----
         # create results file:
+        
+        dataset_info = ml.get_dataset_details(session, dataset_name)
+        dsstox_mapping_strategy = json.loads(dataset_info["dsstox_mapping_strategy"])
+
+        
+        model.qsarReadyRuleSet = dsstox_mapping_strategy["qsarReadyRuleSet"]
+        model.propertyName = dataset_info["property_name"]
+        model.propertyDescription = dataset_info["property_description"]
+        model.unitsModel = dataset_info["units_model"] 
+        model.unitsDisplay = dataset_info["units_display"]
+        epoch_ms = time.time_ns() // 1_000_000
+        model.modelName = user + "_" + str(epoch_ms)
+        model.datasetName = dataset_name
+        model.omitSalts = dsstox_mapping_strategy["omitSalts"]
+        model.applicabilityDomainName = " and ".join(params.ad_measure)
+        model.num_training = df_training.shape[0]
+        model.num_prediction = df_prediction.shape[0]
+        
         
         results_dict = Results.create_results_dict(
             ad_measure_model=ad_measure_model,
@@ -1319,18 +1673,51 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
             columns.insert(0, "Property")
             columns.insert(0, "ID")
             df_test_model = df_prediction[columns]
+
+        df_pv = ml.getMappedPropertyValues(session, dataset_name)
+        print_first_row(df_pv, row=1)
         
-    
-        Results.save_results(results_dict, df_predictions, df_cv_predictions, df_test_model, folder_embedding)
+        
+
+        df_dps = ml.getMappedDatapoints(session, dataset_name)
+
+        df_pred_test.rename(columns={'id': 'canon_qsar_smiles'}, inplace=True)
+        df_pred_test = df_pred_test.merge(df_dps, on='canon_qsar_smiles', how='left')
+        df_pred_test.rename(columns={'qsar_exp_prop_property_values_id_first': 'exp_prop_id'}, inplace=True)
+        print_first_row(df_pred_test)
+
+        # print_first_row(df_pred_cv)
+        df_pred_cv.rename(columns={'id': 'canon_qsar_smiles'}, inplace=True)
+        df_pred_cv = df_pred_cv.merge(df_dps, on='canon_qsar_smiles', how='left')
+        df_pred_cv.rename(columns={'qsar_exp_prop_property_values_id_first': 'exp_prop_id'}, inplace=True)
+        print_first_row(df_pred_cv)
+        
+        #
+        # mtp.generateHistogram2(fileOutHistogram=filePathOutHistogram, property_name=model.propertyName, unit_name=model.unitsModel,
+        #                        mpsTraining=mpsTraining, mpsTest=mpsTest,
+        #                        seriesNameTrain="Training set", seriesNameTest="Test set")
+
+        # print(json.dumps(mps_test,indent=4))
+        
+        folder_path = Results.save_results(
+            model=model,
+            results_dict=results_dict,
+            df_pred_test=df_pred_test,
+            df_pred_training=df_pred_training,
+            df_pred_cv=df_pred_cv,
+            df_test_model=df_test_model,
+            df_pv=df_pv,
+            folder_embedding=folder_embedding,
+        )
+
         logging.info(f"test set stats={json.dumps(test_stats, indent=4)}")
         logging.info(f"training cross validation stats={json.dumps(cv_stats, indent=4)}")   
-        logging.info(f"test set AD stats={json.dumps( results_dict['test_stats_AD'] , indent=4)}")
-        
+        logging.info(f"test set AD stats={json.dumps( results_dict['model_statistics']['test_stats_AD'] , indent=4)}")
+
         if write_to_db:
-            ml = ModelLoader()
-            ml.load_model(session, user, model, results_dict, df_predictions, test_stats)
+            ml.load_model(session, user, model, results_dict, df_pred_training, df_pred_test, df_pred_cv, folder_path)
         
-        return results_dict
+        # logging.info(f"model description={json.dumps(json.loads(model.get_model_description()), indent=4)}")
     
     except Exception:
         # Print the exception traceback to standard error
@@ -1339,16 +1726,18 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
 
 
 class Results:
+
     @staticmethod
-    def save_results(results_dict, df_predictions, df_cv_predictions=None, df_test_model=None, folder_embedding=None):
+    def save_results(model, results_dict, df_pred_test, df_pred_training, df_pred_cv=None, df_test_model=None, df_pv=None,
+                     folder_embedding=None):
         params = results_dict["params"]
         
         # print (json.dumps(params))
     
-        df_predictions = prepare_df(df_predictions)
+        df_pred_test = prepare_df(df_pred_test)
         
-        if df_cv_predictions is not None:
-            df_cv_predictions = prepare_df(df_cv_predictions)
+        if df_pred_cv is not None:
+            df_pred_cv = prepare_df(df_pred_cv)
     
         subfolder = params["qsar_method"] + "_" + params["descriptor_set_name"] + "_fs=" + str(params["feature_selection"])
     
@@ -1366,27 +1755,57 @@ class Results:
         identifier = int(time.time() * 1000)  # time in ms as identifier
         
         prediction_csv_path = os.path.join(folder_path, f"predictions_{identifier}.csv")    
-        df_predictions.to_csv(prediction_csv_path, index=False)
+        df_pred_test.to_csv(prediction_csv_path, index=False)
         
         prediction_excel_path = os.path.join(folder_path, f"predictions_{identifier}.xlsx")
         ec = ExcelCreator()
-        ec.create_excel(df_predictions, df_cv_predictions, df_test_model, results_dict, prediction_excel_path)
+        ec.create_excel(df_pred_test, df_pred_cv, df_test_model, df_pv, results_dict, prediction_excel_path)
         
         json_path = os.path.join(folder_path, "results.json")
         with open(json_path, 'w') as json_file:
             json.dump(results_dict, json_file, indent=4)
+       
+        mpsTraining = df_pred_cv.to_dict(orient='records')  # use CV values so the predictions are fair estimates (exp values wont change from training set)
+        mpsTest = df_pred_test.to_dict(orient='records')
+        
+        filePathOutHistogram = os.path.join(folder_path, "histogram.png")
+        mtp.generateHistogram2(filePathOutHistogram, model.propertyName, model.unitsModel, mpsTraining, mpsTest, seriesNameTrain="Training set", seriesNameTest="Test set")
+        
+        filePathOutScatter = os.path.join(folder_path, "scatter_plot.png")
+        title = "Prediction results for " + model.propertyName
+        mtp.generateScatterPlot2(filePathOut=filePathOutScatter, title=title, unitName=model.unitsModel,
+                                 mpsTraining=mpsTraining, mpsTest=mpsTest,
+                                 seriesNameTrain="Training set (CV)", seriesNameTest="Test set")
+        
+        return folder_path
+    
     
     @staticmethod
     def create_results_dict(ad_measure_model, df_training, params, model, training_stats, test_stats, cv_stats, stats_dict):
     
         results_dict = {"params":params.to_dict()}
         
-        # if feature_selection:
-            # results_dict["embedding"] = model.embedding
+        md = model.get_model_description_dict()
+        results_dict["model_details"] = md
+
+        # Store the embedding length safely (handles None)
+        embedding = getattr(model, "embedding", None)
+        md["embedding_len"] = len(embedding) if embedding is not None else 0
         
-        results_dict["embedding"] = model.embedding
+        md["qsar_method_description"]=md.pop("description")
+        md["qsar_method_description_url"]=md.pop("description_url")
+        md.pop("embedding")
+        md["embedding"]=embedding
         
-        results_dict["len(embedding)"] = len(model.embedding)
+        md.pop("descriptorService")
+        
+        md.pop("training_descriptor_std_devs")
+        md.pop("training_descriptor_means")
+        
+        md["splittingName"] = params.splitting_name
+        
+        
+        md["descriptor_set_name"] = params.descriptor_set_name
             
         qsar_method = params.qsar_method
         
@@ -1394,27 +1813,31 @@ class Results:
             # results_dict['model_coefficients'] = json.loads(model.getOriginalRegressionCoefficients())
             y = df_training[df_training.columns[1]]
             X = df_training[model.embedding]
-            results_dict['model_coefficients'] = json.loads(model.getOriginalRegressionCoefficients2(X, y))
+            results_dict["model_details"]['model_coefficients'] = json.loads(model.getOriginalRegressionCoefficients2(X, y))
         
-        
-        if len(stats_dict) > 0:
-            results_dict["test_stats_all_AD"] = stats_dict
+        ms = {}
+        results_dict["model_statistics"] = ms
 
-        results_dict["training_stats"] = training_stats
+
+        if len(stats_dict) > 0:
+            ms["test_stats_all_AD"] = stats_dict
+
+        training_stats.pop("Coverage_Training")
+        ms["training_stats"] = training_stats
         
         if cv_stats:
-            results_dict["cv_stats"] = cv_stats
+            cv_stats.pop("Coverage_CV_Training")
+            ms["cv_stats"] = cv_stats
 
-        results_dict["test_stats"] = test_stats
+        test_stats.pop("Coverage_Test")
+        ms["test_stats"] = test_stats
 
         if len(stats_dict) > 0:
             str_ad_measure_final = " and ".join(ad_measure_model)                        
-            results_dict["test_stats_AD"] = stats_dict[str_ad_measure_final]
-            results_dict["test_stats_all_AD"] = stats_dict
-        
+            ms["test_stats_AD"] = stats_dict[str_ad_measure_final]
+            ms["test_stats_all_AD"] = stats_dict
         
         return results_dict
-    
 
     @staticmethod
     def summarize_model_stats(dataset_name, excel_name="model_stats.xlsx", sheet_name="stats", col_width_pad=4, min_col_width=5):
@@ -1461,7 +1884,6 @@ class Results:
                             if lenEmbedding is not None and lenEmbedding < 20:
                                 embedding = results.get("embedding", [])
                                 embedding = ", ".join(embedding) if isinstance(embedding, (list, tuple)) else str(embedding)
-                            
     
                             # Format for printing (and store as strings to match the print)
                             mae_test_str = f"{mae_test_val:.3f}" if isinstance(mae_test_val, (int, float)) else "N/A"
@@ -1497,3 +1919,18 @@ class Results:
     
         print(f"Saved summary to: {excel_path}")
         return df_stats, excel_path    
+
+
+if __name__ == '__main__':
+
+    # test getting the detailed property data:
+    from dotenv import load_dotenv
+    load_dotenv()
+    ml = ModelLoader()
+    session = getSession()
+    dataset_name = 'KOC v1 modeling'
+    df_pv = ml.getMappedPropertyValues(session, dataset_name)
+    print_first_row(df_pv, row=1)
+    
+    df_dps = ml.getMappedDatapoints(session, dataset_name)
+    print_first_row(df_dps, row=1)

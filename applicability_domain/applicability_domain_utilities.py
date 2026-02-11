@@ -20,7 +20,7 @@ import pandas as pd
 
 debug = False
 
-from predict_constants import PredictConstants as pc
+from util.predict_constants import PredictConstants as pc
 
 def generate_applicability_domain_with_preselected_descriptors_from_dfs(train_df, test_df, remove_log_p,
                                                                embedding, applicability_domain,filterColumnsInBothSets=True,
@@ -74,8 +74,9 @@ def generate_applicability_domain_with_preselected_descriptors_from_dfs(train_df
         ad = adm.KernelDensityApplicabilityDomain(train_df, test_df, is_binary)
         ad.set_parameters({'fractionTrainingSetInsideAD': 0.95, 'train_column_names': train_column_names})
         output = ad.evaluate(embedding=embedding)
+    else:
+        raise(f"invalid applicability domain:{applicability_domain}")
         
-
     df_results_inside = output.loc[output['AD'] == True]
     # print('inside shape=', df_results_inside.shape)
     coverage = df_results_inside.shape[0] / output.shape[0]

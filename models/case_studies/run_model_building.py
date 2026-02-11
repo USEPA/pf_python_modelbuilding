@@ -11,7 +11,7 @@ import logging
 
 # from applicability_domain import applicability_domain_utilities as adu
 import applicability_domain.applicability_domain_utilities as adu
-from predict_constants import PredictConstants as pc
+from util.predict_constants import PredictConstants as pc
 # from models import df_utilities as DFU
 import model_ws_utilities as mwu
 from models import df_utilities as dfu

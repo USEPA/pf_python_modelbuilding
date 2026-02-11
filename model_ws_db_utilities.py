@@ -20,7 +20,7 @@ from API_Utilities import QsarSmilesAPI, DescriptorsAPI
 
 # from db.mongo_cache import get_cached_prediction, cache_prediction
 
-from predict_constants import PredictConstants
+from util.predict_constants import PredictConstants
 
 from model_ws_utilities import call_do_predictions_from_df, models
 from models import df_utilities as dfu
@@ -39,13 +39,16 @@ import numpy as np
 from report_creator_dict import ReportCreator
 
 import webbrowser
-from predict_constants import UnitsConverter
+from util.units_converter import UnitsConverter
 
 from utils import timer, print_first_row
+from applicability_domain import applicability_domain_utilities as adu
+
 
 
 # debug = False
 import logging
+
 logging.getLogger('sqlalchemy').setLevel(logging.ERROR)
 
 fk_dsstox_snapshot_id = 1  # DSSTOX Snapshot 04/23 (Physchem models were created 2024-02-29), if use fk = 2 or 3 will have more missing records
@@ -393,7 +396,7 @@ def getSessionDsstox():
     return session
 
 
-class ExpDataGetter:
+class ExpDataGetter:    
     
     def getSqlPropertyValues(self):
         sqlPropertyValues = text("""    
@@ -1586,7 +1589,7 @@ class NeighborGetter:
 
 class PlotCreator:
     
-    def insert_image(self, file_path, username, fk_model_id, fk_file_type_id, session):
+    def upload_image_to_db(self, file_path, username, fk_model_id, fk_file_type_id, session):
 
         try:
         # Read the image file as binary
@@ -1678,7 +1681,7 @@ class PlotCreator:
                     #                          mpsTraining=mpsTraining, mpsTest=mpsTest,
                     #                          seriesNameTrain="Training set (CV)", seriesNameTest="Test set")
                     #
-                    # self.insert_image(filePathOutScatter, username, model.modelId, 3, session)
+                    #self.upload_image_to_db((filePathOutScatter, username, model.modelId, 3, session)
                     # self.display_image(model.modelId, 3, session)
                     
                     filePathOutHistogram = os.path.join(folder_path, "histogram_" + str(model.modelId) + ".png")
@@ -1686,7 +1689,7 @@ class PlotCreator:
                     mtp.generateHistogram2(fileOutHistogram=filePathOutHistogram, property_name=model.propertyName, unit_name=model.unitsModel,
                                            mpsTraining=mpsTraining, mpsTest=mpsTest,
                                            seriesNameTrain="Training set", seriesNameTest="Test set")
-                    self.insert_image(filePathOutHistogram, username, model.modelId, 4, session)
+                    self.upload_image_to_db(filePathOutHistogram, username, model.modelId, 4, session)
                     self.display_image(model.modelId, 4, session)
                     
             except Exception as ex:
@@ -2098,13 +2101,17 @@ class ModelPredictor:
                 
         json_predictions = call_do_predictions_from_df(df_prediction, model)        
         # print(json_predictions)
-        
         pred_results = json.loads(json_predictions)
-        
         pred_value = pred_results[0]['pred']
         
         # applicability domain calcs:
         if model.applicabilityDomainName:
+            
+            # For now just use the first AD measure, TODO: make it loop through the AD measures rather than calling self.getFragmentAD later
+            if 'and' in modelDetails.applicabilityDomainName:
+                modelDetails.applicabilityDomainName = modelDetails.applicabilityDomainName.split(" and ")[0].strip()
+                model.applicabilityDomainName = modelDetails.applicabilityDomainName 
+            
             ad_results = self.determineApplicabilityDomain(model, df_prediction)
             ad_results["method"] = modelDetails.applicabilityDomainName    
             ad_results["description"] = modelDetails.applicabilityDomainDescription
@@ -2145,6 +2152,9 @@ class ModelPredictor:
 
         if generate_report:
             report.neighborResultsTraining, report.neighborResultsPrediction = self.addNeighborsFromSets(model, modelResults, df_prediction)
+            
+            # TODO make it so that it instead gets the fragment AD from the adu helper class
+
             self.getFragmentAD(df_prediction, model.df_training, modelResults)
             # print(useFileAPI)
             
@@ -2185,6 +2195,9 @@ class ModelPredictor:
         chemicals, code = qsAPI.call_qsar_ready_standardize_post(server_host=serverAPIs, smiles=smiles, full=useFullStandardize,
                                                            workflow=model.qsarReadyRuleSet)
         logging.debug(chemicals)
+        
+        
+        print(chemicals)
 
         if code == 500:
             return smiles + ": could not generate QSAR Ready SMILES", code 
@@ -2333,7 +2346,6 @@ class ModelPredictor:
 
         # print("remove_log_p", remove_log_p)
 
-        from applicability_domain import applicability_domain_utilities as adu
         # model.applicabilityDomainName = adu.strOPERA_local_index  # for testing diff number of neighbors
 
         output, ad_cutoff = adu.generate_applicability_domain_with_preselected_descriptors_from_dfs(
@@ -2342,6 +2354,7 @@ class ModelPredictor:
             # test_df=model.df_prediction,  #for testing running batch type ad calc
             remove_log_p=model.remove_log_p_descriptors,
             embedding=model.embedding,
+            # applicability_domain=model.applicabilityDomainName,
             applicability_domain=model.applicabilityDomainName,
             filterColumnsInBothSets=True)
 
@@ -2380,6 +2393,79 @@ class ModelPredictor:
         # print(json.dumps(dicts,indent=4))
         return results  # gives an array instead of each object on separate line
 
+    def determineAD(self, model, df_prediction, ad_name):
+        
+        output, ad_cutoff = adu.generate_applicability_domain_with_preselected_descriptors_from_dfs(
+            train_df=model.df_training,
+            test_df=df_prediction,
+            # test_df=model.df_prediction,  #for testing running batch type ad calc
+            remove_log_p=model.remove_log_p_descriptors,
+            embedding=model.embedding,
+            # applicability_domain=model.applicabilityDomainName,
+            applicability_domain=model.ad_name,
+            filterColumnsInBothSets=True)
+
+        # print("AD_CUTOFF",ad_cutoff)
+        # self.printFirstRowDF(output)
+                
+        # TODO: following code will have to be revised for batch model calculations (have more than one row in df_predictio
+        analogsAD = output['ids'].tolist()[0]  # only use first one for singleton prediction
+        
+        # print(json.dumps(analogsAD,indent=4))
+        # dictsAnalogs = [ast.literal_eval(item) for item in analogsAD]
+        
+        AD = output['AD'].tolist()[0]
+        
+        distances = list(output["distances"][0])
+
+        results = {"AD":AD, "analogs": analogsAD, "distances": distances, "AD_Cutoff": ad_cutoff}
+        results["adMethod"] = {}
+        results["adMethod"]["name"] = ad_name
+        results["adMethod"]["description"] = model.applicabilityDomainDescription
+
+        if ad_name == PredictConstants.Applicability_Domain_TEST_Embedding_Euclidean\
+         or ad_name == PredictConstants.Applicability_Domain_TEST_All_Descriptors_Euclidean:
+            
+            results["value"] = sum(distances) / len(distances)
+            
+            if AD == True: 
+                results["conclusion"] = "Inside"
+                results["reasoning"] = f"Avg. distance ({results['value']:.2f}) < {ad_cutoff:.2f}" 
+            else: 
+                results["conclusion"] = "Outside"
+                results["reasoning"] = f"Avg. distance ({results['value']:.2f}) > {ad_cutoff:.2f}"
+                
+        else:
+            pass
+        
+        return results
+
+    @timer
+    def determineApplicabilityDomains(self, model: Model, df_prediction):
+        """
+        Calculate the applicability domain using the model's training set and the AD measure assigned to the model in the DB
+        TODO make sure this works when a model doesnt have a set embedding object
+        :param model:
+        :param df_prediction:
+        :return:
+        """
+        # json_model_description = model.get_model_description()
+        # model_description = json.loads(json_model_description)
+        # model.remove_log_p_descriptors = model_description["remove_log_p_descriptors"]  # just set to False instead?
+
+        # print("model.remove_log_p_descriptors", model.remove_log_p_descriptors)
+
+        # print("remove_log_p", remove_log_p)
+
+        from applicability_domain import applicability_domain_utilities as adu
+        # model.applicabilityDomainName = adu.strOPERA_local_index  # for testing diff number of neighbors
+
+        ad_names = model.applicabilityDomainName.split(' and ')
+        results_array = []
+
+        for ad_name in ad_names:
+            results_array.append(self.determineAD(model, df_prediction))
+        return results_array
 
 # def createHmtlReportFromJson():
 #
@@ -2602,8 +2688,8 @@ def runExample():
 #     return report
 
 
-def runChemical(mp, model_id, smiles, folder_path):
     
+def runChemical(mp, model_id, smiles, folder_path):
     output, code = mp.predict_model_smiles(model_id, smiles)
 
     report = json.loads(output)
@@ -2844,5 +2930,5 @@ def main():
 
 
 if __name__ == '__main__':
-    # main()
-    getLogKowPredictionsForDataset()
+    main()
+    # getLogKowPredictionsForDataset()
