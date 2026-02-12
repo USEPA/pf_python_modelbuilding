@@ -8,14 +8,15 @@ Run with Python 3.9 to avoid problems with parallelizing RF (bug in older versio
 Repository created 05/21/2021
 """
 
-from flask import request, abort, Flask
+from flask import request, abort, Flask, send_file, jsonify
+ 
 
 import json
 import logging
 import pickle
 
 from logging import INFO, DEBUG
-from model_ws_db_utilities import ModelPredictor, ModelInitializer
+from model_ws_db_utilities import ModelPredictor, ModelInitializer, getSession
 
 # why not make the following methods part of a Utility class then call methods from instance of it?
 from model_ws_utilities import get_model_info, call_build_model_with_preselected_descriptors, models, \
@@ -28,6 +29,10 @@ from sklearn2pmml import sklearn2pmml
 
 from dotenv import load_dotenv
 load_dotenv()
+from util import predict_constants as pc
+
+import util.get_model_file as gmf
+import io
 
 
 # import os
@@ -584,7 +589,11 @@ def predictDB():
         report_format = 'json'
         
     mp = ModelPredictor()
-    modelResultsJson = mp.predictFromDB(model_id, smiles)
+    modelResultsJson = mp.predictFromDB(model_id, smiles, file_api=pc.URL_LOCAL_FILE_API)
+    
+    if "invalid" in modelResultsJson.lower():
+        return modelResultsJson, 400
+
     
     if report_format == "html":
         rc=ReportCreator()
@@ -838,6 +847,50 @@ def initPickle():
         abort(400, 'missing model bytes')
 
 
+
+@app.get(pc.URL_LOCAL_FILE_API)
+def get_file():
+        
+    # Validate and parse query params
+    type_id_str = request.args.get("type_id")
+    model_id_str = request.args.get("model_id")
+
+    if not type_id_str or not model_id_str:
+        return jsonify(error="Missing required query params: typeId and modelId"), 400
+
+    try:
+        type_id = int(type_id_str)
+        model_id = int(model_id_str)
+    except ValueError:
+        return jsonify(error="typeId and modelId must be integers"), 400
+
+    # Open a session and fetch file data
+    try:
+        raw_bytes, file_name, mime_type = gmf.fetch_model_file(model_id=model_id, type_id=type_id)
+        
+    except FileNotFoundError as e:
+        return jsonify(error=str(e)), 404
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
+    except Exception as e:
+        return jsonify(error=f"Database error: {e}"), 500
+
+    # New rule: if typeId == 2 then download, else inline
+    as_attachment = (type_id == 2)
+
+    # Stream the file
+    bio = io.BytesIO(raw_bytes)
+    bio.seek(0)
+    return send_file(
+        bio,
+        mimetype=mime_type,
+        download_name=str(file_name),
+        as_attachment=as_attachment,
+        max_age=0,
+        etag=False,
+        conditional=False,
+    )
+       
 
 @app.route('/api/predictor_models/models/<string:model_id>', methods=['GET'])
 def details(model_id):

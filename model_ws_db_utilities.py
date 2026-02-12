@@ -20,7 +20,7 @@ from API_Utilities import QsarSmilesAPI, DescriptorsAPI
 
 # from db.mongo_cache import get_cached_prediction, cache_prediction
 
-from util.predict_constants import PredictConstants
+from util import predict_constants as PredictConstants
 
 from model_ws_utilities import call_do_predictions_from_df, models
 from models import df_utilities as dfu
@@ -67,7 +67,8 @@ dict_missing_dsstox_records = {
                "DTXCID701521422": {"smiles": "[H][C@@]12CCCC[C@@]1([H])CCCC2", "sid": "DTXSID90883405", "casrn": "493-02-7", "name": "trans-Decahydronaphthalene"}}
 
 USE_TEMPORARY_MODEL_PLOTS = False
-urlCtxApi = "https://ctx-api-dev.ccte.epa.gov/chemical/property/model/file/search/"
+
+
 imgURLCid = "https://comptox.epa.gov/dashboard-api/ccdapp1/chemical-files/image/by-dtxcid/";
 
 """
@@ -1133,7 +1134,7 @@ class ModelInitializer:
         return None
 
     def row_to_model_details(self, m: Model, row):
-
+    
         (m.modelId,
          m.modelName,
         m.detailsFile,
@@ -1701,7 +1702,7 @@ cache = {}
 class ModelPredictor:
 
     @timer
-    def predictFromDB(self, model_id, smiles, generate_report=True):
+    def predictFromDB(self, model_id, smiles, generate_report=True, file_api=PredictConstants.URL_LOCAL_FILE_API):
         """
         Runs whole workflow: standardize, descriptors, prediction, applicability domain
         """
@@ -1718,7 +1719,7 @@ class ModelPredictor:
                 # print("in cache: " + key)
                 return cache[key]
             else:
-                cache[key], code = self.predict_model_smiles(model_id, smiles, generate_report=generate_report)
+                cache[key], code = self.predict_model_smiles(model_id, smiles, generate_report=generate_report, file_api=file_api)
                 return cache[key]
         else:
             result, missing = [], []
@@ -2017,7 +2018,7 @@ class ModelPredictor:
         modelResults.adEstimates.append(adResultsFrag)
     
     @timer
-    def predict_model_smiles(self, model_id, smiles, generate_report=True, useFileAPI=True):
+    def predict_model_smiles(self, model_id, smiles, generate_report=True, file_api=PredictConstants.URL_CTX_API):
         """
         Runs whole workflow: standardize, descriptors, prediction, applicability domain
         :param model_id:
@@ -2033,8 +2034,12 @@ class ModelPredictor:
         mi = ModelInitializer()
         model = mi.init_model(model_id)
         
+        # print(hasattr(model, 'modelId'))
+        if hasattr(model, 'modelId') == False:
+            return f"Invalid model_id: {model_id}", 400
+        
         modelDetails = ModelDetails(model)
-        self.addLinks(modelDetails, useFileAPI)
+        self.addLinks(modelDetails, file_api)
         self.addPerformance(modelDetails)
         
         modelResults = ModelResults()
@@ -2158,7 +2163,7 @@ class ModelPredictor:
         return report.to_json(), 200
         # return modelResults
     
-    def addLinks(self, modelDetails, useFileAPI=True):
+    def addLinks(self, modelDetails, file_api=PredictConstants.URL_CTX_API):
         
         modelId = modelDetails.modelId
         
@@ -2169,19 +2174,19 @@ class ModelPredictor:
             file_path_histogram = os.path.join(script_dir, "data/plots", "histogram_" + modelId + ".png")
             modelDetails.imgSrcPlotHistogram = pathlib.Path(file_path_histogram).as_uri()
             
-        elif useFileAPI:
-            # these need to be added to ctx api:
-            modelDetails.imgSrcPlotScatter = urlCtxApi + "?typeId=3&modelId=" + modelDetails.modelId
-            modelDetails.imgSrcPlotHistogram = urlCtxApi + "?typeId=4&modelId=" + modelDetails.modelId
+        elif file_api is not None:
             
+            modelDetails.imgSrcPlotScatter = file_api + "?type_id=3&model_id=" + modelDetails.modelId
+            modelDetails.imgSrcPlotHistogram = file_api + "?type_id=4&model_id=" + modelDetails.modelId
+            modelDetails.urlQMRF = file_api + "?type_id=1&model_id=" + modelDetails.modelId
+            modelDetails.urlExcelSummary = file_api + "?type_id=2&model_id=" + modelDetails.modelId
+            # these need to be added to ctx api:
         else:
             # TODO generate plot and hardcode in the html
             # plot_base64 = self.generateScatterPlot(neighbors, md.unitsModel, "Results for "+modelResults.modelDetails.modelName, "Exp. vs Pred.")                                    
             # modelResults.modelDetails.imgSrcPlotScatter="data:image/png;base64,"+plot_base64
             pass
         
-        modelDetails.urlQMRF = urlCtxApi + "?typeId=1&modelId=" + modelDetails.modelId
-        modelDetails.urlExcelSummary = urlCtxApi + "?typeId=2&modelId=" + modelDetails.modelId
 
     @timer
     def standardizeStructure(self, serverAPIs, smiles, model: Model):
@@ -2596,24 +2601,25 @@ def runExample():
     # model_id = str(1066)  # WS
     # model_id = str(1067)  # VP
     # model_id = str(1068)  # BP
-    model_id = str(1069)  # LogP/LogKow
+    # model_id = str(1069)  # LogP/LogKow
     # model_id = str(1070) # MP, biggest dataset
     # model_id = str(1615) # Koc, MLR model
+    model_id = str(1069)
 
     smiles_list = []
     
     smiles_list.append("c1ccccc1")  # benzene
-    smiles_list.append("OC(=O)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)F")  # PFOA
-    smiles_list.append("COCOCOCOCCCCCCOCCCCOCOCOCCC")  # not in DssTox
-    smiles_list.append("C[Sb]")  # passes standardizer, fails test descriptors
-    smiles_list.append("C[As]C[As]C")  # violates frag AD
-    smiles_list.append("XX")  # fails standardizer
-    smiles_list.append("CCC.Cl")  # not mixture according to qsarReadySmiles
-    smiles_list.append("CCCCC.CCCC")  # mixture according to qsarReadySmiles
+    # smiles_list.append("OC(=O)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)F")  # PFOA
+    # smiles_list.append("COCOCOCOCCCCCCOCCCCOCOCOCCC")  # not in DssTox
+    # smiles_list.append("C[Sb]")  # passes standardizer, fails test descriptors
+    # smiles_list.append("C[As]C[As]C")  # violates frag AD
+    # smiles_list.append("XX")  # fails standardizer
+    # smiles_list.append("CCC.Cl")  # not mixture according to qsarReadySmiles
+    # smiles_list.append("CCCCC.CCCC")  # mixture according to qsarReadySmiles
     
     # For LogP model, following use additional code to get dsstox record for neighbor / analogs:
-    smiles_list.append("[H][C@]12[C@@H](Cl)[C@H](Cl)[C@](C(Cl)Cl)([C@@H](Cl)[C@@H]1Cl)C2(C)C(Cl)Cl")  # DTXCID001783033
-    smiles_list.append("[H][C@]12O[C@@]1([H])[C@@]1([H])[C@@]([H])([C@H]2Cl)[C@@]2(Cl)C(Cl)=C(Cl)[C@]1(Cl)C2(Cl)Cl")  # DTXCID501783733
+    # smiles_list.append("[H][C@]12[C@@H](Cl)[C@H](Cl)[C@](C(Cl)Cl)([C@@H](Cl)[C@@H]1Cl)C2(C)C(Cl)Cl")  # DTXCID001783033
+    # smiles_list.append("[H][C@]12O[C@@]1([H])[C@@]1([H])[C@@]([H])([C@H]2Cl)[C@@]2(Cl)C(Cl)=C(Cl)[C@]1(Cl)C2(Cl)Cl")  # DTXCID501783733
     # smiles_list.append("[H][C@]12CC(Cl)(Cl)[C@](CCl)([C@@H](Cl)[C@@H]1Cl)C2(CCl)CCl")  # DTXCID501782985
     # smiles_list.append("[H][C@]12CO[S@@](=O)OC[C@@]1([H])[C@@]1(Cl)C(Cl)=C(Cl)[C@]2(Cl)C1(Cl)Cl")  # DTXCID601783831, fails standardization!
     # smiles_list.append("CCCCCCCc1ccccc1") # one of neighbors for test set doesnt have matching dtxsid for the dtxcid (not in dsstox_records table)

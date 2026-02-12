@@ -17,7 +17,7 @@ from typing import Dict
 #     Q2_TEST = Q2 + TAG_TEST
 #     R2_TRAINING = R2+TAG_TRAINING
 
-from util.predict_constants import PredictConstants as pc
+from util import predict_constants as pc
 
 
 def calculate_mean_exp_training(df_training: pd.DataFrame):

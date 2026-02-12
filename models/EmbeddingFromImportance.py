@@ -204,7 +204,7 @@ def perform_sequential_feature_selection(model,df_training):
         ("estimator", model.model_obj.named_steps['estimator'])
     ])
 
-    frac = 0.001 # fraction of initial score to add a parameter
+    frac = 0.0001 # fraction of initial score to add a parameter
 
     if model.is_binary:
         scoring='balanced_accuracy'

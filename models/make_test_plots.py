@@ -31,7 +31,7 @@ def getBin(exps, property_name,unit_name):
         print('else', property_name)
         # bins = np.linspace(-10,-10,10)
 
-    print(minVal, maxVal, bins)
+    # print(minVal, maxVal, bins)
 
     return bins
 
@@ -94,7 +94,7 @@ def getBin2(expsTrain,expsTest, property_name, unit_name):
 
         # bins = np.linspace(-10,-10,10)
 
-    print(property_name, minVal, maxVal, bins)
+    # print(property_name, minVal, maxVal, bins)
 
 
     return bins

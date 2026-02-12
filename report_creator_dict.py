@@ -14,6 +14,7 @@ from typing import List, Dict, Any, Optional
 import traceback
 
 import matplotlib
+from utils import print_first_row
 matplotlib.use('Agg')  # Use a non-interactive backend
 import matplotlib.pyplot as plt
 
@@ -21,12 +22,11 @@ from decimal import Decimal, getcontext, ROUND_HALF_UP, InvalidOperation
 
 # from indigo import Indigo
 # from indigo.renderer import IndigoRenderer
-from util.predict_constants import PredictConstants as pc
+from util import predict_constants as pc
 # import tempfile
 
 urlChemicalDetails = "https://comptox.epa.gov/dashboard/chemical/details/"
 imgURLCid = "https://comptox.epa.gov/dashboard-api/ccdapp1/chemical-files/image/by-dtxcid/";
-model_file_api = "https://ctx-api-dev.ccte.epa.gov/chemical/property/model/file/search/"  # may not be needed here
 
 import numpy as np           
 import base64, io
@@ -198,7 +198,7 @@ class ReportCreator:
                         my_td += a('Excel summary', href=link_excel, title='All model details in Excel format', target="_blank")
                         my_td += ")", br()
                         
-                        my_td += b("Model method:"), a(md["modelMethod"], title=md["modelMethodDescription"], href=md["modelMethodDescriptionURL"]), br()
+                        my_td += b("Model method:"), a(md["modelMethod"], title=md["modelMethodDescription"], href=md["modelMethodDescriptionURL"], target="_blank"), br()
                         my_td += b("Model source:"), " " + md["modelSource"], br()
                         
                         my_td += b("Property name:"), " " + md["propertyName"], br()
@@ -364,7 +364,11 @@ class ReportCreator:
                             with p():
                                 span("R")
                                 sup("2")
-                                span(" = Pearson correlation coefficient, RMSE = root mean squared error, MAE = mean absolute error")                
+                                span(" = Pearson correlation coefficient, RMSE = root mean squared error, MAE = mean absolute error")
+                            br()
+                            self.addModelVariablesTable(md)
+                                
+                                                
     
         def addStatsTableTraining(self, md): 
             
@@ -400,41 +404,83 @@ class ReportCreator:
                             td(format2(ms["fiveFoldICV"]["RMSE"]), align="center")
                             td(format2(ms["fiveFoldICV"]["MAE"]), align="center")
     
+        
+        def addModelVariablesTable(self, md):
+            
+            variables = md["embedding"]
+            
+            print(type(variables))
+            print(variables)
+            
+            import pandas as pd
+            from pathlib import Path
+            from flask import current_app            # Inside an app/request context:
+            tsv_path = Path(current_app.root_path) / "resources" / "variable definitions-ed.txt"
+            
+            # Read the TSV
+            df = pd.read_csv(tsv_path, sep="\t", dtype=str)
+            # Simple filter
+            df_vars = df[df["Symbol"].isin(variables)].copy()
+            
+            # (Optional) preserve the order of `variables`
+            df_vars["Symbol"] = pd.Categorical(df_vars["Symbol"], categories=variables, ordered=True)
+            df_vars = df_vars.sort_values("Symbol").reset_index(drop=True)
+            # print_first_row(df_vars)
+            
+            if len(variables)>100:
+                return
+
+            with table(border=1, cellpadding="0", cellspacing="0", width="100%"):
+                caption("Model Variables")
+            
+                with thead():
+                    with tr():
+                        for col in df_vars.columns:
+                            th(str(col), style="background-color: #d3d3d3;")
+            
+                # Body
+                with tbody():
+                    for _, row in df_vars.iterrows():
+                        with tr():
+                            for val in row:
+                                td("" if pd.isna(val) else str(val))  
+            
+        
         def addStatsTableTest(self, md): 
         
             ms = md["performance"]
         
             with table(border=1, cellpadding="0", cellspacing="0", width="100%"):
-                    caption("Model Test Set Statistics")
+                caption("Model Test Set Statistics")
             
-                    with tbody():
-                        with tr():
-                            # Row for "Training" and "Test" headers
-                            td("Test (20%)", colspan="3", align="center", style="background-color: #ccccff; width: 25%;")
-                            td("Test Set Applicability Domain Statistics", colspan="3", align="center",
-                               style="background-color: #ffffcc; width: 25%;")
-            
-                        with tr():
-                            # Header row for metrics
-            
-                            td(["R", sup("2")], align="center")
-                            td("RMSE", align="center")
-                            td("MAE", align="center")
-            
-                            td("MAE Test inside AD", align="center")
-                            td("MAE Test outside AD", align="center")
-                            td("Fraction Inside AD", align="center")
-            
-                        with tr():
-            
-                            td(format2(ms["external"]["R2"]), align="center")
-                            td(format2(ms["external"]["RMSE"]), align="center")
-                            td(format2(ms["external"]["MAE"]), align="center")
-    
-                            # AD stats
-                            td(format2(ms["externalAD"]["MAE_inside_AD"]), align="center")
-                            td(format2(ms["externalAD"]["MAE_outside_AD"]), align="center")
-                            td(format2(ms["externalAD"]["Fraction_inside_AD"]), align="center")    
+                with tbody():
+                    with tr():
+                        # Row for "Training" and "Test" headers
+                        td("Test (20%)", colspan="3", align="center", style="background-color: #ccccff; width: 25%;")
+                        td("Test Set Applicability Domain Statistics", colspan="3", align="center",
+                           style="background-color: #ffffcc; width: 25%;")
+        
+                    with tr():
+                        # Header row for metrics
+        
+                        td(["R", sup("2")], align="center")
+                        td("RMSE", align="center")
+                        td("MAE", align="center")
+        
+                        td("MAE Test inside AD", align="center")
+                        td("MAE Test outside AD", align="center")
+                        td("Fraction Inside AD", align="center")
+        
+                    with tr():
+        
+                        td(format2(ms["external"]["R2"]), align="center")
+                        td(format2(ms["external"]["RMSE"]), align="center")
+                        td(format2(ms["external"]["MAE"]), align="center")
+
+                        # AD stats
+                        td(format2(ms["externalAD"]["MAE_inside_AD"]), align="center")
+                        td(format2(ms["externalAD"]["MAE_outside_AD"]), align="center")
+                        td(format2(ms["externalAD"]["Fraction_inside_AD"]), align="center")    
     
     class RawExpDataSection:
         
@@ -955,7 +1001,7 @@ def create_report_from_json_file():
     except Exception as e:
         print(f"An unexpected error occurred: {e}")
     
-
 if __name__ == '__main__':
     create_report_from_json_file()
+    
 

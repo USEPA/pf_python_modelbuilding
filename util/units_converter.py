@@ -5,7 +5,7 @@ Created on Feb 10, 2026
 '''
 
 import math
-from util.predict_constants import PredictConstants as pc
+from util import predict_constants as pc
 
 class UnitsConverter:
         

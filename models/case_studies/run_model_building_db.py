@@ -46,7 +46,7 @@ from models.EmbeddingFromImportance import perform_sequential_feature_selection 
 
 import StatsCalculator as sc
 
-from models.dataset_utilities_db import get_training_prediction_instances, get_training_cv_instances
+import models.dataset_utilities_db as du
 
 from utils import print_first_row, row_to_json, to_json_safe
 
@@ -75,7 +75,7 @@ feature_selection_method_genetic_algorithm = "Genetic algorithm"
 feature_selection_method_group_contribution = "Group contribution" 
 feature_selection_method_importance = "Importance"
 
-from util.predict_constants import PredictConstants as pc
+from util import predict_constants as pc
 
 # PROJECT_ROOT=r"C:\Users\TMARTI02\OneDrive - Environmental Protection Agency (EPA)\0 python\modeling services\pf_python_modelbuilding"    
 PROJECT_ROOT = os.getenv("PROJECT_ROOT")
@@ -208,185 +208,16 @@ class ParametersGeneticAlgorithm:
         return asdict(self)
 
 
-dbl = DatabaseUtilities(default_schema="qsar_models")
 
 
 class ModelLoader():
     
+    def __init__(self, session):
+        self.session=session
+        self.dbl = DatabaseUtilities(schema="qsar_models", session=self.session)
+
     
-    def getSqlPropertyValuesForDataset(self):
-        
-        # TODO could get additional mapped identifiers from dsstox by doing a join to qsar_models.dsstox_records
-
-        return text("""
-        SELECT
-            pv.id AS prop_value_id,
-            dp.canon_qsar_smiles,
-            sc.source_dtxsid,
-            sc.source_casrn,
-            sc.source_chemical_name,
-            sc.source_smiles,
-            dpc.dtxsid AS mapped_dtxsid,
-            dpc.dtxcid AS mapped_dtxcid,
-            -- dpc.chemical_name AS mapped_chemical_name,
-            dpc.smiles AS mapped_smiles,
-            p.name_ccd AS prop_name,
-            'experimental' AS prop_type,
-            pc.name AS prop_category,
-            d."name" AS dataset,
-            dpc.property_value AS prop_value,--use the dpc value rather than the pv value fields because it's in the right units
-            u.abbreviation_ccd AS prop_unit,
-            dp.qsar_property_value,
-            u2.abbreviation_ccd AS qsar_property_unit,
-            pv.value_original AS prop_value_original,
-            pv.value_text AS prop_value_text,
-            pvT.value_point_estimate AS exp_details_temperature_c,
-            pvP.value_point_estimate AS exp_details_pressure_mmHg,
-            pvpH.value_point_estimate AS exp_details_pH, -- note: will convert to lower case
-            pvRS.value_text AS exp_details_response_site, -- for BCF, fish tox
-            pvSL.value_text AS exp_details_species_latin, -- for BCF, fish tox
-            pvSC.value_text AS exp_details_species_common,
-            pvSS.value_text AS exp_details_species_supercategory,
-            --CASE WHEN ps.name IS NOT NULL THEN ps.name ELSE ls.name END AS source_name,
-            --CASE WHEN ps.name IS NOT NULL THEN ps.description ELSE ls.citation END AS source_description,
-            --CASE WHEN ps.name IS NOT NULL THEN ps.url ELSE ls.doi END AS source_url,
-            ps."name" AS public_source_name,
-            ps.description AS public_source_description,
-            ps.url AS public_source_url,
-            pv.page_url AS direct_url,
-            ls."name" AS literature_source_name,
-            ls.citation AS literature_source_citation,
-            ls.doi AS literature_source_doi,
-            pv.document_name AS brief_citation, -- From OPERA2.9 usually
-            ps2."name" AS public_source_original_name, -- For sources like toxval, pubchem, sander
-            ps2.description AS public_source_original_description,
-            ps2.url AS public_source_original_url
-        FROM qsar_datasets.data_points AS dp
-        JOIN qsar_datasets.data_point_contributors AS dpc
-            ON dpc.fk_data_point_id = dp.id
-        JOIN exp_prop.property_values AS pv
-            ON dpc.exp_prop_property_values_id = pv.id
-        LEFT JOIN exp_prop.literature_sources AS ls
-            ON pv.fk_literature_source_id = ls.id
-        LEFT JOIN exp_prop.public_sources AS ps
-            ON pv.fk_public_source_id = ps.id
-        LEFT JOIN exp_prop.public_sources AS ps2
-            ON pv.fk_public_source_original_id = ps2.id
-        LEFT JOIN exp_prop.parameter_values AS pvT
-            ON pvT.fk_property_value_id = pv.id AND pvT.fk_parameter_id = 2
-        LEFT JOIN exp_prop.parameter_values AS pvP
-            ON pvP.fk_property_value_id = pv.id AND pvP.fk_parameter_id = 1
-        LEFT JOIN exp_prop.parameter_values AS pvpH
-            ON pvpH.fk_property_value_id = pv.id AND pvpH.fk_parameter_id = 3
-        LEFT JOIN exp_prop.parameter_values AS pvRS
-            ON pvRS.fk_property_value_id = pv.id AND pvRS.fk_parameter_id = 22
-        LEFT JOIN exp_prop.parameter_values AS pvSS
-            ON pvSS.fk_property_value_id = pv.id AND pvSS.fk_parameter_id = 38
-        LEFT JOIN exp_prop.parameter_values AS pvSL
-            ON pvSL.fk_property_value_id = pv.id AND pvSL.fk_parameter_id = 21
-        LEFT JOIN exp_prop.parameter_values AS pvSC
-            ON pvSC.fk_property_value_id = pv.id AND pvSC.fk_parameter_id = 11
-        JOIN exp_prop.source_chemicals AS sc
-            ON sc.id = pv.fk_source_chemical_id
-        JOIN qsar_datasets.datasets AS d
-            ON dp.fk_dataset_id = d.id
-        JOIN qsar_datasets.properties AS p
-            ON d.fk_property_id = p.id
-        JOIN qsar_datasets.units AS u
-            ON u.id = d.fk_unit_id_contributor
-        JOIN qsar_datasets.units AS u2
-            ON u2.id = d.fk_unit_id
-        LEFT JOIN qsar_datasets.properties_in_categories AS pic
-            ON p.id = pic.fk_property_id
-        LEFT JOIN qsar_datasets.property_categories AS pc
-            ON pic.fk_property_category_id = pc.id
-        WHERE d.name = :dataset_name
-          AND keep = TRUE
-        """)
-
-
-
-    def getMappedPropertyValues(self, session, dataset_name):
-        
-        logging.info(f"Getting mapped property values for {dataset_name}")
-        df_pv = pd.read_sql(self.getSqlPropertyValuesForDataset(), con=session.get_bind(), params={"dataset_name": dataset_name})
-        df_pv = df_pv.replace('', np.nan).dropna(axis=1, how='all')  # drop the columns with no data
-        logging.info(f"Done")
-        return df_pv
-    
-    
-    def getSqlMappedDataPoints(self):
-        
-        return text("""
-        WITH filtered_dp AS (
-          SELECT
-            dp.canon_qsar_smiles,
-            dp.qsar_exp_prop_property_values_id,
-            dp.qsar_dtxcid,
-            TRIM(SPLIT_PART(dp.qsar_exp_prop_property_values_id, '|', 1)) AS qsar_exp_prop_property_values_id_first,
-            TRIM(SPLIT_PART(dp.qsar_dtxcid, '|', 1)) AS dtxcid
-          FROM qsar_datasets.data_points AS dp
-          JOIN qsar_datasets.datasets AS d
-            ON dp.fk_dataset_id = d.id
-          WHERE d.name = :dataset_name
-        )
-        SELECT
-          fdp.canon_qsar_smiles,
-          --fdp.qsar_exp_prop_property_values_id,
-          fdp.qsar_exp_prop_property_values_id_first,
-          --fdp.qsar_dtxcid,
-          fdp.dtxcid,
-          r.dtxsid,
-          r.casrn,
-          r.preferred_name,
-          r.smiles,
-          r.mol_weight
-        FROM filtered_dp AS fdp
-        LEFT JOIN qsar_models.dsstox_records AS r
-          ON r.dtxcid = fdp.dtxcid
-         AND r.fk_dsstox_snapshot_id = 4;
-        """)
-    
-    def getMappedDatapoints(self,session, dataset_name):
-        logging.info(f"Getting mapped datapoints for {dataset_name}")
-        df_pv = pd.read_sql(self.getSqlMappedDataPoints(), con=session.get_bind(), params={"dataset_name": dataset_name})
-        df_pv = df_pv.replace('', np.nan).dropna(axis=1, how='all')  # drop the columns with no data
-        logging.info(f"Done")
-        return df_pv
-    
-
-    def upload_image_to_db_with_insert(self, file_path, username, fk_model_id, fk_file_type_id, session):
-
-        try:
-        # Read the image file as binary
-            with open(file_path, 'rb') as file:
-                binary_data = file.read()
-        
-            # Prepare the SQL query
-            insert_query = text("""
-            INSERT INTO qsar_models.model_files (created_at, created_by, file, updated_at, updated_by, fk_file_type_id, fk_model_id)
-            VALUES (:created_at, :created_by, :file, :updated_at, :updated_by, :fk_file_type_id, :fk_model_id)
-            """)
-        
-            # Data to insert
-            data = {
-                'created_at': datetime.now(),
-                'created_by': username,
-                'file': binary_data,
-                'updated_at': datetime.now(),
-                'updated_by': username,
-                'fk_file_type_id': fk_file_type_id,  # Example foreign key value
-                'fk_model_id': fk_model_id  # Example foreign key value
-            }
-        
-            session.execute(insert_query, data)
-            session.commit()
-            
-        except Exception as e:
-            session.rollback()
-            print(f"An error occurred: {e}")
-            
-    def upload_image_to_db(self, file_path, username, fk_model_id, fk_file_type_id, session):
+    def upload_image(self, file_path, username, fk_model_id, fk_file_type_id):
 
         try:
         # Read the image file as binary
@@ -404,52 +235,14 @@ class ModelLoader():
                 'fk_model_id': fk_model_id  # Example foreign key value
             }
         
-            new_id = dbl.create_row(session, table="model_files", record=record)
-            session.commit()
+            new_id = self.dbl.create_row(table="model_files", record=record)
             return new_id
 
         except Exception as e:
-            session.rollback()
+            self.dbl.session.rollback()
             print(f"An error occurred: {e}")
     
-    def get_dataset_details(self, session, dataset_name):
-        """
-        Gets m meta data (except training and test set tsvs).
-        TODO Should this info be stored directly in m object and then for new models we won't need to query the db since will be already in the pickled object?
-        """
-        try:
-            
-            query = """
-            SELECT 
-                d.id,
-                d.name,
-                u.abbreviation_ccd AS units_model,
-                u2.abbreviation_ccd AS units_display,
-                d.dsstox_mapping_strategy,
-                p.name_ccd as property_name,
-                p.description as property_description
-            FROM qsar_datasets.datasets AS d
-            LEFT JOIN qsar_datasets.units AS u ON d.fk_unit_id = u.id
-            LEFT JOIN qsar_datasets.units AS u2 ON d.fk_unit_id_contributor = u2.id
-            LEFT JOIN qsar_datasets.properties AS p ON d.fk_property_id = p.id
-            """
-                        # SQL query to retrieve m details
-            sql = text(query + "\nWHERE d.name = :dataset_name")
 
-            # Use left joins so can still get a result if something is missing (like fk_ad_method was not set for m)
-            # print(sql)
-
-            # Execute the query
-            row = session.execute(sql, {'dataset_name': dataset_name}).fetchone()
-
-            row_dict = dict(row._mapping) if row is not None else None
-
-            # Process the result
-            return row_dict
-
-        except Exception as ex:
-            ex.with_traceback()
-            print(f"Exception occurred: {ex}")
 
     def add_model_statistics(self, user, fk_model_id, stats_dict_name, model_statistics_dict, stats_lookup, created_at, model_statistics_rows): 
         
@@ -482,9 +275,9 @@ class ModelLoader():
             else:
                 print(stat_name, "Skipping loading stat")
 
-    def load_stats(self, session, results, user, fk_model_id):
+    def load_stats(self, results, user, fk_model_id):
         
-        stats_rows = dbl.get_rows(session, "statistics")
+        stats_rows = self.dbl.get_rows("statistics")
         stats_lookup = {}  # lookup for the fk_statistic_id
         for stat_row in stats_rows:
             stats_lookup[stat_row.name] = stat_row.id
@@ -510,8 +303,8 @@ class ModelLoader():
             )
         # print(json.dumps(model_statistics_rows,indent=4))
         
-        stats_row_ids = dbl.create_many(session, "model_statistics", model_statistics_rows)
-        session.commit()
+        stats_row_ids = self.dbl.create_many("model_statistics", model_statistics_rows)
+        
         
         # for stats_row_id in stats_row_ids:
         #     print(stats_row_id)
@@ -526,8 +319,8 @@ class ModelLoader():
         parts = [source[i:i + chunksize] for i in range(0, len(source), chunksize)]
     
         # Optional: mimic the Java prints
-        print(f"Size of model bytes={len(source)}")
-        print(f"# Parts = {len(parts)}")
+        logging.info(f"Size of model bytes={len(source)}")
+        logging.info(f"# Parts = {len(parts)}")
     
         total = sum(len(p) for p in parts)
         if total != len(source):
@@ -536,7 +329,7 @@ class ModelLoader():
     
         return parts
 
-    def load_model_from_object(self, session, user, model, params, fk_descriptor_embedding_id, fk_method_id, fk_ad_method):
+    def load_model_from_object(self, user, model, params, fk_descriptor_embedding_id, fk_method_id, fk_ad_method):
 
         created_at = datetime.now()
                 
@@ -561,31 +354,35 @@ class ModelLoader():
             "updated_at":created_at}
         # print(json.dumps(to_json_safe(model_row)))
         # print(json.dumps(model_row,indent=4))
-        new_id = dbl.create_row(session, table="models", record=model_row)
-        session.commit()
-        return new_id
 
-    def create_model_bytes(self, session: Session, bytes_list):
+        new_id = self.dbl.create_row(table="models", record=model_row)
+        new_name = f"{user}_{new_id}"
+        
+        # Filters as kwargs (id=new_id)
+        updated = self.dbl.update_row(
+            table="models",
+            values={"name": new_name, "name_ccd":new_name, "updated_by": user, "updated_at": datetime.now()},
+            id=new_id
+        )
+        return new_id        
+        
+
+    def create_model_bytes(self, bytes_list):
     
         try:
             # Insert records
-            result = dbl.create_many(session, table="model_bytes", records=bytes_list)
-            # Ensure SQL is sent and constraints checked before commit
-            session.flush()
+            result = self.dbl.create_many(table="model_bytes", records=bytes_list)
             # Commit the transaction
-            session.commit()
             # At this point, success if we reached here without exception
-        
-            print("Model bytes loaded")
-            
+            logging.info("Model bytes loaded")
             return result
         except SQLAlchemyError:
             # Roll back on any DB/SQLAlchemy error
-            session.rollback()
+            self.session.rollback()
             # Re-raise or log the error
             raise        
 
-    def load_model_bytes(self, session, user, model, fk_model_id):
+    def load_model_bytes(self, user, model, fk_model_id):
         model_bytes = pickle.dumps(model)
         bytes_list = self.divide_array(model_bytes)
 
@@ -603,11 +400,10 @@ class ModelLoader():
         ]
 
         # Insert
-        return self.create_model_bytes(session, bytes_rows)
+        return self.create_model_bytes(bytes_rows)
     
     def load_predictions(
         self,
-        session: Session,
         user: str,
         set: str,
         df: pd.DataFrame,
@@ -636,7 +432,7 @@ class ModelLoader():
           Number of inserted rows.
         """
         # Basic validation
-        required_cols = ["id", "pred"]
+        required_cols = ["canon_qsar_smiles", "pred"]
         missing = [c for c in required_cols if c not in df.columns]
         if missing:
             raise ValueError(f"DataFrame missing required columns: {missing}")
@@ -649,7 +445,7 @@ class ModelLoader():
     
         # Prepare per-row values (id -> canon_qsar_smiles, pred -> qsar_predicted_value)
         rows_df = pd.DataFrame({
-            "canon_qsar_smiles": df["id"].astype(str),
+            "canon_qsar_smiles": df["canon_qsar_smiles"].astype(str),
             "qsar_predicted_value": pd.to_numeric(df["pred"], errors="coerce"),
         })
     
@@ -686,13 +482,29 @@ class ModelLoader():
         # print_first_row(rows_df, row=0)
     
         # Use your chunked inserter (single atomic transaction)
-        count = dbl.create_many_chunked(session=session, table="predictions", records=records, chunk_size=chunk_size)        
+        count = self.dbl.create_many_chunked(table="predictions", records=records, chunk_size=chunk_size)        
         logging.info(f"For {set} set, # predictions loaded: {count}")
         
-        session.commit()
         return count
 
-    def load_model(self, session, user, model, results, df_pred_training, df_pred_test, df_pred_cv, folder_path):
+
+    def create_method(self, user, isBinary, fullMethodName):
+        logging.info(f"Creating method")
+        created_at = datetime.now()
+        record = {
+            "created_by":user, 
+            "updated_by":user, 
+            "created_at":created_at, 
+            "updated_at":created_at, 
+            "description":"todo", 
+            "is_binary":isBinary, 
+            "name":fullMethodName, 
+            "description_url":"todo"}
+        new_id=self.dbl.create_row("methods", record)
+        return new_id
+
+
+    def load_model(self, user, model, results, df_pred_training, df_pred_test, df_pred_cv, folder_path):
 
         params = results["params"]
 
@@ -700,9 +512,9 @@ class ModelLoader():
         embedding_tsv = "\t".join(results["model_details"]["embedding"])
         
         # print(embedding_tsv)
-        embedding_row = dbl.get_row(session, "descriptor_embeddings", embedding_tsv=embedding_tsv, dataset_name=params["dataset_name"])
+        embedding_row = self.dbl.get_row("descriptor_embeddings", embedding_tsv=embedding_tsv, dataset_name=params["dataset_name"])
         if embedding_row is None:
-            fk_descriptor_embedding_id = self.create_descriptor_embedding_from_params(session, user, results)
+            fk_descriptor_embedding_id = self.create_descriptor_embedding_from_params(user, results)
             logging.info(f"descriptor_embedding created: {fk_descriptor_embedding_id}")
         else:
             fk_descriptor_embedding_id = embedding_row.id
@@ -714,17 +526,33 @@ class ModelLoader():
             return
         
         # ---- get fk_method_id ----
-        row_method = dbl.get_row(session, "methods", name=params["qsar_method"])
+        
+        
+        isBinary = results["model_details"]["is_binary"]
+        methodName = results["model_details"]["qsar_method"]
+        if isBinary:
+            classOrRegr = "classifier"
+        else:
+            classOrRegr = "regressor"
+        fullMethodName = methodName + "_" + classOrRegr
+        
+        print(fullMethodName)
+        
+                
+        row_method = self.dbl.get_row("methods", name=fullMethodName)
         if row_method is not None:
             fk_method_id = row_method.id
         else: 
-            logging.error(f"Cant find fk for qsar_method={params['qsar_method']}")
-            return
+            # logging.error(f"Cant find fk for qsar_method={params['qsar_method']}")
+            # return
+            fk_method_id=self.create_method(user, isBinary, fullMethodName)
+            logging.info(f"Created new method with id: {fk_method_id}")
+            
         logging.info(f"fk_method_id:{fk_method_id}")
         
         # ---- get fk_ad_method_id ----
         ad_measure = " and ".join(params["ad_measure"])
-        row_ad_method = dbl.get_row(session, "ad_methods", name=ad_measure)
+        row_ad_method = self.dbl.get_row("ad_methods", name=ad_measure)
         if row_ad_method is not None:
             fk_ad_method = row_ad_method.id
             logging.info(f"fk_ad_method:{fk_ad_method}")
@@ -734,7 +562,6 @@ class ModelLoader():
         
         # ---- store model into the models table ----
         fk_model_id = self.load_model_from_object(
-            session,
             user,
             model,
             params,
@@ -752,28 +579,33 @@ class ModelLoader():
         model.modelId = fk_model_id
         
         # ---- store model_bytes into the model_bytes table:----
-        self.load_model_bytes(session, user, model, fk_model_id)
+        self.load_model_bytes(user, model, fk_model_id)
         
         # ---- store model_statistics into the model_statistics table:----        
-        self.load_stats(session, results, user, fk_model_id)
+        self.load_stats(results, user, fk_model_id)
         
         # ---- store predictions into prediction table ----
-        self.load_predictions(session, user, "training", df_pred_training, fk_model_id, fk_splitting_id=1)
-        self.load_predictions(session, user, "test", df_pred_test, fk_model_id, fk_splitting_id=1)
-        self.load_predictions(session, user, "training cv", df_pred_cv, fk_model_id)
+        
+        # print_first_row(df_pred_training, row=1)
+        # print_first_row(df_pred_test, row=1)
+        # print_first_row(df_pred_cv, row=1)
+        
+        self.load_predictions(user, "training", df_pred_training, fk_model_id, fk_splitting_id=1)
+        self.load_predictions(user, "test", df_pred_test, fk_model_id, fk_splitting_id=1)
+        self.load_predictions(user, "training cv", df_pred_cv, fk_model_id)
         
         # ---- store plots in model_files table ----     
         filePathOutScatter = os.path.join(folder_path, "scatter_plot.png")
-        image_id = self.upload_image_to_db(filePathOutScatter, user, fk_model_id, 3, session)
+        image_id = self.upload_image(filePathOutScatter, user, fk_model_id, 3)
         logging.info(f"Scatter plot loaded to db with id: {image_id}")
         
         filePathOutHistogram = os.path.join(folder_path, "histogram.png")
-        image_id = self.upload_image_to_db(filePathOutHistogram, user, fk_model_id, 4, session)
+        image_id = self.upload_image(filePathOutHistogram, user, fk_model_id, 4)
         image_id = logging.info(f"Histogram plot loaded to db with id: {image_id}")
         
         # TODO: created detailed spreadsheet and store in the database
     
-    def create_descriptor_embedding_from_params(self, session, user, results):
+    def create_descriptor_embedding_from_params(self, user, results):
         
         params = results["params"]
 
@@ -798,8 +630,7 @@ class ModelLoader():
             "updated_at": created_at,
         }
         
-        new_id = dbl.create_row(session, table="descriptor_embeddings", record=descriptor_embedding)
-        session.commit()
+        new_id = self.dbl.create_row(table="descriptor_embeddings", record=descriptor_embedding)
         return new_id
 
 
@@ -1505,6 +1336,13 @@ def add_log_p_martin_columns(df_training, df_prediction, cross_validate, df_cv_d
     return df_training, df_prediction
 
 
+
+def add_source_chemical_info(df_pred, df_dps):
+    df_pred.rename(columns={'id':'canon_qsar_smiles'}, inplace=True)
+    df_pred = df_pred.merge(df_dps, on='canon_qsar_smiles', how='left')
+    df_pred.rename(columns={'qsar_exp_prop_property_values_id_first':'exp_prop_id'}, inplace=True)
+    return df_pred
+
 def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None, cross_validate=True,
                 run_AD=True, feature_selection=True, fs_previous_embedding=True, params=None,
                 descriptor_set_name="WebTEST-default", splitting_name="RND_REPRESENTATIVE",
@@ -1516,7 +1354,8 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
     
     try:
         session = getSession()
-        ml = ModelLoader()
+        
+        ml = ModelLoader(session)
 
         if qsar_method == 'gcm' or qsar_method == 'svm':
             feature_selection = False
@@ -1576,12 +1415,12 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         # ---- Get dataframes from the database ----
         logging.info("start getting dataframes from db")
     
-        df_training, df_prediction = get_training_prediction_instances(session, dataset_name, descriptor_set_name, params.splitting_name)
+        df_training, df_prediction = du.get_training_prediction_instances(session, dataset_name, descriptor_set_name, params.splitting_name)
         # print(df_training.shape)
     
         df_cv_dict = None 
         if cross_validate:
-            df_cv_dict = get_training_cv_instances(session, dataset_name, descriptor_set_name)
+            df_cv_dict = du.get_training_cv_instances(session, dataset_name, descriptor_set_name)
         
         if add_LOGP_Martin:
             df_training, df_prediction = add_log_p_martin_columns(df_training, df_prediction, cross_validate, df_cv_dict)
@@ -1639,7 +1478,7 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         # ---- Save results ----
         # create results file:
         
-        dataset_info = ml.get_dataset_details(session, dataset_name)
+        dataset_info = du.get_dataset_details(session, dataset_name)
         dsstox_mapping_strategy = json.loads(dataset_info["dsstox_mapping_strategy"])
 
         
@@ -1674,25 +1513,15 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
             columns.insert(0, "ID")
             df_test_model = df_prediction[columns]
 
-        df_pv = ml.getMappedPropertyValues(session, dataset_name)
-        print_first_row(df_pv, row=1)
+        df_pv = du.getMappedPropertyValues(session, dataset_name)
+        # print_first_row(df_pv, row=1)
         
+        df_dps = du.getMappedDatapoints(session, dataset_name)
+
+        df_pred_training = add_source_chemical_info(df_pred_training, df_dps)
+        df_pred_test = add_source_chemical_info(df_pred_test, df_dps)
+        df_pred_cv = add_source_chemical_info(df_pred_cv, df_dps)        # print_first_row(df_pred_cv)
         
-
-        df_dps = ml.getMappedDatapoints(session, dataset_name)
-
-        df_pred_test.rename(columns={'id': 'canon_qsar_smiles'}, inplace=True)
-        df_pred_test = df_pred_test.merge(df_dps, on='canon_qsar_smiles', how='left')
-        df_pred_test.rename(columns={'qsar_exp_prop_property_values_id_first': 'exp_prop_id'}, inplace=True)
-        print_first_row(df_pred_test)
-
-        # print_first_row(df_pred_cv)
-        df_pred_cv.rename(columns={'id': 'canon_qsar_smiles'}, inplace=True)
-        df_pred_cv = df_pred_cv.merge(df_dps, on='canon_qsar_smiles', how='left')
-        df_pred_cv.rename(columns={'qsar_exp_prop_property_values_id_first': 'exp_prop_id'}, inplace=True)
-        print_first_row(df_pred_cv)
-        
-        #
         # mtp.generateHistogram2(fileOutHistogram=filePathOutHistogram, property_name=model.propertyName, unit_name=model.unitsModel,
         #                        mpsTraining=mpsTraining, mpsTest=mpsTest,
         #                        seriesNameTrain="Training set", seriesNameTest="Test set")
@@ -1715,7 +1544,7 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         logging.info(f"test set AD stats={json.dumps( results_dict['model_statistics']['test_stats_AD'] , indent=4)}")
 
         if write_to_db:
-            ml.load_model(session, user, model, results_dict, df_pred_training, df_pred_test, df_pred_cv, folder_path)
+            ml.load_model(user, model, results_dict, df_pred_training, df_pred_test, df_pred_cv, folder_path)
         
         # logging.info(f"model description={json.dumps(json.loads(model.get_model_description()), indent=4)}")
     
@@ -1921,16 +1750,3 @@ class Results:
         return df_stats, excel_path    
 
 
-if __name__ == '__main__':
-
-    # test getting the detailed property data:
-    from dotenv import load_dotenv
-    load_dotenv()
-    ml = ModelLoader()
-    session = getSession()
-    dataset_name = 'KOC v1 modeling'
-    df_pv = ml.getMappedPropertyValues(session, dataset_name)
-    print_first_row(df_pv, row=1)
-    
-    df_dps = ml.getMappedDatapoints(session, dataset_name)
-    print_first_row(df_dps, row=1)

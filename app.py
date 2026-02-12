@@ -8,35 +8,36 @@ Run with Python 3.9 to avoid problems with parallelizing RF (bug in older versio
 Repository created 05/21/2021
 """
 
-from flask import request, abort, Flask
+from flask import request, abort, Flask, jsonify, send_file
 
 import json
 import logging
 import pickle
-
+import io
+from sklearn2pmml import sklearn2pmml
 from logging import INFO, DEBUG
-from model_ws_db_utilities import ModelPredictor, ModelInitializer
 
+from model_ws_db_utilities import ModelPredictor, ModelInitializer
 # why not make the following methods part of a Utility class then call methods from instance of it?
 from model_ws_utilities import get_model_info, call_build_model_with_preselected_descriptors, models, \
     call_build_embedding_ga, call_build_embedding_importance, call_build_embedding_lasso, call_cross_validate, \
     call_do_predictions, instantiateModelForPrediction, get_model_details, call_generate_plot
-
+from report_creator_dict import ReportCreator
 from applicability_domain import applicability_domain_utilities as adu
-
-from sklearn2pmml import sklearn2pmml
+import util.get_model_file as gmf
 
 from dotenv import load_dotenv
 load_dotenv()
-
-from report_creator_dict import ReportCreator
 
 import coloredlogs
 import connexion
 from connexion.middleware import MiddlewarePosition
 from connexion.options import SwaggerUIOptions
 from starlette.middleware.cors import CORSMiddleware
-from starlette.responses import HTMLResponse, Response, JSONResponse
+from starlette.responses import HTMLResponse, Response, JSONResponse, StreamingResponse
+from urllib.parse import quote
+
+
 coloredlogs.install(level=DEBUG, milliseconds=True,
                     fmt='%(asctime)s - %(name)s - %(levelname)s - %(message)s (%(filename)s:%(lineno)d)')
 
@@ -572,6 +573,32 @@ def cross_validate_fold(qsar_method):
 #     return predictDB(model_id, smiles, report_format)
 
 
+async def get_file(type_id: int, model_id: int):
+    try:
+        raw_bytes, file_name, mime_type = gmf.fetch_model_file(model_id=model_id, type_id=type_id)
+    except FileNotFoundError as e:
+        return {"detail": str(e)}, 404
+    except ValueError as e:
+        return {"detail": str(e)}, 400
+    except Exception as e:
+        return {"detail": f"Database error: {e}"}, 500
+
+    as_attachment = (type_id == 2)  # your rule
+    disposition = "attachment" if as_attachment else "inline"
+    cd = f'{disposition}; filename="{file_name}"; filename*=UTF-8\'\'{quote(str(file_name))}'
+
+    bio = io.BytesIO(raw_bytes)
+    bio.seek(0)
+    headers = {
+        "Content-Disposition": cd,
+        "Cache-Control": "no-cache, no-store, max-age=0",
+        "Pragma": "no-cache",
+    }
+    return StreamingResponse(bio, media_type=mime_type, headers=headers)
+
+
+
+
 def predictDB_POST(body):
     return predictDB(body['smiles'], body['model_id'], "json")
 
@@ -605,6 +632,10 @@ def predictDB(smiles, model_id, report_format):
     
         if report_format == "html":
             rc=ReportCreator()
+            
+            if "invalid" in modelResultsJson.lower():
+                return HTMLResponse(content=modelResultsJson)
+            
             modelResultsHtml = rc.create_html_report_from_json(modelResultsJson)
             return HTMLResponse(content=modelResultsHtml)    
         else:

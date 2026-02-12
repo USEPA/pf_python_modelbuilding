@@ -20,7 +20,7 @@ import pandas as pd
 
 debug = False
 
-from util.predict_constants import PredictConstants as pc
+from util import predict_constants as pc
 
 def generate_applicability_domain_with_preselected_descriptors_from_dfs(train_df, test_df, remove_log_p,
                                                                embedding, applicability_domain,filterColumnsInBothSets=True,
