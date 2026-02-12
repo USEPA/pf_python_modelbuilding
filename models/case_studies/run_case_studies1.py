@@ -5,11 +5,11 @@ Created on Feb 3, 2026
 '''
 
 from models.case_studies.run_model_building_db import run_dataset, Results, ParametersGeneticAlgorithm
-from util.predict_constants import PredictConstants as pc
+from util import predict_constants as pc
+
+
 import logging
 import json
-from xgboost.dask import da
-from sklearn.datasets import descr
 
 # logging.basicConfig(level=logging.ERROR, force=True) #turn off info prints 
 
@@ -30,14 +30,19 @@ def run_Koc():
     ad_measure_model = [pc.Applicability_Domain_TEST_Embedding_Euclidean, pc.Applicability_Domain_TEST_Fragment_Counts]
 
     # run_dataset(dataset_name=dataset_name, qsar_method='rf', feature_selection=False, ad_measure_model=ad_measure_model,write_to_db=write_to_db)  # OK
-    # run_dataset(dataset_name=dataset_name, qsar_method='rf', feature_selection=True, ad_measure_model=ad_measure_model,write_to_db=write_to_db)  # OK
+    run_dataset(dataset_name=dataset_name, qsar_method='rf', feature_selection=True, ad_measure_model=ad_measure_model,write_to_db=write_to_db)  # OK
     #
     # run_dataset(dataset_name=dataset_name, qsar_method='xgb', feature_selection=False, ad_measure_model=ad_measure_model,write_to_db=write_to_db)
     # run_dataset(dataset_name=dataset_name, qsar_method='xgb', feature_selection=True, ad_measure_model=ad_measure_model,write_to_db=write_to_db)  # OK
     #
     # run_dataset(dataset_name=dataset_name, qsar_method='knn', feature_selection=False, ad_measure_model=ad_measure_model,write_to_db=write_to_db)  # OK
     # run_dataset(dataset_name=dataset_name, qsar_method='knn', folder_embedding="rf_WebTEST-default_fs=True", ad_measure_model=ad_measure_model,write_to_db=write_to_db)  # OK
-    run_dataset(dataset_name=dataset_name, qsar_method='knn', feature_selection=True, ad_measure_model=ad_measure_model,write_to_db=write_to_db)  # OK
+    # run_dataset(dataset_name=dataset_name, qsar_method='knn', feature_selection=True, ad_measure_model=ad_measure_model,write_to_db=write_to_db)  # OK
+    
+    # grid = {'estimator__n_neighbors': [3], 'estimator__weights': ['distance']}  # matches AD in terms of using 3
+    # params = ParametersGeneticAlgorithm(qsar_method='knn', hyperparameter_grid=grid, descriptor_set_name= "WebTEST-default",
+    #                                     ad_measure=ad_measure_model, dataset_name=dataset_name, run_rfe=True, run_sfs=False)
+    # results_dict = run_dataset(dataset_name=dataset_name, qsar_method='knn', feature_selection=True, params=params, write_to_db=write_to_db)
     
     # run_dataset(dataset_name=dataset_name, qsar_method='gcm', feature_selection=False, ad_measure_model=ad_measure_model,write_to_db=write_to_db)  # OK
     #
