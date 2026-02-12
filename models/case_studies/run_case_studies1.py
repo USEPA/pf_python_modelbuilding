@@ -7,7 +7,8 @@ Created on Feb 3, 2026
 from models.case_studies.run_model_building_db import run_dataset, Results, ParametersGeneticAlgorithm
 from util import predict_constants as pc
 
-
+from model_ws_db_utilities import getEngine, getSession
+from ModelToExcel import ModelToExcel
 import logging
 import json
 
@@ -15,7 +16,6 @@ import json
 
 
 def run_example():
-    
     dataset_name = "KOC v1 modeling"
     run_dataset(dataset_name=dataset_name, qsar_method='rf', feature_selection=False)  # OK
 
@@ -118,11 +118,20 @@ def run_fish_tox():
     r = Results()
     r.summarize_model_stats(dataset_name)
 
-    
+
+def test_model_summary():
+    engine = getEngine()
+    session = getSession()
+    model_id = 1065
+    excel_path = "summary.xlsx"
+    test = ModelToExcel(engine, session, model_id, excel_path)
+    test.create_excel()
+
 
 if __name__ == '__main__':
     # run_example()
     # run_Koc_knn_ga()
-    run_Koc()
+    # run_Koc()
     # run_fish_tox()
     # test_create_model()
+    test_model_summary()

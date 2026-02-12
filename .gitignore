@@ -34,3 +34,5 @@ env/
 *.R
 my.env
 .vscode/
+contractor.env
+*.ipynb

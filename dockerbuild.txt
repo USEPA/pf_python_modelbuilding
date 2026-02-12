@@ -1,4 +1,4 @@
 docker build --network host -t python_model_building -f Dockerfile .
-
-
+docker stop python-model-building    # if it's running
+docker rm python-model-building      # remove it
 docker run -d --name python-model-building --env-file .env -p 8080:8080 python_model_building:latest
