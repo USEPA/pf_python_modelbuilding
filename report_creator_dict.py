@@ -346,7 +346,7 @@ class ReportCreator:
         
         def write_model_performance(self, md):
         
-            with table(border="0", width="100%"):
+            with table(border="0", width="100%", cellpadding="10"):
                 with tbody():
                     with tr(bgcolor="black"):
                         with td(colspan="3"):
@@ -409,14 +409,13 @@ class ReportCreator:
             
             variables = md["embedding"]
             
-            print(type(variables))
-            print(variables)
-            
-            import pandas as pd
             from pathlib import Path
-            from flask import current_app            # Inside an app/request context:
-            tsv_path = Path(current_app.root_path) / "resources" / "variable definitions-ed.txt"
-            
+            import pandas as pd
+
+            BASE_DIR = Path(__file__).resolve().parent
+            RESOURCES_DIR = BASE_DIR / "resources"
+            tsv_path = RESOURCES_DIR / "variable definitions-ed.txt"
+
             # Read the TSV
             df = pd.read_csv(tsv_path, sep="\t", dtype=str)
             # Simple filter
@@ -430,7 +429,7 @@ class ReportCreator:
             if len(variables)>100:
                 return
 
-            with table(border=1, cellpadding="0", cellspacing="0", width="100%"):
+            with table(border=1, cellpadding="5", cellspacing="0", width="100%"):
                 caption("Model Variables")
             
                 with thead():

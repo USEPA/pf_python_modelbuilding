@@ -20,7 +20,7 @@ from API_Utilities import QsarSmilesAPI, DescriptorsAPI
 
 # from db.mongo_cache import get_cached_prediction, cache_prediction
 
-from util import predict_constants as PredictConstants
+from util import predict_constants as pc
 
 from model_ws_utilities import call_do_predictions_from_df, models
 from models import df_utilities as dfu
@@ -1320,7 +1320,7 @@ class ModelStatistics:
         df_preds_training_cv = mi.get_cv_predictions(session, model)
 
         stats_training_cv = stats.calculate_continuous_statistics(df_preds_training_cv, 0,
-            PredictConstants.TAG_CV + PredictConstants.TAG_TRAINING)
+            pc.TAG_CV + pc.TAG_TRAINING)
 
         statistic_name = "RMSE_CV_Training"
         statistic_value = stats_training_cv[statistic_name]
@@ -1339,7 +1339,7 @@ class ModelStatistics:
         df_preds_test = mi.get_predictions(session, model=model, split_num=1, fk_splitting_id=1)
         mean_exp_training = stats.calculate_mean_exp_training(df_preds_training)
         stats_test_set = stats.calculate_continuous_statistics(df_preds_test, mean_exp_training,
-            PredictConstants.TAG_TEST)
+            pc.TAG_TEST)
 
         self.compare_stats(model, stats_test_set)
 
@@ -1355,7 +1355,7 @@ class ModelStatistics:
         ad_results = json.loads(str_ad_results)  # convert json to list of AD results
         df_ad = pd.DataFrame(ad_results)  # convert to dataframe
 
-        self.calculate_AD_stats(df_ad, df_preds_test, PredictConstants.TAG_TEST, model.modelId, session)
+        self.calculate_AD_stats(df_ad, df_preds_test, pc.TAG_TEST, model.modelId, session)
 
     def updateStatsPredictModuleModels(self):
 
@@ -1707,7 +1707,7 @@ cache = {}
 class ModelPredictor:
 
     @timer
-    def predictFromDB(self, model_id, smiles, generate_report=True, file_api=PredictConstants.URL_LOCAL_FILE_API):
+    def predictFromDB(self, model_id, smiles, generate_report=True):
         """
         Runs whole workflow: standardize, descriptors, prediction, applicability domain
         """
@@ -1724,7 +1724,7 @@ class ModelPredictor:
                 # print("in cache: " + key)
                 return cache[key]
             else:
-                cache[key], code = self.predict_model_smiles(model_id, smiles, generate_report=generate_report, file_api=file_api)
+                cache[key], code = self.predict_model_smiles(model_id, smiles, generate_report=generate_report)
                 return cache[key]
         else:
             result, missing = [], []
@@ -1953,12 +1953,12 @@ class ModelPredictor:
         self.addDistances(neighborsTest, distances_test)
                 
         df_neighborsTest = pd.DataFrame(neighborsTest)
-        stats_test = stats.calculate_continuous_statistics(df_neighborsTest, 0, PredictConstants.TAG_TEST)
-        neighborsTestMAE = stats_test[PredictConstants.MAE + PredictConstants.TAG_TEST]
+        stats_test = stats.calculate_continuous_statistics(df_neighborsTest, 0, pc.TAG_TEST)
+        neighborsTestMAE = stats_test[pc.MAE + pc.TAG_TEST]
                     
         df_neighborsTraining = pd.DataFrame(neighborsTraining)
-        stats_training = stats.calculate_continuous_statistics(df_neighborsTraining, 0, PredictConstants.TAG_TRAINING)
-        neighborsTrainingMAE = stats_training[PredictConstants.MAE + PredictConstants.TAG_TRAINING]
+        stats_training = stats.calculate_continuous_statistics(df_neighborsTraining, 0, pc.TAG_TRAINING)
+        neighborsTrainingMAE = stats_training[pc.MAE + pc.TAG_TRAINING]
         
         neighborResultsPrediction = {"set": "Test", "neighbors":neighborsTest, "MAE":neighborsTestMAE,
                                                 "unitNeighbor":modelResults.unitsModel,
@@ -2007,7 +2007,7 @@ class ModelPredictor:
                         
         adResultsFrag = {}
         adResultsFrag["adMethod"] = {}
-        adResultsFrag["adMethod"]["name"] = PredictConstants.TEST_FRAGMENTS
+        adResultsFrag["adMethod"]["name"] = pc.TEST_FRAGMENTS
         adResultsFrag["adMethod"]["description"] = "Whether or not the fragment counts are within the range for chemicals in the training set"
 
         adResultsFrag["AD"] = not outside_ad
@@ -2023,7 +2023,7 @@ class ModelPredictor:
         modelResults.adEstimates.append(adResultsFrag)
     
     @timer
-    def predict_model_smiles(self, model_id, smiles, generate_report=True, file_api=PredictConstants.URL_CTX_API):
+    def predict_model_smiles(self, model_id, smiles, generate_report=True):
         """
         Runs whole workflow: standardize, descriptors, prediction, applicability domain
         :param model_id:
@@ -2032,7 +2032,8 @@ class ModelPredictor:
         :return:
         """
 
-        serverAPIs = os.getenv("CIM_API_SERVER", "https://cim-dev.sciencedataexperts.com/")
+        serverAPIs = os.getenv("CIM_API_SERVER", "https://cim-dev.sciencedataexperts.com")
+        fileAPI = os.getenv("FILE_API_SERVER", pc.URL_CTX_API)
 
         # initialize model bytes and all details from db:
         
@@ -2044,7 +2045,8 @@ class ModelPredictor:
             return f"Invalid model_id: {model_id}", 400
         
         modelDetails = ModelDetails(model)
-        self.addLinks(modelDetails, file_api)
+        
+        self.addLinks(modelDetails, fileAPI)
         self.addPerformance(modelDetails)
         
         modelResults = ModelResults()
@@ -2168,7 +2170,7 @@ class ModelPredictor:
         return report.to_json(), 200
         # return modelResults
     
-    def addLinks(self, modelDetails, file_api=PredictConstants.URL_CTX_API):
+    def addLinks(self, modelDetails, file_api=pc.URL_CTX_API):
         
         modelId = modelDetails.modelId
         
@@ -2196,8 +2198,7 @@ class ModelPredictor:
     @timer
     def standardizeStructure(self, serverAPIs, smiles, model: Model):
         useFullStandardize = False
-        qsAPI = QsarSmilesAPI()
-        chemicals, code = qsAPI.call_qsar_ready_standardize_post(server_host=serverAPIs, smiles=smiles, full=useFullStandardize,
+        chemicals, code = QsarSmilesAPI.call_qsar_ready_standardize_post(server_host=serverAPIs, smiles=smiles, full=useFullStandardize,
                                                            workflow=model.qsarReadyRuleSet)
         logging.debug(chemicals)
         
@@ -2223,8 +2224,7 @@ class ModelPredictor:
         
     def standardizeStructure2(self, serverAPIs, smiles, qsarReadyRuleSet, omitSalts):
         useFullStandardize = False
-        qsAPI = QsarSmilesAPI()
-        chemicals, code = qsAPI.call_qsar_ready_standardize_post(server_host=serverAPIs, smiles=smiles, full=useFullStandardize,
+        chemicals, code = QsarSmilesAPI.call_qsar_ready_standardize_post(server_host=serverAPIs, smiles=smiles, full=useFullStandardize,
                                                            workflow=qsarReadyRuleSet)
         logging.debug(chemicals)
 
@@ -2381,8 +2381,8 @@ class ModelPredictor:
         results["adMethod"]["name"] = model.applicabilityDomainName
         results["adMethod"]["description"] = model.applicabilityDomainDescription
 
-        if model.applicabilityDomainName == PredictConstants.Applicability_Domain_TEST_Embedding_Euclidean\
-         or model.applicabilityDomainName == PredictConstants.Applicability_Domain_TEST_All_Descriptors_Euclidean:
+        if model.applicabilityDomainName == pc.Applicability_Domain_TEST_Embedding_Euclidean\
+         or model.applicabilityDomainName == pc.Applicability_Domain_TEST_All_Descriptors_Euclidean:
             
             results["value"] = sum(distances) / len(distances)
             
@@ -2428,8 +2428,8 @@ class ModelPredictor:
         results["adMethod"]["name"] = ad_name
         results["adMethod"]["description"] = model.applicabilityDomainDescription
 
-        if ad_name == PredictConstants.Applicability_Domain_TEST_Embedding_Euclidean\
-         or ad_name == PredictConstants.Applicability_Domain_TEST_All_Descriptors_Euclidean:
+        if ad_name == pc.Applicability_Domain_TEST_Embedding_Euclidean\
+         or ad_name == pc.Applicability_Domain_TEST_All_Descriptors_Euclidean:
             
             results["value"] = sum(distances) / len(distances)
             
@@ -2839,7 +2839,7 @@ def test_get_exp_data():
     # datasetName = 'LogP v1 modeling'
     datasetName = 'WS v1 modeling'
     qsarSmiles = 'C#C'
-    propertyName = PredictConstants.WATER_SOLUBILITY
+    propertyName = pc.WATER_SOLUBILITY
     
     session = getSession()
     edg = ExpDataGetter()

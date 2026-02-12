@@ -8,8 +8,8 @@ from typing import Final
 
 """Numerical and label constants for processing and modeling."""
 
-URL_CTX_API = "https://ctx-api-dev.ccte.epa.gov/chemical/property/model/file/search/"
-URL_LOCAL_FILE_API = "/api/predictor_models/model/file/" #relative path
+URL_CTX_API = "https://ctx-api-dev.ccte.epa.gov/chemical/property/model/file/search"
+URL_LOCAL_FILE_API = "/api/predictor_models/model/file" #relative path
 
 
 # Labels
