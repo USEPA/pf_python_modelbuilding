@@ -576,7 +576,8 @@ def cross_validate_fold(qsar_method):
 @app.route('/api/predictor_models/models/predictDB', methods=['POST', 'GET'])
 def predictDB():
     """Automates prediction and AD for single smiles using model in database
-    This one works in Flask"""
+    """    
+    
     if request.method == 'POST':
         obj = request.form
     elif request.method == 'GET':
@@ -589,7 +590,60 @@ def predictDB():
         report_format = 'json'
         
     mp = ModelPredictor()
-    modelResultsJson = mp.predictFromDB(model_id, smiles, file_api=pc.URL_LOCAL_FILE_API)
+    modelResultsJson = mp.predictFromDB(model_id, smiles)
+    
+    if "invalid" in modelResultsJson.lower():
+        return modelResultsJson, 400
+
+    
+    if report_format == "html":
+        rc=ReportCreator()
+        html = rc.create_html_report_from_json(modelResultsJson)
+        return html, 200
+    else:
+        return modelResultsJson, 200
+
+    return mp.predictFromDB(model_id, smiles, report_format), 200
+
+
+
+@app.route('/api/predictor_models/models/predict_identifier', methods=['POST', 'GET'])
+def predict_indentifier():
+    """Automates prediction and AD for single identifier using model in database
+    """    
+    
+    if request.method == 'POST':
+        obj = request.form
+    elif request.method == 'GET':
+        obj = request.args
+    
+    identifier = obj.get('identifier')  # Retrieves the model number to use
+    
+    model_id = obj.get('model_id')
+    report_format = obj.get('report_format', 'json').lower()
+    
+    if report_format not in ['json', 'html']:
+        report_format = 'json'
+    
+    from API_Utilities import SearchAPI
+    import os
+    serverAPIs = os.getenv("CIM_API_SERVER", "https://cim-dev.sciencedataexperts.com")
+    
+    chemicals, code = SearchAPI.call_resolver_get(serverAPIs, identifier)
+    
+    # print(chemicals, code)
+    
+    if code != 200:
+        return jsonify(error="not_found", message=f"Could not find {identifier}"), 404
+    
+    if len(chemicals)>0:    
+        smiles = chemicals[0]["chemical"]["smiles"]
+    else:
+        return jsonify(error="not_found", message=f"Could not find {identifier}"), 404
+    
+        
+    mp = ModelPredictor()
+    modelResultsJson = mp.predictFromDB(model_id, smiles)
     
     if "invalid" in modelResultsJson.lower():
         return modelResultsJson, 400
