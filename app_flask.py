@@ -608,7 +608,7 @@ def predictDB():
 
 
 @app.route('/api/predictor_models/models/predict_identifier', methods=['POST', 'GET'])
-def predict_indentifier():
+def predict_identifier():
     """Automates prediction and AD for single identifier using model in database
     """    
     
