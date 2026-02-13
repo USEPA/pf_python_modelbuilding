@@ -177,6 +177,7 @@ class Model:
         
         self.datasetId = None
         self.datasetName = None
+        self.datasetDescription = None
         self.unitsModel = None
         self.unitsDisplay = None
         self.dsstoxMappingStrategy = None
@@ -1162,6 +1163,7 @@ class ModelDescription:
         self.description = model.description
         self.description_url = model.description_url
         self.datasetName = model.datasetName
+        self.datasetDescription = model.datasetDescription
         
         self.embedding = model.embedding
         

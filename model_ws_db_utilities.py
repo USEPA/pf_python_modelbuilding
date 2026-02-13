@@ -1254,6 +1254,7 @@ class ModelDetails:
         self.applicabilityDomainDescription = model.applicabilityDomainDescription
         self.qsarReadyRuleSet = model.qsarReadyRuleSet
         self.embedding = model.embedding
+        self.modelCoefficients = None
 
 # from pydantic import BaseModel
 # class ModelResults(BaseModel):
@@ -2045,6 +2046,12 @@ class ModelPredictor:
             return f"Invalid model_id: {model_id}", 400
         
         modelDetails = ModelDetails(model)
+
+        if 'reg_' in model.modelMethod or 'las_' in model.modelMethod or 'gcm_' in model.modelMethod:
+            y = model.df_training[model.df_training.columns[1]]
+            X = model.df_training[model.embedding]
+            modelDetails.modelCoefficients = json.loads(model.getOriginalRegressionCoefficients2(X, y))
+        
         
         self.addLinks(modelDetails, fileAPI)
         self.addPerformance(modelDetails)

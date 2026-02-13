@@ -8,6 +8,7 @@ from dominate import document
 from dominate.tags import *
 import logging
 
+import pandas as pd
 import json
 import math
 from typing import List, Dict, Any, Optional        
@@ -405,44 +406,98 @@ class ReportCreator:
                             td(format2(ms["fiveFoldICV"]["MAE"]), align="center")
     
         
-        def addModelVariablesTable(self, md):
-            
-            variables = md["embedding"]
-            
-            from pathlib import Path
-            import pandas as pd
 
-            BASE_DIR = Path(__file__).resolve().parent
-            RESOURCES_DIR = BASE_DIR / "resources"
-            tsv_path = RESOURCES_DIR / "variable definitions-ed.txt"
-
-            # Read the TSV
-            df = pd.read_csv(tsv_path, sep="\t", dtype=str)
-            # Simple filter
-            df_vars = df[df["Symbol"].isin(variables)].copy()
+        def writeVariablesTable(self, variables):
             
-            # (Optional) preserve the order of `variables`
+            df_defs = self.get_variable_definition_df()      
+            
+            df_vars = df_defs[df_defs["Symbol"].isin(variables)].copy()
+        # (Optional) preserve the order of `variables`
             df_vars["Symbol"] = pd.Categorical(df_vars["Symbol"], categories=variables, ordered=True)
             df_vars = df_vars.sort_values("Symbol").reset_index(drop=True)
-            # print_first_row(df_vars)
-            
-            if len(variables)>100:
-                return
-
+        # print_first_row(df_vars)
             with table(border=1, cellpadding="5", cellspacing="0", width="100%"):
                 caption("Model Variables")
-            
                 with thead():
                     with tr():
                         for col in df_vars.columns:
                             th(str(col), style="background-color: #d3d3d3;")
-            
+                
                 # Body
                 with tbody():
                     for _, row in df_vars.iterrows():
                         with tr():
                             for val in row:
-                                td("" if pd.isna(val) else str(val))  
+                                td("" if pd.isna(val) else str(val))
+
+
+        
+        
+        def merge_coefficients_with_definition(self, model_coefficients: List[Dict[str, Any]], df_defs: pd.DataFrame) -> pd.DataFrame:
+            coeff_df = pd.DataFrame(model_coefficients)
+            if "name" not in coeff_df.columns:
+                raise ValueError("Each coefficient dict must have a 'name' key")
+        
+            # Exact match: name (coeff) -> Symbol (df)
+            merged = coeff_df.merge(
+                df_defs[["Symbol", "Definition", "Category"]],
+                left_on="name",
+                right_on="Symbol",
+                how="left"
+            ).drop(columns=["Symbol"])
+            return merged
+        
+
+        def get_variable_definition_df(self):
+            from pathlib import Path
+            BASE_DIR = Path(__file__).resolve().parent
+            RESOURCES_DIR = BASE_DIR / "resources"
+            tsv_path = RESOURCES_DIR / "variable definitions-ed.txt"
+            # Read the TSV
+            df_defs = pd.read_csv(tsv_path, sep="\t", dtype=str)
+            return df_defs
+
+        def writeModelCoefficientsTable(self, md):
+            
+            df_defs = self.get_variable_definition_df()
+            
+            df_coeffs = self.merge_coefficients_with_definition(md["modelCoefficients"], df_defs)
+            
+            print_first_row(df_coeffs,2)
+            
+            with table(border=1, cellpadding="5", cellspacing="0", width="100%"):
+                caption("Model Coefficients")
+                with thead():
+                    with tr():
+                        th("Variable", style="background-color: #d3d3d3;")
+                        th("Definition", style="background-color: #d3d3d3;")
+                        th("Coefficient", style="background-color: #d3d3d3;")
+                        th("Standard Error", style="background-color: #d3d3d3;")
+                # Body
+                with tbody():
+                    for coefficient in df_coeffs.itertuples():
+                        with tr():
+                            td(coefficient.name)
+                            
+                            if coefficient.name == "Intercept":
+                                td("Model intercept")
+                            else:
+                                td(coefficient.Definition)
+                            
+                            td(get_formatted_value(False, coefficient.coefficient,4))
+                            td(get_formatted_value(False, coefficient.std_error,4))
+
+        def addModelVariablesTable(self, md):
+            
+            variables = md["embedding"]
+
+            if len(variables)>150:
+                return
+            
+            if "modelCoefficients" in md and md["modelCoefficients"] is not None:
+                self.writeModelCoefficientsTable(md)
+            else:
+                self.writeVariablesTable(variables)  
             
         
         def addStatsTableTest(self, md): 

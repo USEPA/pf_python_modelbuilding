@@ -53,6 +53,9 @@ def fetch_model_file(model_id: int, type_id: int):
         file_name = f"Model_{model_id}_ScatterPlot.png"
     elif type_id == 4:
         file_name = f"Model_{model_id}_Histogram.png"
+    elif type_id == 5:
+        file_name = f"Model_{model_id}_webpage.html"
+
     else:
         # Ensure file_name is always defined
         file_name = f"model_{model_id}_type_{type_id}"

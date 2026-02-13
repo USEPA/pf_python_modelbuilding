@@ -13,7 +13,6 @@ import logging
 import io
 from logging import INFO, DEBUG
 from model_ws_db_utilities import ModelPredictor
-# why not make the following methods part of a Utility class then call methods from instance of it?
 from report_creator_dict import ReportCreator
 import util.get_model_file as gmf
 
@@ -67,11 +66,6 @@ def get_metadata():
         version=get_version()
     )
     
-
-# app = Flask(__name__)
-# log = logging.getLogger('werkzeug')
-# log.setLevel(logging.DEBUG)
-
 
 async def get_file(type_id: int, model_id: int):
     """

@@ -188,13 +188,14 @@ class ParametersGeneticAlgorithm:
     num_optimizers: int = 100
     num_jobs: int = 4
     n_threads: Optional[int] = None  # set to an int (e.g., 4) if you want to pin threads
-    max_length: int = 24  # max number of variables
+    max_length: int = 24  # max number of variables, used by Nate's code
+    max_features = 20
     descriptor_coefficient: float = 0.002
     threshold: int = 1
     elitism = True
     crossover_probability = 0.9
     mutation_probability = 0.05
-    max_features = 20
+    
 
     use_wards: bool = False
     run_rfe: bool = True
@@ -218,8 +219,9 @@ class ModelLoader():
         self.session=session
         self.dbl = DatabaseUtilities(schema="qsar_models", session=self.session)
 
-    
-    def upload_image(self, file_path, username, fk_model_id, fk_file_type_id):
+
+
+    def load_model_file(self, file_path, username, fk_model_id, fk_file_type_id):
 
         try:
         # Read the image file as binary
@@ -244,6 +246,27 @@ class ModelLoader():
             self.dbl.session.rollback()
             print(f"An error occurred: {e}")
     
+    def update_model_file(self, file_path, username, fk_model_id, fk_file_type_id):
+
+        try:
+        # Read the image file as binary
+            with open(file_path, 'rb') as file:
+                binary_data = file.read()
+        
+            # Data to update
+            values = {
+                'file': binary_data,
+                'updated_at': datetime.now(),
+                'updated_by': username,
+            }
+        
+            return self.dbl.update_row(table="model_files", values=values, fk_model_id=fk_model_id, fk_file_type_id=fk_file_type_id)
+            
+
+        except Exception as e:
+            self.dbl.session.rollback()
+            print(f"An error occurred: {e}")
+            return None
 
 
     def add_model_statistics(self, user, fk_model_id, stats_dict_name, model_statistics_dict, stats_lookup, created_at, model_statistics_rows): 
@@ -598,11 +621,11 @@ class ModelLoader():
         
         # ---- store plots in model_files table ----     
         filePathOutScatter = os.path.join(folder_path, "scatter_plot.png")
-        image_id = self.upload_image(filePathOutScatter, user, fk_model_id, 3)
+        image_id = self.load_model_file(filePathOutScatter, user, fk_model_id, 3)
         logging.info(f"Scatter plot loaded to db with id: {image_id}")
         
         filePathOutHistogram = os.path.join(folder_path, "histogram.png")
-        image_id = self.upload_image(filePathOutHistogram, user, fk_model_id, 4)
+        image_id = self.load_model_file(filePathOutHistogram, user, fk_model_id, 4)
         image_id = logging.info(f"Histogram plot loaded to db with id: {image_id}")
         
         # TODO: created detailed spreadsheet and store in the database
@@ -1381,7 +1404,7 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
             
             with open(file_path_embedding, "r", encoding="utf-8") as f:
                 results = json.load(f)
-                embedding = results["embedding"] 
+                embedding = results["model_details"]["embedding"] 
                 # print(f"from {folder_embedding}:{embedding}")
         else:
             fs_previous_embedding = False
@@ -1491,16 +1514,23 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         
         dataset_info = du.get_dataset_details(session, dataset_name)
         dsstox_mapping_strategy = json.loads(dataset_info["dsstox_mapping_strategy"])
-
         
-        model.qsarReadyRuleSet = dsstox_mapping_strategy["qsarReadyRuleSet"]
+        model.qsarReadyRuleSet = dsstox_mapping_strategy.get("qsarReadyRuleSet","qsar-ready")
         model.propertyName = dataset_info["property_name"]
+        
+        # print(json.dumps(dataset_info, indent=4))
+        
+        if model.propertyName is None:
+            print("propertyName is None, need to set name_ccd column for property in properties table")
+            return
+        
         model.propertyDescription = dataset_info["property_description"]
         model.unitsModel = dataset_info["units_model"] 
         model.unitsDisplay = dataset_info["units_display"]
         epoch_ms = time.time_ns() // 1_000_000
         model.modelName = user + "_" + str(epoch_ms)
         model.datasetName = dataset_name
+        model.datasetDescription = dataset_info["dataset_description"]
         model.omitSalts = dsstox_mapping_strategy["omitSalts"]
         model.applicabilityDomainName = " and ".join(params.ad_measure)
         model.num_training = df_training.shape[0]
@@ -1728,7 +1758,7 @@ class Results:
         print("\n\nStats for all models for " + dataset_name)
         print("Run\tMAE_Test\tMAE_Training_CV\t#_variables")
     
-        rows = []  # collect printed results for the dataframe
+        rows = []  # collect printed model_statistics for the dataframe
     
         for entry in Path(folder).iterdir():
             if entry.is_dir():
@@ -1736,23 +1766,30 @@ class Results:
                 if json_path.is_file():
                     try:
                         with json_path.open("r", encoding="utf-8") as f:
-                            results = json.load(f)  # this is a dict
+                            
+                            results = json.load(f)
+                            
+                            model_statistics = results["model_statistics"]  # this is a dict
     
+                            # print(json.dumps(model_statistics,indent=4))
                             # Extract values safely
-                            mae_test_val = results.get("test_stats", {}).get("MAE_Test", None)
-                            mae_cv_val = results.get("cv_stats", {}).get("MAE_Test", None)
+                            mae_test_val = model_statistics.get("test_stats", {}).get("MAE_Test", None)
+                            mae_cv_val = model_statistics.get("cv_stats", {}).get("MAE_CV_Training", None)
+    
+    
+                            model_details = results["model_details"]
     
                             # Embedding length
-                            if "len(embedding)" in results:
-                                lenEmbedding = results["len(embedding)"]
-                            elif "embedding" in results and isinstance(results["embedding"], (list, tuple)):
-                                lenEmbedding = len(results["embedding"])
+                            if "embedding_len" in model_details:
+                                lenEmbedding = model_details["embedding_len"]
+                            elif "embedding" in model_details and isinstance(model_details["embedding"], (list, tuple)):
+                                lenEmbedding = len(model_details["embedding"])
                             else:
                                 lenEmbedding = None
                             
                             embedding = None
-                            if lenEmbedding is not None and lenEmbedding < 20:
-                                embedding = results.get("embedding", [])
+                            if lenEmbedding is not None and lenEmbedding < 150:
+                                embedding = model_details.get("embedding", [])
                                 embedding = ", ".join(embedding) if isinstance(embedding, (list, tuple)) else str(embedding)
     
                             # Format for printing (and store as strings to match the print)
@@ -1791,3 +1828,22 @@ class Results:
         return df_stats, excel_path    
 
 
+def update_tester_page():
+    from dotenv import load_dotenv
+    load_dotenv()
+    ml=ModelLoader(getSession())
+    PROJECT_ROOT = os.getenv("PROJECT_ROOT")
+    file_path= os.path.join(PROJECT_ROOT, "resources","test_api2.html")
+
+    # ml.load_model_file(file_path, "tmarti02", 1670, 5)
+    ml.update_model_file(file_path, "tmarti02", 1670, 5)
+
+
+if __name__ == '__main__':
+    # update_tester_page()
+    pass
+
+    
+    
+    
+    
