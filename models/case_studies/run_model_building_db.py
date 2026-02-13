@@ -186,13 +186,14 @@ class ParametersGeneticAlgorithm:
     num_optimizers: int = 100
     num_jobs: int = 4
     n_threads: Optional[int] = None  # set to an int (e.g., 4) if you want to pin threads
-    max_length: int = 24  # max number of variables
+    max_length: int = 24  # max number of variables, used by Nate's code
+    max_features = 20
     descriptor_coefficient: float = 0.002
     threshold: int = 1
     elitism = True
     crossover_probability = 0.9
     mutation_probability = 0.05
-    max_features = 20
+    
 
     use_wards: bool = False
     run_rfe: bool = True
@@ -1392,7 +1393,7 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
             
             with open(file_path_embedding, "r", encoding="utf-8") as f:
                 results = json.load(f)
-                embedding = results["embedding"] 
+                embedding = results["model_details"]["embedding"] 
                 # print(f"from {folder_embedding}:{embedding}")
         else:
             fs_previous_embedding = False
