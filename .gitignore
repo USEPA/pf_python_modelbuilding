@@ -36,3 +36,4 @@ my.env
 .vscode/
 contractor.env
 *.ipynb
+*.pkl

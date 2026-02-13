@@ -31,10 +31,10 @@ def run_Koc():
 
     # run_dataset(dataset_name=dataset_name, qsar_method='rf', feature_selection=False, ad_measure_model=ad_measure_model,write_to_db=write_to_db)  # OK
     # run_dataset(dataset_name=dataset_name, qsar_method='rf', feature_selection=True, ad_measure_model=ad_measure_model,write_to_db=write_to_db)  # OK
-    #
+    
     # run_dataset(dataset_name=dataset_name, qsar_method='xgb', feature_selection=False, ad_measure_model=ad_measure_model,write_to_db=write_to_db)
     # run_dataset(dataset_name=dataset_name, qsar_method='xgb', feature_selection=True, ad_measure_model=ad_measure_model,write_to_db=write_to_db)  # OK
-    #
+    
     # run_dataset(dataset_name=dataset_name, qsar_method='knn', feature_selection=False, ad_measure_model=ad_measure_model,write_to_db=write_to_db)  # OK
     # run_dataset(dataset_name=dataset_name, qsar_method='knn', folder_embedding="rf_WebTEST-default_fs=True", ad_measure_model=ad_measure_model,write_to_db=write_to_db)  # OK
     # run_dataset(dataset_name=dataset_name, qsar_method='knn', feature_selection=True, ad_measure_model=ad_measure_model,write_to_db=write_to_db)  # OK
@@ -150,10 +150,23 @@ def test_model_summary():
     test.create_excel()
 
 
+def test_model_summary_local():
+    dataset_name = "KOC v1 modeling"
+    run_dataset(dataset_name=dataset_name, qsar_method='rf', feature_selection=False, create_detailed_excel=True)  # OK
+
+
 if __name__ == '__main__':
     # run_example()
     # run_Koc_knn_ga()
+
     # run_Koc()
-    run_fish_tox()
+    # run_fish_tox()
     # test_create_model()
     # test_model_summary()
+
+    run_Koc()
+    # run_fish_tox()
+    # test_create_model()
+    # test_model_summary()
+    # test_model_summary_local()
+
