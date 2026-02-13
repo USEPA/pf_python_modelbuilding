@@ -204,7 +204,8 @@ def get_dataset_details(session, dataset_name):
         query = """
         SELECT 
             d.id,
-            d.name,
+            d.name as dataset_name,
+            d.description as dataset_description, 
             u.abbreviation_ccd AS units_model,
             u2.abbreviation_ccd AS units_display,
             d.dsstox_mapping_strategy,
