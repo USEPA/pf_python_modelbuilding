@@ -44,6 +44,8 @@ from model_ws_utilities import call_build_embedding_ga_db, call_build_model_with
 from models.EmbeddingFromImportance import perform_iterative_recursive_feature_elimination as run_rfe
 from models.EmbeddingFromImportance import perform_sequential_feature_selection as run_sfs
 
+from ModelToExcel import ModelToExcel
+
 import StatsCalculator as sc
 
 import models.dataset_utilities_db as du
@@ -798,7 +800,7 @@ class EmbeddingGenerator:
         return embedding
 
 
-def getSession():
+def getEngine():
     connect_url = URL.create(
         drivername='postgresql+psycopg2',
         username=os.getenv('DEV_QSAR_USER'),
@@ -807,8 +809,15 @@ def getSession():
         port=os.getenv('DEV_QSAR_PORT', 5432),
         database=os.getenv('DEV_QSAR_DATABASE')
     )
-    # print(connect_url)
+    
+    # print(connect_url)    
+    
     engine = create_engine(connect_url, echo=False)
+    return engine
+
+
+def getSession():
+    engine = getEngine()
     Session = sessionmaker(bind=engine)
     session = Session()
     return session
@@ -1343,16 +1352,18 @@ def add_source_chemical_info(df_pred, df_dps):
     df_pred.rename(columns={'qsar_exp_prop_property_values_id_first':'exp_prop_id'}, inplace=True)
     return df_pred
 
+
 def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None, cross_validate=True,
                 run_AD=True, feature_selection=True, fs_previous_embedding=True, params=None,
                 descriptor_set_name="WebTEST-default", splitting_name="RND_REPRESENTATIVE",
-                ad_measure_model=None, add_LOGP_Martin=False, write_to_db=False, user="tmarti02"):
+                ad_measure_model=None, add_LOGP_Martin=False, write_to_db=False, user="tmarti02", create_detailed_excel=False):
     # TODO: reg model using descriptors from XGB or RF model
     # TODO: gcm model that uses reg with fragment descriptors such that it deletes rows with less than 3 instances and the associated rows
     # TODO does add the LOGP predicted from my LOGP model improve the results?
     splitting_name = "RND_REPRESENTATIVE"
     
     try:
+        engine = getEngine()
         session = getSession()
         
         ml = ModelLoader(session)
@@ -1547,6 +1558,36 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
             ml.load_model(user, model, results_dict, df_pred_training, df_pred_test, df_pred_cv, folder_path)
         
         # logging.info(f"model description={json.dumps(json.loads(model.get_model_description()), indent=4)}")
+
+        if create_detailed_excel:
+            cover_sheet_df = ModelToExcel.get_cover_sheet_df(results_dict)
+            statistics_df = ModelToExcel.get_statistics_df(results_dict)
+
+            statistics_df = results_dict["model_statistics"]
+            training_set_df = df_pred_cv # TODO: Might need to adjust?
+            test_set_df = df_pred_test # TODO: Might need to adjust?
+            records_df = df_pv
+            records_field_descriptions_df = None # TODO: Make records field descriptions dict/df
+            test_set_predictions_df = df_pred_test
+            model_descriptors_df = results_dict["model_details"]["embedding"] # TODO: Seems to also need variable definitions-ed.txt
+            model_descriptor_values_df = df_test_model
+
+            with open("test.pkl", "wb") as file:
+                pickle.dump([cover_sheet_df, statistics_df, training_set_df, test_set_df, records_df, records_field_descriptions_df, test_set_predictions_df, model_descriptors_df, model_descriptor_values_df], file)
+
+            mte = ModelToExcel(
+                excel_path="summary_test.xlsx",
+                cover_sheet_df=cover_sheet_df,
+                statistics_df=statistics_df,
+                training_set_df=training_set_df,
+                test_set_df=test_set_df,
+                records_df=records_df,
+                records_field_descriptions_df=records_field_descriptions_df,
+                test_set_predictions_df=test_set_predictions_df,
+                model_descriptors_df=model_descriptors_df,
+                model_descriptor_values_df=model_descriptor_values_df
+            )
+            mte.create_excel()
     
     except Exception:
         # Print the exception traceback to standard error
