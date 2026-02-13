@@ -1576,6 +1576,8 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         if write_to_db:
             ml.load_model(user, model, results_dict, df_pred_training, df_pred_test, df_pred_cv, folder_path)
         
+        logging.info("run_data_set completed\n")
+        
         # logging.info(f"model description={json.dumps(json.loads(model.get_model_description()), indent=4)}")
     
     except Exception:
@@ -1799,8 +1801,8 @@ def update_tester_page():
 
 
 if __name__ == '__main__':
-    # update_tester_page()
-    pass
+    update_tester_page()
+    # pass
 
     
     
