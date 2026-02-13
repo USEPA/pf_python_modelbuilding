@@ -44,7 +44,7 @@ def run_Koc():
     #                                     ad_measure=ad_measure_model, dataset_name=dataset_name, run_rfe=True, run_sfs=False)
     # results_dict = run_dataset(dataset_name=dataset_name, qsar_method='knn', feature_selection=True, params=params, write_to_db=write_to_db)
     
-    run_dataset(dataset_name=dataset_name, qsar_method='gcm', feature_selection=False, ad_measure_model=ad_measure_model,write_to_db=write_to_db)  # OK
+    # run_dataset(dataset_name=dataset_name, qsar_method='gcm', feature_selection=False, ad_measure_model=ad_measure_model,write_to_db=write_to_db)  # OK
     #
     # run_dataset(dataset_name=dataset_name, qsar_method='reg', folder_embedding="rf_WebTEST-default_fs=True", ad_measure_model=ad_measure_model,write_to_db=write_to_db)  # OK
     # run_dataset(dataset_name=dataset_name, qsar_method='reg', feature_selection=True, ad_measure_model=ad_measure_model,write_to_db=write_to_db)  # OK
@@ -136,8 +136,8 @@ def test_model_summary_local():
 if __name__ == '__main__':
     # run_example()
     # run_Koc_knn_ga()
-    run_Koc()
+    # run_Koc()
     # run_fish_tox()
     # test_create_model()
     # test_model_summary()
-    # test_model_summary_local()
+    test_model_summary_local()

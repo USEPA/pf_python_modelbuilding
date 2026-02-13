@@ -1592,8 +1592,7 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         if create_detailed_excel:
             cover_sheet_df = ModelToExcel.get_cover_sheet_df(results_dict)
             statistics_df = ModelToExcel.get_statistics_df(results_dict)
-
-            statistics_df = results_dict["model_statistics"]
+            
             training_set_df = df_pred_cv # TODO: Might need to adjust?
             test_set_df = df_pred_test # TODO: Might need to adjust?
             records_df = df_pv
