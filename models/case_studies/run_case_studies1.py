@@ -92,31 +92,53 @@ def run_fish_tox():
     
     dataset_name = 'ECOTOX_2024_12_12_96HR_Fish_LC50_v3 modeling'
     
-    ad_measure = [pc.Applicability_Domain_TEST_Embedding_Euclidean, pc.Applicability_Domain_TEST_Fragment_Counts]
-    # ad_measure_model = [pc.Applicability_Domain_TEST_All_Descriptors_Euclidean]
-        
-    # run_dataset(dataset_name=dataset_name, qsar_method='rf', feature_selection=False, ad_measure_model=ad_measure_model)  # OK
-    # run_dataset(dataset_name=dataset_name, qsar_method='rf', feature_selection=True, ad_measure_model=ad_measure_model)  # OK
-    
-    # run_dataset(dataset_name=dataset_name, qsar_method='xgb', feature_selection=False, ad_measure_model=ad_measure_model)
-    # run_dataset(dataset_name=dataset_name, qsar_method='xgb', feature_selection=True, ad_measure_model=ad_measure_model)  # OK
-    
-    # run_dataset(dataset_name=dataset_name, qsar_method='knn', feature_selection=False, ad_measure_model=ad_measure_model)  # OK
-    # run_dataset(dataset_name=dataset_name, qsar_method='knn', folder_embedding="rf_WebTEST-default_fs=True", ad_measure_model=ad_measure_model)  # OK
-    # run_dataset(dataset_name=dataset_name, qsar_method='knn', folder_embedding="xgb_WebTEST-default_fs=True", ad_measure_model=ad_measure_model)  # OK
-    # run_dataset(dataset_name=dataset_name, qsar_method='knn', feature_selection=True, ad_measure_model=ad_measure_model)  # OK
+    ad_measure_model = [pc.Applicability_Domain_TEST_Embedding_Euclidean, pc.Applicability_Domain_TEST_Fragment_Counts]
 
-    embedding = ["Mp", "nO", "nS", "ATS1m", "GATS1m", "XLOGP", "Ui"]  # Omit ALOGP
-    run_dataset(dataset_name=dataset_name, qsar_method='knn', feature_selection=True,
-                ad_measure=ad_measure, embedding=embedding, fs_previous_embedding=False)  # OK
+    write_to_db=False
     
-    # run_dataset(dataset_name=dataset_name, qsar_method='gcm', feature_selection=False, ad_measure_model=ad_measure_model)  # OK    
+    # ad_measure_model = [pc.Applicability_Domain_TEST_Embedding_Euclidean, pc.Applicability_Domain_TEST_Fragment_Counts]
+    # ad_measure_model = [pc.Applicability_Domain_TEST_Embedding_Euclidean, pc.Applicability_Domain_TEST_Fragment_Counts]
+
+    # run_dataset(dataset_name=dataset_name, qsar_method='rf', feature_selection=False, ad_measure_model=ad_measure_model,write_to_db=write_to_db)  # OK
+    # run_dataset(dataset_name=dataset_name, qsar_method='rf', feature_selection=True, ad_measure_model=ad_measure_model,write_to_db=write_to_db)  # OK
+    # embedding = ["ALOGP","XLOGP","MW","Mp","MATS1p","xvp4","BEHm5"]
+    # embedding = ["XLOGP","MW","Mp","MATS1p","xvp4","BEHm5"]
+    # run_dataset(dataset_name=dataset_name, qsar_method='rf', fs_previous_embedding=False, feature_selection=False, embedding=embedding, ad_measure_model=ad_measure_model,write_to_db=write_to_db)  # OK
+    
+    
+    # run_dataset(dataset_name=dataset_name, qsar_method='xgb', feature_selection=False, ad_measure_model=ad_measure_model,write_to_db=write_to_db)
+    # run_dataset(dataset_name=dataset_name, qsar_method='xgb', feature_selection=True, ad_measure_model=ad_measure_model,write_to_db=write_to_db)  # OK
     #
-    # run_dataset(dataset_name=dataset_name, qsar_method='reg', folder_embedding="rf_WebTEST-default_fs=True", ad_measure_model=ad_measure_model)  # OK
-    # run_dataset(dataset_name=dataset_name, qsar_method='reg', feature_selection=True, ad_measure_model=ad_measure_model)  # OK
+    # run_dataset(dataset_name=dataset_name, qsar_method='knn', feature_selection=False, ad_measure_model=ad_measure_model,write_to_db=write_to_db)  # OK
+    # run_dataset(dataset_name=dataset_name, qsar_method='knn', feature_selection=True, ad_measure_model=ad_measure_model,write_to_db=write_to_db)  # OK
+    # embedding = ["XLOGP","MW","Mp","MATS1p","xvp4","BEHm5"]
+    # run_dataset(dataset_name=dataset_name, qsar_method='knn', fs_previous_embedding=True, feature_selection=False, embedding=embedding, ad_measure_model=ad_measure_model,write_to_db=write_to_db)  # OK
+    # run_dataset(dataset_name=dataset_name, qsar_method='knn', folder_embedding="rf_WebTEST-default_fs=True", ad_measure_model=ad_measure_model,write_to_db=write_to_db)  # OK
+    
+    # grid = {'estimator__n_neighbors': [3], 'estimator__weights': ['distance']}  # matches AD in terms of using 3
+    # params = ParametersGeneticAlgorithm(qsar_method='knn', hyperparameter_grid=grid, descriptor_set_name= "WebTEST-default",
+    #                                     ad_measure=ad_measure_model, dataset_name=dataset_name, run_rfe=True, run_sfs=False)
+    # results_dict = run_dataset(dataset_name=dataset_name, qsar_method='knn', feature_selection=True, params=params, write_to_db=write_to_db)
+    
+    # run_dataset(dataset_name=dataset_name, qsar_method='gcm', feature_selection=False, ad_measure_model=ad_measure_model,write_to_db=write_to_db)  # OK
+    
+    # run_dataset(dataset_name=dataset_name, qsar_method='reg', feature_selection=True, ad_measure_model=ad_measure_model,write_to_db=write_to_db)  # OK
+    # run_dataset(dataset_name=dataset_name, qsar_method='reg', folder_embedding="rf_WebTEST-default_fs=True", ad_measure_model=ad_measure_model,write_to_db=write_to_db)  # OK
+    # embedding = ["MDEC44","BELm2","nDB","nBnz","ATS6m","ATS1p","ATS2p","SRW09","MPC02","XLOGP"]
+    # run_dataset(dataset_name=dataset_name, qsar_method='reg', fs_previous_embedding=True, feature_selection=False, embedding=embedding, ad_measure_model=ad_measure_model,write_to_db=write_to_db)  # OK
 
-    r = Results()
-    r.summarize_model_stats(dataset_name)
+    # run_dataset(dataset_name=dataset_name, qsar_method='rf', feature_selection=True, add_LOGP_Martin=True,write_to_db=write_to_db)  # Martin LOGP will show up in final descriptors, but error isnt lower!
+    # run_dataset(dataset_name=dataset_name, qsar_method='knn', feature_selection=True, add_LOGP_Martin=True,write_to_db=write_to_db)  # OK
+
+    # Models to upload:
+    # write_to_db=True
+    # run_dataset(dataset_name=dataset_name, qsar_method='gcm', feature_selection=False, ad_measure_model=ad_measure_model,write_to_db=write_to_db)  # OK
+    # run_dataset(dataset_name=dataset_name, qsar_method='xgb', feature_selection=True, ad_measure_model=ad_measure_model,write_to_db=write_to_db)  # OK
+    # run_dataset(dataset_name=dataset_name, qsar_method='knn', feature_selection=True, ad_measure_model=ad_measure_model,write_to_db=write_to_db)  # OK
+    # run_dataset(dataset_name=dataset_name, qsar_method='reg', feature_selection=True, ad_measure_model=ad_measure_model,write_to_db=write_to_db)
+
+    
+    Results.summarize_model_stats(dataset_name)
 
 
 def test_model_summary():
@@ -136,8 +158,15 @@ def test_model_summary_local():
 if __name__ == '__main__':
     # run_example()
     # run_Koc_knn_ga()
+
     # run_Koc()
     # run_fish_tox()
     # test_create_model()
     # test_model_summary()
-    test_model_summary_local()
+
+    run_Koc()
+    # run_fish_tox()
+    # test_create_model()
+    # test_model_summary()
+    # test_model_summary_local()
+

@@ -271,14 +271,15 @@ class DatabaseUtilities:
         for i in range(0, len(seq), size):
             yield seq[i:i + size]
 
+
     def create_many_chunked(
         self,
         table: str,
         records: Sequence[Mapping[str, Any]],
-        chunk_size: int=1000,
+        chunk_size: int = 1000,
     ) -> int:
         """
-        Insert records into `table` in chunks using dbl.create_many.
+        Insert records into `table` in chunks using self.create_many.
     
         Transaction behavior:
           - If no transaction is active on the Session, open one and commit on success.
@@ -292,45 +293,50 @@ class DatabaseUtilities:
         if not records:
             return 0
     
+        # We don't manually commit at the end; the context manager (or outer tx) handles it.
         try:
             if self.session.in_transaction():
-                # Already in a transaction; just execute within the existing one.
+                # Execute within the existing transaction.
                 for batch in self.chunked(records, chunk_size):
-                    self.create_many(table=table, records=batch)
+                    self.create_many(table=table, records=batch, commit=False)
             else:
-                # No transaction active; manage one here.
+                # Manage our own transaction; it auto-commits on success.
                 with self.session.begin():
                     for batch in self.chunked(records, chunk_size):
-                        self.create_many(table=table, records=batch)
-            
-            self.session.commit()
-            
+                        self.create_many(table=table, records=batch, commit=False)
+    
             return len(records)
+    
         except SQLAlchemyError:
-            # If we started the transaction, it will auto-rollback on exception.
-            # If a caller started the transaction, the exception will propagate and they can decide to rollback.
+            # If we started a transaction with `begin()`, it will auto-rollback on exception.
+            # If a caller started the transaction, let them decide how to handle rollback.
             raise
-        
-    # cant make static if want to make use of default schema set in the class constructor 
+
     def create_many(
         self,
         table: str,
         records: Iterable[Mapping[str, Any]],
-        schema: Optional[str]=None,
+        schema: Optional[str] = None,
+        commit: bool = True,
     ) -> List[Any]:
         """
         Bulk insert multiple rows and return a list of primary keys in the same order.
-        - Uses normal add_all + flush to populate PKs (safe for defaults/triggers).
-        - For very large batches, consider chunking for memory usage.
+        - Uses add_all + flush to populate PKs (safe for typical defaults/sequences).
+        - Only commits when `commit=True` and no transaction is active.
         """
         cls = self._get_mapped_class(table)
         rows = [cls(**rec) for rec in records]
+        if not rows:
+            return []
+    
         self.session.add_all(rows)
-        self.session.flush()
-        self.session.commit()
-        return [self._extract_pk(r) for r in rows]    
-   
-
+        self.session.flush()  # populate PKs
+    
+        # Commit only if requested and we're not inside a transaction context
+        if commit and not self.session.in_transaction():
+            self.session.commit()
+    
+        return [self._extract_pk(r) for r in rows]
 
 def getSession():
     connect_url = URL.create(
