@@ -122,12 +122,22 @@ class ModelToExcel:
         
         cover_sheet = cover_sheet.transpose().round(2)
         cover_sheet.reset_index(inplace=True, names=[""])
-        cover_sheet.to_excel(writer, sheet_name="Summary", index=False, header=False)
 
         workbook = writer.book
-        worksheet = writer.sheets["Summary"]
+        worksheet = workbook.add_worksheet("Summary")
+        
+        # Create formats
+        bold_format = workbook.add_format({"bold": True, "align": "left", "valign": "vcenter"})
+        left_align_format = workbook.add_format({"align": "left", "valign": "vcenter"})
+        
+        # Manually write the cover sheet data
+        for row_num, row_data in enumerate(cover_sheet.values):
+            for col_num, value in enumerate(row_data):
+                # First column (labels) uses bold format, rest use left align
+                cell_format = bold_format if col_num == 0 else left_align_format
+                worksheet.write(row_num, col_num, value, cell_format)
+        
         worksheet.freeze_panes(0, 1)
-        bold_format = workbook.add_format({"bold": True})
 
         ModelToExcel.set_column_width(writer, "Summary", cover_sheet, how="full", first_col_format=bold_format)
 
@@ -219,6 +229,7 @@ class ModelToExcel:
             "font_script": 2
         })
         format_number = workbook.add_format({
+            "align": "center",
             "num_format": "0.00"
         })
         merge_format_training = workbook.add_format({
@@ -283,7 +294,7 @@ class ModelToExcel:
         worksheet.write_number("F7", statistics.at[0, "Coverage_Test"], format_number)
 
         ModelToExcel.set_column_width(writer, "Statistics", statistics, how="full")
-        worksheet.insert_image("A8", Path("resources") / "equations.png", {"x_scale": 0.5, "y_scale": 0.5, "x_offset": 10, "y_offset": 2})
+        worksheet.insert_image("A8", Path("resources") / "equations.png", {"x_scale": 0.7, "y_scale": 0.7, "x_offset": 10, "y_offset": 2})
 
         return statistics
 
@@ -714,12 +725,16 @@ class ModelToExcel:
                 df[col] = df[col].apply(
                     lambda x: f'="{x}"' if isinstance(x, str) and x and x[0] in ('=', '+', '-', '@') else x
                 )
+                if col[0] in ("=", "+", "-", "@"):
+                    df = df.rename(columns={col: f'="{col}"'})
         # Prepend a single quote to treat them as literal strings, making a more minor alteration to the stored value
         elif how == "quote":
             for col in df.columns:
                 df[col] = df[col].apply(
-                    lambda x: f'="{x}"' if isinstance(x, str) and x and x[0] in ('=', '+', '-', '@') else x
+                    lambda x: f"'{x}" if isinstance(x, str) and x and x[0] in ('=', '+', '-', '@') else x
                 )
+                if col[0] in ("=", "+", "-", "@"):
+                    df = df.rename(columns={col: f"'{col}"})
         
         return df
 
