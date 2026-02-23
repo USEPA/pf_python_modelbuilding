@@ -14,6 +14,7 @@ from flask import request, abort, Flask, send_file, jsonify
 import json
 import logging
 import pickle
+import gzip
 
 from logging import INFO, DEBUG
 from model_ws_db_utilities import ModelPredictor, ModelInitializer, getSession
@@ -107,7 +108,7 @@ def say_hello(name):
 
 
 @app.route('/api/predictor_models/models/<string:qsar_method>/info', methods=['GET'])
-def info(qsar_method):
+def method_info(qsar_method):
     """Returns a short, generic description of the QSAR method"""
     return get_model_info(qsar_method), 200
 
@@ -683,34 +684,74 @@ def predict_identifier():
 #     return mp.predictFromDB(model_id, smiles, report_format)
 
 
+# @app.route('/api/predictor_models/models/predict', methods=['POST'])
+# def predict():
+#     """Makes predictions for a stored model on provided data"""
+#     obj = request.form
+#     model_id = obj.get('model_id')  # Retrieves the model number to use
+#
+#     prediction_tsv = obj.get('prediction_tsv')  # Retrieves the prediction data as a TSV
+#     if prediction_tsv is None:
+#         prediction_tsv = request.files.get('prediction_tsv').read().decode('UTF-8')
+#
+#     # Can't make predictions without data
+#     if prediction_tsv is None:
+#         abort(400, 'missing prediction tsv')
+#     # Can't make predictions without a model
+#     if model_id is None:
+#         abort(400, 'missing model id')
+#
+#     if models[model_id] is not None:
+#         # Gets stored model using model number
+#         model = models[model_id]
+#     else:
+#         abort(400, 'Need to init model or use predictDB API call instead')
+#
+#     # 404 NOT FOUND if no model stored under provided number
+#     if model is None:
+#         abort(404, 'no stored model with id ' + model_id)
+#
+#     # Calls the appropriate prediction method and returns the results
+#     return call_do_predictions(prediction_tsv, model), 200
+
+
+
+def _read_text_form_or_file(field_name: str):
+    # Prefer file upload
+    f = request.files.get(field_name)
+    if f:
+        name = getattr(f, "filename", "")
+        data = f.read()
+        if name.endswith(".gz") or (len(data) >= 2 and data[:2] == b"\x1f\x8b"):
+            data = gzip.decompress(data)
+        return data.decode("utf-8")
+
+    # Fallback to form field
+    val = request.form.get(field_name)
+    return val
+
 @app.route('/api/predictor_models/models/predict', methods=['POST'])
 def predict():
-    """Makes predictions for a stored model on provided data"""
     obj = request.form
-    model_id = obj.get('model_id')  # Retrieves the model number to use
+    model_id = obj.get('model_id')
 
-    prediction_tsv = obj.get('prediction_tsv')  # Retrieves the prediction data as a TSV
-    if prediction_tsv is None:
-        prediction_tsv = request.files.get('prediction_tsv').read().decode('UTF-8')
+    prediction_tsv = _read_text_form_or_file("prediction_tsv")
+    
+    # print(prediction_tsv)
 
-    # Can't make predictions without data
     if prediction_tsv is None:
         abort(400, 'missing prediction tsv')
-    # Can't make predictions without a model
     if model_id is None:
         abort(400, 'missing model id')
 
-    if models[model_id] is not None:
-        # Gets stored model using model number
+    if model_id in models:
         model = models[model_id]
     else:
         abort(400, 'Need to init model or use predictDB API call instead')
 
-    # 404 NOT FOUND if no model stored under provided number
     if model is None:
         abort(404, 'no stored model with id ' + model_id)
 
-    # Calls the appropriate prediction method and returns the results
     return call_do_predictions(prediction_tsv, model), 200
 
 
@@ -890,8 +931,12 @@ def initPickle():
             #         model.is_binary = form_obj['is_binary'].lower == 'true'
             #     print(model.is_binary)
 
+        # model.modelId = model_id
+
         # Stores model under provided number
         models[model_id] = model
+        
+        
 
         print('After init model_description =', model.get_model_description())
         return model.get_model_description(), 201

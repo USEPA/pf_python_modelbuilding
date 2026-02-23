@@ -694,6 +694,18 @@ class ModelBuilder:
     #     logging.info(f"Done running CV calculations")
     #     return df_predictions_all, cv_stats  
     
+    @staticmethod 
+    def predict(model, df, tag):
+        json_predictions = call_do_predictions_from_df(df, model)
+        df_predictions = pd.read_json(StringIO(json_predictions), orient="records")
+        
+        mean_exp_training = df_predictions["exp"].mean()
+        stats = sc.calculate_continuous_statistics(df_predictions, mean_exp_training, tag)
+    
+        logging.info("Done running CV calculations")
+        return df_predictions, stats
+    
+    
     @staticmethod
     def crossvalidate(df_cv_dict, params, embedding):
         logging.info("Start running CV calculations ...")
@@ -1161,7 +1173,8 @@ class ExcelCreator:
     @staticmethod
     def create_excel(
         df_test: pd.DataFrame,
-        df_training_cv: pd.DataFrame,
+        df_training_cv: pd.DataFrame=None,
+        df_ext: pd.DataFrame=None,
         df_test_model: pd.DataFrame=None,
         df_pv: pd.DataFrame=None,
         results_dict=None,
@@ -1173,10 +1186,22 @@ class ExcelCreator:
         col_width_pad: int=4,
         min_col_width: int=5
     ):
+        
+        def add_prediction_sheet(df, sheet_name):
+            if df is not None:
+                df.to_excel(writer, sheet_name=sheet_name, index=False)
+                ExcelCreator.add_plot(df, sheet_name, sheet_name, chart_size_px, pad_ratio, integer_ticks, yx_offset_rows, writer, workbook)
+                ExcelCreator.add_filter(writer, sheet_name, df)
+                ExcelCreator.set_column_width(writer, sheet_name=sheet_name, df=df, col_width_pad=col_width_pad, min_col_width=min_col_width, how="header")
+        
+        
         # TODO: Change file names for output Excel files under data directory
         with pd.ExcelWriter(excel_path, engine="xlsxwriter") as writer:
             # Write data (now includes abs_diff column)
             workbook = writer.book
+            
+            add_prediction_sheet(df_training_cv, "training cv predictions")
+            add_prediction_sheet(df_ext, "external predictions")
             
             if df_training_cv is not None:
                 sheet_name_cv = "training cv predictions"
@@ -1380,7 +1405,8 @@ def add_source_chemical_info(df_pred, df_dps):
 def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None, cross_validate=True,
                 run_AD=True, feature_selection=True, fs_previous_embedding=True, params=None,
                 descriptor_set_name="WebTEST-default", splitting_name="RND_REPRESENTATIVE",
-                ad_measure_model=None, add_LOGP_Martin=False, write_to_db=False, user="tmarti02", create_detailed_excel=False):
+                ad_measure_model=None, add_LOGP_Martin=False, write_to_db=False, user="tmarti02", create_detailed_excel=False,
+                create_unique_excel=True):
     # TODO: reg model using descriptors from XGB or RF model
     # TODO: gcm model that uses reg with fragment descriptors such that it deletes rows with less than 3 instances and the associated rows
     # TODO does add the LOGP predicted from my LOGP model improve the results?
@@ -1409,6 +1435,10 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
                 # print(f"from {folder_embedding}:{embedding}")
         else:
             fs_previous_embedding = False
+                    
+        # print (feature_selection)
+        # return
+    
                     
         # if True:
         #     return
@@ -1444,6 +1474,11 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
                 splitting_name=splitting_name,
                 dataset_name=dataset_name,
                 ad_measure=ad_measure_model)
+            
+            
+        # make sure they match
+        params.feature_selection = feature_selection
+
         # hyperparameter_grid = None # use default
         
         # ******************************************************************************************************
@@ -1452,6 +1487,13 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
     
         df_training, df_prediction = du.get_training_prediction_instances(session, dataset_name, descriptor_set_name, params.splitting_name)
         # print(df_training.shape)
+    
+        df_prediction_ext = None
+    
+        if dataset_name == 'KOC v1 modeling':
+            dataset_name_ext=  'KOC v1 external'
+            df_prediction_ext = du.get_instances_excluding(session, dataset_name_ext, dataset_name, descriptor_set_name)
+        
     
         df_cv_dict = None 
         if cross_validate:
@@ -1487,6 +1529,14 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
 
         if cross_validate: 
             df_pred_cv, cv_stats = ModelBuilder.crossvalidate(df_cv_dict, params, model.embedding)
+        
+        ext_stats = None
+        df_pred_ext = None
+        
+        if df_prediction_ext is not None:
+            df_pred_ext, ext_stats = ModelBuilder.predict(model, df_prediction_ext, '_External')
+            # print(df_pred_ext.shape)
+                    
         
         # ******************************************************************************************************
         # ---- Run applicability domain calculations ----
@@ -1546,6 +1596,7 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
             training_stats=training_stats,
             test_stats=test_stats,
             cv_stats=cv_stats,
+            ext_stats=ext_stats,
             stats_dict=stats_dict
             )
                 
@@ -1565,11 +1616,20 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         df_pred_test = add_source_chemical_info(df_pred_test, df_dps)
         df_pred_cv = add_source_chemical_info(df_pred_cv, df_dps)        # print_first_row(df_pred_cv)
         
+        
+        if df_prediction_ext is not None:
+            df_dps_ext = du.getMappedDatapoints(session, dataset_name_ext)
+            df_pred_ext = add_source_chemical_info(df_pred_ext, df_dps_ext)
+        
+        
+        
         # mtp.generateHistogram2(fileOutHistogram=filePathOutHistogram, property_name=model.propertyName, unit_name=model.unitsModel,
         #                        mpsTraining=mpsTraining, mpsTest=mpsTest,
         #                        seriesNameTrain="Training set", seriesNameTest="Test set")
 
         # print(json.dumps(mps_test,indent=4))
+        
+        # print(create_unique_excel)
         
         folder_path = Results.save_results(
             model=model,
@@ -1577,12 +1637,16 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
             df_pred_test=df_pred_test,
             df_pred_training=df_pred_training,
             df_pred_cv=df_pred_cv,
+            df_pred_ext=df_pred_ext,
             df_test_model=df_test_model,
             df_pv=df_pv,
             folder_embedding=folder_embedding,
+            create_unique_excel=create_unique_excel
         )
 
         logging.info(f"test set stats={json.dumps(test_stats, indent=4)}")
+        logging.info(f"external set stats={json.dumps(ext_stats, indent=4)}")
+
         logging.info(f"training cross validation stats={json.dumps(cv_stats, indent=4)}")   
         logging.info(f"test set AD stats={json.dumps( results_dict['model_statistics']['test_stats_AD'] , indent=4)}")
 
@@ -1614,8 +1678,9 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
             with open("test.pkl", "wb") as file:
                 pickle.dump([results_dict["model_details"], results_dict["model_statistics"], df_pred_cv, df_pred_test, df_pv, None, df_pred_test, results_dict["model_details"]["embedding"], df_test_model, df_training_model], file)
 
+
             mte = ModelToExcel(
-                excel_path="summary_test.xlsx",
+                excel_path=os.path.join(folder_path, "summary_test.xlsx"),
                 cover_sheet_df=cover_sheet_df,
                 statistics_df=statistics_df,
                 training_set_df=training_set_df,
@@ -1637,8 +1702,8 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
 class Results:
 
     @staticmethod
-    def save_results(model, results_dict, df_pred_test, df_pred_training, df_pred_cv=None, df_test_model=None, df_pv=None,
-                     folder_embedding=None):
+    def save_results(model, results_dict, df_pred_test, df_pred_training, df_pred_cv=None, df_pred_ext=None, df_test_model=None, df_pv=None,
+                     folder_embedding=None, create_unique_excel=True):
         params = results_dict["params"]
         
         # print (json.dumps(params))
@@ -1647,6 +1712,10 @@ class Results:
         
         if df_pred_cv is not None:
             df_pred_cv = prepare_df(df_pred_cv)
+            
+        if df_pred_ext is not None:
+            df_pred_ext = prepare_df(df_pred_ext)
+
     
         subfolder = params["qsar_method"] + "_" + params["descriptor_set_name"] + "_fs=" + str(params["feature_selection"])
     
@@ -1663,12 +1732,24 @@ class Results:
 
         identifier = int(time.time() * 1000)  # time in ms as identifier
         
-        prediction_csv_path = os.path.join(folder_path, f"predictions_{identifier}.csv")    
+        # prediction_csv_path = os.path.join(folder_path, f"predictions_{identifier}.csv")    
+        prediction_csv_path = os.path.join(folder_path, f"test set predictions.csv")
         df_pred_test.to_csv(prediction_csv_path, index=False)
+
+        if df_pred_ext is not None:
+            prediction_csv_path = os.path.join(folder_path, f"external set predictions.csv")
+            df_pred_ext.to_csv(prediction_csv_path, index=False)
+
+
+        # print(create_unique_excel)
         
-        prediction_excel_path = os.path.join(folder_path, f"predictions_{identifier}.xlsx")
+        if create_unique_excel:
+            prediction_excel_path = os.path.join(folder_path, f"predictions_{identifier}.xlsx")
+        else:
+            prediction_excel_path = os.path.join(folder_path, f"predictions.xlsx")
+            
         ec = ExcelCreator()
-        ec.create_excel(df_pred_test, df_pred_cv, df_test_model, df_pv, results_dict, prediction_excel_path)
+        ec.create_excel(df_pred_test, df_pred_cv, df_pred_ext, df_test_model, df_pv, results_dict, prediction_excel_path)
         
         json_path = os.path.join(folder_path, "results.json")
         with open(json_path, 'w') as json_file:
@@ -1690,7 +1771,7 @@ class Results:
     
     
     @staticmethod
-    def create_results_dict(ad_measure_model, df_training, params, model, training_stats, test_stats, cv_stats, stats_dict):
+    def create_results_dict(ad_measure_model, df_training, params, model, training_stats, test_stats, cv_stats, ext_stats, stats_dict):
     
         results_dict = {"params":params.to_dict()}
         
@@ -1738,6 +1819,11 @@ class Results:
             cv_stats.pop("Coverage_CV_Training")
             ms["cv_stats"] = cv_stats
 
+        if ext_stats:
+            ext_stats.pop("Coverage_External")
+            ms["ext_stats"] = ext_stats
+
+
         test_stats.pop("Coverage_Test")
         ms["test_stats"] = test_stats
 
@@ -1765,7 +1851,7 @@ class Results:
         print(folder)
     
         print("\n\nStats for all models for " + dataset_name)
-        print("Run\tMAE_Test\tMAE_Training_CV\t#_variables")
+        print("Run\tMAE_Test\tMAE_Training_CV\tMAE_External\t#_variables")
     
         rows = []  # collect printed model_statistics for the dataframe
     
@@ -1784,7 +1870,7 @@ class Results:
                             # Extract values safely
                             mae_test_val = model_statistics.get("test_stats", {}).get("MAE_Test", None)
                             mae_cv_val = model_statistics.get("cv_stats", {}).get("MAE_CV_Training", None)
-    
+                            mae_ext_val = model_statistics.get("ext_stats", {}).get("MAE_External", None)
     
                             model_details = results["model_details"]
     
@@ -1804,14 +1890,16 @@ class Results:
                             # Format for printing (and store as strings to match the print)
                             mae_test_str = f"{mae_test_val:.3f}" if isinstance(mae_test_val, (int, float)) else "N/A"
                             mae_cv_str = f"{mae_cv_val:.3f}"   if isinstance(mae_cv_val, (int, float)) else "N/A"
+                            mae_ext_str = f"{mae_ext_val:.3f}"   if isinstance(mae_ext_val, (int, float)) else "N/A"
                             lenEmb_str = str(lenEmbedding) if lenEmbedding is not None else "N/A"
     
-                            print(f"{entry.name}\t{mae_test_str}\t{mae_cv_str}\t{lenEmb_str}")
+                            print(f"{entry.name}\t{mae_test_str}\t{mae_cv_str}\t{mae_ext_str}\t{lenEmb_str}")
     
                             rows.append({
                                 "Run": entry.name,
                                 "MAE_Test": float(mae_test_str) if mae_test_str != "N/A" else None,
                                 "MAE_Training_CV": float(mae_cv_str) if mae_cv_str != "N/A" else None,
+                                "MAE_External": float(mae_ext_str) if mae_ext_str != "N/A" else None,
                                 "#_variables": int(lenEmb_str) if lenEmb_str != "N/A" else None,
                                 "Embedding": embedding if embedding is not None else None
                             })
@@ -1820,7 +1908,7 @@ class Results:
                         print(f"Skipping {json_path}: invalid JSON ({e})")
     
         # Save the collected results to Excel in the same folder
-        df_stats = pd.DataFrame(rows, columns=["Run", "MAE_Test", "MAE_Training_CV", "#_variables", "Embedding"])
+        df_stats = pd.DataFrame(rows, columns=["Run", "MAE_Test", "MAE_Training_CV","MAE_External", "#_variables", "Embedding"])
         excel_path = os.path.join(folder, excel_name)
     
         with pd.ExcelWriter(excel_path, engine="xlsxwriter") as writer:

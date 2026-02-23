@@ -254,9 +254,9 @@ class ModelToExcel:
         })
 
         # Make section headers
-        worksheet.merge_range("A1:C1", f"Training Set ({statistics.at[0, "nTraining"]})", merge_format_training)
-        worksheet.merge_range("D1:F1", f"5-Fold CV ({statistics.at[0, "nTraining"]})", merge_format_cv)
-        worksheet.merge_range("A5:C5", f"Test Set ({statistics.at[0, "nTest"]})", merge_format_test)
+        worksheet.merge_range("A1:C1", f"Training Set ({statistics.at[0, 'nTraining']})", merge_format_training)
+        worksheet.merge_range("D1:F1", f"5-Fold CV ({statistics.at[0, 'nTraining']})", merge_format_cv)
+        worksheet.merge_range("A5:C5", f"Test Set ({statistics.at[0, 'nTest']})", merge_format_test)
         worksheet.merge_range("D5:F5", f"Test Set Applicability Domain Statistics", merge_format_ad)
 
         # Make section sub-headers (column titles)
@@ -294,7 +294,10 @@ class ModelToExcel:
         worksheet.write_number("F7", statistics.at[0, "Coverage_Test"], format_number)
 
         ModelToExcel.set_column_width(writer, "Statistics", statistics, how="full")
-        worksheet.insert_image("A8", Path("resources") / "equations.png", {"x_scale": 0.7, "y_scale": 0.7, "x_offset": 10, "y_offset": 2})
+
+        import os        
+        img_path = os.path.join(os.getenv("PROJECT_ROOT"), "resources", "equations.png")        
+        worksheet.insert_image("A8", img_path, {"x_scale": 0.7, "y_scale": 0.7, "x_offset": 10, "y_offset": 2})
 
         return statistics
 
