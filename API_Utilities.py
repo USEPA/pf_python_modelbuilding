@@ -5,6 +5,14 @@ from indigo import Indigo
 
 from utils import timer
 import numpy as np
+import logging
+import socket
+from urllib.parse import urlparse, urljoin
+
+
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
 
 """
 This class assumes that server looks like: CIM_API_SERVER=https://hcd.rtpnc.epa.gov
@@ -147,17 +155,74 @@ class DescriptorsAPI:
 class SearchAPI:
      
     @staticmethod
-    def call_resolver_get(server_host, identifier):
-        url = f"{server_host}/api/resolver/lookup"
-        
-        response = requests.get(url, params={"query": identifier})
-        
-        if response.status_code == 200:
-            # Parse the response JSON and convert it to a list of Chemical objects
-            return response.json(), 200
-        else:
-            # Handle the error appropriately
-            return response.text,  response.status_code 
+    def call_resolver_get(server_host, identifier, timeout=(3.05, 10.0), retries=3):
+        """
+        GET {server_host}/api/resolver/lookup?query=identifier
+
+        Returns:
+          - (payload, 200) on success (payload is JSON if response is JSON; else text)
+          - (payload, <status_code>) on non-2xx from upstream
+          - (error_dict, 502/504) on DNS/connection/timeout errors
+        """
+        base = (server_host or "").strip().rstrip("/")
+        url = urljoin(base + "/", "api/resolver/lookup")
+
+        # Fail fast if DNS cannot resolve
+        host = urlparse(base).hostname or base
+        try:
+            socket.getaddrinfo(host, 443)
+        except socket.gaierror as e:
+            msg = f"DNS resolution failed for {host}: {e}"
+            logging.error(msg)
+            return {"error": "DNS resolution failed", "host": host, "detail": str(e)}, 502
+
+        # Session with retries/backoff on transient errors
+        session = requests.Session()
+        retry_cfg = Retry(
+            total=retries,
+            connect=retries,
+            read=max(0, retries - 1),
+            backoff_factor=0.5,
+            status_forcelist=(502, 503, 504),
+            allowed_methods=frozenset({"GET"}),
+            raise_on_status=False,
+        )
+        adapter = HTTPAdapter(max_retries=retry_cfg)
+        session.mount("https://", adapter)
+        session.mount("http://", adapter)
+
+        try:
+            resp = session.get(url, params={"query": identifier}, timeout=timeout)
+            ctype = resp.headers.get("content-type", "")
+
+            if resp.ok:
+                # Prefer JSON if available
+                if "application/json" in ctype:
+                    return resp.json(), resp.status_code
+                try:
+                    return resp.json(), resp.status_code
+                except ValueError:
+                    return resp.text, resp.status_code
+            else:
+                # Bubble up upstream error payload
+                if "application/json" in ctype:
+                    try:
+                        return resp.json(), resp.status_code
+                    except ValueError:
+                        return resp.text, resp.status_code
+                return resp.text, resp.status_code
+
+        except requests.exceptions.Timeout as e:
+            logging.error(f"Resolver timeout calling {url}: {e}", exc_info=True)
+            return {"error": "Upstream resolver timed out", "detail": str(e)}, 504
+
+        except requests.exceptions.ConnectionError as e:
+            logging.error(f"Resolver connection error calling {url}: {e}", exc_info=True)
+            return {"error": "Upstream resolver unreachable", "detail": str(e)}, 502
+
+        except requests.exceptions.RequestException as e:
+            logging.error(f"Resolver request failed calling {url}: {e}", exc_info=True)
+            return {"error": "Resolver request failed", "detail": str(e)}, 502
     
 
 
