@@ -236,6 +236,36 @@ def getMinMax(exps):
 
     return maxVal, minVal
 
+def getMinMax3(unitName, exps, preds):
+    min_value = min(min(exps), min(preds))
+    max_value = max(max(exps), max(preds))
+# Check if "log" is in unitName
+    if "log" in unitName.lower():
+        min_int = int(np.floor(min_value))
+        max_int = int(np.ceil(max_value))
+        # Determine if padding is needed
+        if (min_value - min_int) < 0.5:
+            min_value = min_int - 1
+        else:
+            min_value = min_int
+        if (max_int - max_value) < 0.5:
+            max_value = max_int + 1
+        else:
+            max_value = max_int
+        
+        # ax.set_xticks(range(min_value, max_value + 1))
+        # ax.set_yticks(range(min_value, max_value + 1))
+        
+    elif unitName == "°C":
+        min_value = (np.floor(min_value / 50) * 50) - 50
+        max_value = (np.ceil(max_value / 50) * 50) + 50
+    else:
+        padding = (max_value - min_value) * 0.05
+        min_value -= padding
+        max_value += padding
+        
+    return (min_value, max_value)
+        
 
 
 def setAxisBounds(unitName, expsTraining, predsTraining, expsTest, predsTest, ax):
@@ -273,6 +303,50 @@ def setAxisBounds(unitName, expsTraining, predsTraining, expsTest, predsTest, ax
     
 
 
+def generateScatterPlot3(filePathOut, title, unitName, mps, seriesName, limits=None):
+    # exps, preds computed from your data
+    exps, preds = getArraysOmitNullPreds(mps)
+
+    if len(exps) == 0 and len(preds) == 0:
+        print("exps or preds has len zero")
+        return None  # no limits to return
+
+    fig, ax = plt.subplots(figsize=(5, 5), layout='constrained', dpi=150)
+    ax.set_xlabel(f"Experimental {unitName}")
+    ax.set_ylabel(f"Predicted  {unitName}")
+    ax.set_title(title)
+
+    # ax.scatter(exps, preds, label=seriesName, color="darkblue", edgecolor="black")
+    ax.scatter(exps, preds, c='tab:blue', edgecolor='black', alpha=0.6,label=seriesName)
+
+    # Y = X reference line
+    ax.plot(exps, exps, label="Y=X", color="black")
+
+    if limits is not None:
+        # Apply provided limits and disable autoscaling
+        ax.autoscale(False)
+        xlim, ylim = limits
+        ax.set_xlim(xlim)
+        ax.set_ylim(ylim)
+    else:
+        # Compute and set limits from the data
+        ax.autoscale(False)
+        limits = getMinMax3(unitName, exps, preds)
+
+    ax.set_xlim(limits)
+    ax.set_ylim(limits)
+    
+    if "log" in unitName.lower():
+        min_value = limits[0]
+        max_value = limits[1]
+        ax.set_xticks(range(min_value, max_value + 1))
+        ax.set_yticks(range(min_value, max_value + 1))
+    
+    ax.legend(loc="lower right")
+    plt.savefig(filePathOut, dpi=200)
+    plt.close(fig)
+
+    return limits
 
 def generateScatterPlot2(filePathOut, title, unitName, mpsTraining, mpsTest, seriesNameTrain,
                     seriesNameTest):

@@ -332,7 +332,9 @@ def call_build_embedding_ga_db(df_training, df_prediction, gap):
     
     # print(go.NUM_GENERATIONS)
                 
-    descriptor_names = go2.runGA(df_training=df_training, model=model, params=gap)
+    # descriptor_names = go2.runGA(df_training=df_training, model=model, params=gap)
+    descriptor_names = go2.runGA_2_stage(df_training=df_training, model=model, params=gap)
+    
     model.embedding = descriptor_names
     
     logging.info(f"embedding from GA ({len(model.embedding)} descriptors): {model.embedding}")
@@ -421,6 +423,7 @@ def call_build_embedding_importance_from_df(qsar_method, df_training, df_predict
     
     if run_sfs:
         efi.perform_sequential_feature_selection(model=model, df_training=df_training)
+        # efi.perform_iterative_sequential_feature_selection(model=model, df_training=df_training)
         logging.info(f"After SFS, {len(model.embedding)} descriptors: {model.embedding}")
 
     # Fit final model using final embedding:
@@ -659,7 +662,7 @@ def call_do_predictions(prediction_tsv, model):
 
     if isinstance(prediction_tsv, pd.DataFrame):
         df_prediction = prediction_tsv
-    elif isinstance(prediction_tsv, pd.DataFrame):
+    elif isinstance(prediction_tsv, str):
         df_prediction = dfu.load_df(prediction_tsv)
     else:
         raise Exception('prediction_tsv must be a pandas DF or a string with TSV data')
@@ -677,6 +680,9 @@ def call_do_predictions(prediction_tsv, model):
 
     results = pd.DataFrame(np.column_stack([pred_ids, pred_labels, predictions]), columns=['id', 'exp', 'pred'])
     results_json = results.to_json(orient='records')
+    
+    print(results_json)
+    
     return results_json
 
 

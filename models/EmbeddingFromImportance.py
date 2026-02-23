@@ -187,61 +187,7 @@ def add_new_descriptors(fraction_of_max_importance, max_descriptor_count, min_de
                     new_descriptors.append(descriptor)
 
 
-def perform_sequential_feature_selection(model,df_training):
-    """
-    # https://scikit-learn.org/stable/modules/generated/sklearn.feature_selection.SequentialFeatureSelector.html
-    # if tol is not None, then features are selected while the score change does not exceed tol.
-    # otherwise, half of the features are selected!
-    """
-    
-    from sklearn.feature_selection import SequentialFeatureSelector
-    
-    _, y, X, _ = DFU.prepare_instances2(df_training, model.embedding,True)
-
-
-    pipe = Pipeline([
-        ("scaler", model.model_obj.named_steps['standardizer']),
-        ("estimator", model.model_obj.named_steps['estimator'])
-    ])
-
-    frac = 0.0001 # fraction of initial score to add a parameter
-
-    if model.is_binary:
-        scoring='balanced_accuracy'
-        scores = cross_val_score(pipe, X, y, cv=5, scoring=scoring)
-        initial_ba = np.mean(scores) # TODO: is the sign correct?
-        logging.debug(f"Initial BA before SFS: {initial_ba}")
-        tol = frac * initial_ba #1% improvement in BA         
-    else:
-        scoring ='neg_mean_squared_error'
-            # Calculate initial cross-validated MSE
-        scores = cross_val_score(pipe, X, y, cv=5, scoring=scoring)
-        initial_mse = -np.mean(scores) # Convert neg_mse to mse
-        logging.debug(f"Initial MSE before SFS: {initial_mse}")
-        tol = frac * initial_mse #1% improvement in neg error
-
-    logging.info(f"tol for SFS: {tol}")
-        
-    #model.model_obj is PMMLPipeline which may not work, convert to Pipeline:
-
-    sfs = SequentialFeatureSelector(
-        # model.model_obj.steps[1][1], # this is just the estimator w/o the scalar (needed for knn)
-        estimator=pipe,
-        n_features_to_select='auto', # or integer, e.g., 3
-        tol = tol,
-        # direction='backward',         # 'forward' or 'backward'
-        direction='forward',         # 'forward' or 'backward'
-        scoring=scoring,
-        cv=5,
-        n_jobs=-1
-    )
-    
-    # 5. Fit SFS
-    sfs.fit(X, y)
-    
-    model.embedding = sfs.get_feature_names_out().tolist()
-    
-    return model.embedding
+import logging
 
 
 def perform_iterative_recursive_feature_elimination(model, df_training, n_threads, n_steps=1):
@@ -262,7 +208,7 @@ def perform_iterative_recursive_feature_elimination(model, df_training, n_thread
         
     calc_time = stop_time - start_time
     return model.embedding, calc_time
-        
+
 
 def perform_recursive_feature_elimination(model, df_training, n_threads, n_steps=1):
     '''
@@ -335,4 +281,191 @@ def perform_recursive_feature_elimination(model, df_training, n_threads, n_steps
 
     features = np.array(train_column_names)
     model.embedding = features[mask].tolist()  # Final descriptor list
+
+
+def perform_iterative_sequential_feature_selection(
+    model,
+    df_training,
+    max_iters=10,
+    min_features=2,
+    cv=5,
+    improvement_threshold=0.01,  # require at least 1% relative improvement to keep going
+    patience=1,                  # stop after this many consecutive iterations without enough improvement
+    shuffle_cv=False,            # optional: explore different CV splits
+    random_state=None,           # used if shuffle_cv=True
+    logger=None
+):
+    """
+    Iteratively runs perform_sequential_feature_selection while keeping the
+    candidate universe fixed. Logs progress via logging.info, tracks the
+    best-scoring embedding, and stops when relative improvement over the best
+    is < improvement_threshold for 'patience' iterations.
+
+    The score used is:
+      - balanced_accuracy for classification (higher is better)
+      - neg_mean_squared_error for regression (higher is better; i.e., lower MSE)
+
+    Returns the best embedding found.
+    """
+
+    if logger is None:
+        logger = logging.getLogger(__name__)
+
+    # Preserve original candidate universe (None => DFU uses all features)
+    original_universe = getattr(model, "embedding", None)
+
+    # Optionally enable shuffled CV folds if your perform_* uses cross_val_score defaults.
+    # Note: perform_sequential_feature_selection must honor this if you want variability.
+    if shuffle_cv and hasattr(model, "cv_splitter"):
+        # If your pipeline can accept a splitter, set it here.
+        # Otherwise, consider modifying perform_* to pass a KFold with shuffle=True.
+        pass
+
+    best_score = -np.inf
+    best_embedding = None
+    no_improve_count = 0
+    eps = 1e-12
+
+    for it in range(1, max_iters + 1):
+        # Reset candidate universe before each SFS run
+        model.embedding = (list(original_universe) if original_universe is not None else None)
+
+        logger.info(
+            f"Iterative SFS: iter={it} | starting candidate_universe="
+            f"{'ALL' if original_universe is None else len(original_universe)}"
+        )
+
+        # Run SFS; this logs pre/post scores and sets model._last_sfs_cv_score
+        perform_sequential_feature_selection(model, df_training, cv=cv)
+
+        # Read post-selection score (higher is better) and the embedding
+        current_score = getattr(model, "_last_sfs_cv_score", None)
+        current_embedding = list(model.embedding or [])
+        current_count = len(current_embedding)
+
+        logger.info(f"Iterative SFS: iter={it} | selected {current_count} features")
+        logger.info(f"Iterative SFS: iter={it} | embedding={current_embedding}")
+        logger.info(f"Iterative SFS: iter={it} | post-score={current_score}")
+
+        # Guard against collapsing to too few features
+        if current_count < min_features:
+            logger.info(
+                f"Iterative SFS: iter={it} | selection dropped to {current_count} < min_features={min_features}; stopping."
+            )
+            # Restore to widest reasonable set (original universe if available)
+            model.embedding = (list(original_universe) if original_universe is not None else current_embedding)
+            break
+
+        # Update best if improved
+        if current_score is not None and current_score > best_score:
+            rel_impr = (current_score - best_score) / max(abs(best_score), eps) if best_score != -np.inf else np.inf
+            logger.info(f"Iterative SFS: iter={it} | relative improvement over best={rel_impr if np.isfinite(rel_impr) else float('inf'):.4%}")
+            best_score = current_score
+            best_embedding = current_embedding
+            no_improve_count = 0
+        else:
+            # Not improved vs. best
+            rel_impr = 0.0
+            logger.info(f"Iterative SFS: iter={it} | relative improvement over best={rel_impr:.4%}")
+            no_improve_count += 1
+
+        # Early stop if improvement is below threshold for 'patience' iterations
+        # Note: We treat any non-increase as < threshold; if you want strict thresholding,
+        #       track the last improvement magnitude and compare to improvement_threshold.
+        if no_improve_count >= patience:
+            logger.info(
+                f"Iterative SFS: iter={it} | no sufficient improvement (< {improvement_threshold:.2%}) "
+                f"for {patience} iteration(s); stopping."
+            )
+            break
+
+    else:
+        logger.info("Iterative SFS: reached max_iters without sufficient improvement.")
+
+    # Restore best embedding before returning
+    if best_embedding is not None:
+        model.embedding = best_embedding
+        logger.info(f"Iterative SFS: best embedding selected (n={len(best_embedding)}), best_score={best_score}")
+
+    return model.embedding
+
+def perform_sequential_feature_selection(model, df_training, cv=5):
+    """
+    Runs SFS on the current candidate feature set in model.embedding, logs
+    CV score before and after selection, logs the selected embedding, and stores
+    the post-selection score (higher-is-better) in model._last_sfs_cv_score.
+
+    For classification: balanced_accuracy (higher is better).
+    For regression: neg_mean_squared_error (higher is better, i.e., lower MSE).
+    """
+    from sklearn.feature_selection import SequentialFeatureSelector
+
+    logger = logging.getLogger(__name__)
+
+    # Prepare inputs based on current candidate set
+    _, y, X, _ = DFU.prepare_instances2(df_training, model.embedding, True)
+
+    pipe = Pipeline([
+        ("scaler", model.model_obj.named_steps['standardizer']),
+        ("estimator", model.model_obj.named_steps['estimator'])
+    ])
+
+    frac = 0.0001  # fraction of initial score for tol
+
+    # Compute initial CV score
+    if model.is_binary:
+        scoring = 'balanced_accuracy'
+        scores = cross_val_score(pipe, X, y, cv=cv, scoring=scoring)
+        initial_mean = float(np.mean(scores))
+        initial_std = float(np.std(scores))
+        tol = frac * max(initial_mean, 1e-12)
+        logger.info(f"SFS (pre): n_features={X.shape[1]}, CV balanced_accuracy={initial_mean:.6f} ± {initial_std:.6f}")
+    else:
+        scoring = 'neg_mean_squared_error'
+        scores = cross_val_score(pipe, X, y, cv=cv, scoring=scoring)
+        # Positive for logging; tol uses same scale factor
+        initial_mse = float(-np.mean(scores))
+        initial_mse_std = float(np.std(-scores))
+        tol = frac * max(initial_mse, 1e-12)
+        logger.info(f"SFS (pre): n_features={X.shape[1]}, CV MSE={initial_mse:.6f} ± {initial_mse_std:.6f}")
+
+    # logger.info(f"SFS tol: {tol}")
+
+    # Run SFS
+    sfs = SequentialFeatureSelector(
+        estimator=pipe,
+        n_features_to_select='auto',
+        tol=tol,
+        direction='forward',
+        scoring=scoring,
+        cv=cv,
+        n_jobs=-1
+    )
+    sfs.fit(X, y)
+
+    # Update embedding with selected features
+    model.embedding = sfs.get_feature_names_out().tolist()
+
+    # Evaluate and log score on selected set
+    _, y_sel, X_sel, _ = DFU.prepare_instances2(df_training, model.embedding, True)
+    sel_scores = cross_val_score(pipe, X_sel, y_sel, cv=cv, scoring=scoring)
+
+    if model.is_binary:
+        sel_mean = float(np.mean(sel_scores))
+        sel_std = float(np.std(sel_scores))
+        logger.info(f"SFS (post): n_features={len(model.embedding)}, CV balanced_accuracy={sel_mean:.6f} ± {sel_std:.6f}")
+        model._last_sfs_cv_score = sel_mean  # higher is better
+    else:
+        sel_neg_mse = float(np.mean(sel_scores))      # negative MSE (higher is better)
+        sel_mse = float(-sel_neg_mse)                 # positive MSE for logging
+        sel_mse_std = float(np.std(-sel_scores))
+        logger.info(f"SFS (post): n_features={len(model.embedding)}, CV MSE={sel_mse:.6f} ± {sel_mse_std:.6f}")
+        model._last_sfs_cv_score = sel_neg_mse        # higher is better
+
+    # Log the selected embedding (feature names)
+    logger.info(f"SFS (post): embedding={model.embedding}")
+
+    return model.embedding
+
+
 
