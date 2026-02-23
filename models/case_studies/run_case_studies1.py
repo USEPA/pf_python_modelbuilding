@@ -643,14 +643,15 @@ def run_example():
 
 def run_Koc():
     create_unique_excel = False
-    write_to_db=True
+    write_to_db=False
     # write_to_db=True
     dataset_name = "KOC v1 modeling"
 
     # ad_measure_model = [pc.Applicability_Domain_TEST_Embedding_Euclidean, pc.Applicability_Domain_TEST_Fragment_Counts]
     ad_measure_model = [pc.Applicability_Domain_TEST_Embedding_Euclidean, pc.Applicability_Domain_TEST_Fragment_Counts]
 
-    # run_dataset(dataset_name=dataset_name, qsar_method='gcm', feature_selection=False, ad_measure_model=ad_measure_model,write_to_db=write_to_db, create_unique_excel=create_unique_excel)  # OK
+    run_dataset(dataset_name=dataset_name, qsar_method='gcm', feature_selection=False, ad_measure_model=ad_measure_model,write_to_db=write_to_db, 
+                create_unique_excel=create_unique_excel, create_detailed_excel=True)  # OK
 
     # run_dataset(dataset_name=dataset_name, qsar_method='rf', feature_selection=False, ad_measure_model=ad_measure_model,write_to_db=write_to_db)  # OK
     # run_dataset(dataset_name=dataset_name, qsar_method='rf', feature_selection=True, ad_measure_model=ad_measure_model,write_to_db=write_to_db)  # OK
@@ -674,7 +675,7 @@ def run_Koc():
 
     
     # run_dataset(dataset_name=dataset_name, qsar_method='knn', feature_selection=False, ad_measure_model=ad_measure_model,write_to_db=write_to_db)  # OK
-    #
+    
     # grid = {'estimator__n_neighbors': [3], 'estimator__weights': ['distance']}  # matches AD in terms of using 3
     # params = ParametersGeneticAlgorithm(qsar_method='knn', hyperparameter_grid=grid, descriptor_set_name= "WebTEST-default",
     #                                     ad_measure=ad_measure_model, dataset_name=dataset_name, 
@@ -706,9 +707,9 @@ def run_Koc():
     
     # run_dataset(dataset_name=dataset_name, qsar_method='gcm', feature_selection=False, ad_measure_model=ad_measure_model,write_to_db=write_to_db, create_unique_excel=create_unique_excel)  # OK
     
-    embedding = ["ALOGP2","nBnz","MATS6v","ATS1p","nDB","Lop","MATS1p"]
-    results_dict = run_dataset(dataset_name=dataset_name, qsar_method='rf', feature_selection=False, 
-                               embedding=embedding, write_to_db=write_to_db, create_unique_excel=create_unique_excel)
+    # embedding = ["ALOGP2","nBnz","MATS6v","ATS1p","nDB","Lop","MATS1p"]
+    # results_dict = run_dataset(dataset_name=dataset_name, qsar_method='rf', feature_selection=False, 
+    #                            embedding=embedding, write_to_db=write_to_db, create_unique_excel=create_unique_excel)
     
 
     r = Results()
@@ -753,20 +754,21 @@ def run_fish_tox():
     
     ad_measure_model = [pc.Applicability_Domain_TEST_Embedding_Euclidean, pc.Applicability_Domain_TEST_Fragment_Counts]
 
-    write_to_db=True
+    write_to_db=False
     create_unique_excel = False
 
     run_dataset(dataset_name=dataset_name, qsar_method='gcm', feature_selection=False, ad_measure_model=ad_measure_model,write_to_db=write_to_db, create_unique_excel=create_unique_excel)  # OK
-    for method in ['rf','xgb', 'reg','knn']:
-        run_dataset(dataset_name=dataset_name, qsar_method=method, feature_selection=True, 
-                    ad_measure_model=ad_measure_model,write_to_db=write_to_db, create_unique_excel=create_unique_excel)  # OK
+    
+    # for method in ['rf','xgb', 'reg','knn']:
+    #     run_dataset(dataset_name=dataset_name, qsar_method=method, feature_selection=True, 
+    #                 ad_measure_model=ad_measure_model,write_to_db=write_to_db, create_unique_excel=create_unique_excel)  # OK
     
     ## embedding = ['ALOGP', 'XLOGP2', 'MW', 'BEHm3', 'xv1', 'Mp', 'AMW'] 
     ## embedding = ['ALOGP', 'XLOGP2', 'MW', 'BEHm3', 'Mp', 'AMW']
-    embedding = ['ALOGP', 'ALOGP2', 'MW', 'Mp', 'AMW']
-    
-    results_dict = run_dataset(dataset_name=dataset_name, qsar_method='rf', feature_selection=False, 
-                               embedding=embedding, write_to_db=write_to_db, create_unique_excel=create_unique_excel)
+    # embedding = ['ALOGP', 'ALOGP2', 'MW', 'Mp', 'AMW']
+    #
+    # results_dict = run_dataset(dataset_name=dataset_name, qsar_method='rf', feature_selection=False, 
+    #                            embedding=embedding, write_to_db=write_to_db, create_unique_excel=create_unique_excel)
 
     
     
@@ -795,9 +797,9 @@ if __name__ == '__main__':
     # run_example()
     # run_Koc_knn_ga()
     
-    run_episuite()
+    # run_episuite()
     
-    # run_Koc()
+    run_Koc()
     # run_fish_tox()
     # test_create_model()
     # test_model_summary()

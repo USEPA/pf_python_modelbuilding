@@ -463,7 +463,7 @@ class ReportCreator:
             
             df_coeffs = self.merge_coefficients_with_definition(md["modelCoefficients"], df_defs)
             
-            print_first_row(df_coeffs,2)
+            # print_first_row(df_coeffs,2)
             
             with table(border=1, cellpadding="5", cellspacing="0", width="100%"):
                 caption("Model Coefficients")
@@ -583,7 +583,7 @@ class ReportCreator:
                     if param["value_min"] and param["value_max"]:
                         minValue = get_formatted_value(False, param["value_min"], 3)
                         maxValue = get_formatted_value(False, param["value_max"], 3)
-                        print(minValue, maxValue, param["units"])
+                        # print(minValue, maxValue, param["units"])
                         if param["units"]:
                             span(param_name + ": " + minValue + " < " + param_name + " " + param["units"] + " < " + maxValue + " ")
                         else:

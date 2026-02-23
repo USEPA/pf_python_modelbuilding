@@ -111,7 +111,7 @@ class ModelToExcel:
 
         return cover_sheet
 
-    
+
     @staticmethod
     def get_statistics_df(results_dict):
         statistics_df = {
@@ -182,7 +182,7 @@ class ModelToExcel:
         # statistics.to_excel(writer, sheet_name="Statistics", index=False)
 
         workbook = writer.book
-        worksheet = writer.sheets["Statistics"]
+        worksheet = workbook.add_worksheet("Statistics")
         # worksheet.freeze_panes(1, 0)
 
         format_center = workbook.add_format({
@@ -219,48 +219,51 @@ class ModelToExcel:
         })
 
         # Make section headers
-        worksheet.merge_range("A1:C1", f"Training Set ({statistics.at[0, "nTraining"]})", merge_format_training)
-        worksheet.merge_range("E1:G1", f"5-Fold CV ({statistics.at[0, "nTraining"]})", merge_format_cv)
-        worksheet.merge_range("A5:C5", f"Test Set ({statistics.at[0, "nTest"]})", merge_format_test)
-        worksheet.merge_range("E5:G5", f"Test Set Applicability Domain Statistics", merge_format_ad)
+        worksheet.merge_range("A1:C1", f"Training Set ({statistics.at[0, 'nTraining']})", merge_format_training)
+        worksheet.merge_range("D1:F1", f"5-Fold CV ({statistics.at[0, 'nTraining']})", merge_format_cv)
+        worksheet.merge_range("A5:C5", f"Test Set ({statistics.at[0, 'nTest']})", merge_format_test)
+        worksheet.merge_range("D5:F5", f"Test Set Applicability Domain Statistics", merge_format_ad)
 
         # Make section sub-headers (column titles)
         worksheet.write_rich_string("A2", "R", format_super, "2", format_center)
-        worksheet.write_rich_string("E2", "R", format_super, "2", format_center)
+        worksheet.write_rich_string("D2", "R", format_super, "2", format_center)
         worksheet.write_rich_string("A6", "R", format_super, "2", format_center)
 
-        worksheet.write_rich_string("B2", "RMSE", format_center)
-        worksheet.write_rich_string("F2", "RMSE", format_center)
-        worksheet.write_rich_string("B6", "RMSE", format_center)
+        worksheet.write_string("B2", "RMSE", format_center)
+        worksheet.write_string("E2", "RMSE", format_center)
+        worksheet.write_string("B6", "RMSE", format_center)
 
-        worksheet.write_rich_string("C2", "MAE", format_center)
-        worksheet.write_rich_string("G2", "MAE", format_center)
-        worksheet.write_rich_string("C6", "MAE", format_center)
+        worksheet.write_string("C2", "MAE", format_center)
+        worksheet.write_string("F2", "MAE", format_center)
+        worksheet.write_string("C6", "MAE", format_center)
 
-        worksheet.write_rich_string("E6", "MAE", format_sub, "Test", " Inside AD", format_center)
-        worksheet.write_rich_string("F6", "MAE", format_sub, "Test", " Outside AD", format_center)
-        worksheet.write_rich_string("G6", "Fraction Inside AD", format_center)
+        worksheet.write_rich_string("D6", "MAE", format_sub, "Test", " Inside AD", format_center)
+        worksheet.write_rich_string("E6", "MAE", format_sub, "Test", " Outside AD", format_center)
+        worksheet.write_string("F6", "Fraction Inside AD", format_center)
 
         # Write statistics
-        worksheet.number("A3", statistics.at[0, "RSQ_Training"], format_number)
-        worksheet.number("B3", statistics.at[0, "RMSE_Training"], format_number)
-        worksheet.number("C3", statistics.at[0, "MAE_Training"], format_number)
+        worksheet.write_number("A3", statistics.at[0, "RSQ_Training"], format_number)
+        worksheet.write_number("B3", statistics.at[0, "RMSE_Training"], format_number)
+        worksheet.write_number("C3", statistics.at[0, "MAE_Training"], format_number)
 
-        worksheet.number("E3", statistics.at[0, "RSQ_CV_Training"], format_number)
-        worksheet.number("F3", statistics.at[0, "RMSE_CV_Training"], format_number)
-        worksheet.number("G3", statistics.at[0, "MAE_CV_Training"], format_number)
+        worksheet.write_number("D3", statistics.at[0, "RSQ_CV_Training"], format_number)
+        worksheet.write_number("E3", statistics.at[0, "RMSE_CV_Training"], format_number)
+        worksheet.write_number("F3", statistics.at[0, "MAE_CV_Training"], format_number)
 
-        worksheet.number("A7", statistics.at[0, "RSQ_Test"], format_number)
-        worksheet.number("B7", statistics.at[0, "RMSE_Test"], format_number)
-        worksheet.number("C7", statistics.at[0, "MAE_Test"], format_number)
+        worksheet.write_number("A7", statistics.at[0, "RSQ_Test"], format_number)
+        worksheet.write_number("B7", statistics.at[0, "RMSE_Test"], format_number)
+        worksheet.write_number("C7", statistics.at[0, "MAE_Test"], format_number)
 
-        worksheet.number("E7", statistics.at[0, "MAE_Test_Inside_AD"], format_number)
-        worksheet.number("F7", statistics.at[0, "MAE_Test_Outside_AD"], format_number)
-        worksheet.number("G7", statistics.at[0, "Coverage_Test"], format_number)
+        worksheet.write_number("D7", statistics.at[0, "MAE_Test_Inside_AD"], format_number)
+        worksheet.write_number("E7", statistics.at[0, "MAE_Test_Outside_AD"], format_number)
+        worksheet.write_number("F7", statistics.at[0, "Coverage_Test"], format_number)
 
         ModelToExcel.set_column_width(writer, "Statistics", statistics, how="full")
         # ModelToExcel.add_filter(writer, "Statistics", statistics)
-        worksheet.insert_image("H1", Path("resources") / "equations.png", {"x_scale": 0.5, "y_scale": 0.5, "x_offset": 10, "y_offset": 2})
+
+        import os        
+        img_path = os.path.join(os.getenv("PROJECT_ROOT"), "resources", "equations.png")        
+        worksheet.insert_image("A8", img_path, {"x_scale": 0.5, "y_scale": 0.5, "x_offset": 10, "y_offset": 2})
 
         return statistics
 
@@ -525,33 +528,33 @@ class ModelToExcel:
 
             # TODO: Write each sheet method below
 
-            logging.info("Creating Training Set...")
-            df = self.training_set(writer, self.training_set_df)
-            logging.info(f"training_set:\n\t{df.head(2)}")
+            # logging.info("Creating Training Set...")
+            # df = self.training_set(writer, self.training_set_df)
+            # logging.info(f"training_set:\n\t{df.head(2)}")
 
-            logging.info("Creating Test Set...")
-            df = self.test_set(writer, self.test_set_df)
-            logging.info(f"test_set:\n\t{df.head(2)}")
+            # logging.info("Creating Test Set...")
+            # df = self.test_set(writer, self.test_set_df)
+            # logging.info(f"test_set:\n\t{df.head(2)}")
 
-            logging.info("Creating Records...")
-            df = self.records(writer, self.records_df)
-            logging.info(f"records:\n\t{df.head(2)}")
+            # logging.info("Creating Records...")
+            # df = self.records(writer, self.records_df)
+            # logging.info(f"records:\n\t{df.head(2)}")
 
             # logging.info("Creating Records Field Descriptions...")
             # df = self.records_field_descriptions(writer, self.records_field_descriptions_df)
             # logging.info(f"records_field_descriptions:\n\t{df.head(2)}")
 
-            logging.info("Creating Test Set Predictions...")
-            df = self.test_set_predictions(writer, self.test_set_predictions_df)
-            logging.info(f"test_set_predictions:\n\t{df.head(2)}")
+            # logging.info("Creating Test Set Predictions...")
+            # df = self.test_set_predictions(writer, self.test_set_predictions_df)
+            # logging.info(f"test_set_predictions:\n\t{df.head(2)}")
 
-            logging.info("Creating Model Descriptors...")
-            df = self.model_descriptors(writer, self.model_descriptors_df)
-            logging.info(f"model_descriptors:\n\t{df.head(2)}")
+            # logging.info("Creating Model Descriptors...")
+            # df = self.model_descriptors(writer, self.model_descriptors_df)
+            # logging.info(f"model_descriptors:\n\t{df.head(2)}")
 
-            logging.info("Creating Model Descriptor Values...")
-            df = self.model_descriptor_values(writer, self.model_descriptor_values_df)
-            logging.info(f"model_descriptor_values:\n\t{df.head(2)}")
+            # logging.info("Creating Model Descriptor Values...")
+            # df = self.model_descriptor_values(writer, self.model_descriptor_values_df)
+            # logging.info(f"model_descriptor_values:\n\t{df.head(2)}")
 
 
 def main():

@@ -1530,9 +1530,11 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
             df_pred_cv, cv_stats = ModelBuilder.crossvalidate(df_cv_dict, params, model.embedding)
         
         ext_stats = None
+        df_pred_ext = None
         
         if df_prediction_ext is not None:
-            df_pred_ext, ext_stats = ModelBuilder.predict(model, df_prediction_ext,'_External')
+            df_pred_ext, ext_stats = ModelBuilder.predict(model, df_prediction_ext, '_External')
+            # print(df_pred_ext.shape)
                     
         
         # ******************************************************************************************************
@@ -1612,7 +1614,7 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         df_pred_test = add_source_chemical_info(df_pred_test, df_dps)
         df_pred_cv = add_source_chemical_info(df_pred_cv, df_dps)        # print_first_row(df_pred_cv)
         
-        df_pred_ext = None
+        
         if df_prediction_ext is not None:
             df_dps_ext = du.getMappedDatapoints(session, dataset_name_ext)
             df_pred_ext = add_source_chemical_info(df_pred_ext, df_dps_ext)
@@ -1656,8 +1658,7 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         if create_detailed_excel:
             cover_sheet_df = ModelToExcel.get_cover_sheet_df(results_dict)
             statistics_df = ModelToExcel.get_statistics_df(results_dict)
-
-            statistics_df = results_dict["model_statistics"]
+            
             training_set_df = df_pred_cv # TODO: Might need to adjust?
             test_set_df = df_pred_test # TODO: Might need to adjust?
             records_df = df_pv
@@ -1669,8 +1670,9 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
             with open("test.pkl", "wb") as file:
                 pickle.dump([cover_sheet_df, statistics_df, training_set_df, test_set_df, records_df, records_field_descriptions_df, test_set_predictions_df, model_descriptors_df, model_descriptor_values_df], file)
 
+
             mte = ModelToExcel(
-                excel_path="summary_test.xlsx",
+                excel_path=os.path.join(folder_path, "summary_test.xlsx"),
                 cover_sheet_df=cover_sheet_df,
                 statistics_df=statistics_df,
                 training_set_df=training_set_df,
