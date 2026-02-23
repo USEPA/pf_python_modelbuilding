@@ -61,32 +61,54 @@ class ModelToExcel:
             "Method Name": [results_dict["model_details"].get("qsar_method", None)],
             "Method Description": [results_dict["model_details"].get("qsar_method_description", None)],
             "Applicability Domain": [results_dict["model_details"].get("applicabilityDomainName", None)],
-            "Applicability Domain Cutoff": [results_dict["model_details"].get("applicabilityDomainCutoff", None)] # TODO
+            # "Applicability Domain Cutoff": [results_dict["model_details"].get("applicabilityDomainCutoff", None)] # TODO
         }
         cover_sheet_df = pd.DataFrame.from_dict(cover_sheet_df)
         return cover_sheet_df
     
 
     def query_cover_sheet_df(self):
-        # TODO: Determine how to obtain nTraining and nTest (1, 2)
-        # TODO: Determine how to obtain AD data (3, 4, 5, 6)
         sql = text(f"""
-        SELECT distinct prop.name as "Property Name", prop.description as "Property Description",
-            u.abbreviation_ccd as "Property Units", m.dataset_name as "Dataset Name",
+        select
+            distinct prop.name as "Property Name",
+            prop.description as "Property Description",
+            u.abbreviation_ccd as "Property Units",
+            m.dataset_name as "Dataset Name",
             d.description as "Dataset Description",
-            1 as "nTraining", 2 as "nTest", -- replace with sql to get nTraining and nTest
-            meth.name as "Method Name", meth.description as "Method Description",
-            3 as "Applicability Domain", 4 as "Applicability Domain Cutoff",
-            5 as "Applicability Domain Descriptors",
-            6 as "Applicability Domain Distance Measure" -- replace with sql to get AD results
-        FROM qsar_models.models AS m
-            JOIN qsar_datasets.datasets AS d ON d.name = m.dataset_name
-            JOIN qsar_models.predictions AS p ON p.fk_model_id = m.id
-            JOIN qsar_models.methods AS meth ON meth.id = m.fk_method_id
-            JOIN qsar_datasets.properties AS prop ON prop.id = d.fk_property_id
-            JOIN qsar_datasets.units AS u ON u.id = d.fk_unit_id
-            JOIN qsar_models.ad_methods AS ad ON ad.id = m.fk_ad_method
-        WHERE m.id = {self.model_id} -- input model_id here
+            SUM(case when dpis.split_num = 0 then 1 else 0 end) as "nTraining",
+            SUM(case when dpis.split_num = 1 then 1 else 0 end) as "nTest",
+            -- replace with sql to get nTraining and nTest
+            meth.name as "Method Name",
+            meth.description as "Method Description",
+            am.name_display as "Applicability Domain"
+        from
+            qsar_models.models as m
+        join qsar_datasets.datasets as d on
+            d.name = m.dataset_name
+        join qsar_models.methods as meth on
+            meth.id = m.fk_method_id
+        join qsar_datasets.properties as prop on
+            prop.id = d.fk_property_id
+        join qsar_datasets.units as u on
+            u.id = d.fk_unit_id
+        join qsar_models.ad_methods as am on
+            am.id = m.fk_ad_method
+        join qsar_datasets.data_points as dp on
+            dp.fk_dataset_id = d.id
+        join qsar_datasets.data_points_in_splittings as dpis on
+            dpis.fk_data_point_id = dp.id
+        where
+            m.id = {self.model_id}
+            -- input model_id here
+        group by
+            prop.name,
+            prop.description,
+            u.abbreviation_ccd,
+            m.dataset_name,
+            d.description,
+            meth.name,
+            meth.description,
+            am.name_display;
         """)
         logging.info("Querying database for Cover Sheet")
         summary = pd.read_sql(sql, self.engine)
@@ -136,12 +158,10 @@ class ModelToExcel:
 
 
     def query_statistics_df(self):
-        # TODO: Determine if RSQ_Training should be PearsonRSQ_Training as is or R2_Training
-        #       Values ARE different in the database for these stats on the same models,
-        #       even if only slightly
         sql = text(f"""
         select
-            1 as "nTraining", 2 as "nTest",
+            SUM(case when dpis.split_num = 0 then 1 else 0 end) as "nTraining",
+            SUM(case when dpis.split_num = 1 then 1 else 0 end) as "nTest",
             MAX(case when s.name = 'PearsonRSQ_Training' then ms.statistic_value end) as "RSQ_Training",
             MAX(case when s.name = 'RMSE_Training' then ms.statistic_value end) as "RMSE_Training",
             MAX(case when s.name = 'MAE_Training' then ms.statistic_value end) as "MAE_Training",
@@ -163,8 +183,15 @@ class ModelToExcel:
             ms.fk_model_id = m.id
         join qsar_models.statistics as s on
             ms.fk_statistic_id = s.id
+        join qsar_datasets.datasets as d on
+            d.name = m.dataset_name
+        join qsar_datasets.data_points as dp on
+            dp.fk_dataset_id = d.id
+        join qsar_datasets.data_points_in_splittings as dpis on
+            dpis.fk_data_point_id = dp.id
         where
-            m.id = {self.model_id} -- input model_id here
+            m.id = {self.model_id}
+            -- input model_id here
         group by
             m.id;
         """)
@@ -178,12 +205,9 @@ class ModelToExcel:
     def statistics(self, writer, statistics=None):
         if statistics is None:
             statistics = self.query_statistics_df() if self.statistics_df is None else self.statistics_df
-        
-        # statistics.to_excel(writer, sheet_name="Statistics", index=False)
 
         workbook = writer.book
         worksheet = workbook.add_worksheet("Statistics")
-        # worksheet.freeze_panes(1, 0)
 
         format_center = workbook.add_format({
             "align": "center"
@@ -259,69 +283,109 @@ class ModelToExcel:
         worksheet.write_number("F7", statistics.at[0, "Coverage_Test"], format_number)
 
         ModelToExcel.set_column_width(writer, "Statistics", statistics, how="full")
-        # ModelToExcel.add_filter(writer, "Statistics", statistics)
         worksheet.insert_image("A8", Path("resources") / "equations.png", {"x_scale": 0.5, "y_scale": 0.5, "x_offset": 10, "y_offset": 2})
 
         return statistics
 
 
-    def query_training_set_df(self):
-        sql = text(f"""
+    # def query_training_set_df(self):
+    #     sql = text(f"""
         
-        """)
+    #     """)
 
-        logging.info("Querying database for Training Set")
-        training_set = pd.read_sql(sql, self.engine).round(2)
-        logging.info("Finished querying database for Training Set")
-        return training_set
+    #     logging.info("Querying database for Training Set")
+    #     training_set = pd.read_sql(sql, self.engine).round(2)
+    #     logging.info("Finished querying database for Training Set")
+    #     return training_set
     
 
-    def training_set(self, writer, training_set=None):
-        # TODO: Write Function
-        if training_set is None:
-            training_set = self.query_training_set_df() if self.training_set_df is None else self.training_set_df
+    # def training_set(self, writer, training_set=None):
+    #     # TODO: Write Function
+    #     if training_set is None:
+    #         training_set = self.query_training_set_df() if self.training_set_df is None else self.training_set_df
         
-        training_set.to_excel(writer, sheet_name="Training Set", index=False)
+    #     training_set.to_excel(writer, sheet_name="Training Set", index=False)
 
-        workbook = writer.book
-        worksheet = writer.sheets["Training Set"]
-        worksheet.freeze_panes(1, 0)
+    #     workbook = writer.book
+    #     worksheet = writer.sheets["Training Set"]
+    #     worksheet.freeze_panes(1, 0)
 
-        ModelToExcel.set_column_width(writer, "Training Set", training_set, how="full")
-        ModelToExcel.add_filter(writer, "Training Set", training_set)
+    #     ModelToExcel.set_column_width(writer, "Training Set", training_set, how="full")
+    #     ModelToExcel.add_filter(writer, "Training Set", training_set)
 
-        return training_set
+    #     return training_set
 
 
-    def query_test_set_df(self):
-        sql = text(f"""
+    # def query_test_set_df(self):
+    #     sql = text(f"""
         
-        """)
+    #     """)
 
-        logging.info("Querying database for Test Set")
-        test_set = pd.read_sql(sql, self.engine).round(2)
-        logging.info("Finished querying database for Test Set")
-        return test_set
+    #     logging.info("Querying database for Test Set")
+    #     test_set = pd.read_sql(sql, self.engine).round(2)
+    #     logging.info("Finished querying database for Test Set")
+    #     return test_set
     
 
-    def test_set(self, writer, test_set=None):
-        # TODO: Write Function
-        if test_set is None:
-            test_set = self.query_test_set_df() if self.test_set_df is None else self.test_set_df
+    # def test_set(self, writer, test_set=None):
+    #     # TODO: Write Function
+    #     if test_set is None:
+    #         test_set = self.query_test_set_df() if self.test_set_df is None else self.test_set_df
         
-        test_set.to_excel(writer, sheet_name="Test Set", index=False)
+    #     test_set.to_excel(writer, sheet_name="Test Set", index=False)
 
-        workbook = writer.book
-        worksheet = writer.sheets["Test Set"]
-        worksheet.freeze_panes(1, 0)
+    #     workbook = writer.book
+    #     worksheet = writer.sheets["Test Set"]
+    #     worksheet.freeze_panes(1, 0)
 
-        ModelToExcel.set_column_width(writer, "Test Set", test_set, how="full")
-        ModelToExcel.add_filter(writer, "Test Set", test_set)
+    #     ModelToExcel.set_column_width(writer, "Test Set", test_set, how="full")
+    #     ModelToExcel.add_filter(writer, "Test Set", test_set)
 
-        return test_set
+    #     return test_set
 
+
+    @staticmethod
+    def get_records_df(df_pv):
+        records_df = {
+            "exp_prop_id": df_pv["prop_value_id"],
+            "canon_qsar_smiles": df_pv["canon_qsar_smiles"],
+            "page_url": None, # df_pv["direct_url"]
+            "public_source_name": df_pv["public_source_name"],
+            "public_source_url": df_pv["public_source_url"],
+            "public_source_original_name": None,
+            "public_source_original_url": None,
+            "literature_source_citation": df_pv["literature_source_citation"],
+            "literature_source_doi": df_pv["literature_source_doi"],
+            "source_dtxrid": None,
+            "source_dtxsid": df_pv["source_dtxsid"],
+            "source_casrn": df_pv["source_casrn"],
+            "source_chemical_name": df_pv["source_chemical_name"],
+            "source_smiles": df_pv["source_smiles"],
+            "mapped_dtxcid": df_pv["mapped_dtxcid"],
+            "mapped_dtxsid": df_pv["mapped_dtxsid"],
+            "mapped_cas": df_pv["source_casrn"], # Assuming the source and mapped casrn are equal
+            "mapped_chemical_name": df_pv["mapped_chemical_name"],
+            "mapped_smiles": df_pv["mapped_smiles"],
+            "mapped_molweight": df_pv["mapped_mol_weight"],
+            "value_original": df_pv["prop_value_original"],
+            "value_max": None, # Might need to add to models.dataset_utilities_db.getSqlPropertyValuesForDataset
+            "value_min": None, # Might need to add to models.dataset_utilities_db.getSqlPropertyValuesForDataset
+            "value_point_estimate": df_pv["prop_value"],
+            "value_units": df_pv["prop_unit"],
+            "qsar_property_value": df_pv["qsar_property_value"],
+            "qsar_property_units": df_pv["qsar_property_unit"],
+            "temperature_c": df_pv["exp_details_temperature_c"],
+            "pressure_mmHg": None,
+            "pH": df_pv["exp_details_ph"],
+            "notes": None,
+            "qc_flag": None,
+        }
+        records_df = pd.DataFrame.from_dict(records_df)
+        return records_df
+    
 
     def query_records_df(self):
+        # TODO: Write query
         sql = text(f"""
         
         """)
@@ -333,7 +397,6 @@ class ModelToExcel:
     
 
     def records(self, writer, records=None):
-        # TODO: Write Function
         if records is None:
             records = self.query_records_df() if self.records_df is None else self.records_df
         
@@ -343,27 +406,102 @@ class ModelToExcel:
         worksheet = writer.sheets["Records"]
         worksheet.freeze_panes(1, 0)
 
-        ModelToExcel.set_column_width(writer, "Records", records, how="full")
+        ModelToExcel.set_column_width(writer, "Records", records, how="header")
         ModelToExcel.add_filter(writer, "Records", records)
 
         return records
 
 
-    def query_records_field_descriptions_df(self):
-        sql = text(f"""
-        
-        """)
+    @staticmethod
+    def get_records_field_descriptions_df():
+        records_field_descriptions_df = {
+            "Field": [
+                "exp_prop_id",
+                "canon_qsar_smiles",
+                "page_url",
+                "public_source_name",
+                "public_source_url",
+                "public_source_original_name",
+                "public_source_original_url",
+                "literature_source_citation",
+                "literature_source_doi",
+                "source_dtxrid",
+                "source_dtxsid",
+                "source_casrn",
+                "source_chemical_name",
+                "source_smiles",
+                "mapped_dtxcid",
+                "mapped_dtxsid",
+                "mapped_cas",
+                "mapped_chemical_name",
+                "mapped_smiles",
+                "mapped_molweight",
+                "value_original",
+                "value_max",
+                "value_min",
+                "value_point_estimate",
+                "value_units",
+                "qsar_property_value",
+                "qsar_property_units",
+                "temperature_c",
+                "pressure_mmHg",
+                "pH",
+                "notes",
+                "qc_flag"
+            ],
+            "Description": [
+                "raw property id number in our database",
+                "qsar_ready_smiles associated with the mapped smiles",
+                "url that the property value is associated with",
+                "name of the public source",
+                "url of the public source",
+                "name of the original public source",
+                "url of the original public source",
+                "citation for the literature source",
+                "doi url for the literature source",
+                "DSSTOX record id with the source chemical",
+                "DSSTOX substance id associated with the source chemical",
+                "source chemical CASRN",
+                "source chemical name",
+                "source chemical SMILES",
+                "DSSTOX compound id for the record mapped to the source chemical",
+                "DSSTOX substance id for the record  mapped to the source chemical",
+                "DSSTOX CASRN  for the record mapped to the source chemical",
+                "DSSTOX chemical name for the record mapped to the source chemical",
+                "DSSTOX SMILES  for the record mapped to the source chemical",
+                "DSSTOX molecular weight  for the record mapped to the source chemical",
+                "Original property value from the source",
+                "Original maximum property value from the source",
+                "Original minimum property value from the source",
+                "Point estimate for the property value derived from value_original or value_max and value_min",
+                "units for the value_point_estimate",
+                "value_point_estimate converted to the qsar_property_units",
+                "units for the qsar_property_value",
+                "temperature at which the experiment was performed in C",
+                "pressure at which the experiment was performed in mmHg",
+                "pH at which the experiment was performed",
+                "notes on the record",
+                "whether or not a quality control flag has been issued"
+            ]
+        }
+        records_field_descriptions_df = pd.DataFrame.from_dict(records_field_descriptions_df)
+        return records_field_descriptions_df
 
-        logging.info("Querying database for Records Field Descriptions")
-        records_field_descriptions = pd.read_sql(sql, self.engine).round(2)
-        logging.info("Finished querying database for Records Field Descriptions")
-        return records_field_descriptions
+
+    # def query_records_field_descriptions_df(self):
+    #     sql = text(f"""
+        
+    #     """)
+
+    #     logging.info("Querying database for Records Field Descriptions")
+    #     records_field_descriptions = pd.read_sql(sql, self.engine).round(2)
+    #     logging.info("Finished querying database for Records Field Descriptions")
+    #     return records_field_descriptions
     
 
     def records_field_descriptions(self, writer, records_field_descriptions=None):
-        # TODO: Write Function
         if records_field_descriptions is None:
-            records_field_descriptions = self.query_records_field_descriptions_df() if self.records_field_descriptions_df is None else self.records_field_descriptions_df
+            records_field_descriptions = self.get_records_field_descriptions_df() if self.records_field_descriptions_df is None else self.records_field_descriptions_df
         
         records_field_descriptions.to_excel(writer, sheet_name="Records Field Descriptions", index=False)
 
@@ -377,35 +515,58 @@ class ModelToExcel:
         return records_field_descriptions
 
 
-    def query_test_set_predictions_df(self):
-        sql = text(f"""
+    # def query_test_set_predictions_df(self):
+    #     # TODO: Write query
+    #     sql = text(f"""
         
-        """)
+    #     """)
 
-        logging.info("Querying database for Test Set Predictions")
-        test_set_predictions = pd.read_sql(sql, self.engine).round(2)
-        logging.info("Finished querying database for Test Set Predictions")
-        return test_set_predictions
+    #     logging.info("Querying database for Test Set Predictions")
+    #     test_set_predictions = pd.read_sql(sql, self.engine).round(2)
+    #     logging.info("Finished querying database for Test Set Predictions")
+    #     return test_set_predictions
     
 
-    def test_set_predictions(self, writer, test_set_predictions=None):
-        # TODO: Write Function
-        if test_set_predictions is None:
-            test_set_predictions = self.query_test_set_predictions_df() if self.test_set_predictions_df is None else self.test_set_predictions_df
+    # def test_set_predictions(self, writer, test_set_predictions=None):
+    #     # TODO: Write Function
+    #     if test_set_predictions is None:
+    #         test_set_predictions = self.query_test_set_predictions_df() if self.test_set_predictions_df is None else self.test_set_predictions_df
         
-        test_set_predictions.to_excel(writer, sheet_name="Test Set Predictions", index=False)
+    #     test_set_predictions.to_excel(writer, sheet_name="Test Set Predictions", index=False)
 
-        workbook = writer.book
-        worksheet = writer.sheets["Test Set Predictions"]
-        worksheet.freeze_panes(1, 0)
+    #     workbook = writer.book
+    #     worksheet = writer.sheets["Test Set Predictions"]
+    #     worksheet.freeze_panes(1, 0)
 
-        ModelToExcel.set_column_width(writer, "Test Set Predictions", test_set_predictions, how="full")
-        ModelToExcel.add_filter(writer, "Test Set Predictions", test_set_predictions)
+    #     ModelToExcel.set_column_width(writer, "Test Set Predictions", test_set_predictions, how="full")
+    #     ModelToExcel.add_filter(writer, "Test Set Predictions", test_set_predictions)
 
-        return test_set_predictions
+    #     return test_set_predictions
 
+
+    @staticmethod
+    def get_model_descriptors_df(results_dict):
+        # Load in model descriptors
+        model_descriptors_df = pd.DataFrame(results_dict["model_details"]["embedding"], columns=["Symbol"])
+
+        # Load in variable definitions
+        variable_definitions_df = pd.read_csv(Path("resources") / "variable definitions-ed.txt", sep="\t")
+
+        # Convert both Symbol columns to strings explicitly
+        model_descriptors_df['Symbol'] = model_descriptors_df['Symbol'].astype(str)
+        variable_definitions_df['Symbol'] = variable_definitions_df['Symbol'].astype(str)
+
+        # Merge the model's descriptors with their respective definitions and rename columns
+        result = model_descriptors_df.merge(variable_definitions_df, on="Symbol", how="left")
+        result = result.rename(columns={"Symbol": "Descriptor", "Category": "Class"})
+
+        result = ModelToExcel.handle_accidental_formulas(result, how="formula")
+
+        return result
+    
 
     def query_model_descriptors_df(self):
+        # TODO: Write query
         sql = text(f"""
         
         """)
@@ -417,7 +578,6 @@ class ModelToExcel:
     
 
     def model_descriptors(self, writer, model_descriptors=None):
-        # TODO: Write Function
         if model_descriptors is None:
             model_descriptors = self.query_model_descriptors_df() if self.model_descriptors_df is None else self.model_descriptors_df
         
@@ -433,7 +593,49 @@ class ModelToExcel:
         return model_descriptors
 
 
+    @staticmethod
+    def get_model_descriptor_values_df(results_dict, df_pred_cv, df_pred_test, df_training_model, df_test_model):
+        # Get the units of the model (for the Observed and Predicted columns)
+        units = results_dict["model_details"].get("unitsModel", "Units")
+
+        # Get the experimental and predicted values for the test set
+        test = df_pred_test.loc[:, ["canon_qsar_smiles", "exp", "pred"]]
+        test["Set"] = "Test"
+
+        # Get the experimental and predicted values for the training set
+        training = df_pred_cv.loc[:, ["canon_qsar_smiles", "exp", "pred"]]
+        training["Set"] = df_pred_cv.cv_fold.apply(lambda x: f"Training, Fold {x}")
+
+        # Concatenate the test and training sets, and clean the columns
+        full = pd.concat([test, training], ignore_index=True)
+        full["canon_qsar_smiles"] = full["canon_qsar_smiles"].astype(str)
+        full = full.rename(columns={
+            "canon_qsar_smiles": "Canonical QSAR Ready Smiles",
+            "exp": f"Observed ({units})",
+            "pred": f"Predicted ({units})"
+        })
+
+        # Get the descriptor values for the test set
+        test_descriptors = df_test_model.drop(columns=["Property"])
+
+        # Get the descriptor values for the training set
+        training_descriptors = df_training_model.drop(columns=["Property"])
+
+        # Concatenate the test and training set predictors, and clean the columns
+        full_descriptors = pd.concat([test_descriptors, training_descriptors], ignore_index=True)
+        full_descriptors["ID"] = full_descriptors["ID"].astype(str)
+        full_descriptors = full_descriptors.rename(columns={"ID": "Canonical QSAR Ready Smiles"})
+
+        # Merge the full set of experimental and predicted values with the model descriptor values
+        final = full.merge(full_descriptors, on="Canonical QSAR Ready Smiles", how="left")
+
+        final = ModelToExcel.handle_accidental_formulas(final)
+
+        return final
+
+
     def query_model_descriptor_values_df(self):
+        # TODO: Write query
         sql = text(f"""
         
         """)
@@ -445,7 +647,6 @@ class ModelToExcel:
     
 
     def model_descriptor_values(self, writer, model_descriptor_values=None):
-        # TODO: Write Function
         if model_descriptor_values is None:
             model_descriptor_values = self.query_model_descriptor_values_df() if self.model_descriptor_values_df is None else self.model_descriptor_values_df
         
@@ -455,7 +656,7 @@ class ModelToExcel:
         worksheet = writer.sheets["Model Descriptor Values"]
         worksheet.freeze_panes(1, 0)
 
-        ModelToExcel.set_column_width(writer, "Model Descriptor Values", model_descriptor_values, how="full")
+        ModelToExcel.set_column_width(writer, "Model Descriptor Values", model_descriptor_values, how="header")
         ModelToExcel.add_filter(writer, "Model Descriptor Values", model_descriptor_values)
 
         return model_descriptor_values
@@ -504,6 +705,25 @@ class ModelToExcel:
         ws.autofilter(0, 0, nrows, ncols - 1)
     
 
+    @staticmethod
+    def handle_accidental_formulas(df, how="formula"):
+        # Excel treats cells starting with =, +, -, @ as formulas
+        # Use an explicit formula to allow values to display properly as is, but alter the actual stored value
+        if how == "formula":
+            for col in df.columns:
+                df[col] = df[col].apply(
+                    lambda x: f'="{x}"' if isinstance(x, str) and x and x[0] in ('=', '+', '-', '@') else x
+                )
+        # Prepend a single quote to treat them as literal strings, making a more minor alteration to the stored value
+        elif how == "quote":
+            for col in df.columns:
+                df[col] = df[col].apply(
+                    lambda x: f'="{x}"' if isinstance(x, str) and x and x[0] in ('=', '+', '-', '@') else x
+                )
+        
+        return df
+
+
     def create_excel(
             self,
             chart_size_px: int=520,  # square chart size
@@ -533,25 +753,27 @@ class ModelToExcel:
             # df = self.test_set(writer, self.test_set_df)
             # logging.info(f"test_set:\n\t{df.head(2)}")
 
-            # logging.info("Creating Records...")
-            # df = self.records(writer, self.records_df)
+            logging.info("Creating Records...")
+            df = self.records(writer, self.records_df)
             # logging.info(f"records:\n\t{df.head(2)}")
 
-            # logging.info("Creating Records Field Descriptions...")
-            # df = self.records_field_descriptions(writer, self.records_field_descriptions_df)
+            logging.info("Creating Records Field Descriptions...")
+            df = self.records_field_descriptions(writer, self.records_field_descriptions_df)
             # logging.info(f"records_field_descriptions:\n\t{df.head(2)}")
 
             # logging.info("Creating Test Set Predictions...")
             # df = self.test_set_predictions(writer, self.test_set_predictions_df)
             # logging.info(f"test_set_predictions:\n\t{df.head(2)}")
 
-            # logging.info("Creating Model Descriptors...")
-            # df = self.model_descriptors(writer, self.model_descriptors_df)
+            logging.info("Creating Model Descriptors...")
+            df = self.model_descriptors(writer, self.model_descriptors_df)
             # logging.info(f"model_descriptors:\n\t{df.head(2)}")
 
-            # logging.info("Creating Model Descriptor Values...")
-            # df = self.model_descriptor_values(writer, self.model_descriptor_values_df)
+            logging.info("Creating Model Descriptor Values...")
+            df = self.model_descriptor_values(writer, self.model_descriptor_values_df)
             # logging.info(f"model_descriptor_values:\n\t{df.head(2)}")
+
+            logging.info("Done creating detailed Excel!")
 
 
 def main():

@@ -1211,6 +1211,7 @@ class ExcelCreator:
             sheet_name_descriptors = "test set descriptors"
             ExcelCreator.writeDescriptors(sheet_name_descriptors, df_test_model, writer, workbook)
             ExcelCreator.writeModelCoefficients(results_dict, writer, workbook)
+            ExcelCreator.add_filter(writer, sheet_name_descriptors, df_test_model)
             ExcelCreator.set_column_width(writer, sheet_name=sheet_name_descriptors, df=df_test_model, col_width_pad=col_width_pad, min_col_width=min_col_width, how="header")
         
 
@@ -1553,6 +1554,7 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
             columns.insert(0, "Property")
             columns.insert(0, "ID")
             df_test_model = df_prediction[columns]
+            df_training_model = df_training[columns]
 
         df_pv = du.getMappedPropertyValues(session, dataset_name)
         # print_first_row(df_pv, row=1)
@@ -1594,17 +1596,23 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         if create_detailed_excel:
             cover_sheet_df = ModelToExcel.get_cover_sheet_df(results_dict)
             statistics_df = ModelToExcel.get_statistics_df(results_dict)
+            records_df = ModelToExcel.get_records_df(df_pv)
+            model_descriptors_df = ModelToExcel.get_model_descriptors_df(results_dict)
+            model_descriptor_values_df = ModelToExcel.get_model_descriptor_values_df(results_dict, df_pred_cv, df_pred_test, df_training_model, df_test_model)
             
+            # cover_sheet_df = results_dict["model_details"]
+            # statistics_df = results_dict["model_statistics"]
             training_set_df = df_pred_cv # TODO: Might need to adjust?
             test_set_df = df_pred_test # TODO: Might need to adjust?
-            records_df = df_pv
+            # records_df = df_pv
             records_field_descriptions_df = None # TODO: Make records field descriptions dict/df
             test_set_predictions_df = df_pred_test
-            model_descriptors_df = results_dict["model_details"]["embedding"] # TODO: Seems to also need variable definitions-ed.txt
-            model_descriptor_values_df = df_test_model
+            # model_descriptors_df = results_dict["model_details"]["embedding"] # TODO: Seems to also need variable definitions-ed.txt
+            # model_descriptor_values_df = df_test_model
 
+            # Temporary for testing purposes
             with open("test.pkl", "wb") as file:
-                pickle.dump([cover_sheet_df, statistics_df, training_set_df, test_set_df, records_df, records_field_descriptions_df, test_set_predictions_df, model_descriptors_df, model_descriptor_values_df], file)
+                pickle.dump([results_dict["model_details"], results_dict["model_statistics"], df_pred_cv, df_pred_test, df_pv, None, df_pred_test, results_dict["model_details"]["embedding"], df_test_model, df_training_model], file)
 
             mte = ModelToExcel(
                 excel_path="summary_test.xlsx",
