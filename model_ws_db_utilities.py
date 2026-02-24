@@ -776,6 +776,22 @@ class ModelInitializer:
 
         return df_set
 
+    def updateUnits(self, model):
+        
+        if model.propertyName in [
+            pc.WATER_SOLUBILITY,
+            pc.ACUTE_AQUATIC_TOXICITY,
+            pc.NINETY_SIX_HOUR_FATHEAD_MINNOW_LC50,
+            pc.NINETY_SIX_HOUR_SCUD_LC50,
+            pc.NINETY_SIX_HOUR_RAINBOW_TROUT_LC50,
+            pc.NINETY_SIX_HOUR_BLUEGILL_LC50,
+            pc.FORTY_EIGHT_HR_TETRAHYMENA_PYRIFORMIS_IGC50,
+            pc.FORTY_EIGHT_HR_DAPHNIA_MAGNA_LC50
+        ]:            
+            model.unitsDisplay = pc.MG_L # units that program office wants (Dashboard uses mol/L)
+
+
+
     @timer
     def initModel(self, model_id):
 
@@ -803,6 +819,9 @@ class ModelInitializer:
         # Stores model under provided number
 
         self.get_model_details(model, session)
+        
+        self.updateUnits(model)
+        
         self.get_model_statistics(model, session)
         self.get_training_prediction_instances(session, model)
         self.get_dsstox_records_for_dataset(model, session)
