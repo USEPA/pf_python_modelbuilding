@@ -776,6 +776,22 @@ class ModelInitializer:
 
         return df_set
 
+    def updateUnits(self, model):
+        
+        if model.propertyName in [
+            pc.WATER_SOLUBILITY,
+            pc.ACUTE_AQUATIC_TOXICITY,
+            pc.NINETY_SIX_HOUR_FATHEAD_MINNOW_LC50,
+            pc.NINETY_SIX_HOUR_SCUD_LC50,
+            pc.NINETY_SIX_HOUR_RAINBOW_TROUT_LC50,
+            pc.NINETY_SIX_HOUR_BLUEGILL_LC50,
+            pc.FORTY_EIGHT_HR_TETRAHYMENA_PYRIFORMIS_IGC50,
+            pc.FORTY_EIGHT_HR_DAPHNIA_MAGNA_LC50
+        ]:            
+            model.unitsDisplay = pc.MG_L # units that program office wants (Dashboard uses mol/L)
+
+
+
     @timer
     def initModel(self, model_id):
 
@@ -803,6 +819,9 @@ class ModelInitializer:
         # Stores model under provided number
 
         self.get_model_details(model, session)
+        
+        self.updateUnits(model)
+        
         self.get_model_statistics(model, session)
         self.get_training_prediction_instances(session, model)
         self.get_dsstox_records_for_dataset(model, session)
@@ -1782,7 +1801,7 @@ class ModelPredictor:
         
         md.modelStatistics = None
     
-    def smiles_to_base64(self, smiles_string, size=400):
+    def smiles_to_base64(self, smiles_string, width=400, height=400):
         '''
         TODO: move to utility class
         :param smiles_string:
@@ -1794,8 +1813,8 @@ class ModelPredictor:
         try:
             mol = indigo.loadMolecule(smiles_string)
             indigo.setOption("render-output-format", "png") 
-            indigo.setOption("render-image-width", size)
-            indigo.setOption("render-image-height", size)
+            indigo.setOption("render-image-width", width)
+            indigo.setOption("render-image-height", height)
             img_bytes = renderer.renderToBuffer(mol)
             base64_string = base64.b64encode(img_bytes).decode('utf-8')
             return base64_string
@@ -2038,10 +2057,17 @@ class ModelPredictor:
         serverAPIs = os.getenv("CIM_API_SERVER", "https://cim-dev.sciencedataexperts.com")
         fileAPI = os.getenv("FILE_API_SERVER", pc.URL_CTX_API)
 
+        logging.info("serverAPIS:{serverAPIs}")
+        logging.info("model.qsarReadyRuleSet:{model.qsarReadyRuleSet}")
+
         # initialize model bytes and all details from db:
         
         mi = ModelInitializer()
         model = mi.init_model(model_id)
+        
+        if serverAPIs == "https://hcd.rtpnc.epa.gov/" and model.qsarReadyRuleSet == 'qsar-ready_04242025_0':
+            model.qsarReadyRuleSet = 'qsar-ready_04242025' #latest rules arent on there yet
+        
         
         # print(hasattr(model, 'modelId'))
         if hasattr(model, 'modelId') == False:
@@ -2211,11 +2237,9 @@ class ModelPredictor:
                                                            workflow=model.qsarReadyRuleSet)
         logging.debug(chemicals)
         
-        
-        print(chemicals)
-
-        if code == 500:
-            return smiles + ": could not generate QSAR Ready SMILES", code 
+        if code == 400:
+            return chemicals, code
+                
                 
         if len(chemicals) == 0:
             # logging.debug('Standardization failed')
@@ -2705,6 +2729,7 @@ def runExample():
 
     
 def runChemical(mp, model_id, smiles, folder_path):
+    
     output, code = mp.predict_model_smiles(model_id, smiles)
 
     report = json.loads(output)
