@@ -17,8 +17,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy import text, bindparam
 
 from API_Utilities import QsarSmilesAPI, DescriptorsAPI
-
-# from db.mongo_cache import get_cached_prediction, cache_prediction
+from db.mongo_cache import get_cached_prediction, cache_prediction
 
 from predict_constants import PredictConstants
 
@@ -95,19 +94,46 @@ X TODO Add size of training sets
 
 lock = threading.Lock()
 
-# def init_model(model_id):
-#     with lock:
-#         if model_id in models:
-#             logging.debug('have model already initialized')
-#             model = models[model_id]
-#         else:
-#             mi=ModelInitializer()
-#             model = mi.initModel(model_id)
-#             models[model_id] = model
-#
-#     return model
-#
-#
+
+@timer
+def standardizeStructure(serverAPIs, smiles, model: Model):
+    useFullStandardize = False
+    qsAPI = QsarSmilesAPI()
+    chemicals = qsAPI.call_qsar_ready_standardize_post(server_host=serverAPIs, smiles=smiles, full=useFullStandardize,
+                                                       workflow=model.qsarReadyRuleSet)
+    if "error" in chemicals:
+        return chemicals, 400
+
+    if len(chemicals) == 0:
+        # logging.debug('Standardization failed')
+        return f"{smiles} failed standardization" if smiles else 'No Structure', 400
+
+    logging.debug(chemicals)
+
+    if len(chemicals) > 1 and model.omitSalts:
+        # print('qsar smiles indicates mixture')
+        return f"{smiles}: model can't run mixtures", 400
+
+    qsarSmiles = chemicals[0]["canonicalSmiles"]
+
+    logging.debug(f"qsarSmiles: {qsarSmiles}")
+
+    return qsarSmiles, 200
+
+
+def init_model(model_id):
+    with lock:
+        if model_id in models:
+            logging.debug('have model already initialized')
+            model = models[model_id]
+        else:
+            mi=ModelInitializer()
+            model = mi.initModel(model_id)
+            models[model_id] = model
+
+    return model
+
+
 # @timer
 # def predictFromDB(model_id, smiles):
 #     """
@@ -226,7 +252,6 @@ lock = threading.Lock()
 #     results_json = model_results.to_json()
 #
 #     return results_json, 200, smiles
-
 #
 #
 # def predictSetFromDB(model_id, excel_file_path):
@@ -340,6 +365,216 @@ lock = threading.Lock()
 #
 #     # return output.to_json(orient='records', lines=True) # gives each object on separate line
 #     return output.to_json(orient='records', lines=False)  # gives an array instead of each object on separate line
+#     return model
+
+
+@timer
+def predictFromDB(model_id, smiles):
+    """
+    Runs whole workflow: standardize, descriptors, prediction, applicability domain
+    :param model_id:
+    :param smiles:
+    :param mwu:
+    :return:
+    """
+
+    # Make sure the model is loaded before the concurrency
+    init_model(model_id)
+
+    if isinstance(smiles, str):
+        key = f"{smiles}-{model_id}"
+        prediction = get_cached_prediction(key)
+        if prediction:
+            return prediction
+        else:
+            prediction = predict_model_smiles(model_id, smiles)
+            cache_prediction(key, prediction)
+            return prediction
+    else:
+        result, missing = [], []
+        for smi in smiles:
+            key = f"{smi}-{model_id}"
+            prediction = get_cached_prediction(key)
+            if prediction:
+                result.append(prediction)
+            else:
+                missing.append(smi)
+
+        with concurrent.futures.ThreadPoolExecutor() as pool:
+            results = pool.map(predict_model_smiles, [model_id for _ in missing], missing)
+
+            for (prediction, code, smi) in results:
+                if code != 200:
+                    prediction = dict(smiles=smi, error=prediction)
+                    result.append(prediction)
+                else:
+                    result.append(prediction)
+
+                key = f"{smi}-{model_id}"
+                cache_prediction(key, prediction)
+
+        return result
+
+
+@timer
+def predict_model_smiles(model_id, smiles):
+    # serverAPIs = "https://hcd.rtpnc.epa.gov" # TODO this should come from environment variable
+    serverAPIs = os.getenv("CIM_API_SERVER", "https://cim-dev.sciencedataexperts.com/")
+
+    # initialize model bytes and all details from db:
+    model = init_model(model_id)
+
+    # Standardize smiles:
+    qsarSmiles, code = standardizeStructure(serverAPIs, smiles, model)
+    if code != 200:
+        return qsarSmiles, code, smiles
+
+    # Descriptor calcs:
+    descriptorAPI = DescriptorsAPI()
+    df_prediction, code = descriptorAPI.calculate_descriptors(serverAPIs, qsarSmiles, model.descriptorService)
+    if code != 200:
+        return df_prediction, 400, smiles
+
+    # Run model prediction:
+    # df_prediction = model.model_details.predictionSet #all chemicals in the model's prediction set, for testing
+    # print("for qsarSmiles="+qsarSmiles+", descriptors="+json.dumps(descriptorsResults,indent=4))
+    pred_results = json.loads(call_do_predictions_from_df(df_prediction, model))
+    pred_value = pred_results[0]['pred']
+
+    # applicability domain calcs:
+    ad_results = None
+    if model.applicabilityDomainName:
+        str_ad_results = determineApplicabilityDomain(model, df_prediction)
+        # str_ad_results = determineApplicabilityDomain(model, model.df_prediction) #testing AD method using multiple chemicals in df
+
+        ad_results = json.loads(str_ad_results)[0]  # TODO check len first?
+        # print(ad_results)
+    else:
+        logging.debug('AD method for model was not set:', model_id)
+
+    # store everything in results:
+    model_results = ModelResults(model, ad_results)
+    model_results.smiles = smiles
+    model_results.qsarSmiles = qsarSmiles
+    model_results.predictionValue = pred_value
+    model_results.predictionUnits = model.unitsName  # duplicated so displayed near prediction value
+    model_results.adResults = ad_results
+
+    return model_results.to_dict(), 200, smiles
+
+
+def predictSetFromDB(model_id, excel_file_path):
+    """
+    Runs whole workflow: standardize, descriptors, prediction, applicability domain
+    :param model_id:
+    :param smiles:
+    :param mwu:
+    :return:
+    """
+
+    descriptorAPI = DescriptorsAPI()
+
+    # serverAPIs = "https://hcd.rtpnc.epa.gov" # TODO this should come from environment variable
+    serverAPIs = os.getenv("CIM_API_SERVER", "https://cim-dev.sciencedataexperts.com/")
+
+    # initialize model bytes and all details from db:
+    model = init_model(model_id)
+
+    import pandas as pd
+    df = pd.read_excel(excel_file_path, sheet_name='Test set')
+    smiles_list = df['Smiles'].tolist()  # Extract the 'Smiles' column into a list
+
+    directory = os.path.dirname(excel_file_path)
+
+    # Create a text file path in the same directory
+    text_file_path = os.path.join(directory, "output.txt")
+    logging.debug(text_file_path)
+
+    with open(text_file_path, 'w') as file:
+        file.write("smiles\tqsarSmiles\tpred_value\tpred_AD\n")
+
+        # for smiles, predOld in zip(smiles_list, pred_list):
+        for smiles in smiles_list:
+            qsarSmiles, code = standardizeStructure(serverAPIs, smiles, model)
+            if code != 200:
+                logging.warn(smiles, qsarSmiles)
+                file.write(smiles + "\terror smiles")
+                continue
+
+            df_prediction, code = descriptorAPI.calculate_descriptors(serverAPIs, qsarSmiles, model.descriptorService)
+            if code != 200:
+                logging.warn(smiles, 'error descriptors')
+                file.write(smiles + "\terror descriptors")
+
+                continue
+
+            pred_results = json.loads(call_do_predictions_from_df(df_prediction, model))
+            pred_value = pred_results[0]['pred']
+
+            str_ad_results = determineApplicabilityDomain(model, df_prediction)
+            ad_results = json.loads(str_ad_results)
+            pred_AD = ad_results[0]["AD"]
+
+            line = smiles + "\t" + qsarSmiles + "\t" + str(pred_value) + "\t" + str(pred_AD) + "\n"
+            print(line)
+            file.write(line)
+            file.flush()
+
+    if True:
+        return
+
+    # Standardize smiles:
+
+    # Descriptor calcs:
+
+    # Run model prediction:
+    # df_prediction = model.model_details.predictionSet #all chemicals in the model's prediction set, for testing
+    # print("for qsarSmiles="+qsarSmiles+", descriptors="+json.dumps(descriptorsResults,indent=4))
+
+    logging.debug(pred_results)
+
+    # # applicability domain calcs:
+    # ad_results = None
+    # if model.applicabilityDomainName:
+    #     str_ad_results = determineApplicabilityDomain(model, df_prediction)
+    #     # str_ad_results = determineApplicabilityDomain(model, model.df_prediction) #testing AD method using multiple chemicals in df
+    #
+    #     ad_results = json.loads(str_ad_results)[0]  # TODO check len first?
+    #     print(ad_results)
+    # else:
+    #     print('AD method for model was not set:', model_id)
+
+    return "OK", 200
+
+
+@timer
+def determineApplicabilityDomain(model: Model, test_tsv):
+    """
+    Calculate the applicability domain using the model's training set and the AD measure assigned to the model in the DB
+    TODO make sure this works when a model doesnt have a set embedding object
+    :param model:
+    :param test_tsv:
+    :return:
+    """
+    json_model_description = model.get_model_description()
+    model_description = json.loads(json_model_description)
+    remove_log_p = model_description["remove_log_p_descriptors"]  # just set to False instead?
+    # print("remove_log_p", remove_log_p)
+
+    from applicability_domain import applicability_domain_utilities as adu
+    # model.applicabilityDomainName = adu.strOPERA_local_index  # for testing diff number of neighbors
+
+    output = adu.generate_applicability_domain_with_preselected_descriptors_from_dfs(
+        train_df=model.df_training,
+        test_df=test_tsv,
+        remove_log_p=remove_log_p,
+        embedding=model.embedding,
+        applicability_domain=model.applicabilityDomainName,
+        filterColumnsInBothSets=True)
+
+    # return output.to_json(orient='records', lines=True) # gives each object on separate line
+    return output.to_json(orient='records', lines=False)  # gives an array instead of each object on separate line
+
 
 
 def getSession():
@@ -389,7 +624,7 @@ def getSessionDsstox():
 
 
 class ExpDataGetter:
-    
+
     def getSqlPropertyValues(self):
         sqlPropertyValues = text("""    
         select 
