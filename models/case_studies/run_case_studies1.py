@@ -809,12 +809,13 @@ def run_Koc():
     # ad_measure_model = [pc.Applicability_Domain_TEST_Embedding_Euclidean, pc.Applicability_Domain_TEST_Fragment_Counts]
     ad_measure_model = [pc.Applicability_Domain_TEST_Embedding_Euclidean, pc.Applicability_Domain_TEST_Fragment_Counts]
 
-    run_dataset(dataset_name=dataset_name, qsar_method='gcm', feature_selection=False, ad_measure_model=ad_measure_model,write_to_db=write_to_db, create_unique_excel=create_unique_excel)  # OK
+    run_dataset(dataset_name=dataset_name, qsar_method='gcm', feature_selection=False, ad_measure_model=ad_measure_model,
+                write_to_db=write_to_db, create_unique_excel=create_unique_excel, create_detailed_excel=True)  # OK
 
     # Models to upload:
-    for method in ['rf','xgb', 'reg','knn']:
-        run_dataset(dataset_name=dataset_name, qsar_method=method, feature_selection=True, 
-                    ad_measure_model=ad_measure_model,write_to_db=write_to_db, create_unique_excel=create_unique_excel)  # OK
+    # for method in ['rf','xgb', 'reg','knn']:
+    #     run_dataset(dataset_name=dataset_name, qsar_method=method, feature_selection=True, 
+    #                 ad_measure_model=ad_measure_model,write_to_db=write_to_db, create_unique_excel=create_unique_excel)  # OK
     
     
     # embedding = ["ALOGP2","nBnz","MATS6v","ATS1p","nDB","Lop","MATS1p"]
