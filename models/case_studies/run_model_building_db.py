@@ -1430,7 +1430,7 @@ def check_for_inchi_key_matches(df_training, df_prediction_ext):
 def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None, cross_validate=True,
                 run_AD=True, feature_selection=True, fs_previous_embedding=True, params=None,
                 descriptor_set_name="WebTEST-default", splitting_name="RND_REPRESENTATIVE",
-                ad_measure_model=None, add_LOGP_Martin=False, write_to_db=False, user="tmarti02", create_detailed_excel=False,
+                ad_measure_model=None, add_LOGP_Martin=False, write_to_db=False, user="tmarti02", create_detailed_excel=True,
                 create_unique_excel=True):
     # TODO: reg model using descriptors from XGB or RF model
     # TODO: gcm model that uses reg with fragment descriptors such that it deletes rows with less than 3 instances and the associated rows
@@ -1703,30 +1703,20 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
             model_descriptors_df = ModelToExcel.get_model_descriptors_df(results_dict)
             model_descriptor_values_df = ModelToExcel.get_model_descriptor_values_df(results_dict, df_pred_cv, df_pred_test, df_training_model, df_test_model)
             
-            # cover_sheet_df = results_dict["model_details"]
-            # statistics_df = results_dict["model_statistics"]
-            training_set_df = df_pred_cv # TODO: Might need to adjust?
-            test_set_df = df_pred_test # TODO: Might need to adjust?
-            # records_df = df_pv
-            records_field_descriptions_df = None # TODO: Make records field descriptions dict/df
-            test_set_predictions_df = df_pred_test
-            # model_descriptors_df = results_dict["model_details"]["embedding"] # TODO: Seems to also need variable definitions-ed.txt
-            # model_descriptor_values_df = df_test_model
-
-            # Temporary for testing purposes
-            with open("test.pkl", "wb") as file:
-                pickle.dump([results_dict["model_details"], results_dict["model_statistics"], df_pred_cv, df_pred_test, df_pv, None, df_pred_test, results_dict["model_details"]["embedding"], df_test_model, df_training_model], file)
-
+            # training_set_df = df_pred_cv # TODO: Might need to adjust?
+            # test_set_df = df_pred_test # TODO: Might need to adjust?
+            # records_field_descriptions_df = None # TODO: Make records field descriptions dict/df
+            # test_set_predictions_df = df_pred_test
 
             mte = ModelToExcel(
-                excel_path=os.path.join(folder_path, "summary_test.xlsx"),
+                excel_path=os.path.join(folder_path, f"detailed_summary.xlsx"),
                 cover_sheet_df=cover_sheet_df,
                 statistics_df=statistics_df,
-                training_set_df=training_set_df,
-                test_set_df=test_set_df,
+                # training_set_df=training_set_df,
+                # test_set_df=test_set_df,
                 records_df=records_df,
-                records_field_descriptions_df=records_field_descriptions_df,
-                test_set_predictions_df=test_set_predictions_df,
+                # records_field_descriptions_df=records_field_descriptions_df,
+                # test_set_predictions_df=test_set_predictions_df,
                 model_descriptors_df=model_descriptors_df,
                 model_descriptor_values_df=model_descriptor_values_df
             )

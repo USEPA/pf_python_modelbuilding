@@ -420,7 +420,7 @@ class ModelToExcel:
         worksheet = writer.sheets["Records"]
         worksheet.freeze_panes(1, 0)
 
-        ModelToExcel.set_column_width(writer, "Records", records, how="header")
+        ModelToExcel.set_column_width(writer, "Records", records, col_width_pad=5, how="header")
         ModelToExcel.add_filter(writer, "Records", records)
 
         return records
@@ -609,21 +609,25 @@ class ModelToExcel:
 
     @staticmethod
     def get_model_descriptor_values_df(results_dict, df_pred_cv, df_pred_test, df_training_model, df_test_model):
-        # Get the units of the model (for the Observed and Predicted columns)
+        # Get the units of the model (for the Observed and Predicted columns) and the columns to pull
         units = results_dict["model_details"].get("unitsModel", "Units")
+        columns = ["exp_prop_id", "dtxcid", "casrn", "preferred_name", "canon_qsar_smiles", "exp", "pred"]
 
         # Get the experimental and predicted values for the test set
-        test = df_pred_test.loc[:, ["canon_qsar_smiles", "exp", "pred"]]
+        test = df_pred_test.loc[:, columns]
         test["Set"] = "Test"
 
         # Get the experimental and predicted values for the training set
-        training = df_pred_cv.loc[:, ["canon_qsar_smiles", "exp", "pred"]]
+        training = df_pred_cv.loc[:, columns]
         training["Set"] = df_pred_cv.cv_fold.apply(lambda x: f"Training, Fold {x}")
 
         # Concatenate the test and training sets, and clean the columns
         full = pd.concat([test, training], ignore_index=True)
         full["canon_qsar_smiles"] = full["canon_qsar_smiles"].astype(str)
         full = full.rename(columns={
+            "dtxcid": "DTXCID",
+            "casrn": "CASRN",
+            "preferred_name": "Preferred Name",
             "canon_qsar_smiles": "Canonical QSAR Ready Smiles",
             "exp": f"Observed ({units})",
             "pred": f"Predicted ({units})"
@@ -670,7 +674,7 @@ class ModelToExcel:
         worksheet = writer.sheets["Model Descriptor Values"]
         worksheet.freeze_panes(1, 0)
 
-        ModelToExcel.set_column_width(writer, "Model Descriptor Values", model_descriptor_values, how="header")
+        ModelToExcel.set_column_width(writer, "Model Descriptor Values", model_descriptor_values, min_col_width=7, col_width_pad=5, how="header")
         ModelToExcel.add_filter(writer, "Model Descriptor Values", model_descriptor_values)
 
         return model_descriptor_values
