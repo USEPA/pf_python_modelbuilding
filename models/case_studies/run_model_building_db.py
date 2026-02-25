@@ -1419,8 +1419,9 @@ def check_for_inchi_key_matches(df_training, df_prediction_ext):
     smiles_to_key_training = iu.smiles_to_inchikey_dict(df_training, "ID", short_key=True)
     smiles_to_key_ext = iu.smiles_to_inchikey_dict(df_prediction_ext, "ID", short_key=True, reverse_lookup=True)
     
-    print(len(smiles_to_key_training))
-    print(len(smiles_to_key_ext))
+    # print(len(smiles_to_key_training))
+    # print(len(smiles_to_key_ext))
+    
     for smiles in smiles_to_key_training:
         ik = smiles_to_key_training[smiles]
         if ik in smiles_to_key_ext:
@@ -1524,7 +1525,6 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
             
         
         check_for_inchi_key_matches(df_training, df_prediction_ext)
-
         
         # print(json.dumps( smiles_to_key_training, indent = 4))
 

@@ -563,8 +563,12 @@ class ModelToExcel:
         # Load in model descriptors
         model_descriptors_df = pd.DataFrame(results_dict["model_details"]["embedding"], columns=["Symbol"])
 
+        import os
+        PROJECT_ROOT = os.getenv("PROJECT_ROOT")
+        path_segments = [PROJECT_ROOT, "resources", "variable definitions-ed.txt"]
+        
         # Load in variable definitions
-        variable_definitions_df = pd.read_csv(Path("resources") / "variable definitions-ed.txt", sep="\t")
+        variable_definitions_df = pd.read_csv(os.path.join(*path_segments), sep="\t")
 
         # Convert both Symbol columns to strings explicitly
         model_descriptors_df['Symbol'] = model_descriptors_df['Symbol'].astype(str)
