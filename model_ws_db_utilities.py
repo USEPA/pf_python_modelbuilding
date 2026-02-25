@@ -22,6 +22,9 @@ from API_Utilities import QsarSmilesAPI, DescriptorsAPI
 
 from util import predict_constants as pc
 
+
+from db.mongo_cache import get_cached_prediction, cache_prediction
+
 from model_ws_utilities import call_do_predictions_from_df, models
 from models import df_utilities as dfu
 from models.ModelBuilder import Model
@@ -346,6 +349,126 @@ lock = threading.Lock()
 #
 #     # return output.to_json(orient='records', lines=True) # gives each object on separate line
 #     return output.to_json(orient='records', lines=False)  # gives an array instead of each object on separate line
+
+
+
+
+
+
+
+
+#
+# def predictSetFromDB(model_id, excel_file_path):
+#     """
+#     Runs whole workflow: standardize, descriptors, prediction, applicability domain
+#     :param model_id:
+#     :param smiles:
+#     :param mwu:
+#     :return:
+#     """
+#
+#     descriptorAPI = DescriptorsAPI()
+#
+#     # serverAPIs = "https://hcd.rtpnc.epa.gov" # TODO this should come from environment variable
+#     serverAPIs = os.getenv("CIM_API_SERVER", "https://cim-dev.sciencedataexperts.com/")
+#
+#     # initialize model bytes and all details from db:
+#     model = init_model(model_id)
+#
+#     import pandas as pd
+#     df = pd.read_excel(excel_file_path, sheet_name='Test set')
+#     smiles_list = df['Smiles'].tolist()  # Extract the 'Smiles' column into a list
+#
+#     directory = os.path.dirname(excel_file_path)
+#
+#     # Create a text file path in the same directory
+#     text_file_path = os.path.join(directory, "output.txt")
+#     logging.debug(text_file_path)
+#
+#     with open(text_file_path, 'w') as file:
+#         file.write("smiles\tqsarSmiles\tpred_value\tpred_AD\n")
+#
+#         # for smiles, predOld in zip(smiles_list, pred_list):
+#         for smiles in smiles_list:
+#             qsarSmiles, code = standardizeStructure(serverAPIs, smiles, model)
+#             if code != 200:
+#                 logging.warn(smiles, qsarSmiles)
+#                 file.write(smiles + "\terror smiles")
+#                 continue
+#
+#             df_prediction, code = descriptorAPI.calculate_descriptors(serverAPIs, qsarSmiles, model.descriptorService)
+#             if code != 200:
+#                 logging.warn(smiles, 'error descriptors')
+#                 file.write(smiles + "\terror descriptors")
+#
+#                 continue
+#
+#             pred_results = json.loads(call_do_predictions_from_df(df_prediction, model))
+#             pred_value = pred_results[0]['pred']
+#
+#             str_ad_results = determineApplicabilityDomain(model, df_prediction)
+#             ad_results = json.loads(str_ad_results)
+#             pred_AD = ad_results[0]["AD"]
+#
+#             line = smiles + "\t" + qsarSmiles + "\t" + str(pred_value) + "\t" + str(pred_AD) + "\n"
+#             print(line)
+#             file.write(line)
+#             file.flush()
+#
+#     if True:
+#         return
+#
+#     # Standardize smiles:
+#
+#     # Descriptor calcs:
+#
+#     # Run model prediction:
+#     # df_prediction = model.model_details.predictionSet #all chemicals in the model's prediction set, for testing
+#     # print("for qsarSmiles="+qsarSmiles+", descriptors="+json.dumps(descriptorsResults,indent=4))
+#
+#     logging.debug(pred_results)
+#
+#     # # applicability domain calcs:
+#     # ad_results = None
+#     # if model.applicabilityDomainName:
+#     #     str_ad_results = determineApplicabilityDomain(model, df_prediction)
+#     #     # str_ad_results = determineApplicabilityDomain(model, model.df_prediction) #testing AD method using multiple chemicals in df
+#     #
+#     #     ad_results = json.loads(str_ad_results)[0]  # TODO check len first?
+#     #     print(ad_results)
+#     # else:
+#     #     print('AD method for model was not set:', model_id)
+#
+#     return "OK", 200
+
+
+@timer
+def determineApplicabilityDomain(model: Model, test_tsv):
+    """
+    Calculate the applicability domain using the model's training set and the AD measure assigned to the model in the DB
+    TODO make sure this works when a model doesnt have a set embedding object
+    :param model:
+    :param test_tsv:
+    :return:
+    """
+    json_model_description = model.get_model_description()
+    model_description = json.loads(json_model_description)
+    remove_log_p = model_description["remove_log_p_descriptors"]  # just set to False instead?
+    # print("remove_log_p", remove_log_p)
+
+    from applicability_domain import applicability_domain_utilities as adu
+    # model.applicabilityDomainName = adu.strOPERA_local_index  # for testing diff number of neighbors
+
+    output = adu.generate_applicability_domain_with_preselected_descriptors_from_dfs(
+        train_df=model.df_training,
+        test_df=test_tsv,
+        remove_log_p=remove_log_p,
+        embedding=model.embedding,
+        applicability_domain=model.applicabilityDomainName,
+        filterColumnsInBothSets=True)
+
+    # return output.to_json(orient='records', lines=True) # gives each object on separate line
+    return output.to_json(orient='records', lines=False)  # gives an array instead of each object on separate line
 
 
 def getEngine():
@@ -1730,49 +1853,99 @@ cache = {}
 
 class ModelPredictor:
 
+    # @timer
+    # def predictFromDB(self, model_id, smiles, generate_report=True):
+    #     """
+    #     Runs whole workflow: standardize, descriptors, prediction, applicability domain
+    #     """
+    #
+    #     # Make sure the model is loaded before the concurrency
+    #     mi = ModelInitializer()
+    #     mi.init_model(model_id)
+    #
+    #     if isinstance(smiles, str):
+    #
+    #         key = f"{model_id}-{smiles}"
+    #
+    #         if key in cache:
+    #             # print("in cache: " + key)
+    #             return cache[key]
+    #         else:
+    #             cache[key], code = self.predict_model_smiles(model_id, smiles, generate_report=generate_report)
+    #             return cache[key]
+    #     else:
+    #         result, missing = [], []
+    #
+    #         for smi in smiles:
+    #             key = f"{model_id}-{smi}"
+    #             if key in cache:
+    #                 result.append(cache[key])
+    #             else:
+    #                 missing.append(smi)
+    #
+    #         with concurrent.futures.ThreadPoolExecutor() as pool:
+    #             results = pool.map(self.predict_model_smiles, [model_id for _ in missing], missing)
+    #
+    #             for (r, code, smi) in results:
+    #                 if code != 200:
+    #                     r = dict(smiles=smi, error=r)
+    #                     result.append(r)
+    #                 else:
+    #                     result.append(r)
+    #
+    #                 key = f"{model_id}-{smi}"
+    #                 cache[key] = r
+    #
+    #         return result
+
+
+
     @timer
-    def predictFromDB(self, model_id, smiles, generate_report=True):
+    def predictFromDB(self, model_id, smiles):
         """
         Runs whole workflow: standardize, descriptors, prediction, applicability domain
+        :param model_id:
+        :param smiles:
+        :param mwu:
+        :return:
         """
-
-        # Make sure the model is loaded before the concurrency
-        mi = ModelInitializer()
-        mi.init_model(model_id)
-
+    
+    
         if isinstance(smiles, str):
-
-            key = f"{model_id}-{smiles}"
-            
-            if key in cache:
-                # print("in cache: " + key)
-                return cache[key]
+            key = f"{smiles}-{model_id}"
+            prediction = get_cached_prediction(key)
+            if prediction:
+                return prediction
             else:
-                cache[key], code = self.predict_model_smiles(model_id, smiles, generate_report=generate_report)
-                return cache[key]
+                prediction, code = self.predict_model_smiles(model_id, smiles)
+                cache_prediction(key, prediction)
+                return prediction
         else:
             result, missing = [], []
-
             for smi in smiles:
-                key = f"{model_id}-{smi}"
-                if key in cache:
-                    result.append(cache[key])
+                key = f"{smi}-{model_id}"
+                prediction = get_cached_prediction(key)
+                if prediction:
+                    result.append(prediction)
                 else:
                     missing.append(smi)
-
+    
             with concurrent.futures.ThreadPoolExecutor() as pool:
-                results = pool.map(self.predict_model_smiles, [model_id for _ in missing], missing)
 
-                for (r, code, smi) in results:
+                
+                prediction, code = self.predict_model_smiles(model_id, smiles)
+                results = pool.map(prediction, [model_id for _ in missing], missing)
+    
+                for (prediction, code, smi) in results:
                     if code != 200:
-                        r = dict(smiles=smi, error=r)
-                        result.append(r)
+                        prediction = dict(smiles=smi, error=prediction)
+                        result.append(prediction)
                     else:
-                        result.append(r)
-
-                    key = f"{model_id}-{smi}"
-                    cache[key] = r
-
+                        result.append(prediction)
+    
+                    key = f"{smi}-{model_id}"
+                    cache_prediction(key, prediction)
+    
             return result
 
     
@@ -2206,6 +2379,8 @@ class ModelPredictor:
         return report.to_json(), 200
         # return modelResults
     
+    
+
     def addLinks(self, modelDetails, file_api=pc.URL_CTX_API):
         
         modelId = modelDetails.modelId
@@ -2451,7 +2626,8 @@ class ModelPredictor:
 
             for fragment in results["fragment_table"]:
                 if fragment['test_value'] < fragment['training_min'] or fragment['test_value'] > fragment['training_max']:
-                    fragment["fragment"] += "*"            
+                    if "*" not in fragment["fragment"]:
+                        fragment["fragment"] += "*"            
 
 
         else:
@@ -2462,32 +2638,7 @@ class ModelPredictor:
         return results  # gives an array instead of each object on separate line
 
 
-    @timer
-    def determineApplicabilityDomains(self, model: Model, df_prediction):
-        """
-        Calculate the applicability domain using the model's training set and the AD measure assigned to the model in the DB
-        TODO make sure this works when a model doesnt have a set embedding object
-        :param model:
-        :param df_prediction:
-        :return:
-        """
-        # json_model_description = model.get_model_description()
-        # model_description = json.loads(json_model_description)
-        # model.remove_log_p_descriptors = model_description["remove_log_p_descriptors"]  # just set to False instead?
-
-        # print("model.remove_log_p_descriptors", model.remove_log_p_descriptors)
-
-        # print("remove_log_p", remove_log_p)
-
-        from applicability_domain import applicability_domain_utilities as adu
-        # model.applicabilityDomainName = adu.strOPERA_local_index  # for testing diff number of neighbors
-
-        ad_names = model.applicabilityDomainName.split(' and ')
-        results_array = []
-
-        for ad_name in ad_names:
-            results_array.append(self.determineAD(model, df_prediction))
-        return results_array
+   
 
 # def createHmtlReportFromJson():
 #

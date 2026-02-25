@@ -6,7 +6,7 @@ import requests
 # from model_ws_utilities import call_do_predictions
 # from models.df_utilities import load_df_from_file
 
-from app_flask import predictDB, info, details, model_coeffs, available_models
+from app_flask import predictDB, method_info, details, model_coeffs, available_models
 
 TEST_DATA_FOLDER = "test_data/"
 host = "http://localhost:5004"
@@ -19,7 +19,7 @@ load_dotenv()
 class TestPredict(TestCase):
     
     def test_info(self): 
-        r = info("rf")
+        r = method_info("rf")
         print("\ninfo")
         print(r)
     
@@ -29,7 +29,7 @@ class TestPredict(TestCase):
         print(r)
     
     def test_coeffs(self):
-        r = model_coeffs("1615")
+        r = model_coeffs("1729")
         print("\nmodel_coeffs")
         print(r)
     
