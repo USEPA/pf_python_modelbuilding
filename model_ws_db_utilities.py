@@ -48,6 +48,8 @@ from applicability_domain import applicability_domain_utilities as adu
 
 # debug = False
 import logging
+from pickle import TRUE
+from dns._features import have
 
 logging.getLogger('sqlalchemy').setLevel(logging.ERROR)
 
@@ -2148,21 +2150,20 @@ class ModelPredictor:
         
         # applicability domain calcs:
         if model.applicabilityDomainName:
-            
-            # For now just use the first AD measure, TODO: make it loop through the AD measures rather than calling self.getFragmentAD later
-            if 'and' in modelDetails.applicabilityDomainName:
-                modelDetails.applicabilityDomainName = modelDetails.applicabilityDomainName.split(" and ")[0].strip()
-                model.applicabilityDomainName = modelDetails.applicabilityDomainName 
-            
-            ad_results = self.determineApplicabilityDomain(model, df_prediction)
-            ad_results["method"] = modelDetails.applicabilityDomainName    
-            ad_results["description"] = modelDetails.applicabilityDomainDescription
-            ad_results["analogs"] = self.setExpPredValuesForADAnalogs(model, ad_results["analogs"])
-            self.addDistances(ad_results["analogs"], ad_results["distances"])        
-            del ad_results['distances']
-            modelResults.adEstimates.append(ad_results)
+            applicabilityDomains = modelDetails.applicabilityDomainName.split(" and ")
+            if pc.Applicability_Domain_TEST_Fragment_Counts not in applicabilityDomains:
+                applicabilityDomains.append(pc.Applicability_Domain_TEST_Fragment_Counts)
+
+            for applicabilityDomain in applicabilityDomains:
+                ad_results = self.determineApplicabilityDomain(model, applicabilityDomain, df_prediction)
+                modelResults.adEstimates.append(ad_results)
         else:
             print('AD method for model was not set:', model_id)
+
+
+        # print("adEstimates:")
+        # print(json.dumps(modelResults.adEstimates, indent=4))
+
         
         # TODO add values in display units here: 
         modelResults.predictionValueUnitsModel = pred_value
@@ -2197,7 +2198,7 @@ class ModelPredictor:
             
             # TODO make it so that it instead gets the fragment AD from the adu helper class
 
-            self.getFragmentAD(df_prediction, model.df_training, modelResults)
+            # self.getFragmentAD(df_prediction, model.df_training, modelResults)
             # print(useFileAPI)
             
         # print(results_json)
@@ -2368,7 +2369,7 @@ class ModelPredictor:
         return "OK", 200
 
     @timer
-    def determineApplicabilityDomain(self, model: Model, df_prediction):
+    def determineApplicabilityDomain(self, model: Model, applicabilityDomainName, df_prediction):
         """
         Calculate the applicability domain using the model's training set and the AD measure assigned to the model in the DB
         TODO make sure this works when a model doesnt have a set embedding object
@@ -2376,15 +2377,6 @@ class ModelPredictor:
         :param df_prediction:
         :return:
         """
-        # json_model_description = model.get_model_description()
-        # model_description = json.loads(json_model_description)
-        # model.remove_log_p_descriptors = model_description["remove_log_p_descriptors"]  # just set to False instead?
-
-        # print("model.remove_log_p_descriptors", model.remove_log_p_descriptors)
-
-        # print("remove_log_p", remove_log_p)
-
-        # model.applicabilityDomainName = adu.strOPERA_local_index  # for testing diff number of neighbors
 
         output, ad_cutoff = adu.generate_applicability_domain_with_preselected_descriptors_from_dfs(
             train_df=model.df_training,
@@ -2393,29 +2385,31 @@ class ModelPredictor:
             remove_log_p=model.remove_log_p_descriptors,
             embedding=model.embedding,
             # applicability_domain=model.applicabilityDomainName,
-            applicability_domain=model.applicabilityDomainName,
+            applicability_domain=applicabilityDomainName,
             filterColumnsInBothSets=True)
 
-        # print("AD_CUTOFF",ad_cutoff)
-        # self.printFirstRowDF(output)
-                
-        # TODO: following code will have to be revised for batch model calculations (have more than one row in df_predictio
-        analogsAD = output['ids'].tolist()[0]  # only use first one for singleton prediction
+        # print("output from ad:")
+        # print_first_row(output)
+        # print(model.modelMethod)
+
+        AD = output['AD'].tolist()[0]
         
+        if 'ids' in output.columns and "distances" in output.columns:
+            analogsAD = output['ids'].tolist()[0]  # only use first one for singleton prediction
+            distances = list(output["distances"][0])
+            results = {"AD":AD, "analogs": analogsAD, "distances": distances, "AD_Cutoff": ad_cutoff}
+        else:
+            results = {"AD":AD}
+                
         # print(json.dumps(analogsAD,indent=4))
         # dictsAnalogs = [ast.literal_eval(item) for item in analogsAD]
         
-        AD = output['AD'].tolist()[0]
-        
-        distances = list(output["distances"][0])
-
-        results = {"AD":AD, "analogs": analogsAD, "distances": distances, "AD_Cutoff": ad_cutoff}
         results["adMethod"] = {}
-        results["adMethod"]["name"] = model.applicabilityDomainName
-        results["adMethod"]["description"] = model.applicabilityDomainDescription
+        results["adMethod"]["name"] = applicabilityDomainName
+        # results["adMethod"]["description"] = model.applicabilityDomainDescription
 
-        if model.applicabilityDomainName == pc.Applicability_Domain_TEST_Embedding_Euclidean\
-         or model.applicabilityDomainName == pc.Applicability_Domain_TEST_All_Descriptors_Euclidean:
+        if applicabilityDomainName == pc.Applicability_Domain_TEST_Embedding_Euclidean\
+         or applicabilityDomainName == pc.Applicability_Domain_TEST_All_Descriptors_Euclidean:
             
             results["value"] = sum(distances) / len(distances)
             
@@ -2426,57 +2420,47 @@ class ModelPredictor:
                 results["conclusion"] = "Outside"
                 results["reasoning"] = f"Avg. distance ({results['value']:.2f}) > {ad_cutoff:.2f}"
                 
-        # print(results)
+            results["analogs"] = self.setExpPredValuesForADAnalogs(model, results["analogs"])
+            results["adMethod"]["description"] = 'Whether or not the average Euclidean distance of the three closest training set neighbors exceeds a cutoff defined so that 95% of the training set is within in AD'
 
+            self.addDistances(results["analogs"], results["distances"])        
+            del results['distances']
+
+                
+        elif applicabilityDomainName == pc.Applicability_Domain_TEST_Fragment_Counts:
+
+            results["adMethod"]["description"] = 'Whether the TEST fragments are within the training set range'
+            results["fragment_table"] = output["fragment_table"].tolist()[0]
+
+            if AD == True:
+                results["conclusion"] = "Inside"
+                results["reasoning"] = "Fragments in test chemical are within the training set ranges"
+            else:
+                results["conclusion"] = "Outside"
+                results["reasoning"] = "Fragments in test chemical are NOT within the training set ranges"
+
+            if 'gcm' in model.modelMethod:
+                haveMissingFragmentInModel = False
+                for fragment in results["fragment_table"]:
+                    if fragment["fragment"] not in model.embedding:
+                        haveMissingFragmentInModel = True
+                        fragment["fragment"] += "**"                                    
+                if haveMissingFragmentInModel:
+                    results["conclusion"] = "Outside"
+                    results["reasoning"] = "Have fragment in test chemical that is NOT included in the model"
+
+            for fragment in results["fragment_table"]:
+                if fragment['test_value'] < fragment['training_min'] or fragment['test_value'] > fragment['training_max']:
+                    fragment["fragment"] += "*"            
+
+
+        else:
+            print("handle "+applicabilityDomainName+" in determineApplicabilityDomain()")
+            
+        # print(results)
         # print(json.dumps(dicts,indent=4))
         return results  # gives an array instead of each object on separate line
 
-    def determineAD(self, model, df_prediction, ad_name):
-        
-        output, ad_cutoff = adu.generate_applicability_domain_with_preselected_descriptors_from_dfs(
-            train_df=model.df_training,
-            test_df=df_prediction,
-            # test_df=model.df_prediction,  #for testing running batch type ad calc
-            remove_log_p=model.remove_log_p_descriptors,
-            embedding=model.embedding,
-            # applicability_domain=model.applicabilityDomainName,
-            applicability_domain=model.ad_name,
-            filterColumnsInBothSets=True)
-
-        # print("AD_CUTOFF",ad_cutoff)
-        # self.printFirstRowDF(output)
-                
-        # TODO: following code will have to be revised for batch model calculations (have more than one row in df_predictio
-        analogsAD = output['ids'].tolist()[0]  # only use first one for singleton prediction
-        
-        # print(json.dumps(analogsAD,indent=4))
-        # dictsAnalogs = [ast.literal_eval(item) for item in analogsAD]
-        
-        AD = output['AD'].tolist()[0]
-        
-        distances = list(output["distances"][0])
-
-        results = {"AD":AD, "analogs": analogsAD, "distances": distances, "AD_Cutoff": ad_cutoff}
-        results["adMethod"] = {}
-        results["adMethod"]["name"] = ad_name
-        results["adMethod"]["description"] = model.applicabilityDomainDescription
-
-        if ad_name == pc.Applicability_Domain_TEST_Embedding_Euclidean\
-         or ad_name == pc.Applicability_Domain_TEST_All_Descriptors_Euclidean:
-            
-            results["value"] = sum(distances) / len(distances)
-            
-            if AD == True: 
-                results["conclusion"] = "Inside"
-                results["reasoning"] = f"Avg. distance ({results['value']:.2f}) < {ad_cutoff:.2f}" 
-            else: 
-                results["conclusion"] = "Outside"
-                results["reasoning"] = f"Avg. distance ({results['value']:.2f}) > {ad_cutoff:.2f}"
-                
-        else:
-            pass
-        
-        return results
 
     @timer
     def determineApplicabilityDomains(self, model: Model, df_prediction):
@@ -2642,11 +2626,13 @@ def runExample():
     # model_id = str(1069)  # LogP/LogKow
     # model_id = str(1070) # MP, biggest dataset
     # model_id = str(1615) # Koc, MLR model
-    model_id = str(1069)
+    # model_id = str(1069)
+    model_id = str(1724)
 
     smiles_list = []
     
-    smiles_list.append("c1ccccc1")  # benzene
+    # smiles_list.append("c1ccccc1")  # benzene
+    smiles_list.append("CC(=O)C") 
     # smiles_list.append("OC(=O)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)F")  # PFOA
     # smiles_list.append("COCOCOCOCCCCCCOCCCCOCOCOCCC")  # not in DssTox
     # smiles_list.append("C[Sb]")  # passes standardizer, fails test descriptors

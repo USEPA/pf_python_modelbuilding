@@ -252,28 +252,33 @@ class ReportCreator:
                                 if method == pc.Applicability_Domain_TEST_Embedding_Euclidean:
                                     # print(method,"Distance") 
                                     self.addAnalogADTable(ad, md)
-                                elif method == pc.TEST_FRAGMENTS:
+                                elif method == pc.Applicability_Domain_TEST_Fragment_Counts:
                                     self.addFragmentADTable(ad)
                                 else:
                                     print("TODO handle " + method + " in addApplicabilityDomains")
     
+
+        def add_ad_conclusion(self, ad, container):
+            if ad["conclusion"] == "Inside":
+                container.add(span("Inside AD", style="color: green;"))
+                container.add(" (" + ad["reasoning"] + ")")
+            else:
+                container.add(span("Outside AD", style="color: red;"))
+                container.add(" (" + ad["reasoning"] + ")")
+
         def addAnalogADTable(self, ad, md):
             
-            if md["applicabilityDomainName"] == pc.Applicability_Domain_TEST_Embedding_Euclidean: 
-                # b("AD measure: "), span("If the avg. Euclidean distance of training set analogs  < "+format2(ad['AD_Cutoff'])+" (in terms of model variables"), br()
-                b("AD measure: "), span("Avg. distance to training set analogs < cutoff value"), br()
-            else:
-                print("TODO in addAnalogADTable(), handle", md["applicabilityDomainName"])
+            # if md["applicabilityDomainName"] == pc.Applicability_Domain_TEST_Embedding_Euclidean: 
+            #     # b("AD measure: "), span("If the avg. Euclidean distance of training set analogs  < "+format2(ad['AD_Cutoff'])+" (in terms of model variables"), br()
+            # else:
+            #     print("TODO in addAnalogADTable(), handle", md["applicabilityDomainName"])
+
+            b("AD measure: "), span("Avg. distance to training set analogs < cutoff value"), br()
+
             
             with span() as container:
                 container.add(b("AD result: "))
-                
-                if ad["conclusion"] == "Inside": 
-                    container.add(span("Inside AD", style="color: green;"))
-                    container.add(" (" + ad["reasoning"] + ")")
-                else:
-                    container.add(span("Outside AD", style="color: red;"))                    
-                    container.add(" (" + ad["reasoning"] + ")")
+                self.add_ad_conclusion(ad, container)
                             
             br(), br()
             
@@ -299,13 +304,7 @@ class ReportCreator:
                         
             with span() as container:
                 container.add(b("AD result: "))
-                
-                if ad["conclusion"] == "Inside":
-                    container.add(span("Inside AD", style="color: green;"))
-                    container.add(" (fragment counts were within the training set range)")
-                else:
-                    container.add(span("Outside AD", style="color: red;"))
-                    container.add(" (fragment counts were outside the training set range)")
+                self.add_ad_conclusion(ad, container)
                         
             with table(cellspacing="0", cellpadding="5", border="1"):
                 
@@ -317,24 +316,27 @@ class ReportCreator:
                     th("Training Min")
                     th("Training Max")
                 with tbody():
-                    for col_name in ad["fragmentTable"]["test_chemical"].keys():
+                    
+                    haveOne = False
+                    haveTwo = False
+                    for fragment in ad["fragment_table"]:
                         # Retrieve values
             
-                        test_value = int(ad["fragmentTable"]["test_chemical"][col_name])
-                        training_min = int(ad["fragmentTable"]["training_min"][col_name])
-                        training_max = int(ad["fragmentTable"]["training_max"][col_name])
-            
                         # Determine if the row should be highlighted
-                        if test_value < training_min or test_value > training_max:
+                        if "**" in fragment["fragment"]:
+                            row_style = "background-color: orange;"
+                            haveTwo = True
+                        elif "*" in fragment["fragment"]:
                             row_style = "background-color: pink;"
+                            haveOne = True
                         else:
                             row_style = "background-color: #E4FAE4;"
             
                         with tr(style=row_style):
-                            td(col_name)
-                            td(test_value, align="center")
-                            td(training_min, align="center")
-                            td(training_max, align="center")
+                            td(fragment["fragment"])
+                            td(fragment['test_value'], align="center")
+                            td(fragment['training_min'], align="center")
+                            td(fragment['training_max'], align="center")
             
                 # Add AD status to the caption based on the flag
                 ad_status_text = span()
@@ -342,7 +344,15 @@ class ReportCreator:
                 cap.add(ad_status_text)
                 cap += br()
                 cap += "Fragment counts for test chemical"
-    
+                
+            # Place the notes below the table
+            if haveOne:
+                with div(style="margin-top: 6px;"):
+                    span("* fragment is not in training set range")                
+            if haveTwo:
+                with div(style="margin-top: 6px;"):
+                    span("** fragment does not appear in the model")                
+            
     class ModelPerformanceSection:
         
         def write_model_performance(self, md):
@@ -1022,11 +1032,14 @@ def create_report_from_json_file():
     # file_name = "1066_QLWFRFCRJULPCK-UHFFFAOYNA-N.json" # has error
     # file_name = "1065_DTXSID3039242.json"  # WS_BZ
     # file_name = "1065_DTXSID8031865.json"  # WS_PFOA
-    file_name = "1069_DTXSID3039242.json"
+    # file_name = "1069_DTXSID3039242.json"
+    
+    model_id=1724
+    dtxsid = 'DTXSID8021482'
     
     current_directory = os.getcwd()
     # Join the path components using os.path.join()
-    file_path = os.path.join(current_directory, "data", "reports", file_name)
+    file_path = os.path.join(current_directory, "data", "reports", dtxsid, str(model_id)+".json")
     
     # Use the full path string
     print(file_path)    

@@ -140,6 +140,8 @@ class UnitsConverter:
                     return NaN
         elif final_unit_name == pc.MOLAR and unit_name == pc.NEG_LOG_M:
             return math.pow(10, -value)
+        elif final_unit_name == pc.MG_L and unit_name == pc.NEG_LOG_M:
+            return math.pow(10, -value) * molecular_weight * 1000
         else:
             return None
     
@@ -159,7 +161,7 @@ class UnitsConverter:
             pc.NINETY_SIX_HOUR_BLUEGILL_LC50,
             pc.FORTY_EIGHT_HR_TETRAHYMENA_PYRIFORMIS_IGC50,
             pc.FORTY_EIGHT_HR_DAPHNIA_MAGNA_LC50
-        ]:
+        ]:            
             converted_value = self.handle_water_solubility(property_name, value, unit_name, final_unit_name, chemical_id, molecular_weight)
     
         elif property_name == pc.ORAL_RAT_LD50:
