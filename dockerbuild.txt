@@ -1,0 +1,23 @@
+docker build --network host -t python_model_building -f Dockerfile .
+docker run -d --name python-model-building --env-file .env -p 8080:8080 python_model_building:latest
+
+cd Documents/code_repos/pf_python_modelbuilding/
+git pull
+docker stop python-model-building    # if it's running
+docker rm python-model-building      # remove it
+docker build --network host -t python_model_building -f Dockerfile .
+
+docker run -d \
+  --name python-model-building \
+  --dns 8.8.8.8 \
+  --dns 1.1.1.1 \
+  --env-file .env \
+  -p 8080:8080 \
+  python_model_building:latest
+
+REM docker run -d --name python-model-building --env-file .env -p 8080:8080 python_model_building:latest
+
+docker restart python-model-building
+
+REM check for error:
+docker logs python-model-building

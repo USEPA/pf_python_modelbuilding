@@ -1,31 +1,24 @@
+
 """
-Uvicorn webservice to build QSAR models with a variety of modeling strategies (RF, SVM, DNN, XGB...more to come?)
-Run with Python 3.12
+Flask webservice to build QSAR models with a variety of modeling strategies (RF, SVM, DNN, XGB...more to come?)
+Run with Python 3.9 to avoid problems with parallelizing RF (bug in older versions of joblib backing sklearn)
 @author: TMARTI02 (Todd Martin) - RF, base webservice code, predictions for new chemicals and reports
-@author: GSincl01 (Gabriel Sinclair), XGB, refactored webservice code
+@author: GSincl01 (Gabriel Sinclair) - SVM (based on work by CRupakhe), XGB, refactored webservice code
 @author: cramslan (Christian Ramsland) - DNN
 Repository created 05/21/2021
 """
-import io
+
+from flask import request, abort, Flask, send_file, jsonify
+ 
+
 import json
 import logging
 import pickle
-import util.get_model_file as gmf
+import gzip
+
 from logging import INFO, DEBUG
-from report_creator_dict import ReportCreator
+from model_ws_db_utilities import ModelPredictor, ModelInitializer, getSession
 
-import coloredlogs
-import connexion
-from dotenv import load_dotenv
-from flask import request, abort, Flask
-from connexion.middleware import MiddlewarePosition
-from connexion.options import SwaggerUIOptions
-from sklearn2pmml import sklearn2pmml
-from starlette.middleware.cors import CORSMiddleware
-from starlette.responses import HTMLResponse, Response, JSONResponse, StreamingResponse, FileResponse
-from urllib.parse import quote
-
-from model_ws_db_utilities import ModelPredictor, ModelInitializer
 # why not make the following methods part of a Utility class then call methods from instance of it?
 from model_ws_utilities import get_model_info, call_build_model_with_preselected_descriptors, models, \
     call_build_embedding_ga, call_build_embedding_importance, call_build_embedding_lasso, call_cross_validate, \
@@ -33,25 +26,48 @@ from model_ws_utilities import get_model_info, call_build_model_with_preselected
 
 from applicability_domain import applicability_domain_utilities as adu
 
+from sklearn2pmml import sklearn2pmml
+
+from dotenv import load_dotenv
 load_dotenv()
+from util import predict_constants as pc
 
-coloredlogs.install(level=DEBUG, milliseconds=True,
-                    fmt='%(asctime)s - %(name)s - %(levelname)s - %(message)s (%(filename)s:%(lineno)d)')
+import util.get_model_file as gmf
+import io
 
-options = SwaggerUIOptions(spec_path="/api/predictor_models/swagger.yaml",
-                           swagger_ui_path="/api/predictor_models/swagger")
-app = connexion.AsyncApp(__name__, swagger_ui_options=options)
-app.add_middleware(
-    CORSMiddleware,
-    position=MiddlewarePosition.BEFORE_EXCEPTION,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-app.add_api('swagger.yaml', swagger_ui_options=options)
 
-app_flask = None
+# import os
+# user_name = os.getenv('DEV_QSAR_USER', 'default_user')
+# print(f"The user is: {user_name}")
+
+
+from report_creator_dict import ReportCreator
+
+# import coloredlogs
+# import connexion
+# from connexion.middleware import MiddlewarePosition
+# from connexion.options import SwaggerUIOptions
+# from starlette.middleware.cors import CORSMiddleware
+#
+# coloredlogs.install(level=DEBUG, milliseconds=True,
+#                     fmt='%(asctime)s - %(name)s - %(levelname)s - %(message)s (%(filename)s:%(lineno)d)')
+#
+# options = SwaggerUIOptions(spec_path="/api/predictor_models/swagger.yaml",
+#                            swagger_ui_path="/api/predictor_models/swagger")
+#
+# app = connexion.AsyncApp(__name__, swagger_ui_options=options)
+# app.add_middleware(
+#     CORSMiddleware,
+#     position=MiddlewarePosition.BEFORE_EXCEPTION,
+#     allow_origins=["*"],
+#     allow_credentials=True,
+#     allow_methods=["*"],
+#     allow_headers=["*"],
+# )
+# app.add_api('swagger.yaml', swagger_ui_options=options)
+app = Flask(__name__)
+log = logging.getLogger('werkzeug')
+log.setLevel(logging.DEBUG)
 
 
 def get_version():
@@ -72,105 +88,8 @@ def get_metadata():
     return dict(
         version=get_version()
     )
+    
 
-
-def get_file(type_id: int = None, model_id: int = None):
-    if type_id is None or model_id is None:
-        return JSONResponse(
-            {"error": "Missing required query params: type_id and model_id"},
-            status_code=400,
-        )
-
-    try:
-        type_id = int(type_id)
-        model_id = int(model_id)
-    except (TypeError, ValueError):
-        return JSONResponse(
-            {"error": "type_id and model_id must be integers"},
-            status_code=400,
-        )
-
-    try:
-        raw_bytes, file_name, mime_type = gmf.fetch_model_file(model_id=model_id, type_id=type_id)
-    except FileNotFoundError as e:
-        return JSONResponse({"error": str(e)}, status_code=404)
-    except ValueError as e:
-        return JSONResponse({"error": str(e)}, status_code=400)
-    except Exception as e:
-        return JSONResponse({"error": f"Database error: {e}"}, status_code=500)
-
-    disposition = "attachment" if type_id == 2 else "inline"
-
-    bio = io.BytesIO(raw_bytes)
-    bio.seek(0)
-
-    headers = {
-        "Content-Disposition": f'{disposition}; filename="{file_name}"',
-        "Cache-Control": "no-store",
-    }
-
-    return StreamingResponse(
-        bio,
-        media_type=mime_type or "application/octet-stream",
-        headers=headers,
-    )
-
-
-def predict_identifier(identifier: str, model_id: int, report_format: str = "json"):
-    """Automates prediction and AD for single identifier using model in database"""
-
-    # normalize report_format
-    report_format = (report_format or "json").lower()
-    if report_format not in ("json", "html"):
-        report_format = "json"
-
-    # model_id -> int
-    try:
-        model_id = int(model_id)
-    except (TypeError, ValueError):
-        return JSONResponse({"error": "bad_request", "message": "model_id must be integer"}, status_code=400)
-
-    if not identifier:
-        return JSONResponse({"error": "bad_request", "message": "identifier is required"}, status_code=400)
-
-    # Resolve identifier -> SMILES
-    from API_Utilities import SearchAPI
-    import os
-
-    serverAPIs = os.getenv("CIM_API_SERVER", "https://cim-dev.sciencedataexperts.com")
-    chemicals, code = SearchAPI.call_resolver_get(serverAPIs, identifier)
-
-    if code != 200 or not chemicals:
-        return JSONResponse(
-            {"error": "not_found", "message": f"Could not find {identifier}"},
-            status_code=404,
-        )
-
-    smiles = (chemicals[0].get("chemical") or {}).get("smiles")
-    if not smiles:
-        return JSONResponse(
-            {"error": "not_found", "message": f"Could not find {identifier}"},
-            status_code=404,
-        )
-
-    # Predict
-    mp = ModelPredictor()
-    modelResultsJson = mp.predictFromDB(model_id, smiles)
-
-    if isinstance(modelResultsJson, str) and "invalid" in modelResultsJson.lower():
-        return JSONResponse({"error": "invalid", "message": modelResultsJson}, status_code=400)
-
-    if report_format == "html":
-        rc = ReportCreator()
-        html = rc.create_html_report_from_json(modelResultsJson)
-        return HTMLResponse(html, status_code=200)
-
-    return modelResultsJson, 200
-
-
-# app = Flask(__name__)
-# log = logging.getLogger('werkzeug')
-# log.setLevel(logging.DEBUG)
 
 
 @app.route('/hello/<name>', methods=['GET'])
@@ -181,12 +100,15 @@ def say_hello(name):
     """
     return "Hello, " + name
 
+
+
 # # use_pmml_pipeline_during_model_building = True # if true use PMMLPipeline with standardizing happening separate during model building
 # # use_sklearn2pmml = True # if false uses pypmml to load the file. Note: pypmml doesnt handle knn predictions the same way...
 
 
+
 @app.route('/api/predictor_models/models/<string:qsar_method>/info', methods=['GET'])
-def info(qsar_method):
+def method_info(qsar_method):
     """Returns a short, generic description of the QSAR method"""
     return get_model_info(qsar_method), 200
 
@@ -324,7 +246,7 @@ def prediction_applicability_domain():
     if embedding and embedding == 'error':
         abort(400, 'non blank embedding and dont have tab character')
 
-    output = adu.generate_applicability_domain_with_preselected_descriptors(training_tsv=training_tsv,
+    output, ad_cutoff = adu.generate_applicability_domain_with_preselected_descriptors(training_tsv=training_tsv,
                                                                             test_tsv=test_tsv,
                                                                             remove_log_p=remove_log_p,
                                                                             embedding=embedding,
@@ -646,99 +568,190 @@ def cross_validate_fold(qsar_method):
 #     return mwu.call_do_predictions(prediction_tsv, model), 200
 
 
-# @app.route('/api/predictor_models/models/predictDB2', methods=['POST', 'GET'])
-# def predictDB2():
-#     """Automates prediction and AD for single smiles using model in database
-#     This one works in Flask"""
-#     if request.method == 'POST':
-#         obj = request.form
-#     elif request.method == 'GET':
-#         obj = request.args
-#     smiles = obj.get('smiles')  # Retrieves the model number to use
-#     model_id = obj.get('model_id')
-#     report_format = obj.get('report_format', 'json')
-#
-#     return predictDB(model_id, smiles, report_format)
+# following didnt work for me when I used simple flask app:
+# @app.route('/api/predictor_models/models/predictDB', methods=['POST', 'GET'])
+# def predictDB(smiles, model_id):
+#     return predictFromDB(model_id, smiles)
 
 
-def _to_obj(x):
-    if isinstance(x, (dict, list)):
-        return x
-    if isinstance(x, (str, bytes, bytearray)):
-        return json.loads(x)
-    raise TypeError(f"Unsupported prediction type: {type(x)}")
-
-def _to_json_str(x):
-    if isinstance(x, (dict, list)):
-        return json.dumps(x)
-    if isinstance(x, (bytes, bytearray)):
-        return x.decode("utf-8")
-    if isinstance(x, str):
-        return x
-    raise TypeError(f"Unsupported prediction type: {type(x)}")
-
-
-def predictDB_POST(body):
-    return predictDB(body["smiles"], body["model_id"], "json")
-
-
-def predictDB(smiles, model_id, report_format):
-    """Automates prediction and AD for single smiles using model in database"""
-
-    report_format = (report_format or "json").lower()
-    if report_format not in ("json", "html"):
-        report_format = "json"
-
+@app.route('/api/predictor_models/models/predictDB', methods=['POST', 'GET'])
+def predictDB():
+    """Automates prediction and AD for single smiles using model in database
+    """    
+    
+    if request.method == 'POST':
+        obj = request.form
+    elif request.method == 'GET':
+        obj = request.args
+    smiles = obj.get('smiles')  # Retrieves the model number to use
+    model_id = obj.get('model_id')
+    report_format = obj.get('report_format', 'json').lower()
+    
+    if report_format not in ['json', 'html']:
+        report_format = 'json'
+        
     mp = ModelPredictor()
+    modelResultsJson = mp.predictFromDB(model_id, smiles)
+    
+    if "invalid" in modelResultsJson.lower():
+        return modelResultsJson, 400
 
-    # BATCH (POST)
-    if isinstance(smiles, list):
-        modelResultsArray = []
-        for current_smiles in smiles:
-            logging.debug("Running %s", current_smiles)
-            pred = mp.predictFromDB(model_id, current_smiles)   # может быть dict или json-str
-            modelResultsArray.append(_to_obj(pred))
-        return JSONResponse(content=modelResultsArray)
-
-    # SINGLETON (GET)
-    pred = mp.predictFromDB(model_id, smiles)
-
+    
     if report_format == "html":
-        rc = ReportCreator()
-        modelResultsHtml = rc.create_html_report_from_json(_to_json_str(pred))
-        return HTMLResponse(content=modelResultsHtml)
+        rc=ReportCreator()
+        html = rc.create_html_report_from_json(modelResultsJson)
+        return html, 200
+    else:
+        return modelResultsJson, 200
 
-    return Response(content=_to_json_str(pred), media_type="application/json")
+    return mp.predictFromDB(model_id, smiles, report_format), 200
 
+
+
+@app.route('/api/predictor_models/models/predict_identifier', methods=['POST', 'GET'])
+def predict_identifier():
+    """Automates prediction and AD for single identifier using model in database
+    """    
+    
+    if request.method == 'POST':
+        obj = request.form
+    elif request.method == 'GET':
+        obj = request.args
+    
+    identifier = obj.get('identifier')  # Retrieves the model number to use
+    
+    model_id = obj.get('model_id')
+    report_format = obj.get('report_format', 'json').lower()
+    
+    if report_format not in ['json', 'html']:
+        report_format = 'json'
+    
+    from API_Utilities import SearchAPI
+    import os
+    serverAPIs = os.getenv("CIM_API_SERVER", "https://cim-dev.sciencedataexperts.com")
+    
+    chemicals, code = SearchAPI.call_resolver_get(serverAPIs, identifier)
+    
+    # print(chemicals, code)
+    
+    if code != 200:
+        return jsonify(error="not_found", message=f"Could not find {identifier}"), 404
+    
+    if len(chemicals)>0:    
+        smiles = chemicals[0]["chemical"]["smiles"]
+    else:
+        return jsonify(error="not_found", message=f"Could not find {identifier}"), 404
+    
+        
+    mp = ModelPredictor()
+    modelResultsJson = mp.predictFromDB(model_id, smiles)
+    
+    if "invalid" in modelResultsJson.lower():
+        return modelResultsJson, 400
+
+    
+    if report_format == "html":
+        rc=ReportCreator()
+        html = rc.create_html_report_from_json(modelResultsJson)
+        return html, 200
+    else:
+        return modelResultsJson, 200
+
+    return mp.predictFromDB(model_id, smiles, report_format), 200
+
+
+# def predictDB_POST(body):
+#     return predictDB(body['model_id'], body['smiles'],body['report_format'])
+#
+# @app.route('/api/predictor_models/models/predictDB', methods=['POST', 'GET'])
+# def predictDB(model_id, smiles, report_format):
+#     """Automates prediction and AD for single smiles using model in database"""
+#
+#     report_format = report_format.lower()
+#     if report_format not in ['json', 'html']:
+#         report_format = 'json'
+#
+#     mp = ModelPredictor()
+#     modelResultsJson = mp.predictFromDB(model_id, smiles)
+#
+#     if report_format == "html":
+#         rc=ReportCreator()
+#         html = rc.create_html_report_from_json(modelResultsJson)
+#         return html, 200
+#     else:
+#         return modelResultsJson, 200
+#
+#     return mp.predictFromDB(model_id, smiles, report_format)
+
+
+# @app.route('/api/predictor_models/models/predict', methods=['POST'])
+# def predict():
+#     """Makes predictions for a stored model on provided data"""
+#     obj = request.form
+#     model_id = obj.get('model_id')  # Retrieves the model number to use
+#
+#     prediction_tsv = obj.get('prediction_tsv')  # Retrieves the prediction data as a TSV
+#     if prediction_tsv is None:
+#         prediction_tsv = request.files.get('prediction_tsv').read().decode('UTF-8')
+#
+#     # Can't make predictions without data
+#     if prediction_tsv is None:
+#         abort(400, 'missing prediction tsv')
+#     # Can't make predictions without a model
+#     if model_id is None:
+#         abort(400, 'missing model id')
+#
+#     if models[model_id] is not None:
+#         # Gets stored model using model number
+#         model = models[model_id]
+#     else:
+#         abort(400, 'Need to init model or use predictDB API call instead')
+#
+#     # 404 NOT FOUND if no model stored under provided number
+#     if model is None:
+#         abort(404, 'no stored model with id ' + model_id)
+#
+#     # Calls the appropriate prediction method and returns the results
+#     return call_do_predictions(prediction_tsv, model), 200
+
+
+
+def _read_text_form_or_file(field_name: str):
+    # Prefer file upload
+    f = request.files.get(field_name)
+    if f:
+        name = getattr(f, "filename", "")
+        data = f.read()
+        if name.endswith(".gz") or (len(data) >= 2 and data[:2] == b"\x1f\x8b"):
+            data = gzip.decompress(data)
+        return data.decode("utf-8")
+
+    # Fallback to form field
+    val = request.form.get(field_name)
+    return val
 
 @app.route('/api/predictor_models/models/predict', methods=['POST'])
 def predict():
-    """Makes predictions for a stored model on provided data"""
     obj = request.form
-    model_id = obj.get('model_id')  # Retrieves the model number to use
+    model_id = obj.get('model_id')
 
-    prediction_tsv = obj.get('prediction_tsv')  # Retrieves the prediction data as a TSV
-    if prediction_tsv is None:
-        prediction_tsv = request.files.get('prediction_tsv').read().decode('UTF-8')
+    prediction_tsv = _read_text_form_or_file("prediction_tsv")
+    
+    # print(prediction_tsv)
 
-    # Can't make predictions without data
     if prediction_tsv is None:
         abort(400, 'missing prediction tsv')
-    # Can't make predictions without a model
     if model_id is None:
         abort(400, 'missing model id')
 
-    if models[model_id] is not None:
-        # Gets stored model using model number
+    if model_id in models:
         model = models[model_id]
     else:
         abort(400, 'Need to init model or use predictDB API call instead')
 
-    # 404 NOT FOUND if no model stored under provided number
     if model is None:
         abort(404, 'no stored model with id ' + model_id)
 
-    # Calls the appropriate prediction method and returns the results
     return call_do_predictions(prediction_tsv, model), 200
 
 
@@ -918,8 +931,12 @@ def initPickle():
             #         model.is_binary = form_obj['is_binary'].lower == 'true'
             #     print(model.is_binary)
 
+        # model.modelId = model_id
+
         # Stores model under provided number
         models[model_id] = model
+        
+        
 
         print('After init model_description =', model.get_model_description())
         return model.get_model_description(), 201
@@ -929,6 +946,50 @@ def initPickle():
         abort(400, 'missing model bytes')
 
 
+
+@app.get(pc.URL_LOCAL_FILE_API)
+def get_file():
+        
+    # Validate and parse query params
+    type_id_str = request.args.get("type_id")
+    model_id_str = request.args.get("model_id")
+
+    if not type_id_str or not model_id_str:
+        return jsonify(error="Missing required query params: typeId and modelId"), 400
+
+    try:
+        type_id = int(type_id_str)
+        model_id = int(model_id_str)
+    except ValueError:
+        return jsonify(error="typeId and modelId must be integers"), 400
+
+    # Open a session and fetch file data
+    try:
+        raw_bytes, file_name, mime_type = gmf.fetch_model_file(model_id=model_id, type_id=type_id)
+        
+    except FileNotFoundError as e:
+        return jsonify(error=str(e)), 404
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
+    except Exception as e:
+        return jsonify(error=f"Database error: {e}"), 500
+
+    # New rule: if typeId == 2 then download, else inline
+    as_attachment = (type_id == 2)
+
+    # Stream the file
+    bio = io.BytesIO(raw_bytes)
+    bio.seek(0)
+    return send_file(
+        bio,
+        mimetype=mime_type,
+        download_name=str(file_name),
+        as_attachment=as_attachment,
+        max_age=0,
+        etag=False,
+        conditional=False,
+    )
+       
 
 @app.route('/api/predictor_models/models/<string:model_id>', methods=['GET'])
 def details(model_id):
@@ -1008,8 +1069,7 @@ def model_obj(model_id):
 
 
 if __name__ == '__main__':
-    app = Flask(__name__)
     # Limit logging output for easier readability
-    log = logging.getLogger('werkzeug')
-    log.setLevel(logging.DEBUG)
-    app_flask.run(host='0.0.0.0', port=5004, debug=True)
+    # log = logging.getLogger('werkzeug')
+    # log.setLevel(logging.ERROR)
+    app.run(host='0.0.0.0', port=5004, debug=True)

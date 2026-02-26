@@ -1,11 +1,19 @@
 FROM python:3.12-slim
 
-RUN apt-get -y update && apt-get -y upgrade && apt-get -y install build-essential
+# Indigo renderer runtime deps reported missing:
+RUN apt-get update && apt-get -y upgrade && apt-get install -y --no-install-recommends \
+    build-essential \
+    libfreetype6 \
+    libfontconfig1 \
+    fonts-dejavu-core \
+    libstdc++6 \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 COPY requirements.txt .
 
+# Install Python deps
 RUN pip install -r requirements.txt
 
 COPY . .

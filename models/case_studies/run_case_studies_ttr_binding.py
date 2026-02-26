@@ -5,12 +5,7 @@ Created on Dec 4, 2024
 '''
 
 
-from models.run_model_building import save_json_file
-from models.run_model_building import model_parameters
-from models.run_model_building import getEmbedding
-from models.run_model_building import buildModel
-from models.run_model_building import lookAtResults
-
+from models.case_studies.run_model_building import save_json_file, model_parameters, getEmbedding, buildModel, lookAtResults
 
 import pandas as pd
 import numpy as np

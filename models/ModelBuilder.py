@@ -26,6 +26,8 @@ from sklearn.neighbors import KNeighborsRegressor, KNeighborsClassifier
 from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
 from lightgbm import LGBMRegressor, LGBMClassifier
 
+from utils import to_json_safe
+
 from sklearn.svm import SVC, SVR
 from sklearn.linear_model import LogisticRegression, LinearRegression, Lasso
 from xgboost import XGBRegressor, XGBClassifier
@@ -47,6 +49,7 @@ import numpy as np
 from os.path import exists
 import json
 
+
 __author__ = "Nathaniel Charest, Todd Martin (modified to work with webservice, added XGB)"
 
 # use_standardizer = True
@@ -59,6 +62,7 @@ importance_type = 'weight' #default, TODO make a passable parameter to app when 
 # importance_type = 'total_gain'
 # importance_type ='total_cover'
 
+SEED=42
 
 def model_registry_model_obj(regressor_name, is_categorical):
     '''
@@ -76,9 +80,9 @@ def model_registry_model_obj(regressor_name, is_categorical):
             return KNeighborsRegressor()
     elif regressor_name == 'rf':
         if is_categorical:
-            return RandomForestClassifier()
+            return RandomForestClassifier(random_state=SEED)
         else:
-            return RandomForestRegressor()
+            return RandomForestRegressor(random_state=SEED)
     elif regressor_name == 'svm':
         if is_categorical:
             return SVC(probability=True)
@@ -88,19 +92,20 @@ def model_registry_model_obj(regressor_name, is_categorical):
         if is_categorical:
             # return XGBClassifier()
             # return XGBClassifier(use_label_encoder=False, eval_metric='logloss')
-            return XGBClassifier(eval_metric='logloss')
+            return XGBClassifier(eval_metric='logloss',random_state=SEED)
             # return XGBClassifier(use_label_encoder=False, eval_metric='auc')
         else:
-            return XGBRegressor(importance_type=importance_type)
+            return XGBRegressor(importance_type=importance_type, random_state=SEED)
     elif regressor_name == 'lgb':
         if is_categorical:
             # return XGBClassifier()
             # return XGBClassifier(use_label_encoder=False, eval_metric='logloss')
-            return LGBMClassifier(eval_metric='logloss')
+            return LGBMClassifier(eval_metric='logloss',random_state=SEED)
             # return XGBClassifier(use_label_encoder=False, eval_metric='auc')
         else:
-            return LGBMRegressor(eval_metric='rmse')
-    elif regressor_name == 'reg':
+            return LGBMRegressor(eval_metric='rmse',random_state=SEED,)
+    
+    elif regressor_name == 'reg' or regressor_name == 'gcm':
         # return LinearRegression()
         if is_categorical:
             # return LogisticRegression(penalty='none')
@@ -139,18 +144,19 @@ class Model:
 
         self.training_descriptor_std_devs = None  # standard deviations of training set descriptors
         self.training_descriptor_means = None  # means of training set descriptors
-        self.df_training = df_training
         self.remove_log_p_descriptors = remove_log_p_descriptors
         self.n_jobs = n_jobs
 
         self.regressor_name = '' #TODO set to None instead?
-        self.version = '0.0.1'
+        self.qsar_method = None
+        self.qsar_method_version = None
+
         self.model_obj = None
         self.embedding = None
         # self.coeff = None
         self.is_binary = None
         self.training_stats = {}
-        self.seed = 11171992
+        self.seed = SEED
 
         self.description = None
         self.description_url = None
@@ -162,11 +168,23 @@ class Model:
         #Extra metadata 2025-12-08
         self.modelId = None
         self.modelName = None
+        self.modelSource = None
+        self.modelStatistics = None
+        
+        self.modelMethod = None
+        self.modelMethodDescription = None
+        self.modelMethodDescriptionURL = None
+        
         self.datasetId = None
         self.datasetName = None
-        self.unitsName = None
+        self.datasetDescription = None
+        self.unitsModel = None
+        self.unitsDisplay = None
         self.dsstoxMappingStrategy = None
+        
         self.propertyName = None
+        self.propertyDescription = None
+
         self.descriptorSetId = None
         self.descriptorSetName = None
         self.descriptorService = None
@@ -174,9 +192,21 @@ class Model:
         self.splittingId = None
         self.splittingName = None
         self.applicabilityDomainName = None
+        self.applicabilityDomainDescription = None
         self.omitSalts = None
         self.qsarReadyRuleSet = None
+         
+        self.df_dsstoxRecords = None
+        self.df_training = df_training
         self.df_prediction = None
+        
+        self.num_training = None
+        self.num_prediction = None
+                
+        self.df_preds_test = None # external predictions for test set
+        self.df_preds_training_cv = None #cross validation predictions for training set
+        
+        self.detailsFile = None
 
 
     def get_model(self):
@@ -226,6 +256,155 @@ class Model:
         }
 
 
+    def getOriginalRegressionCoefficients(self):
+
+        # print('enter getOriginalRegressionCoefficients')
+
+        model_obj = self.get_model()
+        reg = model_obj.steps[1][1]
+        scale = model_obj.steps[0][1]
+        
+        # Get the scaled coefficients and intercept
+        beta_scaled = reg.coef_
+        intercept_scaled = reg.intercept_
+
+        # Get the means and standard deviations used by the StandardScaler
+        means = scale.mean_
+        stds = scale.scale_
+
+        # Transform the coefficients to the unscaled version
+        beta_unscaled = beta_scaled / stds
+
+        # Transform the intercept to the unscaled version
+        intercept_unscaled = intercept_scaled - np.sum((means * beta_scaled) / stds)
+
+        # Report the unscaled coefficients and intercept
+        # print("Intercept (unscaled):", intercept_unscaled)
+        # print("Coefficients (unscaled):", beta_unscaled)
+        # print(self.embedding)
+
+        # from collections import OrderedDict
+        # coefficients_dict = OrderedDict()
+        #
+        # # Create a dictionary for the coefficients, starting with the intercept
+        # coefficients_dict['Intercept'] = intercept_unscaled
+        #
+        # # Add the coefficients in the order of embedding
+        # coefficients_dict.update(dict(zip(self.embedding, beta_unscaled)))
+        #
+        # # print(coefficients_dict)
+        # # return coefficients_dict
+        # return json.dumps(coefficients_dict,indent=4)
+    
+        coefficients = []
+        coefficients.append({"name": "Intercept", "coefficient": float(intercept_unscaled)})
+        for name, coef in zip(self.embedding, beta_unscaled):
+            coefficients.append({"name": name, "coefficient": float(coef)})
+    
+        return json.dumps(coefficients,indent=4)
+    
+
+
+    def getOriginalRegressionCoefficients2(self, X, y):
+        """
+        Return a list of dicts: [{'name': <str>, 'coefficient': <float>, 'std_error': <float>}]
+        for the unscaled coefficients and intercept.
+        
+        Assumptions:
+        - reg is an OLS-like estimator (e.g., LinearRegression) with fit_intercept=True.
+        - X is the training DataFrame used to fit the model, with columns matching self.embedding.
+        - y is the training target (Series or 1D array).
+        
+        Notes:
+        - For multi-output regression, this computes SEs for the first target only.
+        - If any feature has std == 0 (constant feature), SEs for that coefficient are set to NaN.
+        """
+        model_obj = self.get_model()
+        reg = model_obj.steps[1][1]    # e.g., LinearRegression
+        scale = model_obj.steps[0][1]  # StandardScaler
+        
+        # Arrange X columns in the same order as self.embedding (features used by the model)
+        X_feats = X[self.embedding].to_numpy(dtype=float)
+        
+        # Use the scaler from the pipeline to transform X
+        X_scaled = scale.transform(X_feats)
+        
+        # Ensure y is 1D np.array
+        y = np.asarray(y).ravel()
+        n, p = X_scaled.shape
+    
+        # Extract scaled coefficients/intercept (handle multi-output)
+        beta_scaled = np.asarray(reg.coef_)
+        intercept_scaled = np.asarray(reg.intercept_)
+        
+        if beta_scaled.ndim == 2:
+            beta_scaled = beta_scaled[0]
+        if intercept_scaled.ndim > 0:
+            intercept_scaled = intercept_scaled[0]
+    
+        # Scaler params
+        means = np.asarray(scale.mean_, dtype=float)
+        stds  = np.asarray(scale.scale_, dtype=float)
+    
+        # Compute unscaled coefficients
+        with np.errstate(divide='ignore', invalid='ignore'):
+            beta_unscaled = np.divide(beta_scaled, stds, where=stds != 0)
+        intercept_unscaled = intercept_scaled - np.sum((means * beta_scaled) / stds)
+    
+        # OLS residuals and sigma^2
+        y_hat = reg.predict(X_scaled)
+        residuals = y - y_hat
+        # Degrees of freedom: n - (p + 1) when intercept is included
+        df_resid = n - (p + 1)
+        if df_resid <= 0:
+            raise ValueError("Not enough degrees of freedom to estimate standard errors.")
+        RSS = np.sum(residuals**2)
+        sigma2 = RSS / df_resid
+    
+        # Build design matrix consistent with fit_intercept=True (assumed)
+        Z = np.column_stack([np.ones(n, dtype=float), X_scaled])  # shape: (n, p+1)
+    
+        # Covariance of scaled parameters: sigma^2 * (Z^T Z)^(-1)
+        XtX = Z.T @ Z
+        XtX_inv = np.linalg.pinv(XtX)  # robust to singularity
+        cov_scaled = sigma2 * XtX_inv   # shape: (p+1, p+1)
+    
+        # Transform covariance to unscaled parameters using linear transform:
+        # theta_unscaled = T @ theta_scaled
+        # where theta = [intercept, beta_1, ..., beta_p]
+        T = np.zeros((p + 1, p + 1), dtype=float)
+        T[0, 0] = 1.0
+        # Intercept row depends on scaled intercept and scaled betas
+        with np.errstate(divide='ignore', invalid='ignore'):
+            ratios = np.divide(means, stds, where=stds != 0)  # mean_j / std_j
+        T[0, 1:] = -ratios
+        # Coefficient rows: beta_unscaled_j = beta_scaled_j / std_j
+        with np.errstate(divide='ignore', invalid='ignore'):
+            inv_stds = np.divide(1.0, stds, where=stds != 0)
+        np.fill_diagonal(T[1:, 1:], inv_stds)
+    
+        cov_unscaled = T @ cov_scaled @ T.T
+        se_unscaled = np.sqrt(np.diag(cov_unscaled))
+    
+        # Build coefficients: list of dicts with name, coefficient, std_error
+        coefficients = []
+        coefficients.append({
+            "name": "Intercept",
+            "coefficient": float(intercept_unscaled),
+            "std_error": float(se_unscaled[0]),
+        })
+        for i, (name, coef) in enumerate(zip(self.embedding, beta_unscaled), start=1):
+            # If std was zero (constant feature), set SE to NaN
+            se = se_unscaled[i] if np.isfinite(inv_stds[i-1]) else np.nan
+            coefficients.append({
+                "name": name,
+                "coefficient": float(coef),
+                "std_error": float(se) if np.isfinite(se) else np.nan,
+            })
+    
+        return json.dumps(coefficients,indent=4)
+        
+
     def set_model_obj_pmml_for_prediction(self, pmml_file_path, qsar_method):
 
         # print(type(self.model_obj))
@@ -267,9 +446,21 @@ class Model:
 
             setattr(self, key, value)
 
+
+    
+    
     def get_model_description(self):
         modelDescription = ModelDescription(self)
-        return json.dumps(modelDescription.__dict__)
+        # return json.dumps(modelDescription.__dict__)
+    
+        safe_dict = to_json_safe(modelDescription.__dict__)
+        return json.dumps(safe_dict, ensure_ascii=False)
+    
+    def get_model_description_dict(self):
+        modelDescription = ModelDescription(self)
+        return to_json_safe(modelDescription.__dict__)
+        # return modelDescription.__dict__
+
 
     def get_model_description_pretty(self):
         modelDescription = ModelDescription(self)
@@ -300,25 +491,32 @@ class Model:
     def build_model(self, use_pmml_pipeline, include_standardization_in_pmml, descriptor_names=None):
         logging.debug('enter build model')
 
+
         t1 = time.time()
-        self.embedding = descriptor_names
+        
         self.use_pmml = use_pmml_pipeline
         self.include_standardization_in_pmml = include_standardization_in_pmml
 
         # Call prepare_instances without removing correlated descriptors
-        if self.embedding is None:
-            train_ids, train_labels, train_features, train_column_names, self.is_binary = \
-                DFU.prepare_instances(self.df_training, "training", remove_logp=self.remove_log_p_descriptors, remove_corr=True)
-            # Use columns selected by prepare_instances (in case logp descriptors were removed)
+
+        if descriptor_names is None:
+            
+            if self.regressor_name == 'gcm':
+                train_ids, train_labels, train_features, train_column_names, self.is_binary = \
+                    DFU.prepare_instances_with_preselected_descriptors_gcm(self.df_training, "training")
+                # print(len(train_column_names))
+            else:
+                train_ids, train_labels, train_features, train_column_names, self.is_binary = \
+                    DFU.prepare_instances(self.df_training, "training", remove_logp=self.remove_log_p_descriptors, remove_corr=True)
+                # Use columns selected by prepare_instances (in case logp descriptors were removed)
             self.embedding = train_column_names
-
             # print(self.embedding)
-
         else:
+            self.embedding = descriptor_names
             train_ids, train_labels, train_features, train_column_names, self.is_binary = \
                 DFU.prepare_instances_with_preselected_descriptors(self.df_training, "training", self.embedding)
-            # Use columns selected by prepare_instances (in case logp descriptors were removed)
-            self.embedding = train_column_names
+            # print("train_ids", train_ids)
+            # Use columns selected by prepare_instances (in case logp descriptors were removed)            
 
         # print(train_features)
         if use_pmml_pipeline and include_standardization_in_pmml is False:  # need to handle scaling outside of pipeline
@@ -343,10 +541,10 @@ class Model:
                 self.hyperparameter_grid = {"estimator__C": self.c_space, "estimator__gamma": self.gamma_space}
                 print('using single set of hyperparameters for SVM due to large data set')
 
-        print('hyperparameter_grid', self.hyperparameter_grid)
+        logging.debug('hyperparameter_grid %s', self.hyperparameter_grid)
 
         if self.has_hyperparameter_grid():
-            print('Hyperparameter grid has multiple sets of parameters, running grid search')
+            logging.debug('Hyperparameter grid has multiple sets of parameters, running grid search')
 
             kfold_splitter = KFold(n_splits=5, shuffle=True, random_state=42)
 
@@ -361,7 +559,7 @@ class Model:
             self.hyperparameters = optimizer.best_params_
 
         else:
-            print('Hyperparameter grid only has a single set of parameters, skipping grid search')
+            logging.debug('Hyperparameter grid only has a single set of parameters, skipping grid search')
             self.hyperparameters = self.get_single_parameters()
             self.model_obj.set_params(**self.hyperparameters)
 
@@ -370,6 +568,9 @@ class Model:
         # Train the model on training data
 
         self.model_obj.fit(train_features, train_labels)
+        
+        # print(self.getOriginalRegressionCoefficients())
+        
 
         # training_score = self.model_obj.score(train_features, train_labels)
         # self.training_stats['training_score'] = training_score
@@ -386,16 +587,16 @@ class Model:
         t2 = time.time()
         training_time = t2 - t1
 
-        print('\n******************************************************************************************')
-        print('Regressor', self.regressor_name)
-        print('Best model params', self.hyperparameters)
+        logging.debug('\n******************************************************************************************')
+        logging.debug(f"Regressor{self.regressor_name}")
+        logging.debug(f"Best model params{self.hyperparameters}")
         # print('training_cv_r2',self.training_stats['training_cv_r2'])
         # print('training_cv_q2', self.training_stats['training_cv_q2'])
 
         # print(r'Score for Training data = {score}'.format(score=training_score))
-        print(r'Time to train model  = {training_time} seconds'.format(training_time=training_time))
-        print('modelDescription', self.get_model_description())
-        print('******************************************************************************************\n')
+        logging.debug(f"Time to train model  = {training_time:.0f} seconds")
+        logging.debug(f"modelDescription = {self.get_model_description()}")
+        logging.debug('******************************************************************************************\n')
 
         self.training_stats['training_time'] = t2 - t1
         return self
@@ -705,7 +906,7 @@ class Model:
             else:
                 print("Cant handle ", type(self.model_obj))
 
-            print(r'Balanced Accuracy for Test data = {score}'.format(score=score))
+            logging.debug(r'Balanced Accuracy for Test data = {score}'.format(score=score))
 
         elif not self.is_binary:
 
@@ -731,7 +932,7 @@ class Model:
             if df_prediction.shape[0] > 1:
                 score = stats.pearsonr(predictions, pred_labels)[0]
                 score = score * score
-                print(r'R2 for Test data = {score}'.format(score=score))
+                logging.debug(r'R2 for Test data = {score}'.format(score=score))
 
         else:
             print("is_categorical is null")  # does this happen?
@@ -774,7 +975,7 @@ class KNN(Model):
         Model.__init__(self, df_training, remove_log_p_descriptors, n_jobs=n_jobs)
 
         self.regressor_name = 'knn'
-        self.version = '1.2'
+        self.qsar_method_version = '1.2'
 
         # self.hyperparameter_grid = {'estimator__n_neighbors': [5],
         #                         'estimator__weights': ['uniform', 'distance']}
@@ -790,59 +991,28 @@ class REG(Model):
         Model.__init__(self, df_training, remove_log_p_descriptors, n_jobs=n_jobs)
         self.regressor_name = 'reg'
         self.version = '1.0'
-        self.hyperparameter_grid = {}  # keep it consistent between endpoints, match OPERA
-
+        self.hyperparameter_grid = {}  
         self.description = 'python implementation of regression'
-        self.description_url = 'https://scikit-learn.org/stable/modules/classes.html#module-sklearn.linear_model'
+        self.description_url = 'https://scikit-learn.org/stable/modules/generated/sklearn.linear_model.LinearRegression.html'
 
-    def getOriginalRegressionCoefficients(self):
 
-        model_obj = self.get_model()
-        reg = model_obj.steps[1][1]
-        scale = model_obj.steps[0][1]
-        # Original_coeff = np.divide(reg.coef_, scale.scale_)
-        # Original_coeff = list(Original_coeff[0])
-        # print('Original_coeff', Original_coeff)
-        # # Following doesnt work with regularization
-        # Original_intercept = reg.intercept_
-        # coeffs = list(reg.coef_[0])
-        # for index, coefficient in enumerate(coeffs):
-        #     # print(index,coefficient)
-        #     Original_intercept = Original_intercept - scale.mean_[index] * coefficient / scale.scale_[index]
-        # print('Original intercept', Original_intercept)
 
-        # Get the scaled coefficients and intercept
-        beta_scaled = reg.coef_
-        intercept_scaled = reg.intercept_
 
-        # Get the means and standard deviations used by the StandardScaler
-        means = scale.mean_
-        stds = scale.scale_
-
-        # Transform the coefficients to the unscaled version
-        beta_unscaled = beta_scaled / stds
-
-        # Transform the intercept to the unscaled version
-        intercept_unscaled = intercept_scaled - np.sum((means * beta_scaled) / stds)
-
-        # Report the unscaled coefficients and intercept
-        print("Intercept (unscaled):", intercept_unscaled)
-        print("Coefficients (unscaled):", beta_unscaled)
-
-        # coefficients_df = pd.DataFrame({
-        #     'Feature': ['Intercept'] + list(X.columns),
-        #     'Coefficient': [intercept_unscaled] + list(beta_unscaled)
-        # })
-        # Display the DataFrame
-        # print(coefficients_df)
-
+class GCM(Model):
+    def __init__(self, df_training=None, remove_log_p_descriptors=False, n_jobs=1):
+        Model.__init__(self, df_training, remove_log_p_descriptors, n_jobs=n_jobs)
+        self.regressor_name = 'gcm'
+        self.version = '1.0'
+        self.hyperparameter_grid = {}  
+        self.description = 'group contribution model multilinear regression model with frag descriptors >= min_count'
+        self.description_url = 'https://scikit-learn.org/stable/modules/generated/sklearn.linear_model.LinearRegression.html'
 
 
 class LAS(Model):
     def __init__(self, df_training=None, remove_log_p_descriptors=False, n_jobs=1):
         Model.__init__(self, df_training, remove_log_p_descriptors, n_jobs=n_jobs)
         self.regressor_name = 'las'
-        self.version = '1.0'
+        self.qsar_method_version = '1.0'
         # self.hyperparameter_grid = {'estimator__alpha': [np.round(i, 5) for i in np.logspace(-5, 0, num=26)],'estimator__max_iter': [1000000]}
         self.hyperparameter_grid = {'estimator__alpha': [np.round(i, 5) for i in np.logspace(-4, 0, num=20)],
                                     'estimator__max_iter': [1000000]}
@@ -851,11 +1021,11 @@ class LAS(Model):
         #                            'estimator__max_iter': [1000000], 'estimator__tol': [1.0e-6, 1.0e-5, 1.0e-4, 1.0e-3]}
         # self.hyperparameter_grid = {}
 
-        print(self.hyperparameter_grid)
+        # print(self.hyperparameter_grid)
 
         self.description = 'python implementation of lasso'
         self.description_url = 'https://scikit-learn.org/stable/modules/classes.html#module-sklearn.linear_model'
-
+       
 
 class XGB(Model):
     def __init__(self, df_training=None, remove_log_p_descriptors=False, n_jobs=1):
@@ -883,7 +1053,7 @@ class LGB(Model):
 
         # self.hyperparameter_grid = {'estimator__booster':['gbtree', 'gblinear','dart']}  #other two make it run a lot slower
 
-        self.version = '1.0'
+        self.qsar_method_version = '1.0'
 
         # 'weight': The default for , this represents the number of times a feature is used to split data across all trees.
         # 'gain': The default for the scikit-learn API's attribute, this is the average gain across all splits where the feature is used. Gain is the improvement in accuracy from a feature on its branches.
@@ -912,7 +1082,7 @@ class SVM(Model):
         #                         "estimator__kernel": ["linear", "poly", "rbf"],
         #                         "estimator__gamma": [10 ** n for n in range(-3, 4)]}
 
-        self.version = '1.4'
+        self.qsar_method_version = '1.4'
         self.c_space = [1, 10, 100]
         self.gamma_space = ['scale', 'auto']
         self.hyperparameter_grid = {"estimator__C": self.c_space, "estimator__gamma": self.gamma_space}
@@ -927,10 +1097,10 @@ class RF(Model):
         Model.__init__(self, df_training, remove_log_p_descriptors, n_jobs=n_jobs)
         self.regressor_name = "rf"
 
-        # # self.version = '1.4'
-        # self.hyper_parameter_grid = {'max_features': ['sqrt', 'log2'],
-        #                              'min_impurity_decrease': [10 ** x for x in range(-5, 0)],
-        #                              'n_estimators': [10, 100, 250, 500]}
+        self.version = '1.4'
+        self.hyperparameter_grid = {'estimator__max_features': ['sqrt', 'log2'],
+                                     'estimator__min_impurity_decrease': [10 ** x for x in range(-5, 0)],
+                                     'estimator__n_estimators': [10, 100, 250, 500]}
 
         # following didnt seem to help at all for predicting PFAS properties:
         # self.hyperparameter_grid = {"estimator__max_features": ["sqrt", "log2"],
@@ -951,26 +1121,29 @@ class RF(Model):
         #                             "estimator__min_samples_split": [2, 5, 10],
         #                             "estimator__max_samples": [0.25, 0.50, 1.0]}
 
-        self.version = '1.8'
-
-        min_impurity_decrease = [10 ** x for x in range(-5, 0)]
-        min_impurity_decrease.append(0)
-
-        self.hyperparameter_grid = {"estimator__max_features": ["sqrt", "log2", None],
-                                    "estimator__n_estimators": [50, 100, 150, 300],
-                                    "estimator__min_impurity_decrease": min_impurity_decrease
-                                    }
+        # self.version = '1.8'
+        # min_impurity_decrease = [10 ** x for x in range(-5, 0)]
+        # min_impurity_decrease.append(0)
+        # self.hyperparameter_grid = {"estimator__max_features": ["sqrt", "log2", None],
+        #                             "estimator__n_estimators": [50, 100, 150, 300],
+        #                             "estimator__min_impurity_decrease": min_impurity_decrease
+        #                             }
+        
+        
 
         self.description = 'sklearn implementation of random forest'
         self.description_url = 'https://scikit-learn.org/stable/modules/generated/sklearn.ensemble.RandomForestClassifier.html'
 
 
 class ModelDescription:
-    def __init__(self, model):
+    def __init__(self, model: Model):
         """Describes parameters of the current method"""
 
         self.modelId = model.modelId
         self.modelName = model.modelName
+        self.modelSource = model.modelSource
+        
+        
         # self.qsar_method = model.regressor_name
 
         if model.regressor_name:
@@ -978,21 +1151,39 @@ class ModelDescription:
         elif model.qsar_method:
             self.qsar_method = model.qsar_method
 
+        if hasattr(model, "version"):
+            self.qsar_method_version = model.version
+        if hasattr(model, "qsar_method_version"):
+            self.qsar_method_version = model.qsar_method_version
+
+
+        if model.modelStatistics:
+            self.modelStatistics = model.modelStatistics
+
         self.description = model.description
         self.description_url = model.description_url
         self.datasetName = model.datasetName
+        self.datasetDescription = model.datasetDescription
+        
         self.embedding = model.embedding
-        self.unitsName = model.unitsName
+        
+        self.unitsModel = model.unitsModel
+        self.unitsDisplay = model.unitsDisplay
+        
         self.propertyName = model.propertyName
+        self.propertyDescription = model.propertyDescription
+        
         self.descriptorService = model.descriptorService
         self.splittingName = model.splittingName
         self.applicabilityDomainName = model.applicabilityDomainName
+        
+        self.numTraining = model.num_training
+        self.numPrediction = model.num_prediction
+        
         self.omitSalts = model.omitSalts
         self.qsarReadyRuleSet = model.qsarReadyRuleSet
-
         self.is_binary = model.is_binary
         self.remove_log_p_descriptors = model.remove_log_p_descriptors
-        self.version = model.version
         self.hyperparameter_grid = model.hyperparameter_grid
         self.hyperparameters = model.hyperparameters  # final hyperparameters
         self.training_stats = model.training_stats
@@ -1060,3 +1251,5 @@ def runExamples():
 
 if __name__ == "__main__":
     runExamples()
+
+

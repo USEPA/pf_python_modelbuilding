@@ -13,16 +13,17 @@ Created on Thu May  5 12:09:19 2022
 @author: NCHAREST
 """
 
-import DataSetManager as dsm
-import ApplicabilityDomain as adm
-import modelSpace as ms
+# from applicability_domain import DataSetManager as dsm
+from applicability_domain import ApplicabilityDomain as adm
+# from applicability_domain import modelSpace as ms
+
 import numpy as np
 # from tqdm import tqdm
 import pandas as pd
 
 pd.options.mode.chained_assignment = None  # default='warn'  #TMM suppresses warnings :)
 from models import df_utilities as DFU
-from models_old import knn_model as knn
+from models.old.models_old import knn_model as knn
 
 
 # %%
@@ -127,7 +128,7 @@ def caseStudies():
         # Need to run get the training column names for alldescriptors AD:
         removeCorr = False  # remove correlated descriptors for all descriptors AD
         train_ids, train_labels, train_features, train_column_names, is_binary = \
-            DFU.prepare_instances(trainData, "training", remove_log_p, removeCorr)
+            DFU.prepare_instances(df=trainData, which_set="training", remove_logp=remove_log_p, remove_corr=removeCorr)
 
         ###################################################################################################
         # Build the model

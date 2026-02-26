@@ -7,17 +7,9 @@ Created on Tue Jul  5 07:18:59 2022
 import logging
 
 #%%
-import numpy as np
+
 from sklearn.model_selection import cross_val_score
-from models import df_utilities as dfu
-from sklearn import preprocessing
-from scipy.stats import spearmanr, pearsonr
-from scipy.cluster import hierarchy
-from scipy.spatial.distance import squareform
 import numpy as np
-import pandas as pd
-from collections import defaultdict
-from models import ModelBuilder
 from models import df_utilities as DFU
 
 
@@ -92,17 +84,23 @@ DESCRIPTOR_COEFFICIENT = 0.002
 #     return wardsFeatures
 
 
-def runGA(df_training, model, use_wards, remove_log_p_descriptors=False):
+def runGA(df_training, model, use_wards, remove_log_p_descriptors=False,remove_fragment_descriptors=False,remove_acnt_descriptors=False):
+
+
+    # print("remove_fragment_descriptors",remove_fragment_descriptors)
 
     if use_wards:
         # Using ward's method removes too descriptors for PFAS only training sets:
-        train_ids, train_labels, train_features, train_column_names, model.is_binary = \
+        _, train_labels, train_features, train_column_names, model.is_binary = \
             DFU.prepare_instances_wards(df_training, "training", remove_log_p_descriptors,
                                         0.5)  # uses wards method to remove extra descriptors
     else:
-        train_ids, train_labels, train_features, train_column_names, model.is_binary = \
-            DFU.prepare_instances(df_training, "training", remove_log_p_descriptors,
-                                  True)  # removes descriptors which are correlated by 0.95
+        _, train_labels, train_features, train_column_names, model.is_binary = \
+            DFU.prepare_instances(df=df_training, which_set="training", remove_logp=remove_log_p_descriptors,
+                                  remove_corr=True,remove_constant=True, 
+                                  remove_fragment_descriptors=remove_fragment_descriptors,
+                                  remove_acnt_descriptors=remove_acnt_descriptors)  # removes descriptors which are correlated by 0.95
+
 
 
     # train_ids, train_labels, train_features, train_column_names, model.is_categorical = \
@@ -110,8 +108,11 @@ def runGA(df_training, model, use_wards, remove_log_p_descriptors=False):
 
     # print(type(model))
 
-    logging.debug('use_wards = ',use_wards)
-    logging.debug('after initial feature selection, # features = ',len(train_column_names))
+    logging.debug('use_wards: '+str(use_wards))
+    logging.info('after initial feature selection, # features: '+str(len(train_column_names)))
+    logging.info(f"NUM_GENERATIONS:{NUM_GENERATIONS}")
+    logging.info(f"NUM_OPTIMIZERS:{NUM_OPTIMIZERS}")
+
     # print('Number of rows = ', len(train_ids))
 
 
@@ -126,7 +127,6 @@ def runGA(df_training, model, use_wards, remove_log_p_descriptors=False):
     model.hyperparameters = model.get_single_parameters()
     model.model_obj.set_params(**model.hyperparameters)
 
-    logging.debug(model.hyperparameters)
 
     # features = wardsMethod(df_train, 0.5)
     # y_internal = df_train.iloc[:,1]
@@ -138,11 +138,10 @@ def runGA(df_training, model, use_wards, remove_log_p_descriptors=False):
 
     fitness_calculator = FiveFoldFitness(X_train=x_internal, y_train=y_internal, model=model.model_obj)
 
-    go = GeneticOptimizer(descriptor_pool, fitness_calculator)
+    # go = GeneticOptimizer(descriptor_pool, fitness_calculator)
 
     ensemble_selector = GeneticSelector(descriptor_pool, fitness_calculator)
 
-    logging.debug('NUM_GENERATIONS',NUM_GENERATIONS)
 
     ensemble_selector.ensemble_evolution(num_optimizers=NUM_OPTIMIZERS, num_generations=NUM_GENERATIONS,
                                          num_parents=NUM_PARENTS, min_length=MINIMUM_LENGTH,
@@ -324,6 +323,7 @@ class GeneticOptimizer:
             if debug:
                 print('\tgeneration',i+1)
             children, prime = self.run_generation(children, mutation_probability, num_survivors, return_prime = True)
+            
             self.generations[i] = children
             primes.append(prime)
 
@@ -356,7 +356,7 @@ class GeneticSelector:
         
         self.prime_sequences = []
         for key in self.genetic_optimizers.keys():
-           self.prime_sequences += self.genetic_optimizers[key].optimal_sequence
+            self.prime_sequences += self.genetic_optimizers[key].optimal_sequence
             
         self.descriptor_counts = {}
         for descriptor in self.prime_sequences:

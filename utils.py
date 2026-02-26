@@ -28,3 +28,54 @@ def timer(func):
         return result
 
     return wrapper
+
+import numpy as np
+import pandas as pd
+from datetime import datetime
+import json
+import base64
+
+def row_to_json(df, row=0):
+    row = df.iloc[row]
+    row_dict = {col: to_json_safe(val) for col, val in row.items()}
+    json_str = json.dumps(row_dict, indent=4)
+    return json_str
+    
+
+def print_first_row(df, row=0):
+    row = df.iloc[row]
+    row_dict = {col: to_json_safe(val) for col, val in row.items()}
+    json_str = json.dumps(row_dict, indent=4)
+    print(json_str)
+
+def to_json_safe(obj):
+    
+    if isinstance(obj, (bytes, bytearray, memoryview)):
+        b = bytes(obj)
+        try:
+            return b.decode("utf-8")
+        except UnicodeDecodeError:
+            return "base64:" + base64.b64encode(b).decode("ascii")
+    if isinstance(obj, (np.integer,)):
+        return int(obj)
+    if isinstance(obj, (np.floating,)):
+        return float(obj)
+    if isinstance(obj, (np.bool_,)):
+        return bool(obj)
+    if isinstance(obj, np.ndarray):
+        return [to_json_safe(x) for x in obj.tolist()]
+    if isinstance(obj, pd.Series):
+        return [to_json_safe(x) for x in obj.tolist()]
+    if isinstance(obj, pd.DataFrame):
+        return [to_json_safe(r) for r in obj.to_dict(orient="records")]
+    if isinstance(obj, (pd.Timestamp, datetime)):
+        return obj.isoformat()
+    if isinstance(obj, pd.Timedelta):
+        return obj.isoformat()
+    if isinstance(obj, dict):
+        return {str(k): to_json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple, set)):
+        return [to_json_safe(x) for x in obj]
+    if pd.isna(obj):
+        return None
+    return obj
