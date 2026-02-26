@@ -977,6 +977,7 @@ class ExcelCreator:
         y_values: Iterable[float],
         pad_ratio: float=0.02,
         integer_ticks: bool=True,
+        log_plot: bool=True,
         target_ticks: int=5,
     ) -> Tuple[float, float, Optional[float]]:
         xs = [float(v) for v in x_values if v is not None and v == v]
@@ -1001,13 +1002,29 @@ class ExcelCreator:
             if int_min == int_max:
                 int_min -= 1
                 int_max += 1
-            major_unit = ExcelCreator.nice_integer_major_unit(int_max - int_min, target_ticks=target_ticks)
+            # For integer ticks, always use major_unit=1 to show ticks at every integer
+            # This is important for log-log plots where integer differences represent significant changes
+            if log_plot:
+                major_unit = 1
+            else:
+                major_unit = ExcelCreator.nice_integer_major_unit(int_max - int_min, target_ticks=target_ticks)
+            
             return float(int_min), float(int_max), float(major_unit)
     
         return mn, mx, None
 
     @staticmethod
-    def add_plot(df, sheet_name, sheet_name_plot, chart_size_px, pad_ratio, integer_ticks, yx_offset_rows, writer, workbook):
+    def add_plot(
+        writer,
+        workbook,
+        sheet_name: str,
+        sheet_name_plot: str,
+        df: pd.DataFrame,
+        chart_size_px: int=520,
+        pad_ratio: float=0.02,
+        integer_ticks: bool=True,
+        log_plot: bool=True,
+        yx_offset_rows: int=3):
         worksheet = writer.sheets[sheet_name]
         worksheet_plot = writer.sheets[sheet_name_plot]
         # Hide worksheet gridlines (screen + print)
@@ -1015,7 +1032,7 @@ class ExcelCreator:
         nrows = len(df)
         # Compute unified bounds (also used for y=x line)
         mn, mx, major_unit = ExcelCreator.compute_equal_axis_bounds(
-            df["exp"], df["pred"], pad_ratio=pad_ratio, integer_ticks=integer_ticks, target_ticks=5)
+            df["exp"], df["pred"], pad_ratio=pad_ratio, integer_ticks=integer_ticks, log_plot=log_plot, target_ticks=5)
         # Create scatter chart with markers
         chart = workbook.add_chart({"type":"scatter", "subtype":"straight_with_markers"})
         chart.set_title({"name":"Predicted vs Experimental"})
@@ -1078,9 +1095,17 @@ class ExcelCreator:
         chart.set_legend({
                 "overlay":True,
                 "layout":{"x":0.7, "y":0.75, "width":0.25, "height":0.1}})
-        if sheet_name == sheet_name_plot: 
-            worksheet_plot.insert_chart("E2", chart, {"x_offset":20, "y_offset":10})
+        
+        if sheet_name == sheet_name_plot:
+            # Position chart to the right of the data
+            # Estimate: each column is ~20 characters wide, chart starts after all data columns
+            num_data_cols = len(df.columns)
+            # Add some buffer columns for spacing (typically 1-2 columns)
+            chart_start_col = num_data_cols + 1
+            chart_position = f"{chr(65 + chart_start_col)}" + "2"  # Start at row 2
+            worksheet_plot.insert_chart(chart_position, chart, {"x_offset":20, "y_offset":10})
         else:
+            # If chart is on a separate sheet, place it at top-left
             worksheet_plot.insert_chart(0, 0, chart, {'x_scale': 1.0, 'y_scale': 1.0})
 
     @staticmethod
@@ -1182,6 +1207,7 @@ class ExcelCreator:
         chart_size_px: int=520,  # square chart size
         pad_ratio: float=0.02,
         integer_ticks: bool=True,
+        log_plot: bool=True,
         yx_offset_rows: int=3,  # empty rows between data and y=x helper points
         col_width_pad: int=4,
         min_col_width: int=5
@@ -1190,7 +1216,7 @@ class ExcelCreator:
         def add_prediction_sheet(df, sheet_name):
             if df is not None:
                 df.to_excel(writer, sheet_name=sheet_name, index=False)
-                ExcelCreator.add_plot(df, sheet_name, sheet_name, chart_size_px, pad_ratio, integer_ticks, yx_offset_rows, writer, workbook)
+                ExcelCreator.add_plot(writer, workbook, sheet_name, sheet_name, df, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, log_plot=log_plot, yx_offset_rows=yx_offset_rows)
                 ExcelCreator.add_filter(writer, sheet_name, df)
                 ExcelCreator.set_column_width(writer, sheet_name=sheet_name, df=df, col_width_pad=col_width_pad, min_col_width=min_col_width, how="header")
         
@@ -1206,7 +1232,7 @@ class ExcelCreator:
             if df_training_cv is not None:
                 sheet_name_cv = "training cv predictions"
                 df_training_cv.to_excel(writer, sheet_name=sheet_name_cv, index=False)
-                ExcelCreator.add_plot(df_training_cv, sheet_name_cv, sheet_name_cv, chart_size_px, pad_ratio, integer_ticks, yx_offset_rows, writer, workbook)
+                ExcelCreator.add_plot(writer, workbook, sheet_name_cv, sheet_name_cv, df_training_cv, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, log_plot=log_plot, yx_offset_rows=yx_offset_rows)
                 ExcelCreator.add_filter(writer, sheet_name_cv, df_training_cv)
                 ExcelCreator.set_column_width(writer, sheet_name=sheet_name_cv, df=df_training_cv, col_width_pad=col_width_pad, min_col_width=min_col_width, how="header")
 
@@ -1219,6 +1245,8 @@ class ExcelCreator:
 
             sheet_name_records = "records"
             df_pv.to_excel(writer, sheet_name=sheet_name_records, index=False)
+            ExcelCreator.add_filter(writer, sheet_name_records, df_pv)
+            ExcelCreator.set_column_width(writer, sheet_name=sheet_name_records, df=df_pv, col_width_pad=col_width_pad, min_col_width=min_col_width, how="header")
 
             # ExcelCreator.add_plot(df_test, sheet_name_test, chart_size_px, pad_ratio, integer_ticks, yx_offset_rows, writer, workbook)
             
@@ -1227,7 +1255,7 @@ class ExcelCreator:
             # Add the worksheet explicitly and register it with writer.sheets
             chart_ws = workbook.add_worksheet(chart_sheet_name_test)
             writer.sheets[chart_sheet_name_test] = chart_ws
-            ExcelCreator.add_plot(df_test, sheet_name_test, chart_sheet_name_test, chart_size_px, pad_ratio, integer_ticks, yx_offset_rows, writer, workbook)
+            ExcelCreator.add_plot(writer, workbook, sheet_name_test, chart_sheet_name_test, df_test, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, log_plot=log_plot, yx_offset_rows=yx_offset_rows)
             summary_row = 2
             summary_col = 10
             summary_col_width = 15
@@ -1663,23 +1691,26 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
             records_df = ModelToExcel.get_records_df(df_pv)
             model_descriptors_df = ModelToExcel.get_model_descriptors_df(results_dict)
             model_descriptor_values_df = ModelToExcel.get_model_descriptor_values_df(results_dict, df_pred_cv, df_pred_test, df_training_model, df_test_model)
-            
+            training_cv_predictions_df = ModelToExcel.get_training_cv_predictions_df(df_pred_cv)
+            test_set_predictions_df = ModelToExcel.get_test_set_predictions_df(df_pred_test)
+            external_predictions_df = ModelToExcel.get_external_predictions_df(df_pred_ext)
+            log_plot = "log" in results_dict["model_details"].get("unitsModel", "").lower()
+
             # training_set_df = df_pred_cv # TODO: Might need to adjust?
             # test_set_df = df_pred_test # TODO: Might need to adjust?
             # records_field_descriptions_df = None # TODO: Make records field descriptions dict/df
-            # test_set_predictions_df = df_pred_test
 
             mte = ModelToExcel(
                 excel_path=os.path.join(folder_path, f"detailed_summary.xlsx"),
                 cover_sheet_df=cover_sheet_df,
                 statistics_df=statistics_df,
-                # training_set_df=training_set_df,
-                # test_set_df=test_set_df,
+                training_cv_predictions_df=training_cv_predictions_df,
+                test_set_predictions_df=test_set_predictions_df,
+                external_predictions_df=external_predictions_df,
                 records_df=records_df,
-                # records_field_descriptions_df=records_field_descriptions_df,
-                # test_set_predictions_df=test_set_predictions_df,
                 model_descriptors_df=model_descriptors_df,
-                model_descriptor_values_df=model_descriptor_values_df
+                model_descriptor_values_df=model_descriptor_values_df,
+                log_plot=log_plot
             )
             mte.create_excel()
     
@@ -1737,9 +1768,11 @@ class Results:
             prediction_excel_path = os.path.join(folder_path, f"predictions_{identifier}.xlsx")
         else:
             prediction_excel_path = os.path.join(folder_path, f"predictions.xlsx")
-            
+        
+        log_plot = "log" in results_dict["model_details"].get("unitsModel", "").lower()
+
         ec = ExcelCreator()
-        ec.create_excel(df_pred_test, df_pred_cv, df_pred_ext, df_test_model, df_pv, results_dict, prediction_excel_path)
+        ec.create_excel(df_pred_test, df_pred_cv, df_pred_ext, df_test_model, df_pv, results_dict, prediction_excel_path, log_plot=log_plot)
         
         json_path = os.path.join(folder_path, "results.json")
         with open(json_path, 'w') as json_file:

@@ -2,6 +2,10 @@ from model_ws_db_utilities import getEngine, getSession
 import pandas as pd
 from sqlalchemy import text
 from pathlib import Path
+import math
+from typing import Optional, Dict, Any, Iterable, Tuple
+from openpyxl import load_workbook
+from openpyxl.styles import Font
 
 import logging
 logging.getLogger('sqlalchemy').setLevel(logging.ERROR)
@@ -12,18 +16,21 @@ class ModelToExcel:
     def __init__(
             self,
             excel_path: str="summary.xlsx",
-            cover_sheet_df = None,
-            statistics_df = None,
-            training_set_df = None,
-            test_set_df = None,
-            records_df = None,
-            records_field_descriptions_df = None,
-            test_set_predictions_df = None,
-            model_descriptors_df = None,
-            model_descriptor_values_df = None,
+            cover_sheet_df: Optional[pd.DataFrame] = None,
+            statistics_df: Optional[pd.DataFrame] = None,
+            training_set_df: Optional[pd.DataFrame] = None,
+            test_set_df: Optional[pd.DataFrame] = None,
+            records_df: Optional[pd.DataFrame] = None,
+            records_field_descriptions_df: Optional[pd.DataFrame] = None,
+            training_cv_predictions_df: Optional[pd.DataFrame] = None,
+            test_set_predictions_df: Optional[pd.DataFrame] = None,
+            external_predictions_df: Optional[pd.DataFrame] = None,
+            model_descriptors_df: Optional[pd.DataFrame] = None,
+            model_descriptor_values_df: Optional[pd.DataFrame] = None,
             engine=None,
             session=None,
-            model_id: int=1065
+            model_id: int=1065,
+            log_plot: bool=True
         ):
         # TODO: Determine correct default for excel_path given model_id
         #       Maybe write a new method that can be ran post init to
@@ -40,12 +47,15 @@ class ModelToExcel:
         self.test_set_df = test_set_df
         self.records_df = records_df
         self.records_field_descriptions_df = records_field_descriptions_df
+        self.training_cv_predictions_df = training_cv_predictions_df
         self.test_set_predictions_df = test_set_predictions_df
+        self.external_predictions_df = external_predictions_df
         self.model_descriptors_df = model_descriptors_df
         self.model_descriptor_values_df = model_descriptor_values_df
         self.engine = engine
         self.session = session
         self.model_id = model_id
+        self.log_plot = log_plot
     
 
     @staticmethod
@@ -679,6 +689,119 @@ class ModelToExcel:
 
         return model_descriptor_values
     
+
+    @staticmethod
+    def get_training_cv_predictions_df(df_training_cv):
+        exp_prop_id = df_training_cv.pop("exp_prop_id")
+        df_training_cv.insert(0, "exp_prop_id", exp_prop_id)
+        return df_training_cv
+    
+
+    def query_training_cv_predictions_df(self):
+        # TODO: Write query
+        sql = text(f"""
+        
+        """)
+
+        logging.info("Querying database for Training CV Predictions")
+        training_cv_predictions = pd.read_sql(sql, self.engine).round(2)
+        logging.info("Finished querying database for Training CV Predictions")
+        return training_cv_predictions
+    
+
+    def training_cv_predictions(self, writer, training_cv_predictions=None):
+        if training_cv_predictions is None:
+            training_cv_predictions = self.query_training_cv_predictions_df() if self.training_cv_predictions_df is None else self.training_cv_predictions_df
+        
+        training_cv_predictions.to_excel(writer, sheet_name="Training CV Predictions", index=False)
+
+        workbook = writer.book
+        worksheet = writer.sheets["Training CV Predictions"]
+        worksheet.freeze_panes(1, 0)
+
+        ModelToExcel.set_column_width(writer, "Training CV Predictions", training_cv_predictions, min_col_width=7, col_width_pad=5, how="header")
+        ModelToExcel.add_filter(writer, "Training CV Predictions", training_cv_predictions)
+        
+        ModelToExcel.add_plot(writer, workbook, "Training CV Predictions", "Training CV Predictions", training_cv_predictions, log_plot=self.log_plot)
+
+        return training_cv_predictions
+    
+
+    @staticmethod
+    def get_test_set_predictions_df(df_test):
+        exp_prop_id = df_test.pop("exp_prop_id")
+        df_test.insert(0, "exp_prop_id", exp_prop_id)
+        return df_test
+    
+
+    def query_test_set_predictions_df(self):
+        # TODO: Write query
+        sql = text(f"""
+        
+        """)
+
+        logging.info("Querying database for Test Set Predictions")
+        test_set_predictions = pd.read_sql(sql, self.engine).round(2)
+        logging.info("Finished querying database for Test Set Predictions")
+        return test_set_predictions
+    
+
+    def test_set_predictions(self, writer, test_set_predictions=None):
+        if test_set_predictions is None:
+            test_set_predictions = self.query_test_set_predictions_df() if self.test_set_predictions_df is None else self.test_set_predictions_df
+        
+        test_set_predictions.to_excel(writer, sheet_name="Test Set Predictions", index=False)
+
+        workbook = writer.book
+        worksheet = writer.sheets["Test Set Predictions"]
+        worksheet.freeze_panes(1, 0)
+
+        ModelToExcel.set_column_width(writer, "Test Set Predictions", test_set_predictions, min_col_width=7, col_width_pad=5, how="header")
+        ModelToExcel.add_filter(writer, "Test Set Predictions", test_set_predictions)
+        
+        ModelToExcel.add_plot(writer, workbook, "Test Set Predictions", "Test Set Predictions", test_set_predictions, log_plot=self.log_plot)
+
+        return test_set_predictions
+    
+
+    @staticmethod
+    def get_external_predictions_df(df_ext):
+        exp_prop_id = df_ext.pop("exp_prop_id")
+        df_ext.insert(0, "exp_prop_id", exp_prop_id)
+        return df_ext
+    
+
+    def query_external_predictions_df(self):
+        # TODO: Write query
+        sql = text(f"""
+        
+        """)
+
+        logging.info("Querying database for External Predictions")
+        external_predictions = pd.read_sql(sql, self.engine).round(2)
+        logging.info("Finished querying database for External Predictions")
+        return external_predictions
+    
+
+    def external_predictions(self, writer, external_predictions=None):
+        if external_predictions is None:
+            external_predictions = self.query_external_predictions_df() if self.external_predictions_df is None else self.external_predictions_df
+            if external_predictions is None:
+                return external_predictions
+        
+        external_predictions.to_excel(writer, sheet_name="External Predictions", index=False)
+
+        workbook = writer.book
+        worksheet = writer.sheets["External Predictions"]
+        worksheet.freeze_panes(1, 0)
+
+        ModelToExcel.set_column_width(writer, "External Predictions", external_predictions, min_col_width=7, col_width_pad=5, how="header")
+        ModelToExcel.add_filter(writer, "External Predictions", external_predictions)
+        
+        ModelToExcel.add_plot(writer, workbook, "External Predictions", "External Predictions", external_predictions, log_plot=self.log_plot)
+        
+        return external_predictions
+
     
     @staticmethod
     def set_column_width(
@@ -746,6 +869,258 @@ class ModelToExcel:
         return df
 
 
+    @staticmethod
+    def nice_integer_major_unit(span: int, target_ticks: int=5) -> int:
+        raw = max(1, int(math.ceil(span / max(1, target_ticks))))
+        exp = int(math.floor(math.log10(raw))) if raw > 0 else 0
+        base = raw / (10 ** exp)
+        if base <= 1:
+            step_base = 1
+        elif base <= 2:
+            step_base = 2
+        elif base <= 5:
+            step_base = 5
+        else:
+            step_base = 10
+        return int(step_base * (10 ** exp))
+    
+
+    @staticmethod
+    def add_hyperlinks_to_sheet(
+        excel_path: str,
+        source_sheet: str,
+        target_sheet: str,
+        df_source: pd.DataFrame,
+        df_target: pd.DataFrame,
+        link_column: str = "exp_prop_id",
+        link_col_index: int = 1):
+        """
+        Add hyperlinks from source sheet to target sheet based on a matching column.
+        Uses openpyxl to add hyperlinks after the Excel file is written.
+        
+        Args:
+            excel_path: Path to the Excel file
+            source_sheet: Name of the source sheet (e.g., "Training CV Predictions")
+            target_sheet: Name of the target sheet (e.g., "Records")
+            df_source: Source dataframe (used to verify column exists and get values)
+            df_target: Target dataframe (used to create the mapping)
+            link_column: Column name to match on (must exist in both dataframes)
+            link_col_index: Column index (1-based) in source sheet where hyperlinks will be added
+        """
+        logging.info(f"Processing hyperlinks for {source_sheet}")
+        
+        if df_source is None or df_source.empty:
+            logging.warning(f"Source dataframe {source_sheet} is empty or None. Skipping hyperlinks.")
+            return
+        
+        if link_column not in df_source.columns:
+            logging.warning(f"Column '{link_column}' not found in source dataframe {source_sheet}.")
+            return
+        
+        if link_column not in df_target.columns:
+            logging.warning(f"Column '{link_column}' not found in target dataframe {target_sheet}.")
+            return
+        
+        try:
+            # Load the workbook with openpyxl
+            wb = load_workbook(excel_path)
+            ws_source = wb[source_sheet]
+            ws_target = wb[target_sheet]
+        except KeyError as e:
+            logging.warning(f"Sheet not found in workbook: {e}. Skipping hyperlinks.")
+            return
+        except Exception as e:
+            logging.warning(f"Failed to open workbook: {e}. Skipping hyperlinks.")
+            return
+        
+        # Create a mapping of link_column values to row numbers in target sheet
+        # df_target is 0-indexed, but Excel rows are 1-indexed (with row 1 being header)
+        target_row_map = {}
+        for idx, val in enumerate(df_target[link_column]):
+            excel_row = idx + 2  # +2 to account for header (row 1) and 1-based indexing
+            key = str(val).strip() if pd.notna(val) else None
+            target_row_map[key] = excel_row
+        
+        logging.info(f"Created target mapping with {len(target_row_map)} entries for {target_sheet}")
+        logging.info(f"Target column data type: {df_target[link_column].dtype}, Source column data type: {df_source[link_column].dtype}")
+        
+        # Create hyperlink font (blue, underlined)
+        hyperlink_font = Font(color="0563C1", underline="single")
+        
+        # Add hyperlinks to source sheet
+        hyperlinks_added = 0
+        unmatched_count = 0
+        
+        for src_idx, src_val in enumerate(df_source[link_column]):
+            src_val_str = str(src_val).strip() if pd.notna(src_val) else None
+            excel_row = src_idx + 2  # +2 for header and 1-based indexing
+            
+            if src_val_str and src_val_str in target_row_map:
+                target_row = target_row_map[src_val_str]
+                # Create the cell reference for the hyperlink
+                # Format: #SheetName!CellAddress
+                link_target = f"#'{target_sheet}'!A{target_row}"
+                
+                try:
+                    # Get the cell in the source sheet
+                    cell = ws_source.cell(row=excel_row, column=link_col_index)
+                    # Set the hyperlink
+                    cell.hyperlink = link_target
+                    # Apply hyperlink style (blue, underlined)
+                    cell.font = hyperlink_font
+                    hyperlinks_added += 1
+                except Exception as e:
+                    logging.warning(f"Failed to write hyperlink for {source_sheet} row {excel_row}: {e}")
+            else:
+                unmatched_count += 1
+        
+        # Save the modified workbook
+        try:
+            wb.save(excel_path)
+            logging.info(f"Added {hyperlinks_added} hyperlinks from {source_sheet} to {target_sheet} ({unmatched_count} unmatched)")
+        except Exception as e:
+            logging.warning(f"Failed to save workbook after adding hyperlinks: {e}")
+    
+
+    @staticmethod
+    def compute_equal_axis_bounds(
+        x_values: Iterable[float],
+        y_values: Iterable[float],
+        pad_ratio: float=0.02,
+        integer_ticks: bool=True,
+        log_plot: bool=True,
+        target_ticks: int=5,
+    ) -> Tuple[float, float, Optional[float]]:
+        xs = [float(v) for v in x_values if v is not None and v == v]
+        ys = [float(v) for v in y_values if v is not None and v == v]
+        if not xs or not ys:
+            raise ValueError("No numeric values provided for axis scaling.")
+    
+        mn = min(min(xs), min(ys))
+        mx = max(max(xs), max(ys))
+    
+        if mn == mx:
+            mn -= 0.5
+            mx += 0.5
+        else:
+            span = mx - mn
+            mn -= span * pad_ratio
+            mx += span * pad_ratio
+    
+        if integer_ticks:
+            int_min = math.floor(mn)
+            int_max = math.ceil(mx)
+            if int_min == int_max:
+                int_min -= 1
+                int_max += 1
+            # For integer ticks, always use major_unit=1 to show ticks at every integer
+            # This is important for log-log plots where integer differences represent significant changes
+            if log_plot:
+                major_unit = 1
+            else:
+                major_unit = ModelToExcel.nice_integer_major_unit(int_max - int_min, target_ticks=target_ticks)
+            
+            return float(int_min), float(int_max), float(major_unit)
+    
+        return mn, mx, None
+    
+
+    @staticmethod
+    def add_plot(
+        writer,
+        workbook,
+        sheet_name: str,
+        sheet_name_plot: str,
+        df: pd.DataFrame,
+        chart_size_px: int=520,
+        pad_ratio: float=0.02,
+        integer_ticks: bool=True,
+        log_plot: bool=True,
+        yx_offset_rows: int=3):
+        worksheet = writer.sheets[sheet_name]
+        worksheet_plot = writer.sheets[sheet_name_plot]
+        # Hide worksheet gridlines (screen + print)
+        worksheet.hide_gridlines(2)
+        nrows = len(df)
+        # Compute unified bounds (also used for y=x line)
+        mn, mx, major_unit = ModelToExcel.compute_equal_axis_bounds(
+            df["exp"], df["pred"], pad_ratio=pad_ratio, integer_ticks=integer_ticks, log_plot=log_plot, target_ticks=5)
+        # Create scatter chart with markers
+        chart = workbook.add_chart({"type":"scatter", "subtype":"straight_with_markers"})
+        chart.set_title({"name":"Predicted vs Experimental"})
+        chart.set_style(10)
+        # Series 1: data points (markers only)
+        # exp is column B (index 1), pred is column C (index 2) even after adding abs_diff (column D)
+        chart.add_series({
+                "name":"Pred vs Exp",
+                "categories":[sheet_name, 1, 1, nrows, 1],  # B2..B(nrows+1)
+                "values":[sheet_name, 1, 2, nrows, 2],  # C2..C(nrows+1)
+                "marker":{"type":"circle", "size":6},
+                "line":{"none":True}})
+        # Write y = x helper points a few rows below the data, in columns B/C
+        yx_row_start = nrows + 1 + yx_offset_rows  # 0-based row index after header
+        worksheet.write_number(yx_row_start, 1, mn)  # B{yx_row_start+1}
+        worksheet.write_number(yx_row_start, 2, mn)  # C{yx_row_start+1}
+        worksheet.write_number(yx_row_start + 1, 1, mx)  # B{yx_row_start+2}
+        worksheet.write_number(yx_row_start + 1, 2, mx)  # C{yx_row_start+2}
+        # Series 2: y = x line (dark blue, solid, no markers)
+        chart.add_series({
+                "name":"y = x",
+                "categories":[sheet_name, yx_row_start, 1, yx_row_start + 1, 1],  # B(r)..B(r+1)
+                "values":[sheet_name, yx_row_start, 2, yx_row_start + 1, 2],  # C(r)..C(r+1)
+                "marker":{"type":"none"},
+                "line":{"color":"#1f4e79", "width":2.25}})  # dark blue
+        # Axes with same bounds, integer labels, no gridlines
+        x_axis_opts = {
+            "name":"exp",
+            "min":mn, "max":mx,
+            "num_format":"0",
+            "crossing": "min",
+            "major_gridlines":{"visible":False},
+            "minor_gridlines":{"visible":False}}
+        y_axis_opts = {
+            "name":"pred",
+            "min":mn, "max":mx,
+            "num_format":"0",
+            "crossing": "min",
+            "major_gridlines":{"visible":False},
+            "minor_gridlines":{"visible":False}}
+        if major_unit is not None:
+            x_axis_opts["major_unit"] = major_unit
+            y_axis_opts["major_unit"] = major_unit
+        
+        chart.set_x_axis(x_axis_opts)
+        chart.set_y_axis(y_axis_opts)
+                
+        # Make the chart square
+        chart.set_size({"width":chart_size_px, "height":chart_size_px})
+        # Plot area: border + margins so axis titles/labels aren't overlapped
+        chart.set_plotarea({
+                "fill":{"none":True},
+                "border":{"color":"#666666", "width":1.0},
+                "layout":{
+                    "x":0.12,  # left padding for y-axis title + labels
+                    "y":0.10,  # top padding for chart title
+                    "width":0.84,  # reduce width so right edge doesn't crowd labels/legend
+                    "height":0.80}})  # reduce height to leave room for x-axis title
+        # Legend: bottom-right, overlaid, explicit size to avoid warnings
+        chart.set_legend({
+                "overlay":True,
+                "layout":{"x":0.7, "y":0.75, "width":0.25, "height":0.1}})
+        
+        if sheet_name == sheet_name_plot:
+            # Position chart to the right of the data
+            # Estimate: each column is ~20 characters wide, chart starts after all data columns
+            num_data_cols = len(df.columns)
+            # Add some buffer columns for spacing (typically 1-2 columns)
+            chart_start_col = num_data_cols + 1
+            chart_position = f"{chr(65 + chart_start_col)}" + "2"  # Start at row 2
+            worksheet_plot.insert_chart(chart_position, chart, {"x_offset":20, "y_offset":10})
+        else:
+            # If chart is on a separate sheet, place it at top-left
+            worksheet_plot.insert_chart(0, 0, chart, {'x_scale': 1.0, 'y_scale': 1.0})
+    
+
     def create_excel(
             self,
             chart_size_px: int=520,  # square chart size
@@ -795,7 +1170,32 @@ class ModelToExcel:
             df = self.model_descriptor_values(writer, self.model_descriptor_values_df)
             # logging.info(f"model_descriptor_values:\n\t{df.head(2)}")
 
+            logging.info("Creating Training CV Predictions...")
+            df = self.training_cv_predictions(writer, self.training_cv_predictions_df)
+            # logging.info(f"training_cv_predictions:\n\t{df.head(2)}")
+
+            logging.info("Creating Test Set Predictions...")
+            df = self.test_set_predictions(writer, self.test_set_predictions_df)
+            # logging.info(f"test_set_predictions:\n\t{df.head(2)}")
+
+            logging.info("Creating External Predictions...")
+            df = self.external_predictions(writer, self.external_predictions_df)
+            # logging.info(f"external_predictions:\n\t{df.head(2)}")
+
             logging.info("Done creating detailed Excel!")
+        
+        # Add hyperlinks AFTER the Excel file is written and closed
+        # This allows us to use openpyxl to properly set hyperlinks with formatting
+        logging.info("Adding hyperlinks to Excel file...")
+        if self.training_cv_predictions_df is not None:
+            self.add_hyperlinks_to_sheet(self.excel_path, "Training CV Predictions", "Records", self.training_cv_predictions_df, self.records_df)
+            self.add_hyperlinks_to_sheet(self.excel_path, "Records", "Training CV Predictions", self.records_df, self.training_cv_predictions_df)
+        if self.test_set_predictions_df is not None:
+            self.add_hyperlinks_to_sheet(self.excel_path, "Test Set Predictions", "Records", self.test_set_predictions_df, self.records_df)
+            self.add_hyperlinks_to_sheet(self.excel_path, "Records", "Test Set Predictions", self.records_df, self.test_set_predictions_df)
+        # if self.external_predictions_df is not None:
+        #     self.add_hyperlinks_to_sheet(self.excel_path, "External Predictions", "Records", self.external_predictions_df, self.records_df)
+        logging.info("Hyperlinks added successfully!")
 
 
 def main():
