@@ -20,6 +20,7 @@ from sklearn2pmml.pipeline import PMMLPipeline as PMMLPipeline
 # from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sqlalchemy.orm.relationships import remote
+from models.case_studies.run_model_building import run_dataset
 # from xgboost.testing.ranking import run_ranking_categorical
 # from models.runGA import qsar_method
 
@@ -297,13 +298,13 @@ def call_build_embedding_ga(qsar_method, training_tsv, prediction_tsv, remove_lo
     descriptor_names = go.runGA(df_training, ga_model, use_wards, remove_log_p_descriptors=remove_log_p)
 
     from models.EmbeddingFromImportance import perform_iterative_recursive_feature_elimination as run_rfe_it
-    from models.EmbeddingFromImportance import perform_sequential_feature_selection as run_sfs
+    from models.EmbeddingFromImportance import perform_iterative_sequential_feature_selection as run_sfs_it
 
     if run_rfe:
         run_rfe_it(ga_model,df_training=df_training, n_threads=n_threads)
 
     if run_sfs:
-        run_sfs(ga_model,df_training=df_training)
+        run_sfs_it(ga_model,df_training=df_training)
 
 
     # embedding = json.dumps(descriptor_names)
@@ -340,15 +341,15 @@ def call_build_embedding_ga_db(df_training, df_prediction, gap):
     logging.info(f"embedding from GA ({len(model.embedding)} descriptors): {model.embedding}")
 
     from models.EmbeddingFromImportance import perform_iterative_recursive_feature_elimination as run_rfe_it
+    from models.EmbeddingFromImportance import perform_iterative_sequential_feature_selection as run_sfs_it
 
     if gap.run_rfe:
         run_rfe_it(model,df_training,gap.n_threads, n_steps=1)
         logging.info(f"embedding after iterative RFE ({len(model.embedding)} descriptors): {model.embedding}")
 
-    from models.EmbeddingFromImportance import perform_sequential_feature_selection as run_sfs
 
     if gap.run_sfs:
-        run_sfs(model=model, df_training=df_training)
+        run_sfs_it(model=model, df_training=df_training)
         logging.info(f"embedding after SFS ({len(model.embedding)} descriptors): {model.embedding}")
 
 
@@ -389,6 +390,7 @@ def call_build_embedding_importance_from_df(qsar_method, df_training, df_predict
                                     run_sfs=False):
     """Generates importance based embedding"""
 
+
     # print('in call_build_embedding_importance, df_training.shape',df_training.shape)
     # print('in call_build_embedding_importance, df_prediction.shape',df_prediction.shape)
 
@@ -422,8 +424,9 @@ def call_build_embedding_importance_from_df(qsar_method, df_training, df_predict
 
     
     if run_sfs:
-        efi.perform_sequential_feature_selection(model=model, df_training=df_training)
-        # efi.perform_iterative_sequential_feature_selection(model=model, df_training=df_training)
+        
+        # efi.perform_sequential_feature_selection(model=model, df_training=df_training, n_features_to_select=n_features_to_select)
+        efi.perform_iterative_sequential_feature_selection(model=model, df_training=df_training)
         logging.info(f"After SFS, {len(model.embedding)} descriptors: {model.embedding}")
 
     # Fit final model using final embedding:

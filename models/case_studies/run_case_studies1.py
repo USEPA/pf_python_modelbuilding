@@ -13,8 +13,7 @@ from ModelToExcel import ModelToExcel
 import logging
 import json
 from utils import print_first_row
-from _tkinter import create
-from models.runGA import num_generations, num_optimizers
+
 import pandas as pd
 import os
 import requests
@@ -22,6 +21,14 @@ from pathlib import Path
 import csv
 from typing import Optional, List, Dict, Tuple
 import math
+    # Build HTML with dominate
+from dominate import document
+from dominate.tags import meta, style, h2, table, thead, tbody, tr, th, td, div, img, h1, section
+
+
+# from indigo import Indigo
+# from indigo_renderer import IndigoRenderer
+
 
 def run_episuite_csv(url, df_test, output_path):
     
@@ -188,16 +195,156 @@ def go_through_episuite_results(csv_output_path_episuite, csv_output_path_test, 
 
 
 # pip install dominate
-from dominate import document
-from dominate.tags import meta, style, h1, section, table, tr, td, div
-from dominate.tags import img as img_tag  # alias
+# from dominate import document
+# from dominate.tags import meta, style, h1, section, table, tr, td, div
+# from dominate.tags import img as img_tag  # alias
+
+
+
+
+def build_episuite_dom_html(
+    method=None,
+    df_episuite=None,
+    out_html_path=None,
+    smiles_col="smiles",
+    pred_col="pred",
+    exp_col="exp",
+    width=240,
+    height=180,
+    max_rows=None,
+    cell_padding=8,           # cell padding (px)
+    table_max_width=None      # optional max width for the table/container (px); None for no cap
+):
+    """
+    - Adds abs_err = |pred - exp|
+    - Sorts by abs_err desc
+    - Builds HTML via dominate; SMILES column max width = image width + 2*cell_padding
+    - Table width is auto (content-sized), centered on the page so it does not fill the page.
+      Optionally cap the overall width via table_max_width (px).
+    """
+    
+    
+    title=method.upper() + " Error Report",
+
+    # Prepare data
+    df = df_episuite.copy()
+    df[pred_col] = pd.to_numeric(df[pred_col], errors="coerce")
+    df[exp_col] = pd.to_numeric(df[exp_col], errors="coerce")
+    df["abs_err"] = (df[pred_col] - df[exp_col]).abs()
+    df_sorted = df.sort_values("abs_err", ascending=False, na_position="last")
+    if max_rows is not None:
+        df_sorted = df_sorted.head(max_rows)
+
+    # Indigo renderer (import path corrected)
+    
+    from util.indigo_utils import IndigoUtils
+    iu = IndigoUtils()
+    
+
+    # indigo.setOption("render-coloring", "true")
+    
+
+    # Build HTML with dominate
+    # Compute SMILES column max width (content width + left/right padding)
+    smiles_col_px = width + 2 * cell_padding
+
+    # Optional max width for container
+    container_max_w_css = f"max-width:{table_max_width}px;" if table_max_width is not None else ""
+
+    doc = document(title=title)
+    with doc.head:
+        meta(charset="utf-8")
+        css = f"""
+          body {{ font-family: Arial, sans-serif; margin: 24px; }}
+          /* Left-justified content container that doesn't fill the page */
+          .content-wrap {{
+            {container_max_w_css}
+            margin: 0;     /* left-justified */
+          }}
+          table {{
+            border-collapse: collapse;
+            width: auto;    /* content-sized */
+            margin: 0;      /* left-justified */
+            table-layout: auto;
+          }}
+          th, td {{
+            border: 1px solid #ddd;
+            padding: {cell_padding}px;
+            vertical-align: top;
+          }}
+          th {{ background: #f0f0f0; }}
+          tr:nth-child(even) {{ background: #fafafa; }}
+          td.num {{ text-align: right; }}
+          /* Constrain the SMILES column to image width + padding */
+          th.smiles-col, td.smiles-col {{ max-width: {smiles_col_px}px; width: {smiles_col_px}px; }}
+          .smiles-cell {{ width: {width}px; display: flex; flex-direction: column; align-items: center; }}
+          .smiles-text {{ margin-top: 6px; font-family: monospace; font-size: 12px; word-break: break-all; }}
+          .placeholder {{
+            width: {width}px;
+            height: {height}px;
+            display:flex; align-items:center; justify-content:center;
+            background:#f8f8f8; color:#888; border:1px solid #ddd;
+          }}
+        """
+        style(css)
+
+    with doc:
+        with div(_class="content-wrap"):
+            h2(method+" Predicted vs. Experimental Value (sorted by |pred - exp| desc)")
+
+            tbl = table()
+            with tbl.add(thead()).add(tr()):
+                th("Structure", _class="smiles-col")
+                th("exp")
+                th("pred")
+                th("|pred - exp|")
+
+            body = tbl.add(tbody())
+
+            def fmt_num(x):
+                return "" if pd.isna(x) else f"{x:.2f}"
+
+            for _, row in df_sorted.iterrows():
+                smi = "" if pd.isna(row.get(smiles_col)) else str(row.get(smiles_col))
+                pred_val = row.get(pred_col)
+                exp_val = row.get(exp_col)
+                abs_err_val = row.get("abs_err")
+
+                b64 = iu.smiles_png_b64_indigo(smi, width=width, height=height)
+
+                with body.add(tr()):
+                    # SMILES cell (image + text)
+                    smiles_td = td(_class="smiles-col")
+                    with smiles_td.add(div(_class="smiles-cell")):
+                        if b64:
+                            img(src=f"data:image/png;base64,{b64}", width=str(width), height=str(height), alt=smi)
+                        else:
+                            div("N/A", _class="placeholder")
+                        div(smi, _class="smiles-text")
+
+                    # exp, pred, abs_err
+                    td(fmt_num(exp_val), _class="num")
+                    td(fmt_num(pred_val), _class="num")
+                    td(fmt_num(abs_err_val), _class="num")
+
+    html_str = doc.render()
+
+    if out_html_path:
+        with open(out_html_path, "w", encoding="utf-8") as f:
+            f.write(html_str)
+
+    return html_str
+
 
 def run_episuite(max_cols_per_row: int = 3, img_min_height_px: int = 400, row_gap_px: int = 24):
     url = "https://episuite.app/EpiWebSuite/api/submit"
 
     PROJECT_ROOT = os.getenv("PROJECT_ROOT")
-    # dataset_name = "KOC v1 modeling"
-    # dataset_name = 'ECOTOX_2024_12_12_96HR_Fish_LC50_v3 modeling'
+    
+    # dataset_name = "KOC v1 modeling"    
+    # property = "Koc"
+    
+    dataset_name = 'ECOTOX_2024_12_12_96HR_Fish_LC50_v3 modeling'
     dataset_name = 'ECOTOX_2024_12_12_96HR_Fish_LC50_v3a modeling'
     property = "96 hr Fish LC50"
 
@@ -224,10 +371,11 @@ def run_episuite(max_cols_per_row: int = 3, img_min_height_px: int = 400, row_ga
     if "KOC" in dataset_name:
         splits.append("external")
     
-    other_methods = ["xgb", "reg", "knn"]
+    other_methods = ["rf", "xgb", "reg", "knn"]
 
     summaries = {split: [] for split in splits}
 
+    
     for split in splits:
         file_path_csv = pred_csv_path(base_embedding_for_df_test, split)
         df_test = pd.read_csv(file_path_csv)
@@ -259,17 +407,25 @@ def run_episuite(max_cols_per_row: int = 3, img_min_height_px: int = 400, row_ga
         )
         summaries[split].append({"method": "EpiSuite", "n": number, "mae": mae, "img": filePathOutScatter})
 
+        episuite_pred_html_path = episuite_dir / f"{split}_set_episuite_predictions.html"
+        
+        build_episuite_dom_html("Episuite", df_episuite, out_html_path=episuite_pred_html_path, smiles_col='canon_qsar_smiles', width=480, height=360)
+        
         # RF custom
-        df_subset, number, mae, filePathOutScatter = go_through_test_results(
-            "rf", str(pred_csv_path(rf_custom_embedding, split)), df_episuite, split, limits, property
-        )
-        summaries[split].append({"method": "RF", "n": number, "mae": mae, "img": filePathOutScatter})
+        # df_subset, number, mae, filePathOutScatter = go_through_test_results(
+        #     "rf", str(pred_csv_path(rf_custom_embedding, split)), df_episuite, split, limits, property
+        # )
+        # summaries[split].append({"method": "RF", "n": number, "mae": mae, "img": filePathOutScatter})
 
         # GCM baseline
+        method='gcm'
         df_subset, number, mae, filePathOutScatter = go_through_test_results(
-            "gcm", str(pred_csv_path(base_embedding_for_df_test, split)), df_episuite, split, limits, property
+            method, str(pred_csv_path(base_embedding_for_df_test, split)), df_episuite, split, limits, property
         )
-        summaries[split].append({"method": "GCM", "n": number, "mae": mae, "img": filePathOutScatter})
+        summaries[split].append({"method": method, "n": number, "mae": mae, "img": filePathOutScatter})
+        pred_html_path = episuite_dir / f"{split}_set_{method}_predictions.html"
+        build_episuite_dom_html(method, df_subset, out_html_path=pred_html_path, smiles_col='canon_qsar_smiles', width=480, height=360)
+
 
         # Other methods
         for method in other_methods:
@@ -278,6 +434,9 @@ def run_episuite(max_cols_per_row: int = 3, img_min_height_px: int = 400, row_ga
                 method, str(pred_csv_path(embedding, split)), df_episuite, split, limits, property
             )
             summaries[split].append({"method": method.upper(), "n": number, "mae": mae, "img": filePathOutScatter})
+            pred_html_path = episuite_dir / f"{split}_set_{method}_predictions.html"
+            build_episuite_dom_html(method, df_subset, out_html_path=pred_html_path, smiles_col='canon_qsar_smiles', width=480, height=360)
+
 
     def rel_for_html(target_path: str, base: Path) -> str:
         if not target_path:
@@ -357,7 +516,7 @@ def run_episuite(max_cols_per_row: int = 3, img_min_height_px: int = 400, row_ga
 
                                 with td():
                                     if img_src:
-                                        img_tag(src=img_src, cls="plot-img", alt="")
+                                        img(src=img_src, cls="plot-img", alt="")
                                     div(caption_text, cls="mae-caption")
 
         out_html.write_text(doc.render(), encoding="utf-8")
@@ -650,62 +809,14 @@ def run_Koc():
     # ad_measure_model = [pc.Applicability_Domain_TEST_Embedding_Euclidean, pc.Applicability_Domain_TEST_Fragment_Counts]
     ad_measure_model = [pc.Applicability_Domain_TEST_Embedding_Euclidean, pc.Applicability_Domain_TEST_Fragment_Counts]
 
-    run_dataset(dataset_name=dataset_name, qsar_method='gcm', feature_selection=False, ad_measure_model=ad_measure_model,write_to_db=write_to_db, 
-                create_unique_excel=create_unique_excel, create_detailed_excel=True)  # OK
+    run_dataset(dataset_name=dataset_name, qsar_method='gcm', feature_selection=False, ad_measure_model=ad_measure_model,
+                write_to_db=write_to_db, create_unique_excel=create_unique_excel, create_detailed_excel=True)  # OK
 
-    # run_dataset(dataset_name=dataset_name, qsar_method='rf', feature_selection=False, ad_measure_model=ad_measure_model,write_to_db=write_to_db)  # OK
-    # run_dataset(dataset_name=dataset_name, qsar_method='rf', feature_selection=True, ad_measure_model=ad_measure_model,write_to_db=write_to_db)  # OK
-
-    # embedding = ["ALOGP2","nBnz","MATS6v","nDB","Lop","MATS1p"]
-    # results_dict = run_dataset(dataset_name=dataset_name, qsar_method='rf', feature_selection=True, embedding=embedding, write_to_db=write_to_db)
-
-    #
-    # run_dataset(dataset_name=dataset_name, qsar_method='xgb', feature_selection=False, ad_measure_model=ad_measure_model,write_to_db=write_to_db)
-
-    # grid = {
-    #     # Tree-specific parameters
-    #     'estimator__max_depth': [3, 5, 7, 9],'estimator__min_child_weight': [1, 3, 5],'estimator__gamma': [0, 0.1, 0.2, 0.4],
-    #     'estimator__subsample': [0.7, 0.8, 0.9, 1.0],'estimator__colsample_bytree': [0.7, 0.8, 0.9, 1.0],
-    #     'estimator__learning_rate': [0.01, 0.05, 0.1, 0.2],'estimator__n_estimators': [100, 500, 1000] 
-    # }
-    # params = ParametersImportance(qsar_method='xgb', hyperparameter_grid=grid, descriptor_set_name= "WebTEST-default",
-    #                                     ad_measure=ad_measure_model, dataset_name=dataset_name, 
-    #                                     run_rfe=True, run_sfs=True, feature_selection=True)
-    # run_dataset(dataset_name=dataset_name, qsar_method='xgb', feature_selection=params.feature_selection, params=params, write_to_db=write_to_db)
-
-    
-    # run_dataset(dataset_name=dataset_name, qsar_method='knn', feature_selection=False, ad_measure_model=ad_measure_model,write_to_db=write_to_db)  # OK
-    
-    # grid = {'estimator__n_neighbors': [3], 'estimator__weights': ['distance']}  # matches AD in terms of using 3
-    # params = ParametersGeneticAlgorithm(qsar_method='knn', hyperparameter_grid=grid, descriptor_set_name= "WebTEST-default",
-    #                                     ad_measure=ad_measure_model, dataset_name=dataset_name, 
-    #                                     num_generations = 100, num_optimizers=100,
-    #                                     run_rfe=True, run_sfs=False, feature_selection=True)
-    # run_dataset(dataset_name=dataset_name, qsar_method='knn', feature_selection=params.feature_selection, params=params, write_to_db=write_to_db)
-    #
-    # embedding = ['piPC06', 'ALOGP', 'ALOGP2']
-    # # embedding = ["piPC06","XLOGP","XLOGP2"]
-    # results_dict = run_dataset(dataset_name=dataset_name, qsar_method='knn', feature_selection=True, embedding=embedding, write_to_db=write_to_db)
-    #
-    # run_dataset(dataset_name=dataset_name, qsar_method='knn', feature_selection=True, ad_measure_model=ad_measure_model,write_to_db=write_to_db)  # OK
-    # run_dataset(dataset_name=dataset_name, qsar_method='knn', folder_embedding="rf_WebTEST-default_fs=True", ad_measure_model=ad_measure_model,write_to_db=write_to_db)  # OK
-    #
-    # run_dataset(dataset_name=dataset_name, qsar_method='reg', folder_embedding="rf_WebTEST-default_fs=True", ad_measure_model=ad_measure_model,write_to_db=write_to_db)  # OK
-    # run_dataset(dataset_name=dataset_name, qsar_method='reg', feature_selection=True, ad_measure_model=ad_measure_model,write_to_db=write_to_db)  # OK
-
-    # Does adding my LogKow model prediction as a descriptor help:
-    # run_dataset(dataset_name=dataset_name, qsar_method='rf', feature_selection=True, add_LOGP_Martin=True,write_to_db=write_to_db)  # Martin LOGP will show up in final descriptors, but error isnt lower!
-    # run_dataset(dataset_name=dataset_name, qsar_method='knn', feature_selection=True, add_LOGP_Martin=True,write_to_db=write_to_db)  # OK
-
-    # *****************************************************************************************************************************
-
-    # ---- Models to upload: ----
     # Models to upload:
     # for method in ['rf','xgb', 'reg','knn']:
     #     run_dataset(dataset_name=dataset_name, qsar_method=method, feature_selection=True, 
     #                 ad_measure_model=ad_measure_model,write_to_db=write_to_db, create_unique_excel=create_unique_excel)  # OK
     
-    # run_dataset(dataset_name=dataset_name, qsar_method='gcm', feature_selection=False, ad_measure_model=ad_measure_model,write_to_db=write_to_db, create_unique_excel=create_unique_excel)  # OK
     
     # embedding = ["ALOGP2","nBnz","MATS6v","ATS1p","nDB","Lop","MATS1p"]
     # results_dict = run_dataset(dataset_name=dataset_name, qsar_method='rf', feature_selection=False, 
@@ -751,25 +862,36 @@ def run_Koc_knn_ga():
 def run_fish_tox():
     
     dataset_name = 'ECOTOX_2024_12_12_96HR_Fish_LC50_v3a modeling'
-    
+    descriptor_set_name="WebTEST-default"
+    splitting_name="RND_REPRESENTATIVE"    
     ad_measure_model = [pc.Applicability_Domain_TEST_Embedding_Euclidean, pc.Applicability_Domain_TEST_Fragment_Counts]
 
-    write_to_db=False
+    write_to_db=True
     create_unique_excel = False
 
-    run_dataset(dataset_name=dataset_name, qsar_method='gcm', feature_selection=False, ad_measure_model=ad_measure_model,write_to_db=write_to_db, create_unique_excel=create_unique_excel)  # OK
-    
     # for method in ['rf','xgb', 'reg','knn']:
-    #     run_dataset(dataset_name=dataset_name, qsar_method=method, feature_selection=True, 
+    #     params = set_hyper_parameters(qsar_method=method, feature_selection=True, descriptor_set_name="WebTEST-default", 
+    #                                   splitting_name=splitting_name, dataset_name=dataset_name, ad_measure=ad_measure_model)
+    #     params.n_features_to_select = 6
+    #     # params.n_features_to_select = 10
+    #     run_dataset(dataset_name=dataset_name, qsar_method=params.qsar_method, feature_selection=True, params = params, 
     #                 ad_measure_model=ad_measure_model,write_to_db=write_to_db, create_unique_excel=create_unique_excel)  # OK
-    
+
+
     ## embedding = ['ALOGP', 'XLOGP2', 'MW', 'BEHm3', 'xv1', 'Mp', 'AMW'] 
     ## embedding = ['ALOGP', 'XLOGP2', 'MW', 'BEHm3', 'Mp', 'AMW']
     # embedding = ['ALOGP', 'ALOGP2', 'MW', 'Mp', 'AMW']
     #
     # results_dict = run_dataset(dataset_name=dataset_name, qsar_method='rf', feature_selection=False, 
     #                            embedding=embedding, write_to_db=write_to_db, create_unique_excel=create_unique_excel)
+    
+    run_dataset(dataset_name=dataset_name, qsar_method='gcm', feature_selection=False, ad_measure_model=ad_measure_model,write_to_db=write_to_db, create_unique_excel=create_unique_excel)  # OK
 
+    for method in ['rf','xgb', 'reg','knn']:
+        run_dataset(dataset_name=dataset_name, qsar_method=method, feature_selection=True, 
+                    ad_measure_model=ad_measure_model,write_to_db=write_to_db, create_unique_excel=create_unique_excel)  # OK
+        
+        
     
     
     Results.summarize_model_stats(dataset_name)
@@ -809,5 +931,6 @@ if __name__ == '__main__':
     # test_create_model()
     # test_model_summary()
     # test_model_summary_local()
+
 
 

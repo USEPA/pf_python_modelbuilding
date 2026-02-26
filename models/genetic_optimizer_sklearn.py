@@ -170,6 +170,7 @@ def runGA_2_stage(df_training, model, params):
     logging.info('after initial feature selection, # features: ' + str(len(train_column_names)))
     logging.info(f"NUM_GENERATIONS:{params.num_generations}")
     logging.info(f"NUM_OPTIMIZERS:{params.num_optimizers}")
+    logging.info(f"max_features:{params.max_features}")
 
     # Set model hyperparameters
     model.hyperparameters = model.get_single_parameters()

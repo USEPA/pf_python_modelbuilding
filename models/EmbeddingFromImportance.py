@@ -15,6 +15,7 @@ import pandas as pd
 
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
+from sklearn.feature_selection import SequentialFeatureSelector
 
 def generateEmbedding(model, df_training, df_prediction, fraction_of_max_importance,min_descriptor_count, max_descriptor_count,
                       num_generations=5, n_threads=4,remove_log_p_descriptors=False,
@@ -283,7 +284,227 @@ def perform_recursive_feature_elimination(model, df_training, n_threads, n_steps
     model.embedding = features[mask].tolist()  # Final descriptor list
 
 
+
 def perform_iterative_sequential_feature_selection(
+    model,
+    df_training,
+    cv=5,
+    n_min=2,
+    n_max=30,
+    step=2,
+    direction='forward',
+    DESCRIPTOR_COEFFICIENT = 0.0025
+):
+    """
+    Iteratively runs Sequential Feature Selection, increasing the number of
+    selected features from n_min by 'step' until n_max (if provided) or until
+    the total number of features is reached. Automatically breaks the loop if
+    k exceeds the available number of features.
+
+    For each k:
+      - Runs SFS with k features (if k < n_features)
+      - Logs CV RMSE (mean ± std)
+    If k reaches n_features, it evaluates the full set (no SFS) as a baseline,
+    logs it, then stops.
+
+    Notes:
+    - This function is intended for regression (RMSE). Raises if model.is_binary is True.
+    - Keeps the initial candidate set fixed throughout the sweep.
+    - Updates model.embedding to the best-performing selection and returns it.
+
+    Parameters
+    ----------
+    model : object
+        Must expose:
+          - model.embedding: list of candidate feature names
+          - model.model_obj: a Pipeline with named steps 'standardizer' and 'estimator'
+          - model.is_binary: boolean
+    df_training : DataFrame
+        Training data (passed to DFU.prepare_instances2).
+    cv : int or CV splitter, default=5
+        Cross-validation specification.
+    n_min : int, default=1
+        Starting number of features to select.
+    n_max : int or None, default=None
+        Optional upper limit on number of features to try. If None, will iterate
+        until hitting the total feature count (which triggers a baseline eval).
+    step : int, default=1
+        Increment for k between iterations. Must be >= 1.
+    direction : {'forward', 'backward'}, default='forward'
+        SFS direction.
+
+    Returns
+    -------
+    best_embedding : list[str]
+        Feature names at the k that produced the lowest mean CV RMSE.
+    """
+    logger = logging.getLogger(__name__)
+
+    if getattr(model, "is_binary", False):
+        raise ValueError("perform_iterative_sequential_feature_selection is intended for regression (RMSE).")
+
+    # Preserve the original candidate feature set
+    candidate_features = list(model.embedding)
+
+    # Prepare data once
+    _, y, X, _ = DFU.prepare_instances2(df_training, candidate_features, True)
+    n_features_total = X.shape[1]
+
+    # Build the same pipeline as the single-run SFS
+    pipe = Pipeline([
+        ("scaler", model.model_obj.named_steps['standardizer']),
+        ("estimator", model.model_obj.named_steps['estimator'])
+    ])
+
+    # Edge case: not enough features for SFS to run
+    if n_features_total <= 1:
+        scoring = 'neg_mean_squared_error'
+        base_scores = cross_val_score(pipe, X, y, cv=cv, scoring=scoring)
+        rmse_folds = np.sqrt(np.maximum(0.0, -base_scores))
+        base_rmse = float(np.mean(rmse_folds))
+        model.embedding = candidate_features
+        model._last_sfs_cv_score = -(base_rmse ** 2)  # store as negative MSE (higher is better)
+        logger.info(
+            f"SFS iterative (degenerate): n_features={n_features_total}, "
+            f"CV RMSE={base_rmse:.2f}, embedding={candidate_features}"
+        )
+        return candidate_features
+
+    # Defaults and bounds
+    n_min = max(1, int(n_min))
+    step = int(step)
+    if step < 1:
+        raise ValueError(f"'step' must be >= 1, got {step}.")
+    if n_max is not None:
+        n_max = int(n_max)
+        if n_min > n_max:
+            raise ValueError(f"n_min ({n_min}) cannot be greater than n_max ({n_max}).")
+
+    # Use neg_mean_squared_error for selection, report RMSE for interpretability
+    scoring = 'neg_mean_squared_error'
+
+    # A small tolerance based on initial MSE scale
+    frac = 1e-4
+    init_scores = cross_val_score(pipe, X, y, cv=cv, scoring=scoring)
+    init_mse_mean = float(-np.mean(init_scores))
+    tol = frac * max(init_mse_mean, 1e-12)
+
+    import math
+
+    logger.info(
+        f"SFS iterative (pre): total_features={n_features_total}, "
+        f"baseline CV RMSE={math.sqrt(init_mse_mean):.3f}, tol={tol:.3e}"
+    )
+
+    best_rmse = float("inf")
+    best_score = float("inf") # want to minimize this
+    best_embedding = None
+
+    # Iterate k from n_min by step; break when exceeding limits
+    k = n_min
+    while True:
+        # Respect user-provided n_max (if any)
+        if n_max is not None and k > n_max:
+            break
+
+        # If k reaches or exceeds the total number of features, evaluate baseline and stop
+        if k >= n_features_total:
+            # Only evaluate baseline if the sweep intends to reach all features
+            if n_max is None or n_max >= n_features_total:
+                base_scores = cross_val_score(pipe, X, y, cv=cv, scoring=scoring)
+                rmse_folds = np.sqrt(np.maximum(0.0, -base_scores))
+                base_rmse = float(np.mean(rmse_folds))
+                base_rmse_std = float(np.std(rmse_folds))
+                logger.info(
+                    f"SFS iterative (baseline all features): n_features={n_features_total}, "
+                    f"CV RMSE={base_rmse:.3f} ± {base_rmse_std:.3f}"
+                )
+                
+                base_score = base_rmse + base_rmse_std + DESCRIPTOR_COEFFICIENT * n_features_total
+                 
+                if base_score < best_score:
+                    best_score = base_score
+                    best_embedding = candidate_features
+            break
+
+        # Run SFS for k < n_features_total
+        sfs = SequentialFeatureSelector(
+            estimator=pipe,
+            n_features_to_select=int(k),
+            tol=tol,
+            direction=direction,
+            scoring=scoring,
+            cv=cv,
+            n_jobs=-1
+        )
+        sfs.fit(X, y)
+
+        # Extract selected feature names
+        try:
+            selected_names = sfs.get_feature_names_out().tolist()
+        except AttributeError:
+            mask = sfs.get_support()
+            if hasattr(X, "columns"):
+                selected_names = list(X.columns[mask])
+            else:
+                selected_names = [f"f{i}" for i, m in enumerate(mask) if m]
+
+        # Evaluate CV RMSE on the selected subset
+        if hasattr(X, "loc"):
+            X_sel = X[selected_names]
+        else:
+            X_sel = X[:, sfs.get_support()]
+
+        sel_scores = cross_val_score(pipe, X_sel, y, cv=cv, scoring=scoring)
+        rmse_folds = np.sqrt(np.maximum(0.0, -sel_scores))
+        rmse_mean = float(np.mean(rmse_folds))
+        rmse_std = float(np.std(rmse_folds))
+        
+        score = rmse_mean + rmse_std + DESCRIPTOR_COEFFICIENT * len(selected_names) #penalize models which have high std dev over the folders and have many variables
+        
+
+        # logger.info(
+        #     f"SFS iterative: n_features={k}, CV RMSE={rmse_mean:.3f} ± {rmse_std:.3f}, embedding={selected_names}"
+        # )
+        
+        logger.info(
+            f"SFS iterative: n_features={k}, score={score:.3f}, CV RMSE={rmse_mean:.3f} ± {rmse_std:.3f}, embedding={selected_names}"
+        )
+
+    
+        # if rmse_mean < best_rmse:
+        #     best_rmse = rmse_mean
+        #     best_embedding = selected_names
+        #
+
+        if score < best_score:
+            best_score = score
+            best_embedding = selected_names
+
+
+        # Next k
+        k += step
+
+    # Finalize and return
+    if best_embedding is None:
+        # Fallback to baseline if no selection was made/evaluated
+        base_scores = cross_val_score(pipe, X, y, cv=cv, scoring=scoring)
+        rmse_folds = np.sqrt(np.maximum(0.0, -base_scores))
+        best_rmse = float(np.mean(rmse_folds))
+        best_embedding = candidate_features
+
+    model.embedding = best_embedding
+    # Store as negative MSE (higher is better), consistent with existing convention
+    model._last_sfs_cv_score = -(best_rmse ** 2)
+
+    logger.info(
+        f"SFS iterative (best): n_features={len(best_embedding)}, "
+        f"CV RMSE={best_rmse:.2f}, embedding={best_embedding}"
+    )
+
+    return best_embedding
+
+def perform_iterative_sequential_feature_selection_old(
     model,
     df_training,
     max_iters=10,
@@ -389,7 +610,7 @@ def perform_iterative_sequential_feature_selection(
 
     return model.embedding
 
-def perform_sequential_feature_selection(model, df_training, cv=5):
+def perform_sequential_feature_selection(model, df_training, cv=5, n_features_to_select='auto'):
     """
     Runs SFS on the current candidate feature set in model.embedding, logs
     CV score before and after selection, logs the selected embedding, and stores
@@ -398,9 +619,10 @@ def perform_sequential_feature_selection(model, df_training, cv=5):
     For classification: balanced_accuracy (higher is better).
     For regression: neg_mean_squared_error (higher is better, i.e., lower MSE).
     """
-    from sklearn.feature_selection import SequentialFeatureSelector
 
     logger = logging.getLogger(__name__)
+    
+    print(f"here1, n_features_to_select: {n_features_to_select}")
 
     # Prepare inputs based on current candidate set
     _, y, X, _ = DFU.prepare_instances2(df_training, model.embedding, True)
@@ -434,7 +656,8 @@ def perform_sequential_feature_selection(model, df_training, cv=5):
     # Run SFS
     sfs = SequentialFeatureSelector(
         estimator=pipe,
-        n_features_to_select='auto',
+        # n_features_to_select=n_features_to_select,
+        n_features_to_select=n_features_to_select,
         tol=tol,
         direction='forward',
         scoring=scoring,
@@ -453,13 +676,13 @@ def perform_sequential_feature_selection(model, df_training, cv=5):
     if model.is_binary:
         sel_mean = float(np.mean(sel_scores))
         sel_std = float(np.std(sel_scores))
-        logger.info(f"SFS (post): n_features={len(model.embedding)}, CV balanced_accuracy={sel_mean:.6f} ± {sel_std:.6f}")
+        logger.info(f"SFS (post): n_features={len(model.embedding)}, CV balanced_accuracy={sel_mean:.3f} ± {sel_std:.3f}")
         model._last_sfs_cv_score = sel_mean  # higher is better
     else:
         sel_neg_mse = float(np.mean(sel_scores))      # negative MSE (higher is better)
         sel_mse = float(-sel_neg_mse)                 # positive MSE for logging
         sel_mse_std = float(np.std(-sel_scores))
-        logger.info(f"SFS (post): n_features={len(model.embedding)}, CV MSE={sel_mse:.6f} ± {sel_mse_std:.6f}")
+        logger.info(f"SFS (post): n_features={len(model.embedding)}, CV RMSE={sel_mse:.3f} ± {sel_mse_std:.3f}")
         model._last_sfs_cv_score = sel_neg_mse        # higher is better
 
     # Log the selected embedding (feature names)

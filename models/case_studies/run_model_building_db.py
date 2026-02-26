@@ -102,7 +102,7 @@ class ParametersImportance:
     use_wards: bool = False
     run_rfe: bool = True
     run_sfs: bool = True
-
+    n_features_to_select = 'auto' #not used
     min_descriptor_count: int = 20
     max_descriptor_count: int = 30
 
@@ -200,6 +200,8 @@ class ParametersGeneticAlgorithm:
     use_wards: bool = False
     run_rfe: bool = True
     run_sfs: bool = True
+    n_features_to_select = 'auto' #not used
+    
     remove_fragment_descriptors: bool = True
     remove_acnt_descriptors: bool = True
     use_wards: bool = False
@@ -369,7 +371,8 @@ class ModelLoader():
             "fk_ad_method":fk_ad_method,  # lookup from ad_methods table using ad_method_name currently cant have multiple AD methods the way the db is configured
             "hyperparameter_grid":json.dumps(model.hyperparameter_grid),
             "hyperparameters":json.dumps(model.hyperparameters),  # JSON/JSONB column
-            "details":model.get_model_description().encode("utf-8"),  # this column is bytes in the database. In the future that column should be converted to text field
+            "details":model.get_model_description().encode("utf-8"),  # this column is bytes in the database (deprecated) 
+            "details_text":model.get_model_description(),  # this will be column to use in future
             "is_public":False,
             "name_ccd":model.modelName,
             "has_qmrf":False,
@@ -811,6 +814,8 @@ class EmbeddingGenerator:
     def feature_selection(df_training, df_prediction, params):
         # ga_methods = ['knn', 'reg','las']
         # imp_methods = ['rf', 'xgb']
+        
+        # print(f"here1:{params.n_features_to_select}")
         
         if params.feature_selection_method == feature_selection_method_genetic_algorithm:
             embedding, _ = call_build_embedding_ga_db(df_training, df_prediction, params)
@@ -1430,6 +1435,27 @@ def add_source_chemical_info(df_pred, df_dps):
     return df_pred
 
 
+
+def check_for_inchi_key_matches(df_training, df_prediction_ext):
+
+    if df_prediction_ext is None:
+        return 
+    
+    from util.indigo_utils import IndigoUtils
+    iu = IndigoUtils()
+
+    smiles_to_key_training = iu.smiles_to_inchikey_dict(df_training, "ID", short_key=True)
+    smiles_to_key_ext = iu.smiles_to_inchikey_dict(df_prediction_ext, "ID", short_key=True, reverse_lookup=True)
+    
+    # print(len(smiles_to_key_training))
+    # print(len(smiles_to_key_ext))
+    
+    for smiles in smiles_to_key_training:
+        ik = smiles_to_key_training[smiles]
+        if ik in smiles_to_key_ext:
+            print("Have ext set match in training set:", ik, smiles_to_key_ext[ik])
+
+
 def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None, cross_validate=True,
                 run_AD=True, feature_selection=True, fs_previous_embedding=True, params=None,
                 descriptor_set_name="WebTEST-default", splitting_name="RND_REPRESENTATIVE",
@@ -1503,7 +1529,9 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
                 dataset_name=dataset_name,
                 ad_measure=ad_measure_model)
             
-            
+        # print(params.n_features_to_select)
+        
+        
         # make sure they match
         params.feature_selection = feature_selection
 
@@ -1516,12 +1544,18 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         df_training, df_prediction = du.get_training_prediction_instances(session, dataset_name, descriptor_set_name, params.splitting_name)
         # print(df_training.shape)
     
-        df_prediction_ext = None
     
+    
+        df_prediction_ext = None    
         if dataset_name == 'KOC v1 modeling':
             dataset_name_ext=  'KOC v1 external'
             df_prediction_ext = du.get_instances_excluding(session, dataset_name_ext, dataset_name, descriptor_set_name)
+            
         
+        check_for_inchi_key_matches(df_training, df_prediction_ext)
+        
+        # print(json.dumps( smiles_to_key_training, indent = 4))
+
     
         df_cv_dict = None 
         if cross_validate:
@@ -1548,7 +1582,7 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
                 logging.info(f"After RFE, {len(model.embedding)} descriptors: {model.embedding}")
                 
             if params.run_sfs:
-                run_sfs(model, df_training)
+                run_sfs(model, df_training, params.n_features_to_select)
                 logging.info(f"After SFS, {len(model.embedding)} descriptors: {model.embedding}")
     
             # redo model and predictions:
@@ -1564,7 +1598,12 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         if df_prediction_ext is not None:
             df_pred_ext, ext_stats = ModelBuilder.predict(model, df_prediction_ext, '_External')
             # print(df_pred_ext.shape)
-                    
+
+
+        
+                
+        # df_training["inchi_key_qsar_ready"] = df_training["canon_qsar_smiles"].map(smiles_to_key_training)
+
         
         # ******************************************************************************************************
         # ---- Run applicability domain calculations ----

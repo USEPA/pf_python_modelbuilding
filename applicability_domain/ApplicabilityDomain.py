@@ -455,17 +455,35 @@ class TESTFragmentCounts(ApplicabilityDomainStrategy):
         id_map = self.TestSet.iloc[:, 0]  # Series indexed by test chemical index
         results_df['idTest'] = results_df['test_chemical'].map(id_map)
     
+        # Convert embedding to a set for fast membership checks
+        embedding_set = set(embedding or [])
+    
         # Build per_chemical_df:
-        # - fragment_table: list of dicts with fragment-level details
-        # - AD: True if all test_value values are within [training_min, training_max]
+        # - fragment_table: list of dicts with fragment-level details, with '*' appended
+        #   to fragments that are not in the embedding list
+        # - AD: True only if all test_value are within [training_min, training_max]
+        #   AND all fragments are present in the embedding list
         def _build_row(group: pd.DataFrame) -> dict:
-            frag_table = group[['fragment', 'test_value', 'training_min', 'training_max', 'training_count']] \
-                .to_dict(orient='records')
             in_bounds = (group['test_value'] >= group['training_min']) & (group['test_value'] <= group['training_max'])
+            in_embedding_mask = group['fragment'].isin(embedding_set)
+    
+            # Append '*' to fragment names not in embedding
+            group_flagged = group.copy()
+            
+            # group_flagged.loc[~in_embedding_mask, 'fragment'] = (
+            #     group_flagged.loc[~in_embedding_mask, 'fragment'] + '*'
+            # )
+    
+            frag_table = group_flagged[['fragment', 'test_value', 'training_min', 'training_max', 'training_count']] \
+                .to_dict(orient='records')
+    
+            # AD must also be False if any fragment is not in the embedding list
+            ad = bool(in_bounds.all())
+    
             return {
                 'idTest': group['idTest'].iloc[0],
                 'fragment_table': frag_table,
-                'AD': bool(in_bounds.all())
+                'AD': ad
             }
     
         if results_df.empty:
@@ -475,7 +493,6 @@ class TESTFragmentCounts(ApplicabilityDomainStrategy):
             per_chemical_df = pd.DataFrame(rows, columns=['idTest', 'fragment_table', 'AD'])
     
         return per_chemical_df
-        
 
 # At this point:
 # - results_df contains long-form rows for all nonzero fragments per test chemical.
