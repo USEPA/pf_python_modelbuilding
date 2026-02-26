@@ -1536,32 +1536,39 @@ class ModelPredictor:
     
             return result
 
-    
-    def addPerformance(self, md:ModelDetails):
-    
-        ms = md.modelStatistics
-            
+    def addPerformance(self, md: ModelDetails):
+        ms = md.modelStatistics or {}
+
+        def set_metric(block: dict, out_key: str, *candidates: str):
+            """Put first existing metric from candidates into block[out_key]."""
+            for k in candidates:
+                if k in ms and ms[k] is not None:
+                    block[out_key] = ms[k]
+                    return
+            block[out_key] = None
+
         md.performance = {}
+
         md.performance["train"] = {}
-        md.performance["train"]["R2"] = ms["PearsonRSQ_Training"]
-        md.performance["train"]["RMSE"] = ms["RMSE_Training"]
-        md.performance["train"]["MAE"] = ms["MAE_Training"]
-        
+        set_metric(md.performance["train"], "R2", "PearsonRSQ_Training", "R2_Training")
+        set_metric(md.performance["train"], "RMSE", "RMSE_Training")
+        set_metric(md.performance["train"], "MAE", "MAE_Training")
+
         md.performance["fiveFoldICV"] = {}
-        md.performance["fiveFoldICV"]["R2"] = ms["PearsonRSQ_CV_Training"]
-        md.performance["fiveFoldICV"]["RMSE"] = ms["RMSE_CV_Training"]
-        md.performance["fiveFoldICV"]["MAE"] = ms["MAE_CV_Training"]
-        
+        set_metric(md.performance["fiveFoldICV"], "R2", "PearsonRSQ_CV_Training", "PearsonRSQ_CV")
+        set_metric(md.performance["fiveFoldICV"], "RMSE", "RMSE_CV_Training", "RMSE_CV", "RMSE_CV_Train")
+        set_metric(md.performance["fiveFoldICV"], "MAE", "MAE_CV_Training", "MAE_CV")
+
         md.performance["external"] = {}
-        md.performance["external"]["R2"] = ms["PearsonRSQ_Test"]
-        md.performance["external"]["RMSE"] = ms["RMSE_Test"]
-        md.performance["external"]["MAE"] = ms["MAE_Test"]
-        
+        set_metric(md.performance["external"], "R2", "PearsonRSQ_Test", "R2_Test")
+        set_metric(md.performance["external"], "RMSE", "RMSE_Test")
+        set_metric(md.performance["external"], "MAE", "MAE_Test")
+
         md.performance["externalAD"] = {}
-        md.performance["externalAD"]["MAE_inside_AD"] = ms["MAE_Test_inside_AD"]
-        md.performance["externalAD"]["MAE_outside_AD"] = ms["MAE_Test_outside_AD"]
-        md.performance["externalAD"]["Fraction_inside_AD"] = ms["Coverage_Test"]
-        
+        set_metric(md.performance["externalAD"], "MAE_inside_AD", "MAE_Test_inside_AD")
+        set_metric(md.performance["externalAD"], "MAE_outside_AD", "MAE_Test_outside_AD")
+        set_metric(md.performance["externalAD"], "Fraction_inside_AD", "Coverage_Test")
+
         md.modelStatistics = None
     
     def smiles_to_base64(self, smiles_string, width=400, height=400):

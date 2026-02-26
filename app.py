@@ -22,7 +22,7 @@ from connexion.middleware import MiddlewarePosition
 from connexion.options import SwaggerUIOptions
 from sklearn2pmml import sklearn2pmml
 from starlette.middleware.cors import CORSMiddleware
-from starlette.responses import HTMLResponse, Response, JSONResponse, StreamingResponse
+from starlette.responses import HTMLResponse, Response, JSONResponse, StreamingResponse, FileResponse
 from urllib.parse import quote
 
 from model_ws_db_utilities import ModelPredictor, ModelInitializer
@@ -72,7 +72,101 @@ def get_metadata():
     return dict(
         version=get_version()
     )
-    
+
+
+def get_file(type_id: int = None, model_id: int = None):
+    if type_id is None or model_id is None:
+        return JSONResponse(
+            {"error": "Missing required query params: type_id and model_id"},
+            status_code=400,
+        )
+
+    try:
+        type_id = int(type_id)
+        model_id = int(model_id)
+    except (TypeError, ValueError):
+        return JSONResponse(
+            {"error": "type_id and model_id must be integers"},
+            status_code=400,
+        )
+
+    try:
+        raw_bytes, file_name, mime_type = gmf.fetch_model_file(model_id=model_id, type_id=type_id)
+    except FileNotFoundError as e:
+        return JSONResponse({"error": str(e)}, status_code=404)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    except Exception as e:
+        return JSONResponse({"error": f"Database error: {e}"}, status_code=500)
+
+    disposition = "attachment" if type_id == 2 else "inline"
+
+    bio = io.BytesIO(raw_bytes)
+    bio.seek(0)
+
+    headers = {
+        "Content-Disposition": f'{disposition}; filename="{file_name}"',
+        "Cache-Control": "no-store",
+    }
+
+    return StreamingResponse(
+        bio,
+        media_type=mime_type or "application/octet-stream",
+        headers=headers,
+    )
+
+
+def predict_identifier(identifier: str, model_id: int, report_format: str = "json"):
+    """Automates prediction and AD for single identifier using model in database"""
+
+    # normalize report_format
+    report_format = (report_format or "json").lower()
+    if report_format not in ("json", "html"):
+        report_format = "json"
+
+    # model_id -> int
+    try:
+        model_id = int(model_id)
+    except (TypeError, ValueError):
+        return JSONResponse({"error": "bad_request", "message": "model_id must be integer"}, status_code=400)
+
+    if not identifier:
+        return JSONResponse({"error": "bad_request", "message": "identifier is required"}, status_code=400)
+
+    # Resolve identifier -> SMILES
+    from API_Utilities import SearchAPI
+    import os
+
+    serverAPIs = os.getenv("CIM_API_SERVER", "https://cim-dev.sciencedataexperts.com")
+    chemicals, code = SearchAPI.call_resolver_get(serverAPIs, identifier)
+
+    if code != 200 or not chemicals:
+        return JSONResponse(
+            {"error": "not_found", "message": f"Could not find {identifier}"},
+            status_code=404,
+        )
+
+    smiles = (chemicals[0].get("chemical") or {}).get("smiles")
+    if not smiles:
+        return JSONResponse(
+            {"error": "not_found", "message": f"Could not find {identifier}"},
+            status_code=404,
+        )
+
+    # Predict
+    mp = ModelPredictor()
+    modelResultsJson = mp.predictFromDB(model_id, smiles)
+
+    if isinstance(modelResultsJson, str) and "invalid" in modelResultsJson.lower():
+        return JSONResponse({"error": "invalid", "message": modelResultsJson}, status_code=400)
+
+    if report_format == "html":
+        rc = ReportCreator()
+        html = rc.create_html_report_from_json(modelResultsJson)
+        return HTMLResponse(html, status_code=200)
+
+    return modelResultsJson, 200
+
 
 # app = Flask(__name__)
 # log = logging.getLogger('werkzeug')
@@ -567,45 +661,54 @@ def cross_validate_fold(qsar_method):
 #     return predictDB(model_id, smiles, report_format)
 
 
+def _to_obj(x):
+    if isinstance(x, (dict, list)):
+        return x
+    if isinstance(x, (str, bytes, bytearray)):
+        return json.loads(x)
+    raise TypeError(f"Unsupported prediction type: {type(x)}")
+
+def _to_json_str(x):
+    if isinstance(x, (dict, list)):
+        return json.dumps(x)
+    if isinstance(x, (bytes, bytearray)):
+        return x.decode("utf-8")
+    if isinstance(x, str):
+        return x
+    raise TypeError(f"Unsupported prediction type: {type(x)}")
+
+
 def predictDB_POST(body):
-    return predictDB(body['smiles'], body['model_id'], "json")
+    return predictDB(body["smiles"], body["model_id"], "json")
 
 
-# @app.route('/api/predictor_models/predict', methods=['POST', 'GET'])  # old flask route
 def predictDB(smiles, model_id, report_format):
     """Automates prediction and AD for single smiles using model in database"""
-        
-    report_format = report_format.lower()
-    if report_format not in ['json', 'html']:
-        report_format = 'json'
-        
+
+    report_format = (report_format or "json").lower()
+    if report_format not in ("json", "html"):
+        report_format = "json"
+
     mp = ModelPredictor()
-    
-    # TODO: should we just return a JSON array in either case?
-    
+
+    # BATCH (POST)
     if isinstance(smiles, list):
         modelResultsArray = []
+        for current_smiles in smiles:
+            logging.debug("Running %s", current_smiles)
+            pred = mp.predictFromDB(model_id, current_smiles)   # может быть dict или json-str
+            modelResultsArray.append(_to_obj(pred))
+        return JSONResponse(content=modelResultsArray)
 
-        #Following just runs each one at a time, will need to dive into code to ran true batch calculations
-        # With current code just better off pinging API one at a time since then wont need to deserialize 
-        for current_smiles in smiles:  
-            logging.debug("Running " +current_smiles)
-            modelResultsJson =  mp.predictFromDB(model_id, current_smiles)
-            modelResults = json.loads(modelResultsJson) #deserialize so can add to array
-            modelResultsArray.append(modelResults)
-        return JSONResponse(content=modelResultsArray) #this return type will automatically serialize the array    
-    else:
-    
-        modelResultsJson = mp.predictFromDB(model_id, smiles)
-    
-        if report_format == "html":
-            rc=ReportCreator()
-            modelResultsHtml = rc.create_html_report_from_json(modelResultsJson)
-            return HTMLResponse(content=modelResultsHtml)    
-        else:
-            # if just return a Response then can skip the json.loads step (takes time)
-            return Response(content=modelResultsJson, media_type="application/json") #by using this return type it wont try to serialize the json again    
+    # SINGLETON (GET)
+    pred = mp.predictFromDB(model_id, smiles)
 
+    if report_format == "html":
+        rc = ReportCreator()
+        modelResultsHtml = rc.create_html_report_from_json(_to_json_str(pred))
+        return HTMLResponse(content=modelResultsHtml)
+
+    return Response(content=_to_json_str(pred), media_type="application/json")
 
 
 @app.route('/api/predictor_models/models/predict', methods=['POST'])
