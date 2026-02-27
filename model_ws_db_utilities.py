@@ -24,8 +24,6 @@ from db.mongo_cache import get_cached_prediction, cache_prediction
 from util import predict_constants as pc
 
 
-from db.mongo_cache import get_cached_prediction, cache_prediction
-
 from model_ws_utilities import call_do_predictions_from_df, models
 from models import df_utilities as dfu
 from models.ModelBuilder import Model
@@ -50,8 +48,6 @@ from applicability_domain import applicability_domain_utilities as adu
 
 # debug = False
 import logging
-from pickle import TRUE
-from dns._features import have
 
 logging.getLogger('sqlalchemy').setLevel(logging.ERROR)
 
@@ -1536,32 +1532,39 @@ class ModelPredictor:
     
             return result
 
-    
-    def addPerformance(self, md:ModelDetails):
-    
-        ms = md.modelStatistics
-            
+    def addPerformance(self, md: ModelDetails):
+        ms = md.modelStatistics or {}
+
+        def set_metric(block: dict, out_key: str, *candidates: str):
+            """Put first existing metric from candidates into block[out_key]."""
+            for k in candidates:
+                if k in ms and ms[k] is not None:
+                    block[out_key] = ms[k]
+                    return
+            block[out_key] = None
+
         md.performance = {}
+
         md.performance["train"] = {}
-        md.performance["train"]["R2"] = ms["PearsonRSQ_Training"]
-        md.performance["train"]["RMSE"] = ms["RMSE_Training"]
-        md.performance["train"]["MAE"] = ms["MAE_Training"]
-        
+        set_metric(md.performance["train"], "R2", "PearsonRSQ_Training", "R2_Training")
+        set_metric(md.performance["train"], "RMSE", "RMSE_Training")
+        set_metric(md.performance["train"], "MAE", "MAE_Training")
+
         md.performance["fiveFoldICV"] = {}
-        md.performance["fiveFoldICV"]["R2"] = ms["PearsonRSQ_CV_Training"]
-        md.performance["fiveFoldICV"]["RMSE"] = ms["RMSE_CV_Training"]
-        md.performance["fiveFoldICV"]["MAE"] = ms["MAE_CV_Training"]
-        
+        set_metric(md.performance["fiveFoldICV"], "R2", "PearsonRSQ_CV_Training", "PearsonRSQ_CV")
+        set_metric(md.performance["fiveFoldICV"], "RMSE", "RMSE_CV_Training", "RMSE_CV", "RMSE_CV_Train")
+        set_metric(md.performance["fiveFoldICV"], "MAE", "MAE_CV_Training", "MAE_CV")
+
         md.performance["external"] = {}
-        md.performance["external"]["R2"] = ms["PearsonRSQ_Test"]
-        md.performance["external"]["RMSE"] = ms["RMSE_Test"]
-        md.performance["external"]["MAE"] = ms["MAE_Test"]
-        
+        set_metric(md.performance["external"], "R2", "PearsonRSQ_Test", "R2_Test")
+        set_metric(md.performance["external"], "RMSE", "RMSE_Test")
+        set_metric(md.performance["external"], "MAE", "MAE_Test")
+
         md.performance["externalAD"] = {}
-        md.performance["externalAD"]["MAE_inside_AD"] = ms["MAE_Test_inside_AD"]
-        md.performance["externalAD"]["MAE_outside_AD"] = ms["MAE_Test_outside_AD"]
-        md.performance["externalAD"]["Fraction_inside_AD"] = ms["Coverage_Test"]
-        
+        set_metric(md.performance["externalAD"], "MAE_inside_AD", "MAE_Test_inside_AD")
+        set_metric(md.performance["externalAD"], "MAE_outside_AD", "MAE_Test_outside_AD")
+        set_metric(md.performance["externalAD"], "Fraction_inside_AD", "Coverage_Test")
+
         md.modelStatistics = None
     
     def smiles_to_base64(self, smiles_string, width=400, height=400):
@@ -1968,37 +1971,43 @@ class ModelPredictor:
         # return modelResults
     
     
-
     def addLinks(self, modelDetails, file_api=pc.URL_CTX_API):
-        
-        modelId = modelDetails.modelId
-        
+        modelId = str(modelDetails.modelId)
+    
+        from util.web_utils import append_query
+    
         if USE_TEMPORARY_MODEL_PLOTS:
             script_dir = os.path.dirname(os.path.abspath(__file__))
-            file_path_scatter = os.path.join(script_dir, "data/plots", "scatter_plot_" + modelId + ".png")
+            file_path_scatter = os.path.join(script_dir, "data/plots", f"scatter_plot_{modelId}.png")
             modelDetails.imgSrcPlotScatter = pathlib.Path(file_path_scatter).as_uri()
-            file_path_histogram = os.path.join(script_dir, "data/plots", "histogram_" + modelId + ".png")
+    
+            file_path_histogram = os.path.join(script_dir, "data/plots", f"histogram_{modelId}.png")
             modelDetails.imgSrcPlotHistogram = pathlib.Path(file_path_histogram).as_uri()
-            
-        elif file_api is not None:
-            if file_api == "https://ctx-api-dev.ccte.epa.gov/chemical/property/model/file/search/":
-                modelDetails.imgSrcPlotScatter = file_api + "?typeId=3&modelId=" + modelDetails.modelId
-                modelDetails.imgSrcPlotHistogram = file_api + "?typeId=4&modelId=" + modelDetails.modelId
-                modelDetails.urlQMRF = file_api + "?typeId=1&modelId=" + modelDetails.modelId
-                modelDetails.urlExcelSummary = file_api + "?typeId=2&modelId=" + modelDetails.modelId
-            elif file_api == '/api/predictor_models/model/file/':
-                modelDetails.imgSrcPlotScatter = file_api + "?type_id=3&model_id=" + modelDetails.modelId
-                modelDetails.imgSrcPlotHistogram = file_api + "?type_id=4&model_id=" + modelDetails.modelId
-                modelDetails.urlQMRF = file_api + "?type_id=1&model_id=" + modelDetails.modelId
-                modelDetails.urlExcelSummary = file_api + "?type_id=2&model_id=" + modelDetails.modelId
+    
+        elif file_api:
+            base = str(file_api)
+    
+            # ctx search endpoint (must be .../search/ before '?')
+            if "chemical/property/model/file/search" in base:
+                force_slash = True
+                modelDetails.imgSrcPlotScatter   = append_query(base, {"typeId": 3, "modelId": modelId}, force_trailing_slash=force_slash)
+                modelDetails.imgSrcPlotHistogram = append_query(base, {"typeId": 4, "modelId": modelId}, force_trailing_slash=force_slash)
+                modelDetails.urlQMRF             = append_query(base, {"typeId": 1, "modelId": modelId}, force_trailing_slash=force_slash)
+                modelDetails.urlExcelSummary     = append_query(base, {"typeId": 2, "modelId": modelId}, force_trailing_slash=force_slash)
+    
+            # predictor models endpoint
+            elif "api/predictor_models/model/file" in base:
+                # This endpoint typically doesn’t require the trailing slash, but you can enforce if needed
+                modelDetails.imgSrcPlotScatter   = append_query(base, {"type_id": 3, "model_id": modelId})
+                modelDetails.imgSrcPlotHistogram = append_query(base, {"type_id": 4, "model_id": modelId})
+                modelDetails.urlQMRF             = append_query(base, {"type_id": 1, "model_id": modelId})
+                modelDetails.urlExcelSummary     = append_query(base, {"type_id": 2, "model_id": modelId})
+    
             else:
                 logging.error(f"Invalid file_api: {file_api}")
-                
-            # these need to be added to ctx api:
+    
         else:
-            # TODO generate plot and hardcode in the html
-            # plot_base64 = self.generateScatterPlot(neighbors, md.unitsModel, "Results for "+modelResults.modelDetails.modelName, "Exp. vs Pred.")                                    
-            # modelResults.modelDetails.imgSrcPlotScatter="data:image/png;base64,"+plot_base64
+            # TODO: generate plots inline and embed as data URLs if no API is available
             pass
         
 

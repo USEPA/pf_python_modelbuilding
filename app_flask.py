@@ -16,8 +16,7 @@ import logging
 import pickle
 import gzip
 
-from logging import INFO, DEBUG
-from model_ws_db_utilities import ModelPredictor, ModelInitializer, getSession
+from model_ws_db_utilities import ModelPredictor, ModelInitializer
 
 # why not make the following methods part of a Utility class then call methods from instance of it?
 from model_ws_utilities import get_model_info, call_build_model_with_preselected_descriptors, models, \
@@ -29,42 +28,28 @@ from applicability_domain import applicability_domain_utilities as adu
 from sklearn2pmml import sklearn2pmml
 
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv('personal.env')
 from util import predict_constants as pc
 
 import util.get_model_file as gmf
 import io
 
-
-# import os
-# user_name = os.getenv('DEV_QSAR_USER', 'default_user')
-# print(f"The user is: {user_name}")
-
-
 from report_creator_dict import ReportCreator
 
-# import coloredlogs
-# import connexion
-# from connexion.middleware import MiddlewarePosition
-# from connexion.options import SwaggerUIOptions
-# from starlette.middleware.cors import CORSMiddleware
-#
-# coloredlogs.install(level=DEBUG, milliseconds=True,
-#                     fmt='%(asctime)s - %(name)s - %(levelname)s - %(message)s (%(filename)s:%(lineno)d)')
-#
-# options = SwaggerUIOptions(spec_path="/api/predictor_models/swagger.yaml",
-#                            swagger_ui_path="/api/predictor_models/swagger")
-#
-# app = connexion.AsyncApp(__name__, swagger_ui_options=options)
-# app.add_middleware(
-#     CORSMiddleware,
-#     position=MiddlewarePosition.BEFORE_EXCEPTION,
-#     allow_origins=["*"],
-#     allow_credentials=True,
-#     allow_methods=["*"],
-#     allow_headers=["*"],
-# )
-# app.add_api('swagger.yaml', swagger_ui_options=options)
+custom_level_styles = {
+    'debug': {'color': 'cyan'},
+    'info': {'color': 'yellow'},
+    'warning': {'color': 'red', 'bold': True},
+    'error': {'color': 'white', 'background': 'red'},
+}
+from logging import INFO, DEBUG, ERROR
+import coloredlogs
+level = INFO
+coloredlogs.install(level=level, milliseconds=True, level_styles=custom_level_styles,
+                    fmt='%(asctime)s - %(name)s - %(levelname)s - %(message)s (%(filename)s:%(lineno)d)')
+
+
+
 app = Flask(__name__)
 log = logging.getLogger('werkzeug')
 log.setLevel(logging.DEBUG)
@@ -107,13 +92,13 @@ def say_hello(name):
 
 
 
-@app.route('/api/predictor_models/models/<string:qsar_method>/info', methods=['GET'])
+@app.route('/api/predictor_models/<string:qsar_method>/info', methods=['GET'])
 def method_info(qsar_method):
     """Returns a short, generic description of the QSAR method"""
     return get_model_info(qsar_method), 200
 
 
-@app.route('/api/predictor_models/models/<string:qsar_method>/train', methods=['POST'])
+@app.route('/api/predictor_models/<string:qsar_method>/train', methods=['POST'])
 def train(qsar_method):
     """Trains a model for the specified QSAR method on provided data"""
 
@@ -207,7 +192,7 @@ def train(qsar_method):
             return pickle.dumps(model), status
 
 
-@app.route('/api/predictor_models/models/prediction_applicability_domain', methods=['POST'])
+@app.route('/api/predictor_models/prediction_applicability_domain', methods=['POST'])
 def prediction_applicability_domain():
     """Generates applicability domain values"""
 
@@ -280,7 +265,7 @@ def get_embedding(obj):
     return embedding
 
 
-@app.route('/api/predictor_models/models/<string:qsar_method>/embedding', methods=['POST'])
+@app.route('/api/predictor_models/<string:qsar_method>/embedding', methods=['POST'])
 def train_embedding_ga(qsar_method):
     """Post method that trains GA embedding for the specified QSAR method on provided data"""
 
@@ -353,7 +338,7 @@ def train_embedding_ga(qsar_method):
     return result_str
 
 
-@app.route('/api/predictor_models/models/<string:qsar_method>/embedding_importance', methods=['POST'])
+@app.route('/api/predictor_models/<string:qsar_method>/embedding_importance', methods=['POST'])
 def train_embedding_importance(qsar_method):
     """Post method that trains importance based embedding for the specified QSAR method on provided data"""
 
@@ -431,7 +416,7 @@ def train_embedding_importance(qsar_method):
     return result_str
 
 
-@app.route('/api/predictor_models/models/<string:qsar_method>/embedding_lasso', methods=['POST'])
+@app.route('/api/predictor_models/<string:qsar_method>/embedding_lasso', methods=['POST'])
 def train_embedding_lasso(qsar_method):
     """Post method that trains importance based embedding for the specified QSAR method on provided data"""
 
@@ -480,7 +465,7 @@ def train_embedding_lasso(qsar_method):
     return result_str
 
 
-@app.route('/api/predictor_models/models/<string:qsar_method>/cross_validate', methods=['POST'])
+@app.route('/api/predictor_models/<string:qsar_method>/cross_validate', methods=['POST'])
 def cross_validate_fold(qsar_method):
     """Trains a model for the specified QSAR method on provided data"""
     print('\n********************************************************************************************************')
@@ -536,7 +521,7 @@ def cross_validate_fold(qsar_method):
                                hyperparameters=hyperparameters, n_jobs=n_jobs)
 
 #
-# @app.route('/api/predictor_models/models/<string:qsar_method>/predictsa', methods=['POST'])
+# @app.route('/api/predictor_models/<string:qsar_method>/predictsa', methods=['POST'])
 # def predictpythonstorage(qsar_method):
 #     """Makes predictions for a stored model on provided data"""
 #     obj = request.form
@@ -569,12 +554,12 @@ def cross_validate_fold(qsar_method):
 
 
 # following didnt work for me when I used simple flask app:
-# @app.route('/api/predictor_models/models/predictDB', methods=['POST', 'GET'])
+# @app.route('/api/predictor_models/predictDB', methods=['POST', 'GET'])
 # def predictDB(smiles, model_id):
 #     return predictFromDB(model_id, smiles)
 
 
-@app.route('/api/predictor_models/models/predictDB', methods=['POST', 'GET'])
+@app.route('/api/predictor_models/predictDB', methods=['POST', 'GET'])
 def predictDB():
     """Automates prediction and AD for single smiles using model in database
     """    
@@ -608,7 +593,7 @@ def predictDB():
 
 
 
-@app.route('/api/predictor_models/models/predict_identifier', methods=['POST', 'GET'])
+@app.route('/api/predictor_models/predict_identifier', methods=['POST', 'GET'])
 def predict_identifier():
     """Automates prediction and AD for single identifier using model in database
     """    
@@ -663,7 +648,7 @@ def predict_identifier():
 # def predictDB_POST(body):
 #     return predictDB(body['model_id'], body['smiles'],body['report_format'])
 #
-# @app.route('/api/predictor_models/models/predictDB', methods=['POST', 'GET'])
+# @app.route('/api/predictor_models/predictDB', methods=['POST', 'GET'])
 # def predictDB(model_id, smiles, report_format):
 #     """Automates prediction and AD for single smiles using model in database"""
 #
@@ -684,7 +669,7 @@ def predict_identifier():
 #     return mp.predictFromDB(model_id, smiles, report_format)
 
 
-# @app.route('/api/predictor_models/models/predict', methods=['POST'])
+# @app.route('/api/predictor_models/predict', methods=['POST'])
 # def predict():
 #     """Makes predictions for a stored model on provided data"""
 #     obj = request.form
@@ -730,7 +715,7 @@ def _read_text_form_or_file(field_name: str):
     val = request.form.get(field_name)
     return val
 
-@app.route('/api/predictor_models/models/predict', methods=['POST'])
+@app.route('/api/predictor_models/predict', methods=['POST'])
 def predict():
     obj = request.form
     model_id = obj.get('model_id')
@@ -755,7 +740,7 @@ def predict():
     return call_do_predictions(prediction_tsv, model), 200
 
 
-@app.route('/api/predictor_models/models/plot', methods=['POST'])
+@app.route('/api/predictor_models/plot', methods=['POST'])
 def generate_plot():
     """Makes predictions for a stored model on provided data"""
     obj = request.form
@@ -794,7 +779,7 @@ def generate_plot():
     return call_generate_plot(training_tsv, prediction_tsv, model, model_name, plot_type), 200
 
 
-@app.route('/api/predictor_models/models/initPMML', methods=['POST'])
+@app.route('/api/predictor_models/initPMML', methods=['POST'])
 def initPMML():
     """Loads a model and stores it under the provided number"""
 
@@ -891,7 +876,7 @@ def initPMML():
     return model.get_model_description(), 201
 
 
-@app.route('/api/predictor_models/models/initPickle', methods=['POST'])
+@app.route('/api/predictor_models/initPickle', methods=['POST'])
 def initPickle():
     """Loads a model and stores it under the provided number"""
     print('enter initPickle')
@@ -991,7 +976,7 @@ def get_file():
     )
        
 
-@app.route('/api/predictor_models/models/<string:model_id>', methods=['GET'])
+@app.route('/api/predictor_models/<string:model_id>', methods=['GET'])
 def details(model_id):
     """Returns a detailed description of the QSAR model with version and parameter information (also inits the model if needed)"""
 
@@ -1029,7 +1014,7 @@ def available_models():
 #
 #
 
-@app.route('/api/predictor_models/models/reg_coeff/<string:model_id>', methods=['GET'])
+@app.route('/api/predictor_models/reg_coeff/<string:model_id>', methods=['GET'])
 def model_coeffs(model_id):
     """Returns a detailed description of the QSAR model with version and parameter information"""
 
@@ -1050,7 +1035,7 @@ def model_coeffs(model_id):
         return "Cant return coefficients for "+model.qsar_method
 
 
-@app.route('/api/predictor_models/models/<string:model_id>/object', methods=['GET'])
+@app.route('/api/predictor_models/<string:model_id>/object', methods=['GET'])
 def model_obj(model_id):
     """Returns model object"""
 
