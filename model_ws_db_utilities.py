@@ -1981,11 +1981,19 @@ class ModelPredictor:
             modelDetails.imgSrcPlotHistogram = pathlib.Path(file_path_histogram).as_uri()
             
         elif file_api is not None:
-            
-            modelDetails.imgSrcPlotScatter = file_api + "?type_id=3&model_id=" + modelDetails.modelId
-            modelDetails.imgSrcPlotHistogram = file_api + "?type_id=4&model_id=" + modelDetails.modelId
-            modelDetails.urlQMRF = file_api + "?type_id=1&model_id=" + modelDetails.modelId
-            modelDetails.urlExcelSummary = file_api + "?type_id=2&model_id=" + modelDetails.modelId
+            if file_api == "https://ctx-api-dev.ccte.epa.gov/chemical/property/model/file/search/":
+                modelDetails.imgSrcPlotScatter = file_api + "?typeId=3&modelId=" + modelDetails.modelId
+                modelDetails.imgSrcPlotHistogram = file_api + "?typeId=4&modelId=" + modelDetails.modelId
+                modelDetails.urlQMRF = file_api + "?typeId=1&modelId=" + modelDetails.modelId
+                modelDetails.urlExcelSummary = file_api + "?typeId=2&modelId=" + modelDetails.modelId
+            elif file_api == '/api/predictor_models/model/file/':
+                modelDetails.imgSrcPlotScatter = file_api + "?type_id=3&model_id=" + modelDetails.modelId
+                modelDetails.imgSrcPlotHistogram = file_api + "?type_id=4&model_id=" + modelDetails.modelId
+                modelDetails.urlQMRF = file_api + "?type_id=1&model_id=" + modelDetails.modelId
+                modelDetails.urlExcelSummary = file_api + "?type_id=2&model_id=" + modelDetails.modelId
+            else:
+                logging.error(f"Invalid file_api: {file_api}")
+                
             # these need to be added to ctx api:
         else:
             # TODO generate plot and hardcode in the html
@@ -2184,7 +2192,7 @@ class ModelPredictor:
                 results["reasoning"] = f"Avg. distance ({results['value']:.2f}) > {ad_cutoff:.2f}"
                 
             results["analogs"] = self.setExpPredValuesForADAnalogs(model, results["analogs"])
-            results["adMethod"]["description"] = 'Whether or not the average Euclidean distance of the three closest training set neighbors exceeds a cutoff defined so that 95% of the training set is within in AD'
+            results["adMethod"]["description"] = 'Whether or not the average Euclidean distance of the three closest training set neighbors exceeds a cutoff defined so that 95% of the training set is within the AD'
 
             self.addDistances(results["analogs"], results["distances"])        
             del results['distances']
