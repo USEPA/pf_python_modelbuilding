@@ -190,8 +190,6 @@ def prediction_applicability_domain():
     training_tsv = obj.get('training_tsv')  # Retrieves the training data as a TSV
     test_tsv = obj.get('test_tsv')  # Retrieves the training data as a TSV
 
-    # print(embedding_tsv)
-
     applicability_domain = obj.get('applicability_domain')
 
     if training_tsv is None:
@@ -491,43 +489,6 @@ def cross_validate_fold(qsar_method):
                                remove_log_p=remove_log_p,
                                hyperparameters=hyperparameters, n_jobs=n_jobs)
 
-#
-# @app.route('/api/predictor_models/<string:qsar_method>/predictsa', methods=['POST'])
-# def predictpythonstorage(qsar_method):
-#     """Makes predictions for a stored model on provided data"""
-#     obj = request.form
-#     model_id = obj.get('model_id')  # Retrieves the model number to use
-#
-#     prediction_tsv = obj.get('prediction_tsv')  # Retrieves the prediction data as a TSV
-#     if prediction_tsv is None:
-#         prediction_tsv = request.files.get('prediction_tsv').read().decode('UTF-8')
-#
-#     # Can't make predictions without data
-#     if prediction_tsv is None:
-#         abort(400, 'missing prediction tsv')
-#     # Can't make predictions without a model
-#     if model_id is None:
-#         abort(400, 'missing model id')
-#
-#     # Gets stored model using model number
-#     model = None
-#     if mwu.models[model_id] is not None:
-#         model = mwu.models[model_id]
-#     else:
-#         model = loadModelFromDatabase(model_id)
-#
-#     # 404 NOT FOUND if no model stored under provided number
-#     if model is None:
-#         abort(404, 'no stored model with id ' + model_id)
-#
-#     # Calls the appropriate prediction method and returns the results
-#     return mwu.call_do_predictions(prediction_tsv, model), 200
-
-# following didnt work for me when I used simple flask app:
-# @app.route('/api/predictor_models/predictDB', methods=['POST', 'GET'])
-# def predictDB(smiles, model_id):
-#     return predictFromDB(model_id, smiles)
-
 
 @app.route('/api/predictor_models/predictDB', methods=['POST', 'GET'])
 def predictDB():
@@ -628,12 +589,14 @@ def _read_text_form_or_file(field_name: str):
 
 @app.route('/api/predictor_models/predict', methods=['POST'])
 def predict():
+    """input: model_id and prediction_tsv
+       output: predictions json (list of 'id', 'exp', 'pred')
+    """    
+
     obj = request.form
     model_id = obj.get('model_id')
 
     prediction_tsv = _read_text_form_or_file("prediction_tsv")
-    
-    # print(prediction_tsv)
 
     if prediction_tsv is None:
         abort(400, 'missing prediction tsv')
@@ -714,13 +677,7 @@ def initPMML():
         model = models[model_id]
         return model.get_model_description(), 201
 
-    # if mwu.models[model_id] is not None:
-    #     model = mwu.models[model_id]
-    #     print('Already have model loaded, description=:',model.get_model_description)
-    #     return model.get_model_description(), 201
-
     # Retrieves the model file from the request files
-    # model_file = files_obj['model']
     model_file = form_obj['model']
 
     # print(model_file)
@@ -769,10 +726,6 @@ def initPMML():
                                           use_sklearn2pmml=use_sklearn2pmml)  # init from app should take care of this when doing from java
     model.set_details(details=form_obj)
 
-    # print(model.model_obj)
-    # model.embedding = model.model_obj.dataDictionary.fieldNames
-    # model.embedding.remove('Property')
-
     # Stores model under provided number
     models[model_id] = model
 
@@ -819,15 +772,6 @@ def initPickle():
         if not hasattr(model, "is_binary"):
             print('model.is_binary is none, setting to false')
             model.is_binary = False
-
-            # if form_obj['is_binary']:
-            #     if isinstance(form_obj['is_binary'], bool):
-            #         model.is_binary = form_obj['is_binary']
-            #     else:
-            #         model.is_binary = form_obj['is_binary'].lower == 'true'
-            #     print(model.is_binary)
-
-        # model.modelId = model_id
 
         # Stores model under provided number
         models[model_id] = model
@@ -889,10 +833,7 @@ def details(model_id):
     """Returns a detailed description of the QSAR model with version and parameter information (also inits the model if needed)"""
 
     mi = ModelInitializer()
-    # model = mwu.models[model_id]
     model = mi.init_model(model_id)
-
-    # print('details3', model.get_model_description())
 
     # 404 NOT FOUND if no model stored under provided number
     if model is None:
@@ -908,9 +849,6 @@ def details(model_id):
     return model_details, 200
 
 
-#
-#
-#
 @app.route('/api/predictor_models/models', methods=['GET'])
 def available_models():
     """Returns a detailed description of the QSAR model with version and parameter information"""
@@ -921,8 +859,6 @@ def available_models():
 
     # Return description and 200 OK
     return models, 200
-#
-#
 
 
 @app.route('/api/predictor_models/reg_coeff/<string:model_id>', methods=['GET'])
@@ -931,8 +867,6 @@ def model_coeffs(model_id):
 
     mi = ModelInitializer()
     model = mi.init_model(model_id)
-
-    # print('details3', model.get_model_description())
 
     # 404 NOT FOUND if no model stored under provided number
     if model is None:
