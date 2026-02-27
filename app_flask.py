@@ -9,7 +9,6 @@ Repository created 05/21/2021
 """
 
 from flask import request, abort, Flask, send_file, jsonify
- 
 
 import json
 import logging
@@ -47,8 +46,6 @@ import coloredlogs
 level = INFO
 coloredlogs.install(level=level, milliseconds=True, level_styles=custom_level_styles,
                     fmt='%(asctime)s - %(name)s - %(levelname)s - %(message)s (%(filename)s:%(lineno)d)')
-
-
 
 app = Flask(__name__)
 log = logging.getLogger('werkzeug')
@@ -277,7 +274,6 @@ def train_embedding_ga(qsar_method):
         prediction_tsv = request.files.get('prediction_tsv').read().decode('UTF-8')
     if prediction_tsv is None:
         abort(400, 'missing prediction tsv')
-
 
     if obj.get('remove_log_p'):  # Sets boolean remove_log_p from string
         remove_log_p = obj.get('remove_log_p', '').lower() == 'true'
@@ -527,7 +523,6 @@ def cross_validate_fold(qsar_method):
 #     # Calls the appropriate prediction method and returns the results
 #     return mwu.call_do_predictions(prediction_tsv, model), 200
 
-
 # following didnt work for me when I used simple flask app:
 # @app.route('/api/predictor_models/predictDB', methods=['POST', 'GET'])
 # def predictDB(smiles, model_id):
@@ -555,17 +550,15 @@ def predictDB():
     
     if "invalid" in modelResultsJson.lower():
         return modelResultsJson, 400
-
     
     if report_format == "html":
-        rc=ReportCreator()
+        rc = ReportCreator()
         html = rc.create_html_report_from_json(modelResultsJson)
         return html, 200
     else:
         return modelResultsJson, 200
 
     return mp.predictFromDB(model_id, smiles, report_format), 200
-
 
 
 @app.route('/api/predictor_models/predict_identifier', methods=['POST', 'GET'])
@@ -597,27 +590,26 @@ def predict_identifier():
     if code != 200:
         return jsonify(error="not_found", message=f"Could not find {identifier}"), 404
     
-    if len(chemicals)>0:    
+    if len(chemicals) > 0: 
         smiles = chemicals[0]["chemical"]["smiles"]
     else:
         return jsonify(error="not_found", message=f"Could not find {identifier}"), 404
-    
         
     mp = ModelPredictor()
     modelResultsJson = mp.predictFromDB(model_id, smiles)
     
     if "invalid" in modelResultsJson.lower():
         return modelResultsJson, 400
-
     
     if report_format == "html":
-        rc=ReportCreator()
+        rc = ReportCreator()
         html = rc.create_html_report_from_json(modelResultsJson)
         return html, 200
     else:
         return modelResultsJson, 200
 
     return mp.predictFromDB(model_id, smiles, report_format), 200
+
 
 def _read_text_form_or_file(field_name: str):
     # Prefer file upload
@@ -632,6 +624,7 @@ def _read_text_form_or_file(field_name: str):
     # Fallback to form field
     val = request.form.get(field_name)
     return val
+
 
 @app.route('/api/predictor_models/predict', methods=['POST'])
 def predict():
@@ -838,8 +831,6 @@ def initPickle():
 
         # Stores model under provided number
         models[model_id] = model
-        
-        
 
         print('After init model_description =', model.get_model_description())
         return model.get_model_description(), 201
@@ -847,7 +838,6 @@ def initPickle():
     else:
         # Can't store a model if none provided
         abort(400, 'missing model bytes')
-
 
 
 @app.get(pc.URL_LOCAL_FILE_API)
@@ -898,7 +888,7 @@ def get_file():
 def details(model_id):
     """Returns a detailed description of the QSAR model with version and parameter information (also inits the model if needed)"""
 
-    mi=ModelInitializer()
+    mi = ModelInitializer()
     # model = mwu.models[model_id]
     model = mi.init_model(model_id)
 
@@ -916,6 +906,8 @@ def details(model_id):
 
     # Return description and 200 OK
     return model_details, 200
+
+
 #
 #
 #
@@ -924,7 +916,7 @@ def available_models():
     """Returns a detailed description of the QSAR model with version and parameter information"""
 
     # model = mwu.models[model_id]
-    mi=ModelInitializer()
+    mi = ModelInitializer()
     models = mi.get_available_models()
 
     # Return description and 200 OK
@@ -932,11 +924,12 @@ def available_models():
 #
 #
 
+
 @app.route('/api/predictor_models/reg_coeff/<string:model_id>', methods=['GET'])
 def model_coeffs(model_id):
     """Returns a detailed description of the QSAR model with version and parameter information"""
 
-    mi=ModelInitializer()
+    mi = ModelInitializer()
     model = mi.init_model(model_id)
 
     # print('details3', model.get_model_description())
@@ -945,12 +938,11 @@ def model_coeffs(model_id):
     if model is None:
         abort(404, 'no stored model with id ' + model_id)
         
-        
     if hasattr(model, 'getOriginalRegressionCoefficients') and callable(getattr(model, 'getOriginalRegressionCoefficients')):
         coeff_dict = model.getOriginalRegressionCoefficients()
         return coeff_dict, 200
     else:
-        return "Cant return coefficients for "+model.qsar_method
+        return "Cant return coefficients for " + model.qsar_method
 
 
 @app.route('/api/predictor_models/<string:model_id>/object', methods=['GET'])

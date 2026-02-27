@@ -74,7 +74,7 @@ def get_metadata():
     )
 
 
-def get_file(type_id: int = None, model_id: int = None):
+def get_file(type_id: int=None, model_id: int=None):
     if type_id is None or model_id is None:
         return JSONResponse(
             {"error": "Missing required query params: type_id and model_id"},
@@ -116,7 +116,7 @@ def get_file(type_id: int = None, model_id: int = None):
     )
 
 
-def predict_identifier(identifier: str, model_id: int, report_format: str = "json"):
+def predict_identifier(identifier: str, model_id: int, report_format: str="json"):
     """Automates prediction and AD for single identifier using model in database"""
 
     # normalize report_format
@@ -166,7 +166,6 @@ def predict_identifier(identifier: str, model_id: int, report_format: str = "jso
         return HTMLResponse(html, status_code=200)
 
     return modelResultsJson, 200
-
 
 # app = Flask(__name__)
 # log = logging.getLogger('werkzeug')
@@ -614,13 +613,13 @@ def cross_validate_fold(qsar_method):
                                hyperparameters=hyperparameters, n_jobs=n_jobs)
 
 
-
 def _to_obj(x):
     if isinstance(x, (dict, list)):
         return x
     if isinstance(x, (str, bytes, bytearray)):
         return json.loads(x)
     raise TypeError(f"Unsupported prediction type: {type(x)}")
+
 
 def _to_json_str(x):
     if isinstance(x, (dict, list)):
@@ -650,7 +649,7 @@ def predictDB(smiles, model_id, report_format):
         modelResultsArray = []
         for current_smiles in smiles:
             logging.debug("Running %s", current_smiles)
-            pred = mp.predictFromDB(model_id, current_smiles)   # может быть dict или json-str
+            pred = mp.predictFromDB(model_id, current_smiles)  # может быть dict или json-str
             modelResultsArray.append(_to_obj(pred))
         return JSONResponse(content=modelResultsArray)
 
@@ -876,12 +875,11 @@ def initPickle():
         abort(400, 'missing model bytes')
 
 
-
 @app.route('/api/predictor_models/models/<string:model_id>', methods=['GET'])
 def details(model_id):
     """Returns a detailed description of the QSAR model with version and parameter information (also inits the model if needed)"""
 
-    mi=ModelInitializer()
+    mi = ModelInitializer()
     # model = mwu.models[model_id]
     model = mi.init_model(model_id)
 
@@ -899,6 +897,8 @@ def details(model_id):
 
     # Return description and 200 OK
     return model_details, 200
+
+
 #
 #
 #
@@ -907,7 +907,7 @@ def available_models():
     """Returns a detailed description of the QSAR model with version and parameter information"""
 
     # model = mwu.models[model_id]
-    mi=ModelInitializer()
+    mi = ModelInitializer()
     models = mi.get_available_models()
 
     # Return description and 200 OK
@@ -915,11 +915,12 @@ def available_models():
 #
 #
 
+
 @app.route('/api/predictor_models/models/reg_coeff/<string:model_id>', methods=['GET'])
 def model_coeffs(model_id):
     """Returns a detailed description of the QSAR model with version and parameter information"""
 
-    mi=ModelInitializer()
+    mi = ModelInitializer()
     model = mi.init_model(model_id)
 
     # print('details3', model.get_model_description())
@@ -928,12 +929,11 @@ def model_coeffs(model_id):
     if model is None:
         abort(404, 'no stored model with id ' + model_id)
         
-        
     if hasattr(model, 'getOriginalRegressionCoefficients') and callable(getattr(model, 'getOriginalRegressionCoefficients')):
         coeff_dict = model.getOriginalRegressionCoefficients()
         return coeff_dict, 200
     else:
-        return "Cant return coefficients for "+model.qsar_method
+        return "Cant return coefficients for " + model.qsar_method
 
 
 @app.route('/api/predictor_models/models/<string:model_id>/object', methods=['GET'])
