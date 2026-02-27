@@ -75,8 +75,6 @@ def get_metadata():
     )
     
 
-
-
 @app.route('/hello/<name>', methods=['GET'])
 def say_hello(name):
     """
@@ -84,12 +82,6 @@ def say_hello(name):
     The name is extracted from the URL path parameter.
     """
     return "Hello, " + name
-
-
-
-# # use_pmml_pipeline_during_model_building = True # if true use PMMLPipeline with standardizing happening separate during model building
-# # use_sklearn2pmml = True # if false uses pypmml to load the file. Note: pypmml doesnt handle knn predictions the same way...
-
 
 
 @app.route('/api/predictor_models/<string:qsar_method>/info', methods=['GET'])
@@ -286,12 +278,6 @@ def train_embedding_ga(qsar_method):
     if prediction_tsv is None:
         abort(400, 'missing prediction tsv')
 
-    # if obj.get('save_to_database'):  # Sets boolean remove_log_p from string
-    #     save_to_database = obj.get('save_to_database', '').lower() == 'true'
-    # else:
-    #     save_to_database = False
-
-    # model_id = obj.get('model_id')  # Retrieves the model number to use for persistent storage
 
     if obj.get('remove_log_p'):  # Sets boolean remove_log_p from string
         remove_log_p = obj.get('remove_log_p', '').lower() == 'true'
@@ -311,10 +297,6 @@ def train_embedding_ga(qsar_method):
     threshold = int(obj.get('threshold'))
     descriptor_coefficient = float(obj.get('descriptor_coefficient'))
     n_threads = int(obj.get('n_threads'))
-
-    # print('use_wards = ',use_wards)
-    # print('use_wards2 = ', obj.get('use_wards'))
-    # print(num_generations)
 
     embedding, timeMin = call_build_embedding_ga(qsar_method=qsar_method,
                                                  training_tsv=training_tsv,
@@ -358,13 +340,6 @@ def train_embedding_importance(qsar_method):
         prediction_tsv = request.files.get('prediction_tsv').read().decode('UTF-8')
     if prediction_tsv is None:
         abort(400, 'missing prediction tsv')
-
-    # if obj.get('save_to_database'):  # Sets boolean remove_log_p from string
-    #     save_to_database = obj.get('save_to_database', '').lower() == 'true'
-    # else:
-    #     save_to_database = False
-
-    # model_id = obj.get('model_id')  # Retrieves the model number to use for persistent storage
 
     if obj.get('remove_log_p'):  # Sets boolean remove_log_p from string
         remove_log_p = obj.get('remove_log_p', '').lower() == 'true'
@@ -643,63 +618,6 @@ def predict_identifier():
         return modelResultsJson, 200
 
     return mp.predictFromDB(model_id, smiles, report_format), 200
-
-
-# def predictDB_POST(body):
-#     return predictDB(body['model_id'], body['smiles'],body['report_format'])
-#
-# @app.route('/api/predictor_models/predictDB', methods=['POST', 'GET'])
-# def predictDB(model_id, smiles, report_format):
-#     """Automates prediction and AD for single smiles using model in database"""
-#
-#     report_format = report_format.lower()
-#     if report_format not in ['json', 'html']:
-#         report_format = 'json'
-#
-#     mp = ModelPredictor()
-#     modelResultsJson = mp.predictFromDB(model_id, smiles)
-#
-#     if report_format == "html":
-#         rc=ReportCreator()
-#         html = rc.create_html_report_from_json(modelResultsJson)
-#         return html, 200
-#     else:
-#         return modelResultsJson, 200
-#
-#     return mp.predictFromDB(model_id, smiles, report_format)
-
-
-# @app.route('/api/predictor_models/predict', methods=['POST'])
-# def predict():
-#     """Makes predictions for a stored model on provided data"""
-#     obj = request.form
-#     model_id = obj.get('model_id')  # Retrieves the model number to use
-#
-#     prediction_tsv = obj.get('prediction_tsv')  # Retrieves the prediction data as a TSV
-#     if prediction_tsv is None:
-#         prediction_tsv = request.files.get('prediction_tsv').read().decode('UTF-8')
-#
-#     # Can't make predictions without data
-#     if prediction_tsv is None:
-#         abort(400, 'missing prediction tsv')
-#     # Can't make predictions without a model
-#     if model_id is None:
-#         abort(400, 'missing model id')
-#
-#     if models[model_id] is not None:
-#         # Gets stored model using model number
-#         model = models[model_id]
-#     else:
-#         abort(400, 'Need to init model or use predictDB API call instead')
-#
-#     # 404 NOT FOUND if no model stored under provided number
-#     if model is None:
-#         abort(404, 'no stored model with id ' + model_id)
-#
-#     # Calls the appropriate prediction method and returns the results
-#     return call_do_predictions(prediction_tsv, model), 200
-
-
 
 def _read_text_form_or_file(field_name: str):
     # Prefer file upload
@@ -1054,7 +972,4 @@ def model_obj(model_id):
 
 
 if __name__ == '__main__':
-    # Limit logging output for easier readability
-    # log = logging.getLogger('werkzeug')
-    # log.setLevel(logging.ERROR)
     app.run(host='0.0.0.0', port=5004, debug=True)

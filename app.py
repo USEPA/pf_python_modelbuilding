@@ -613,52 +613,6 @@ def cross_validate_fold(qsar_method):
                                remove_log_p=remove_log_p,
                                hyperparameters=hyperparameters, n_jobs=n_jobs)
 
-#
-# @app.route('/api/predictor_models/models/<string:qsar_method>/predictsa', methods=['POST'])
-# def predictpythonstorage(qsar_method):
-#     """Makes predictions for a stored model on provided data"""
-#     obj = request.form
-#     model_id = obj.get('model_id')  # Retrieves the model number to use
-#
-#     prediction_tsv = obj.get('prediction_tsv')  # Retrieves the prediction data as a TSV
-#     if prediction_tsv is None:
-#         prediction_tsv = request.files.get('prediction_tsv').read().decode('UTF-8')
-#
-#     # Can't make predictions without data
-#     if prediction_tsv is None:
-#         abort(400, 'missing prediction tsv')
-#     # Can't make predictions without a model
-#     if model_id is None:
-#         abort(400, 'missing model id')
-#
-#     # Gets stored model using model number
-#     model = None
-#     if mwu.models[model_id] is not None:
-#         model = mwu.models[model_id]
-#     else:
-#         model = loadModelFromDatabase(model_id)
-#
-#     # 404 NOT FOUND if no model stored under provided number
-#     if model is None:
-#         abort(404, 'no stored model with id ' + model_id)
-#
-#     # Calls the appropriate prediction method and returns the results
-#     return mwu.call_do_predictions(prediction_tsv, model), 200
-
-
-# @app.route('/api/predictor_models/models/predictDB2', methods=['POST', 'GET'])
-# def predictDB2():
-#     """Automates prediction and AD for single smiles using model in database
-#     This one works in Flask"""
-#     if request.method == 'POST':
-#         obj = request.form
-#     elif request.method == 'GET':
-#         obj = request.args
-#     smiles = obj.get('smiles')  # Retrieves the model number to use
-#     model_id = obj.get('model_id')
-#     report_format = obj.get('report_format', 'json')
-#
-#     return predictDB(model_id, smiles, report_format)
 
 
 def _to_obj(x):
@@ -911,13 +865,6 @@ def initPickle():
             print('model.is_binary is none, setting to false')
             model.is_binary = False
 
-            # if form_obj['is_binary']:
-            #     if isinstance(form_obj['is_binary'], bool):
-            #         model.is_binary = form_obj['is_binary']
-            #     else:
-            #         model.is_binary = form_obj['is_binary'].lower == 'true'
-            #     print(model.is_binary)
-
         # Stores model under provided number
         models[model_id] = model
 
@@ -1012,4 +959,4 @@ if __name__ == '__main__':
     # Limit logging output for easier readability
     log = logging.getLogger('werkzeug')
     log.setLevel(logging.DEBUG)
-    app_flask.run(host='0.0.0.0', port=5004, debug=True)
+    app.run(host='0.0.0.0', port=5004, debug=True)

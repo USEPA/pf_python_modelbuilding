@@ -11,7 +11,7 @@ import csv
 from utils import print_first_row
 from applicability_domain import applicability_domain_utilities as adu
 from models import df_utilities as dfu
-from util.predict_constants import PredictConstants as pc
+import util.predict_constants as pc
 
 from dominate import document
 from dominate.tags import *
