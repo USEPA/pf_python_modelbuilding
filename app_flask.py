@@ -109,11 +109,6 @@ def train(qsar_method):
     else:
         abort(400, 'missing include_standardization_in_pmml')
 
-    if obj.get('save_to_database'):  # Sets boolean remove_log_p from string
-        save_to_database = obj.get('save_to_database', '').lower() == 'true'
-    else:
-        save_to_database = False
-
     if training_tsv is None:
         training_tsv = request.files.get('training_tsv').read().decode('UTF-8')
     # Can't train a model without data
@@ -158,27 +153,15 @@ def train(qsar_method):
         models[model_id] = model
         status = 201
 
-    if save_to_database:
-        # mwdu.saveModelToDatabase(model, model_id)
-        # return 'model bytes saved to database', 202
-        # TMM: the code that was in there doesnt work anymore
-        print('need to implement working method to save to database using sql')
-        return 'need to implement working method to save to database using sql', 400
-
+    # Returns model bytes
+    if use_pmml:
+        pmml_file = 'model.pmml'
+        sklearn2pmml(model.model_obj,
+                     pmml_file)  # write pmml to harddrive temporarily- TODO will this cause problems in docker???
+        with open(pmml_file, 'r') as file:
+            return bytes(file.read(), 'utf-8'), status  # return pmml as string, todo compress it?
     else:
-        # Returns model bytes
-        if use_pmml:
-
-            pmml_file = 'model.pmml'
-
-            sklearn2pmml(model.model_obj,
-                         pmml_file)  # write pmml to harddrive temporarily- TODO will this cause problems in docker???
-
-            with open(pmml_file, 'r') as file:
-                return bytes(file.read(), 'utf-8'), status  # return pmml as string, todo compress it?
-
-        else:
-            return pickle.dumps(model), status
+        return pickle.dumps(model), status
 
 
 @app.route('/api/predictor_models/prediction_applicability_domain', methods=['POST'])
@@ -657,16 +640,8 @@ def generate_plot():
 def initPMML():
     """Loads a model and stores it under the provided number"""
 
-    # print('enter initPMML')
-
-    # form_obj = request.form
-    # files_obj = request.files  # Retrieves the files attached to the request
-
     form_obj = request.get_json()
     model_id = form_obj.get('model_id')  # Retrieves the model number to use for persistent storage
-    # print('form_obj',form_obj)
-
-    # print('model_id=',model_id)
 
     # Can't store a model unless number is specified
     if model_id is None:
@@ -679,9 +654,6 @@ def initPMML():
 
     # Retrieves the model file from the request files
     model_file = form_obj['model']
-
-    # print(model_file)
-    # return ""
 
     print('use_sklearn2mml in form_obj:', form_obj.get('use_sklearn2pmml'))
 
@@ -720,7 +692,6 @@ def initPMML():
     else:
         is_binary = form_obj['is_binary'].lower == 'true'
 
-    # print('is_categorical', is_categorical)
     model = instantiateModelForPrediction(qsar_method=form_obj['qsar_method'],
                                           is_binary=is_binary, pmml_file_path=pmml_file_path,
                                           use_sklearn2pmml=use_sklearn2pmml)  # init from app should take care of this when doing from java
@@ -766,8 +737,6 @@ def initPickle():
 
         # print('is_categorical', is_categorical)
         model = pickle.loads(model_file.read())
-
-        # printEqn(model)
 
         if not hasattr(model, "is_binary"):
             print('model.is_binary is none, setting to false')
