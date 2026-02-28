@@ -12,6 +12,8 @@ import json
 host = "http://v2626umcth882.rtord.epa.gov:8080"
 # host = "http://localhost:5005" # running on uvicorn.exe on local machine
 
+# TODO merge this class with test_predict_from_api_call.py
+
 class Test(unittest.TestCase):
 
     

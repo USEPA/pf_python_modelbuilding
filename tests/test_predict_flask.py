@@ -29,7 +29,7 @@ class TestPredict(TestCase):
         print(r)
     
     def test_coeffs(self):
-        r = model_coeffs("1729")
+        r = model_coeffs("1724")
         print("\nmodel_coeffs")
         print(r)
     
