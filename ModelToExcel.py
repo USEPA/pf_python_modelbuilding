@@ -2,6 +2,10 @@ from model_ws_db_utilities import getEngine, getSession
 import pandas as pd
 from sqlalchemy import text
 from pathlib import Path
+import math
+from typing import Optional, Dict, Any, Iterable, Tuple
+from openpyxl import load_workbook
+from openpyxl.styles import Font
 
 import logging
 logging.getLogger('sqlalchemy').setLevel(logging.ERROR)
@@ -12,19 +16,43 @@ class ModelToExcel:
     def __init__(
             self,
             excel_path: str="summary.xlsx",
-            cover_sheet_df = None,
-            statistics_df = None,
-            training_set_df = None,
-            test_set_df = None,
-            records_df = None,
-            records_field_descriptions_df = None,
-            test_set_predictions_df = None,
-            model_descriptors_df = None,
-            model_descriptor_values_df = None,
+            cover_sheet_df: Optional[pd.DataFrame] = None,
+            statistics_df: Optional[pd.DataFrame] = None,
+            training_set_df: Optional[pd.DataFrame] = None,
+            test_set_df: Optional[pd.DataFrame] = None,
+            records_df: Optional[pd.DataFrame] = None,
+            records_field_descriptions_df: Optional[pd.DataFrame] = None,
+            training_cv_predictions_df: Optional[pd.DataFrame] = None,
+            test_set_predictions_df: Optional[pd.DataFrame] = None,
+            external_predictions_df: Optional[pd.DataFrame] = None,
+            model_descriptors_df: Optional[pd.DataFrame] = None,
+            model_descriptor_values_df: Optional[pd.DataFrame] = None,
             engine=None,
             session=None,
-            model_id: int=1065
-        ):
+            model_id: int=1065,
+            log_plot: bool=True
+        ) -> None:
+        """
+        Initialize ModelToExcel instance for generating QSAR model summary reports.
+        
+        Args:
+            excel_path: Output path for the generated Excel file. Defaults to "summary.xlsx".
+            cover_sheet_df: DataFrame containing high-level model information.
+            statistics_df: DataFrame with model performance statistics.
+            training_set_df: DataFrame with training set data.
+            test_set_df: DataFrame with test set data.
+            records_df: DataFrame with detailed experimental records.
+            records_field_descriptions_df: DataFrame describing fields in the records sheet.
+            training_cv_predictions_df: DataFrame with cross-validation predictions on training set.
+            test_set_predictions_df: DataFrame with predictions on test set.
+            external_predictions_df: DataFrame with predictions on external/validation set.
+            model_descriptors_df: DataFrame with model descriptor definitions.
+            model_descriptor_values_df: DataFrame with descriptor values for each prediction.
+            engine: SQLAlchemy engine for database queries. If None, creates a new engine.
+            session: SQLAlchemy session for database queries. If None, creates a new session.
+            model_id: Database ID of the model. Defaults to 1065.
+            log_plot: Whether to use log scale for prediction plots. Defaults to True.
+        """
         # TODO: Determine correct default for excel_path given model_id
         #       Maybe write a new method that can be ran post init to
         #       change the excel_path based on a query of the database?
@@ -40,16 +68,28 @@ class ModelToExcel:
         self.test_set_df = test_set_df
         self.records_df = records_df
         self.records_field_descriptions_df = records_field_descriptions_df
+        self.training_cv_predictions_df = training_cv_predictions_df
         self.test_set_predictions_df = test_set_predictions_df
+        self.external_predictions_df = external_predictions_df
         self.model_descriptors_df = model_descriptors_df
         self.model_descriptor_values_df = model_descriptor_values_df
         self.engine = engine
         self.session = session
         self.model_id = model_id
+        self.log_plot = log_plot
     
 
     @staticmethod
-    def get_cover_sheet_df(results_dict):
+    def get_cover_sheet_df(results_dict: Dict[str, Any]) -> pd.DataFrame:
+        """
+        Extract model information from results dictionary to create cover sheet dataframe.
+        
+        Args:
+            results_dict (dict): Dictionary containing model details and metadata.
+        
+        Returns:
+            pd.DataFrame: Single-row dataframe with model overview information including property, dataset, and method details.
+        """
         cover_sheet_df = {
             "Property Name": [results_dict["model_details"].get("propertyName", None)],
             "Property Description": [results_dict["model_details"].get("propertyDescription", None)],
@@ -67,7 +107,15 @@ class ModelToExcel:
         return cover_sheet_df
     
 
-    def query_cover_sheet_df(self):
+    def query_cover_sheet_df(self) -> pd.DataFrame:
+        """
+        Query database for model summary information to populate cover sheet.
+        
+        Retrieves model details including property name, dataset information, method details, and training/test set sizes.
+        
+        Returns:
+            pd.DataFrame: Single-row dataframe with model overview from database.
+        """
         sql = text(f"""
         select
             distinct prop.name as "Property Name",
@@ -116,7 +164,19 @@ class ModelToExcel:
         return summary
     
 
-    def cover_sheet(self, writer, cover_sheet=None):
+    def cover_sheet(self, writer: Any, cover_sheet: Optional[pd.DataFrame]=None) -> pd.DataFrame:
+        """
+        Create the cover sheet in the Excel workbook with model summary information.
+        
+        Formats the cover sheet with bold labels and centered alignment. Freezes the first column for better readability.
+        
+        Args:
+            writer: pandas ExcelWriter object for writing to the workbook.
+            cover_sheet (pd.DataFrame, optional): Cover sheet dataframe. If None, queries from database or uses instance dataframe.
+        
+        Returns:
+            pd.DataFrame: The cover sheet dataframe that was written.
+        """
         if cover_sheet is None:
             cover_sheet = self.query_cover_sheet_df() if self.cover_sheet_df is None else self.cover_sheet_df
         
@@ -145,7 +205,16 @@ class ModelToExcel:
 
 
     @staticmethod
-    def get_statistics_df(results_dict):
+    def get_statistics_df(results_dict: Dict[str, Any]) -> pd.DataFrame:
+        """
+        Extract model performance statistics from results dictionary.
+        
+        Args:
+            results_dict (dict): Dictionary containing model statistics and details.
+        
+        Returns:
+            pd.DataFrame: Single-row dataframe with model performance metrics including R², RMSE, MAE for training, CV, test, and applicability domain.
+        """
         statistics_df = {
             "nTraining": [results_dict["model_details"].get("numTraining", None)],
             "nTest": [results_dict["model_details"].get("numPrediction", None)],
@@ -167,7 +236,15 @@ class ModelToExcel:
         return statistics_df
 
 
-    def query_statistics_df(self):
+    def query_statistics_df(self) -> pd.DataFrame:
+        """
+        Query database for model performance statistics.
+        
+        Retrieves training, cross-validation, test, and applicability domain statistics from the database.
+        
+        Returns:
+            pd.DataFrame: Single-row dataframe with model performance metrics rounded to 2 decimal places.
+        """
         sql = text(f"""
         select
             SUM(case when dpis.split_num = 0 then 1 else 0 end) as "nTraining",
@@ -212,7 +289,19 @@ class ModelToExcel:
         return statistics
     
 
-    def statistics(self, writer, statistics=None):
+    def statistics(self, writer: Any, statistics: Optional[pd.DataFrame]=None) -> pd.DataFrame:
+        """
+        Create the statistics sheet in the Excel workbook with formatted model performance metrics.
+        
+        Organizes statistics into sections (Training, Cross-Validation, Test, Applicability Domain) with color-coded headers. Includes equation reference image.
+        
+        Args:
+            writer: pandas ExcelWriter object for writing to the workbook.
+            statistics (pd.DataFrame, optional): Statistics dataframe. If None, queries from database or uses instance dataframe.
+        
+        Returns:
+            pd.DataFrame: The statistics dataframe that was written.
+        """
         if statistics is None:
             statistics = self.query_statistics_df() if self.statistics_df is None else self.statistics_df
 
@@ -302,64 +391,19 @@ class ModelToExcel:
         return statistics
 
 
-    # def query_training_set_df(self):
-    #     sql = text(f"""
-        
-    #     """)
-
-    #     logging.info("Querying database for Training Set")
-    #     training_set = pd.read_sql(sql, self.engine).round(2)
-    #     logging.info("Finished querying database for Training Set")
-    #     return training_set
-    
-
-    # def training_set(self, writer, training_set=None):
-    #     # TODO: Write Function
-    #     if training_set is None:
-    #         training_set = self.query_training_set_df() if self.training_set_df is None else self.training_set_df
-        
-    #     training_set.to_excel(writer, sheet_name="Training Set", index=False)
-
-    #     workbook = writer.book
-    #     worksheet = writer.sheets["Training Set"]
-    #     worksheet.freeze_panes(1, 0)
-
-    #     ModelToExcel.set_column_width(writer, "Training Set", training_set, how="full")
-    #     ModelToExcel.add_filter(writer, "Training Set", training_set)
-
-    #     return training_set
-
-
-    # def query_test_set_df(self):
-    #     sql = text(f"""
-        
-    #     """)
-
-    #     logging.info("Querying database for Test Set")
-    #     test_set = pd.read_sql(sql, self.engine).round(2)
-    #     logging.info("Finished querying database for Test Set")
-    #     return test_set
-    
-
-    # def test_set(self, writer, test_set=None):
-    #     # TODO: Write Function
-    #     if test_set is None:
-    #         test_set = self.query_test_set_df() if self.test_set_df is None else self.test_set_df
-        
-    #     test_set.to_excel(writer, sheet_name="Test Set", index=False)
-
-    #     workbook = writer.book
-    #     worksheet = writer.sheets["Test Set"]
-    #     worksheet.freeze_panes(1, 0)
-
-    #     ModelToExcel.set_column_width(writer, "Test Set", test_set, how="full")
-    #     ModelToExcel.add_filter(writer, "Test Set", test_set)
-
-    #     return test_set
-
-
     @staticmethod
-    def get_records_df(df_pv):
+    def get_records_df(df_pv: pd.DataFrame) -> pd.DataFrame:
+        """
+        Extract and structure experimental record information from property values dataframe.
+        
+        Transforms raw property value data into a detailed records format with chemical mapping, source information, and experimental conditions.
+        
+        Args:
+            df_pv (pd.DataFrame): Property values dataframe containing raw experimental and chemical data.
+        
+        Returns:
+            pd.DataFrame: Records dataframe with standardized columns for chemical, source, and experimental information.
+        """
         records_df = {
             "exp_prop_id": df_pv["prop_value_id"],
             "canon_qsar_smiles": df_pv["canon_qsar_smiles"],
@@ -398,7 +442,15 @@ class ModelToExcel:
         return records_df
     
 
-    def query_records_df(self):
+    def query_records_df(self) -> pd.DataFrame:
+        """
+        Query database for detailed experimental records.
+        
+        Note: This method is a placeholder and requires SQL implementation.
+        
+        Returns:
+            pd.DataFrame: Records dataframe from database (currently returns empty result).
+        """
         # TODO: Write query
         sql = text(f"""
         
@@ -410,7 +462,19 @@ class ModelToExcel:
         return records
     
 
-    def records(self, writer, records=None):
+    def records(self, writer: Any, records: Optional[pd.DataFrame]=None) -> pd.DataFrame:
+        """
+        Create the records sheet in the Excel workbook with detailed experimental data.
+        
+        Includes autofilter for easy data filtering, frozen header row, and appropriately sized columns.
+        
+        Args:
+            writer: pandas ExcelWriter object for writing to the workbook.
+            records (pd.DataFrame, optional): Records dataframe. If None, queries from database or uses instance dataframe.
+        
+        Returns:
+            pd.DataFrame: The records dataframe that was written.
+        """
         if records is None:
             records = self.query_records_df() if self.records_df is None else self.records_df
         
@@ -427,7 +491,15 @@ class ModelToExcel:
 
 
     @staticmethod
-    def get_records_field_descriptions_df():
+    def get_records_field_descriptions_df() -> pd.DataFrame:
+        """
+        Create dataframe with detailed descriptions of all fields in the records sheet.
+        
+        Provides documentation for each column explaining the source and meaning of the data.
+        
+        Returns:
+            pd.DataFrame: Two-column dataframe mapping field names to their descriptions.
+        """
         records_field_descriptions_df = {
             "Field": [
                 "exp_prop_id",
@@ -500,20 +572,21 @@ class ModelToExcel:
         }
         records_field_descriptions_df = pd.DataFrame.from_dict(records_field_descriptions_df)
         return records_field_descriptions_df
-
-
-    # def query_records_field_descriptions_df(self):
-    #     sql = text(f"""
-        
-    #     """)
-
-    #     logging.info("Querying database for Records Field Descriptions")
-    #     records_field_descriptions = pd.read_sql(sql, self.engine).round(2)
-    #     logging.info("Finished querying database for Records Field Descriptions")
-    #     return records_field_descriptions
     
 
-    def records_field_descriptions(self, writer, records_field_descriptions=None):
+    def records_field_descriptions(self, writer: Any, records_field_descriptions: Optional[pd.DataFrame]=None) -> pd.DataFrame:
+        """
+        Create the records field descriptions sheet in the Excel workbook.
+        
+        Provides documentation for all fields in the records sheet with frozen header and autofilter.
+        
+        Args:
+            writer: pandas ExcelWriter object for writing to the workbook.
+            records_field_descriptions (pd.DataFrame, optional): Field descriptions dataframe. If None, uses static method or instance dataframe.
+        
+        Returns:
+            pd.DataFrame: The field descriptions dataframe that was written.
+        """
         if records_field_descriptions is None:
             records_field_descriptions = self.get_records_field_descriptions_df() if self.records_field_descriptions_df is None else self.records_field_descriptions_df
         
@@ -529,37 +602,19 @@ class ModelToExcel:
         return records_field_descriptions
 
 
-    # def query_test_set_predictions_df(self):
-    #     # TODO: Write query
-    #     sql = text(f"""
-        
-    #     """)
-
-    #     logging.info("Querying database for Test Set Predictions")
-    #     test_set_predictions = pd.read_sql(sql, self.engine).round(2)
-    #     logging.info("Finished querying database for Test Set Predictions")
-    #     return test_set_predictions
-    
-
-    # def test_set_predictions(self, writer, test_set_predictions=None):
-    #     # TODO: Write Function
-    #     if test_set_predictions is None:
-    #         test_set_predictions = self.query_test_set_predictions_df() if self.test_set_predictions_df is None else self.test_set_predictions_df
-        
-    #     test_set_predictions.to_excel(writer, sheet_name="Test Set Predictions", index=False)
-
-    #     workbook = writer.book
-    #     worksheet = writer.sheets["Test Set Predictions"]
-    #     worksheet.freeze_panes(1, 0)
-
-    #     ModelToExcel.set_column_width(writer, "Test Set Predictions", test_set_predictions, how="full")
-    #     ModelToExcel.add_filter(writer, "Test Set Predictions", test_set_predictions)
-
-    #     return test_set_predictions
-
-
     @staticmethod
-    def get_model_descriptors_df(results_dict):
+    def get_model_descriptors_df(results_dict: Dict[str, Any]) -> pd.DataFrame:
+        """
+        Extract model descriptors from results dictionary and merge with variable definitions.
+        
+        Loads model descriptors from embedding data, matches them with variable definitions from file, and handles special formula characters.
+        
+        Args:
+            results_dict (dict): Dictionary containing model details and embedding (descriptors) information.
+        
+        Returns:
+            pd.DataFrame: Descriptors with their definitions and classifications, with formula characters escaped.
+        """
         # Load in model descriptors
         model_descriptors_df = pd.DataFrame(results_dict["model_details"]["embedding"], columns=["Symbol"])
 
@@ -583,7 +638,15 @@ class ModelToExcel:
         return result
     
 
-    def query_model_descriptors_df(self):
+    def query_model_descriptors_df(self) -> pd.DataFrame:
+        """
+        Query database for model descriptors and their definitions.
+        
+        Note: This method is a placeholder and requires SQL implementation.
+        
+        Returns:
+            pd.DataFrame: Model descriptors from database (currently returns empty result).
+        """
         # TODO: Write query
         sql = text(f"""
         
@@ -595,7 +658,19 @@ class ModelToExcel:
         return model_descriptors
     
 
-    def model_descriptors(self, writer, model_descriptors=None):
+    def model_descriptors(self, writer: Any, model_descriptors: Optional[pd.DataFrame]=None) -> pd.DataFrame:
+        """
+        Create the model descriptors sheet in the Excel workbook.
+        
+        Lists all descriptors used in the model with their definitions and classifications. Includes autofilter and properly sized columns.
+        
+        Args:
+            writer: pandas ExcelWriter object for writing to the workbook.
+            model_descriptors (pd.DataFrame, optional): Model descriptors dataframe. If None, queries from database or uses instance dataframe.
+        
+        Returns:
+            pd.DataFrame: The model descriptors dataframe that was written.
+        """
         if model_descriptors is None:
             model_descriptors = self.query_model_descriptors_df() if self.model_descriptors_df is None else self.model_descriptors_df
         
@@ -612,7 +687,22 @@ class ModelToExcel:
 
 
     @staticmethod
-    def get_model_descriptor_values_df(results_dict, df_pred_cv, df_pred_test, df_training_model, df_test_model):
+    def get_model_descriptor_values_df(results_dict: Dict[str, Any], df_pred_cv: pd.DataFrame, df_pred_test: pd.DataFrame, df_training_model: pd.DataFrame, df_test_model: pd.DataFrame) -> pd.DataFrame:
+        """
+        Create dataframe combining predictions with descriptor values for all data points.
+        
+        Merges experimental and predicted values for training and test sets with their corresponding descriptor values, renaming columns for clarity.
+        
+        Args:
+            results_dict (dict): Dictionary containing model details including units.
+            df_pred_cv (pd.DataFrame): Training set predictions with cross-validation fold information.
+            df_pred_test (pd.DataFrame): Test set predictions.
+            df_training_model (pd.DataFrame): Training set descriptor values.
+            df_test_model (pd.DataFrame): Test set descriptor values.
+        
+        Returns:
+            pd.DataFrame: Combined dataframe with predictions and descriptor values for all points, with formula characters escaped.
+        """
         # Get the units of the model (for the Observed and Predicted columns) and the columns to pull
         units = results_dict["model_details"].get("unitsModel", "Units")
         columns = ["exp_prop_id", "dtxcid", "casrn", "preferred_name", "canon_qsar_smiles", "exp", "pred"]
@@ -656,7 +746,15 @@ class ModelToExcel:
         return final
 
 
-    def query_model_descriptor_values_df(self):
+    def query_model_descriptor_values_df(self) -> pd.DataFrame:
+        """
+        Query database for predictions and descriptor values.
+        
+        Note: This method is a placeholder and requires SQL implementation.
+        
+        Returns:
+            pd.DataFrame: Predictions and descriptor values from database (currently returns empty result).
+        """
         # TODO: Write query
         sql = text(f"""
         
@@ -668,7 +766,19 @@ class ModelToExcel:
         return model_descriptor_values
     
 
-    def model_descriptor_values(self, writer, model_descriptor_values=None):
+    def model_descriptor_values(self, writer: Any, model_descriptor_values: Optional[pd.DataFrame]=None) -> pd.DataFrame:
+        """
+        Create the model descriptor values sheet in the Excel workbook.
+        
+        Shows predictions and descriptor values for all compounds in training and test sets. Includes autofilter and appropriately sized columns.
+        
+        Args:
+            writer: pandas ExcelWriter object for writing to the workbook.
+            model_descriptor_values (pd.DataFrame, optional): Descriptor values dataframe. If None, queries from database or uses instance dataframe.
+        
+        Returns:
+            pd.DataFrame: The descriptor values dataframe that was written.
+        """
         if model_descriptor_values is None:
             model_descriptor_values = self.query_model_descriptor_values_df() if self.model_descriptor_values_df is None else self.model_descriptor_values_df
         
@@ -683,16 +793,246 @@ class ModelToExcel:
 
         return model_descriptor_values
     
+
+    @staticmethod
+    def get_training_cv_predictions_df(df_training_cv: pd.DataFrame) -> pd.DataFrame:
+        """
+        Prepare training set cross-validation predictions for Excel output.
+        
+        Moves exp_prop_id to the first column for proper hyperlink anchoring.
+        
+        Args:
+            df_training_cv (pd.DataFrame): Training cross-validation predictions dataframe.
+        
+        Returns:
+            pd.DataFrame: Formatted predictions dataframe with exp_prop_id in first column.
+        """
+        exp_prop_id = df_training_cv.pop("exp_prop_id")
+        df_training_cv.insert(0, "exp_prop_id", exp_prop_id)
+        return df_training_cv
+    
+
+    def query_training_cv_predictions_df(self) -> pd.DataFrame:
+        """
+        Query database for training set cross-validation predictions.
+        
+        Note: This method is a placeholder and requires SQL implementation.
+        
+        Returns:
+            pd.DataFrame: Training predictions from database (currently returns empty result).
+        """
+        # TODO: Write query
+        sql = text(f"""
+        
+        """)
+
+        logging.info("Querying database for Training CV Predictions")
+        training_cv_predictions = pd.read_sql(sql, self.engine).round(2)
+        logging.info("Finished querying database for Training CV Predictions")
+        return training_cv_predictions
+    
+
+    def training_cv_predictions(self, writer: Any, training_cv_predictions: Optional[pd.DataFrame]=None, chart_size_px: int=520, pad_ratio: float=0.02, integer_ticks: bool=True, yx_offset_rows: int=3) -> pd.DataFrame:
+        """
+        Create the training CV predictions sheet in the Excel workbook with scatter plot.
+        
+        Displays cross-validation predictions with observed vs predicted plot, autofilter, and appropriate column widths.
+        
+        Args:
+            writer: pandas ExcelWriter object for writing to the workbook.
+            training_cv_predictions (pd.DataFrame, optional): Training predictions dataframe. If None, queries from database or uses instance dataframe.
+            chart_size_px (int): Square chart size in pixels. Defaults to 520.
+            pad_ratio (float): Axis padding as fraction of data span. Defaults to 0.02.
+            integer_ticks (bool): Whether to use integer-based tick spacing. Defaults to True.
+            yx_offset_rows (int): Empty rows between data and y=x helper points. Defaults to 3.
+        
+        Returns:
+            pd.DataFrame: The training predictions dataframe that was written.
+        """
+        if training_cv_predictions is None:
+            training_cv_predictions = self.query_training_cv_predictions_df() if self.training_cv_predictions_df is None else self.training_cv_predictions_df
+        
+        training_cv_predictions.to_excel(writer, sheet_name="Training CV Predictions", index=False)
+
+        workbook = writer.book
+        worksheet = writer.sheets["Training CV Predictions"]
+        worksheet.freeze_panes(1, 0)
+
+        ModelToExcel.set_column_width(writer, "Training CV Predictions", training_cv_predictions, min_col_width=7, col_width_pad=5, how="header")
+        ModelToExcel.add_filter(writer, "Training CV Predictions", training_cv_predictions)
+        
+        ModelToExcel.add_plot(writer, workbook, "Training CV Predictions", "Training CV Predictions", training_cv_predictions, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, log_plot=self.log_plot, yx_offset_rows=yx_offset_rows)
+
+        return training_cv_predictions
+    
+
+    @staticmethod
+    def get_test_set_predictions_df(df_test: pd.DataFrame) -> pd.DataFrame:
+        """
+        Prepare test set predictions for Excel output.
+        
+        Moves exp_prop_id to the first column for proper hyperlink anchoring.
+        
+        Args:
+            df_test (pd.DataFrame): Test set predictions dataframe.
+        
+        Returns:
+            pd.DataFrame: Formatted predictions dataframe with exp_prop_id in first column.
+        """
+        exp_prop_id = df_test.pop("exp_prop_id")
+        df_test.insert(0, "exp_prop_id", exp_prop_id)
+        return df_test
+    
+
+    def query_test_set_predictions_df(self) -> pd.DataFrame:
+        """
+        Query database for test set predictions.
+        
+        Note: This method is a placeholder and requires SQL implementation.
+        
+        Returns:
+            pd.DataFrame: Test predictions from database (currently returns empty result).
+        """
+        # TODO: Write query
+        sql = text(f"""
+        
+        """)
+
+        logging.info("Querying database for Test Set Predictions")
+        test_set_predictions = pd.read_sql(sql, self.engine).round(2)
+        logging.info("Finished querying database for Test Set Predictions")
+        return test_set_predictions
+    
+
+    def test_set_predictions(self, writer: Any, test_set_predictions: Optional[pd.DataFrame]=None, chart_size_px: int=520, pad_ratio: float=0.02, integer_ticks: bool=True, yx_offset_rows: int=3) -> pd.DataFrame:
+        """
+        Create the test set predictions sheet in the Excel workbook with scatter plot.
+        
+        Displays test set predictions with observed vs predicted plot, autofilter, and appropriate column widths.
+        
+        Args:
+            writer: pandas ExcelWriter object for writing to the workbook.
+            test_set_predictions (pd.DataFrame, optional): Test predictions dataframe. If None, queries from database or uses instance dataframe.
+            chart_size_px (int): Square chart size in pixels. Defaults to 520.
+            pad_ratio (float): Axis padding as fraction of data span. Defaults to 0.02.
+            integer_ticks (bool): Whether to use integer-based tick spacing. Defaults to True.
+            yx_offset_rows (int): Empty rows between data and y=x helper points. Defaults to 3.
+        
+        Returns:
+            pd.DataFrame: The test predictions dataframe that was written.
+        """
+        if test_set_predictions is None:
+            test_set_predictions = self.query_test_set_predictions_df() if self.test_set_predictions_df is None else self.test_set_predictions_df
+        
+        test_set_predictions.to_excel(writer, sheet_name="Test Set Predictions", index=False)
+
+        workbook = writer.book
+        worksheet = writer.sheets["Test Set Predictions"]
+        worksheet.freeze_panes(1, 0)
+
+        ModelToExcel.set_column_width(writer, "Test Set Predictions", test_set_predictions, min_col_width=7, col_width_pad=5, how="header")
+        ModelToExcel.add_filter(writer, "Test Set Predictions", test_set_predictions)
+        
+        ModelToExcel.add_plot(writer, workbook, "Test Set Predictions", "Test Set Predictions", test_set_predictions, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, log_plot=self.log_plot, yx_offset_rows=yx_offset_rows)
+
+        return test_set_predictions
+    
+
+    @staticmethod
+    def get_external_predictions_df(df_ext: pd.DataFrame) -> pd.DataFrame:
+        """
+        Prepare external/validation set predictions for Excel output.
+        
+        Moves exp_prop_id to the first column for proper hyperlink anchoring.
+        
+        Args:
+            df_ext (pd.DataFrame): External predictions dataframe.
+        
+        Returns:
+            pd.DataFrame: Formatted predictions dataframe with exp_prop_id in first column.
+        """
+        exp_prop_id = df_ext.pop("exp_prop_id")
+        df_ext.insert(0, "exp_prop_id", exp_prop_id)
+        return df_ext
+    
+
+    def query_external_predictions_df(self) -> pd.DataFrame:
+        """
+        Query database for external validation set predictions.
+        
+        Note: This method is a placeholder and requires SQL implementation.
+        
+        Returns:
+            pd.DataFrame: External predictions from database (currently returns empty result).
+        """
+        # TODO: Write query
+        sql = text(f"""
+        
+        """)
+
+        logging.info("Querying database for External Predictions")
+        external_predictions = pd.read_sql(sql, self.engine).round(2)
+        logging.info("Finished querying database for External Predictions")
+        return external_predictions
+    
+
+    def external_predictions(self, writer: Any, external_predictions: Optional[pd.DataFrame]=None, chart_size_px: int=520, pad_ratio: float=0.02, integer_ticks: bool=True, yx_offset_rows: int=3) -> Optional[pd.DataFrame]:
+        """
+        Create the external predictions sheet in the Excel workbook with scatter plot.
+        
+        Displays external/validation set predictions with observed vs predicted plot (if data available), autofilter, and appropriate column widths.
+        
+        Args:
+            writer: pandas ExcelWriter object for writing to the workbook.
+            external_predictions (pd.DataFrame, optional): External predictions dataframe. If None, queries from database or uses instance dataframe.
+            chart_size_px (int): Square chart size in pixels. Defaults to 520.
+            pad_ratio (float): Axis padding as fraction of data span. Defaults to 0.02.
+            integer_ticks (bool): Whether to use integer-based tick spacing. Defaults to True.
+            yx_offset_rows (int): Empty rows between data and y=x helper points. Defaults to 3.
+        
+        Returns:
+            pd.DataFrame: The external predictions dataframe that was written, or None if no data available.
+        """
+        if external_predictions is None:
+            external_predictions = self.query_external_predictions_df() if self.external_predictions_df is None else self.external_predictions_df
+            if external_predictions is None:
+                return external_predictions
+        
+        external_predictions.to_excel(writer, sheet_name="External Predictions", index=False)
+
+        workbook = writer.book
+        worksheet = writer.sheets["External Predictions"]
+        worksheet.freeze_panes(1, 0)
+
+        ModelToExcel.set_column_width(writer, "External Predictions", external_predictions, min_col_width=7, col_width_pad=5, how="header")
+        ModelToExcel.add_filter(writer, "External Predictions", external_predictions)
+        
+        ModelToExcel.add_plot(writer, workbook, "External Predictions", "External Predictions", external_predictions, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, log_plot=self.log_plot, yx_offset_rows=yx_offset_rows)
+        
+        return external_predictions
+
     
     @staticmethod
     def set_column_width(
-        writer,
+        writer: Any,
         sheet_name: str,
         df: pd.DataFrame,
         col_width_pad: int=4,
         min_col_width: int=5,
         how: str="header",
-        first_col_format = None):
+        first_col_format: Optional[Any] = None) -> None:
+        """
+        Set column widths in Excel sheet based on content or header width.
+        
+        Args:
+            writer: pandas ExcelWriter object for accessing the worksheet.
+            sheet_name (str): Name of the sheet to format.
+            df (pd.DataFrame): Dataframe whose columns determine width.
+            col_width_pad (int): Padding to add to calculated width. Defaults to 4.
+            min_col_width (int): Minimum column width. Defaults to 5.
+            how (str): Method for calculating width - 'header' uses header length, 'full' scans all data. Defaults to 'header'.
+            first_col_format: Optional cell format to apply to the first column.
+        """
         worksheet = writer.sheets[sheet_name]
         for col_idx in range(len(df.columns)):
             if how == "header":
@@ -716,7 +1056,17 @@ class ModelToExcel:
 
 
     @staticmethod
-    def add_filter(writer, sheet_name, df):
+    def add_filter(writer: Any, sheet_name: str, df: pd.DataFrame) -> None:
+        """
+        Add autofilter to a sheet for easy data filtering.
+        
+        Enables filter dropdown buttons on all column headers.
+        
+        Args:
+            writer: pandas ExcelWriter object for accessing the worksheet.
+            sheet_name (str): Name of the sheet to add filter to.
+            df (pd.DataFrame): Dataframe providing shape information for filter range.
+        """
         # Get the worksheet object
         ws = writer.sheets[sheet_name]
 
@@ -728,7 +1078,19 @@ class ModelToExcel:
     
 
     @staticmethod
-    def handle_accidental_formulas(df, how="formula"):
+    def handle_accidental_formulas(df: pd.DataFrame, how: str="formula") -> pd.DataFrame:
+        """
+        Escape special characters in cells that Excel would interpret as formula starts.
+        
+        Prevents cells starting with =, +, -, or @ from being treated as formulas by Excel.
+        
+        Args:
+            df (pd.DataFrame): Dataframe to process.
+            how (str): Escaping method - 'formula' wraps in formula quotes, 'quote' prepends single quote. Defaults to 'formula'.
+        
+        Returns:
+            pd.DataFrame: Processed dataframe with escaped special characters.
+        """
         # Excel treats cells starting with =, +, -, @ as formulas
         # Use an explicit formula to allow values to display properly as is, but alter the actual stored value
         if how == "formula":
@@ -750,6 +1112,307 @@ class ModelToExcel:
         return df
 
 
+    @staticmethod
+    def nice_integer_major_unit(span: int, target_ticks: int=5) -> int:
+        """
+        Calculate a nice integer major unit for chart axis tick spacing.
+        
+        Computes a round number for axis ticks based on the data span, preferring multiples of 1, 2, 5, or 10.
+        
+        Args:
+            span (int): Range of values (max - min).
+            target_ticks (int): Desired approximate number of ticks. Defaults to 5.
+        
+        Returns:
+            int: Nice integer major unit for axis tick spacing.
+        """
+        raw = max(1, int(math.ceil(span / max(1, target_ticks))))
+        exp = int(math.floor(math.log10(raw))) if raw > 0 else 0
+        base = raw / (10 ** exp)
+        if base <= 1:
+            step_base = 1
+        elif base <= 2:
+            step_base = 2
+        elif base <= 5:
+            step_base = 5
+        else:
+            step_base = 10
+        return int(step_base * (10 ** exp))
+    
+
+    @staticmethod
+    def add_hyperlinks_to_sheet(
+        excel_path: str,
+        source_sheet: str,
+        target_sheet: str,
+        df_source: pd.DataFrame,
+        df_target: pd.DataFrame,
+        link_column: str = "exp_prop_id",
+        link_col_index: int = 1) -> None:
+        """
+        Add hyperlinks from source sheet to target sheet based on a matching column.
+        Uses openpyxl to add hyperlinks after the Excel file is written.
+        
+        Args:
+            excel_path: Path to the Excel file
+            source_sheet: Name of the source sheet (e.g., "Training CV Predictions")
+            target_sheet: Name of the target sheet (e.g., "Records")
+            df_source: Source dataframe (used to verify column exists and get values)
+            df_target: Target dataframe (used to create the mapping)
+            link_column: Column name to match on (must exist in both dataframes)
+            link_col_index: Column index (1-based) in source sheet where hyperlinks will be added
+        """
+        logging.info(f"Processing hyperlinks for {source_sheet}")
+        
+        if df_source is None or df_source.empty:
+            logging.warning(f"Source dataframe {source_sheet} is empty or None. Skipping hyperlinks.")
+            return
+        
+        if link_column not in df_source.columns:
+            logging.warning(f"Column '{link_column}' not found in source dataframe {source_sheet}.")
+            return
+        
+        if link_column not in df_target.columns:
+            logging.warning(f"Column '{link_column}' not found in target dataframe {target_sheet}.")
+            return
+        
+        try:
+            # Load the workbook with openpyxl
+            wb = load_workbook(excel_path)
+            ws_source = wb[source_sheet]
+            ws_target = wb[target_sheet]
+        except KeyError as e:
+            logging.warning(f"Sheet not found in workbook: {e}. Skipping hyperlinks.")
+            return
+        except Exception as e:
+            logging.warning(f"Failed to open workbook: {e}. Skipping hyperlinks.")
+            return
+        
+        # Create a mapping of link_column values to row numbers in target sheet
+        # df_target is 0-indexed, but Excel rows are 1-indexed (with row 1 being header)
+        target_row_map = {}
+        for idx, val in enumerate(df_target[link_column]):
+            excel_row = idx + 2  # +2 to account for header (row 1) and 1-based indexing
+            key = str(val).strip() if pd.notna(val) else None
+            target_row_map[key] = excel_row
+        
+        logging.info(f"Created target mapping with {len(target_row_map)} entries for {target_sheet}")
+        logging.info(f"Target column data type: {df_target[link_column].dtype}, Source column data type: {df_source[link_column].dtype}")
+        
+        # Create hyperlink font (blue, underlined)
+        hyperlink_font = Font(color="0563C1", underline="single")
+        
+        # Add hyperlinks to source sheet
+        hyperlinks_added = 0
+        unmatched_count = 0
+        
+        for src_idx, src_val in enumerate(df_source[link_column]):
+            src_val_str = str(src_val).strip() if pd.notna(src_val) else None
+            excel_row = src_idx + 2  # +2 for header and 1-based indexing
+            
+            if src_val_str and src_val_str in target_row_map:
+                target_row = target_row_map[src_val_str]
+                # Create the cell reference for the hyperlink
+                # Format: #SheetName!CellAddress
+                link_target = f"#'{target_sheet}'!A{target_row}"
+                
+                try:
+                    # Get the cell in the source sheet
+                    cell = ws_source.cell(row=excel_row, column=link_col_index)
+                    # Set the hyperlink
+                    cell.hyperlink = link_target
+                    # Apply hyperlink style (blue, underlined)
+                    cell.font = hyperlink_font
+                    hyperlinks_added += 1
+                except Exception as e:
+                    logging.warning(f"Failed to write hyperlink for {source_sheet} row {excel_row}: {e}")
+            else:
+                unmatched_count += 1
+        
+        # Save the modified workbook
+        try:
+            wb.save(excel_path)
+            logging.info(f"Added {hyperlinks_added} hyperlinks from {source_sheet} to {target_sheet} ({unmatched_count} unmatched)")
+        except Exception as e:
+            logging.warning(f"Failed to save workbook after adding hyperlinks: {e}")
+    
+
+    @staticmethod
+    def compute_equal_axis_bounds(
+        x_values: Iterable[float],
+        y_values: Iterable[float],
+        pad_ratio: float=0.02,
+        integer_ticks: bool=True,
+        log_plot: bool=True,
+        target_ticks: int=5,
+    ) -> Tuple[float, float, Optional[float]]:
+        """
+        Calculate equal bounds for both axes of a scatter plot with padding.
+        
+        Ensures x and y axes have identical ranges for better visual comparison on prediction plots. Computes nice integer tick spacing if requested.
+        
+        Args:
+            x_values (Iterable[float]): X-axis values (experimental values).
+            y_values (Iterable[float]): Y-axis values (predicted values).
+            pad_ratio (float): Fraction of total span to pad axes. Defaults to 0.02 (2%).
+            integer_ticks (bool): Whether to use integer-based tick spacing. Defaults to True.
+            log_plot (bool): Whether this is a log-scale plot. Affects major unit calculation. Defaults to True.
+            target_ticks (int): Desired approximate number of axis ticks. Defaults to 5.
+        
+        Returns:
+            Tuple[float, float, Optional[float]]: (min_value, max_value, major_unit) where major_unit is None for non-integer ticks.
+        
+        Raises:
+            ValueError: If no numeric values are provided.
+        """
+        xs = [float(v) for v in x_values if v is not None and v == v]
+        ys = [float(v) for v in y_values if v is not None and v == v]
+        if not xs or not ys:
+            raise ValueError("No numeric values provided for axis scaling.")
+    
+        mn = min(min(xs), min(ys))
+        mx = max(max(xs), max(ys))
+    
+        if mn == mx:
+            mn -= 0.5
+            mx += 0.5
+        else:
+            span = mx - mn
+            mn -= span * pad_ratio
+            mx += span * pad_ratio
+    
+        if integer_ticks:
+            int_min = math.floor(mn)
+            int_max = math.ceil(mx)
+            if int_min == int_max:
+                int_min -= 1
+                int_max += 1
+            # For integer ticks, always use major_unit=1 to show ticks at every integer
+            # This is important for log-log plots where integer differences represent significant changes
+            if log_plot:
+                major_unit = 1
+            else:
+                major_unit = ModelToExcel.nice_integer_major_unit(int_max - int_min, target_ticks=target_ticks)
+            
+            return float(int_min), float(int_max), float(major_unit)
+    
+        return mn, mx, None
+    
+
+    @staticmethod
+    def add_plot(
+        writer: Any,
+        workbook: Any,
+        sheet_name: str,
+        sheet_name_plot: str,
+        df: pd.DataFrame,
+        chart_size_px: int=520,
+        pad_ratio: float=0.02,
+        integer_ticks: bool=True,
+        log_plot: bool=True,
+        yx_offset_rows: int=3) -> None:
+        """
+        Add a prediction vs experimental scatter plot to the worksheet.
+        
+        Creates a scatter plot with predicted (y-axis) vs experimental (x-axis) values, including a y=x reference line. 
+        Data points are plotted as circles, and axes are scaled equally with integer tick marks.
+        
+        Args:
+            writer: pandas ExcelWriter object for accessing worksheets.
+            workbook: xlsxwriter workbook object for creating the chart.
+            sheet_name (str): Name of the sheet containing data (must have 'exp' and 'pred' columns).
+            sheet_name_plot (str): Name of the sheet where chart will be inserted.
+            df (pd.DataFrame): Dataframe with 'exp' and 'pred' columns.
+            chart_size_px (int): Square chart size in pixels. Defaults to 520.
+            pad_ratio (float): Axis padding as fraction of data span. Defaults to 0.02.
+            integer_ticks (bool): Whether to use integer-based tick spacing. Defaults to True.
+            log_plot (bool): Whether this is a log-scale plot. Defaults to True.
+            yx_offset_rows (int): Empty rows between data and y=x helper points. Defaults to 3.
+        """
+        worksheet = writer.sheets[sheet_name]
+        worksheet_plot = writer.sheets[sheet_name_plot]
+        # Hide worksheet gridlines (screen + print)
+        worksheet.hide_gridlines(2)
+        nrows = len(df)
+        # Compute unified bounds (also used for y=x line)
+        mn, mx, major_unit = ModelToExcel.compute_equal_axis_bounds(
+            df["exp"], df["pred"], pad_ratio=pad_ratio, integer_ticks=integer_ticks, log_plot=log_plot, target_ticks=5)
+        # Create scatter chart with markers
+        chart = workbook.add_chart({"type":"scatter", "subtype":"straight_with_markers"})
+        chart.set_title({"name":"Predicted vs Experimental"})
+        chart.set_style(10)
+        # Series 1: data points (markers only)
+        # exp is column B (index 1), pred is column C (index 2) even after adding abs_diff (column D)
+        chart.add_series({
+                "name":"Pred vs Exp",
+                "categories":[sheet_name, 1, 1, nrows, 1],  # B2..B(nrows+1)
+                "values":[sheet_name, 1, 2, nrows, 2],  # C2..C(nrows+1)
+                "marker":{"type":"circle", "size":6},
+                "line":{"none":True}})
+        # Write y = x helper points a few rows below the data, in columns B/C
+        yx_row_start = nrows + 1 + yx_offset_rows  # 0-based row index after header
+        worksheet.write_number(yx_row_start, 1, mn)  # B{yx_row_start+1}
+        worksheet.write_number(yx_row_start, 2, mn)  # C{yx_row_start+1}
+        worksheet.write_number(yx_row_start + 1, 1, mx)  # B{yx_row_start+2}
+        worksheet.write_number(yx_row_start + 1, 2, mx)  # C{yx_row_start+2}
+        # Series 2: y = x line (dark blue, solid, no markers)
+        chart.add_series({
+                "name":"y = x",
+                "categories":[sheet_name, yx_row_start, 1, yx_row_start + 1, 1],  # B(r)..B(r+1)
+                "values":[sheet_name, yx_row_start, 2, yx_row_start + 1, 2],  # C(r)..C(r+1)
+                "marker":{"type":"none"},
+                "line":{"color":"#1f4e79", "width":2.25}})  # dark blue
+        # Axes with same bounds, integer labels, no gridlines
+        x_axis_opts = {
+            "name":"exp",
+            "min":mn, "max":mx,
+            "num_format":"0",
+            "crossing": "min",
+            "major_gridlines":{"visible":False},
+            "minor_gridlines":{"visible":False}}
+        y_axis_opts = {
+            "name":"pred",
+            "min":mn, "max":mx,
+            "num_format":"0",
+            "crossing": "min",
+            "major_gridlines":{"visible":False},
+            "minor_gridlines":{"visible":False}}
+        if major_unit is not None:
+            x_axis_opts["major_unit"] = major_unit
+            y_axis_opts["major_unit"] = major_unit
+        
+        chart.set_x_axis(x_axis_opts)
+        chart.set_y_axis(y_axis_opts)
+                
+        # Make the chart square
+        chart.set_size({"width":chart_size_px, "height":chart_size_px})
+        # Plot area: border + margins so axis titles/labels aren't overlapped
+        chart.set_plotarea({
+                "fill":{"none":True},
+                "border":{"color":"#666666", "width":1.0},
+                "layout":{
+                    "x":0.12,  # left padding for y-axis title + labels
+                    "y":0.10,  # top padding for chart title
+                    "width":0.84,  # reduce width so right edge doesn't crowd labels/legend
+                    "height":0.80}})  # reduce height to leave room for x-axis title
+        # Legend: bottom-right, overlaid, explicit size to avoid warnings
+        chart.set_legend({
+                "overlay":True,
+                "layout":{"x":0.7, "y":0.75, "width":0.25, "height":0.1}})
+        
+        if sheet_name == sheet_name_plot:
+            # Position chart to the right of the data
+            # Estimate: each column is ~20 characters wide, chart starts after all data columns
+            num_data_cols = len(df.columns)
+            # Add some buffer columns for spacing (typically 1-2 columns)
+            chart_start_col = num_data_cols + 1
+            chart_position = f"{chr(65 + chart_start_col)}" + "2"  # Start at row 2
+            worksheet_plot.insert_chart(chart_position, chart, {"x_offset":20, "y_offset":10})
+        else:
+            # If chart is on a separate sheet, place it at top-left
+            worksheet_plot.insert_chart(0, 0, chart, {'x_scale': 1.0, 'y_scale': 1.0})
+    
+
     def create_excel(
             self,
             chart_size_px: int=520,  # square chart size
@@ -758,7 +1421,22 @@ class ModelToExcel:
             yx_offset_rows: int=3,  # empty rows between data and y=x helper points
             col_width_pad: int=4,
             min_col_width: int=5
-        ):
+        ) -> None:
+        """
+        Generate complete Excel workbook with all model summary sheets and charts.
+        
+        Creates an Excel file with multiple sheets containing model summary information, statistics, experimental records, 
+        descriptor information, and prediction plots for training, test, and external validation sets. Hyperlinks are added 
+        as a post-processing step after the file is written.
+        
+        Args:
+            chart_size_px (int): Square chart size in pixels for prediction plots. Defaults to 520.
+            pad_ratio (float): Axis padding as fraction of data span. Defaults to 0.02.
+            integer_ticks (bool): Whether to use integer-based tick spacing on charts. Defaults to True.
+            yx_offset_rows (int): Empty rows between chart data and y=x reference line helper points. Defaults to 3.
+            col_width_pad (int): Padding added to calculated column widths. Defaults to 4.
+            min_col_width (int): Minimum column width. Defaults to 5.
+        """
         logging.info("Creating detailed Excel...")
         with pd.ExcelWriter(self.excel_path, engine="xlsxwriter") as writer:
             workbook = writer.book
@@ -799,7 +1477,32 @@ class ModelToExcel:
             df = self.model_descriptor_values(writer, self.model_descriptor_values_df)
             # logging.info(f"model_descriptor_values:\n\t{df.head(2)}")
 
+            logging.info("Creating Training CV Predictions...")
+            df = self.training_cv_predictions(writer, self.training_cv_predictions_df, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, yx_offset_rows=yx_offset_rows)
+            # logging.info(f"training_cv_predictions:\n\t{df.head(2)}")
+
+            logging.info("Creating Test Set Predictions...")
+            df = self.test_set_predictions(writer, self.test_set_predictions_df, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, yx_offset_rows=yx_offset_rows)
+            # logging.info(f"test_set_predictions:\n\t{df.head(2)}")
+
+            logging.info("Creating External Predictions...")
+            df = self.external_predictions(writer, self.external_predictions_df, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, yx_offset_rows=yx_offset_rows)
+            # logging.info(f"external_predictions:\n\t{df.head(2)}")
+
             logging.info("Done creating detailed Excel!")
+        
+        # Add hyperlinks AFTER the Excel file is written and closed
+        # This allows us to use openpyxl to properly set hyperlinks with formatting
+        logging.info("Adding hyperlinks to Excel file...")
+        if self.training_cv_predictions_df is not None:
+            self.add_hyperlinks_to_sheet(self.excel_path, "Training CV Predictions", "Records", self.training_cv_predictions_df, self.records_df)
+            self.add_hyperlinks_to_sheet(self.excel_path, "Records", "Training CV Predictions", self.records_df, self.training_cv_predictions_df)
+        if self.test_set_predictions_df is not None:
+            self.add_hyperlinks_to_sheet(self.excel_path, "Test Set Predictions", "Records", self.test_set_predictions_df, self.records_df)
+            self.add_hyperlinks_to_sheet(self.excel_path, "Records", "Test Set Predictions", self.records_df, self.test_set_predictions_df)
+        # if self.external_predictions_df is not None:
+        #     self.add_hyperlinks_to_sheet(self.excel_path, "External Predictions", "Records", self.external_predictions_df, self.records_df)
+        logging.info("Hyperlinks added successfully!")
 
 
 def main():

@@ -29,7 +29,7 @@ class TestPredict(TestCase):
         print(r)
     
     def test_coeffs(self):
-        r = model_coeffs("1729")
+        r = model_coeffs("1724")
         print("\nmodel_coeffs")
         print(r)
     
@@ -91,12 +91,12 @@ class TestPredict(TestCase):
         print("\ntest_predict_examples")
         for smiles in smiles_list:
             params = {'smiles': {smiles}, 'model_id': '1065','report_format':'json'}       
-            url = host + "/api/predictor_models/models/predictDB"        
+            url = host + "/api/predictor_models/predictDB"        
             r = requests.get(url, params) # need to use requests because cant pass parameters otherwise for flask       
             print(r.json())
             
     def test_predictDB_html_get(self):
-        url = host + "/api/predictor_models/models/predictDB"
+        url = host + "/api/predictor_models/predictDB"
         params = {'smiles': "C1CCCCC1", 'model_id': '1065','report_format':'html'}        
         r = requests.get(url, params)        
         print(r.status_code)

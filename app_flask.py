@@ -9,15 +9,13 @@ Repository created 05/21/2021
 """
 
 from flask import request, abort, Flask, send_file, jsonify
- 
 
 import json
 import logging
 import pickle
 import gzip
 
-from logging import INFO, DEBUG
-from model_ws_db_utilities import ModelPredictor, ModelInitializer, getSession
+from model_ws_db_utilities import ModelPredictor, ModelInitializer
 
 # why not make the following methods part of a Utility class then call methods from instance of it?
 from model_ws_utilities import get_model_info, call_build_model_with_preselected_descriptors, models, \
@@ -29,42 +27,26 @@ from applicability_domain import applicability_domain_utilities as adu
 from sklearn2pmml import sklearn2pmml
 
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv('personal.env')
 from util import predict_constants as pc
 
 import util.get_model_file as gmf
 import io
 
-
-# import os
-# user_name = os.getenv('DEV_QSAR_USER', 'default_user')
-# print(f"The user is: {user_name}")
-
-
 from report_creator_dict import ReportCreator
 
-# import coloredlogs
-# import connexion
-# from connexion.middleware import MiddlewarePosition
-# from connexion.options import SwaggerUIOptions
-# from starlette.middleware.cors import CORSMiddleware
-#
-# coloredlogs.install(level=DEBUG, milliseconds=True,
-#                     fmt='%(asctime)s - %(name)s - %(levelname)s - %(message)s (%(filename)s:%(lineno)d)')
-#
-# options = SwaggerUIOptions(spec_path="/api/predictor_models/swagger.yaml",
-#                            swagger_ui_path="/api/predictor_models/swagger")
-#
-# app = connexion.AsyncApp(__name__, swagger_ui_options=options)
-# app.add_middleware(
-#     CORSMiddleware,
-#     position=MiddlewarePosition.BEFORE_EXCEPTION,
-#     allow_origins=["*"],
-#     allow_credentials=True,
-#     allow_methods=["*"],
-#     allow_headers=["*"],
-# )
-# app.add_api('swagger.yaml', swagger_ui_options=options)
+custom_level_styles = {
+    'debug': {'color': 'cyan'},
+    'info': {'color': 'yellow'},
+    'warning': {'color': 'red', 'bold': True},
+    'error': {'color': 'white', 'background': 'red'},
+}
+from logging import INFO, DEBUG, ERROR
+import coloredlogs
+level = INFO
+coloredlogs.install(level=level, milliseconds=True, level_styles=custom_level_styles,
+                    fmt='%(asctime)s - %(name)s - %(levelname)s - %(message)s (%(filename)s:%(lineno)d)')
+
 app = Flask(__name__)
 log = logging.getLogger('werkzeug')
 log.setLevel(logging.DEBUG)
@@ -90,8 +72,6 @@ def get_metadata():
     )
     
 
-
-
 @app.route('/hello/<name>', methods=['GET'])
 def say_hello(name):
     """
@@ -101,19 +81,13 @@ def say_hello(name):
     return "Hello, " + name
 
 
-
-# # use_pmml_pipeline_during_model_building = True # if true use PMMLPipeline with standardizing happening separate during model building
-# # use_sklearn2pmml = True # if false uses pypmml to load the file. Note: pypmml doesnt handle knn predictions the same way...
-
-
-
-@app.route('/api/predictor_models/models/<string:qsar_method>/info', methods=['GET'])
+@app.route('/api/predictor_models/<string:qsar_method>/info', methods=['GET'])
 def method_info(qsar_method):
     """Returns a short, generic description of the QSAR method"""
     return get_model_info(qsar_method), 200
 
 
-@app.route('/api/predictor_models/models/<string:qsar_method>/train', methods=['POST'])
+@app.route('/api/predictor_models/<string:qsar_method>/train', methods=['POST'])
 def train(qsar_method):
     """Trains a model for the specified QSAR method on provided data"""
 
@@ -134,11 +108,6 @@ def train(qsar_method):
         include_standardization_in_pmml = obj.get('include_standardization_in_pmml', '').lower() == 'true'
     else:
         abort(400, 'missing include_standardization_in_pmml')
-
-    if obj.get('save_to_database'):  # Sets boolean remove_log_p from string
-        save_to_database = obj.get('save_to_database', '').lower() == 'true'
-    else:
-        save_to_database = False
 
     if training_tsv is None:
         training_tsv = request.files.get('training_tsv').read().decode('UTF-8')
@@ -184,30 +153,18 @@ def train(qsar_method):
         models[model_id] = model
         status = 201
 
-    if save_to_database:
-        # mwdu.saveModelToDatabase(model, model_id)
-        # return 'model bytes saved to database', 202
-        # TMM: the code that was in there doesnt work anymore
-        print('need to implement working method to save to database using sql')
-        return 'need to implement working method to save to database using sql', 400
-
+    # Returns model bytes
+    if use_pmml:
+        pmml_file = 'model.pmml'
+        sklearn2pmml(model.model_obj,
+                     pmml_file)  # write pmml to harddrive temporarily- TODO will this cause problems in docker???
+        with open(pmml_file, 'r') as file:
+            return bytes(file.read(), 'utf-8'), status  # return pmml as string, todo compress it?
     else:
-        # Returns model bytes
-        if use_pmml:
-
-            pmml_file = 'model.pmml'
-
-            sklearn2pmml(model.model_obj,
-                         pmml_file)  # write pmml to harddrive temporarily- TODO will this cause problems in docker???
-
-            with open(pmml_file, 'r') as file:
-                return bytes(file.read(), 'utf-8'), status  # return pmml as string, todo compress it?
-
-        else:
-            return pickle.dumps(model), status
+        return pickle.dumps(model), status
 
 
-@app.route('/api/predictor_models/models/prediction_applicability_domain', methods=['POST'])
+@app.route('/api/predictor_models/prediction_applicability_domain', methods=['POST'])
 def prediction_applicability_domain():
     """Generates applicability domain values"""
 
@@ -215,8 +172,6 @@ def prediction_applicability_domain():
 
     training_tsv = obj.get('training_tsv')  # Retrieves the training data as a TSV
     test_tsv = obj.get('test_tsv')  # Retrieves the training data as a TSV
-
-    # print(embedding_tsv)
 
     applicability_domain = obj.get('applicability_domain')
 
@@ -280,7 +235,7 @@ def get_embedding(obj):
     return embedding
 
 
-@app.route('/api/predictor_models/models/<string:qsar_method>/embedding', methods=['POST'])
+@app.route('/api/predictor_models/<string:qsar_method>/embedding', methods=['POST'])
 def train_embedding_ga(qsar_method):
     """Post method that trains GA embedding for the specified QSAR method on provided data"""
 
@@ -301,13 +256,6 @@ def train_embedding_ga(qsar_method):
     if prediction_tsv is None:
         abort(400, 'missing prediction tsv')
 
-    # if obj.get('save_to_database'):  # Sets boolean remove_log_p from string
-    #     save_to_database = obj.get('save_to_database', '').lower() == 'true'
-    # else:
-    #     save_to_database = False
-
-    # model_id = obj.get('model_id')  # Retrieves the model number to use for persistent storage
-
     if obj.get('remove_log_p'):  # Sets boolean remove_log_p from string
         remove_log_p = obj.get('remove_log_p', '').lower() == 'true'
     else:
@@ -326,10 +274,6 @@ def train_embedding_ga(qsar_method):
     threshold = int(obj.get('threshold'))
     descriptor_coefficient = float(obj.get('descriptor_coefficient'))
     n_threads = int(obj.get('n_threads'))
-
-    # print('use_wards = ',use_wards)
-    # print('use_wards2 = ', obj.get('use_wards'))
-    # print(num_generations)
 
     embedding, timeMin = call_build_embedding_ga(qsar_method=qsar_method,
                                                  training_tsv=training_tsv,
@@ -353,7 +297,7 @@ def train_embedding_ga(qsar_method):
     return result_str
 
 
-@app.route('/api/predictor_models/models/<string:qsar_method>/embedding_importance', methods=['POST'])
+@app.route('/api/predictor_models/<string:qsar_method>/embedding_importance', methods=['POST'])
 def train_embedding_importance(qsar_method):
     """Post method that trains importance based embedding for the specified QSAR method on provided data"""
 
@@ -373,13 +317,6 @@ def train_embedding_importance(qsar_method):
         prediction_tsv = request.files.get('prediction_tsv').read().decode('UTF-8')
     if prediction_tsv is None:
         abort(400, 'missing prediction tsv')
-
-    # if obj.get('save_to_database'):  # Sets boolean remove_log_p from string
-    #     save_to_database = obj.get('save_to_database', '').lower() == 'true'
-    # else:
-    #     save_to_database = False
-
-    # model_id = obj.get('model_id')  # Retrieves the model number to use for persistent storage
 
     if obj.get('remove_log_p'):  # Sets boolean remove_log_p from string
         remove_log_p = obj.get('remove_log_p', '').lower() == 'true'
@@ -431,7 +368,7 @@ def train_embedding_importance(qsar_method):
     return result_str
 
 
-@app.route('/api/predictor_models/models/<string:qsar_method>/embedding_lasso', methods=['POST'])
+@app.route('/api/predictor_models/<string:qsar_method>/embedding_lasso', methods=['POST'])
 def train_embedding_lasso(qsar_method):
     """Post method that trains importance based embedding for the specified QSAR method on provided data"""
 
@@ -480,7 +417,7 @@ def train_embedding_lasso(qsar_method):
     return result_str
 
 
-@app.route('/api/predictor_models/models/<string:qsar_method>/cross_validate', methods=['POST'])
+@app.route('/api/predictor_models/<string:qsar_method>/cross_validate', methods=['POST'])
 def cross_validate_fold(qsar_method):
     """Trains a model for the specified QSAR method on provided data"""
     print('\n********************************************************************************************************')
@@ -535,46 +472,8 @@ def cross_validate_fold(qsar_method):
                                remove_log_p=remove_log_p,
                                hyperparameters=hyperparameters, n_jobs=n_jobs)
 
-#
-# @app.route('/api/predictor_models/models/<string:qsar_method>/predictsa', methods=['POST'])
-# def predictpythonstorage(qsar_method):
-#     """Makes predictions for a stored model on provided data"""
-#     obj = request.form
-#     model_id = obj.get('model_id')  # Retrieves the model number to use
-#
-#     prediction_tsv = obj.get('prediction_tsv')  # Retrieves the prediction data as a TSV
-#     if prediction_tsv is None:
-#         prediction_tsv = request.files.get('prediction_tsv').read().decode('UTF-8')
-#
-#     # Can't make predictions without data
-#     if prediction_tsv is None:
-#         abort(400, 'missing prediction tsv')
-#     # Can't make predictions without a model
-#     if model_id is None:
-#         abort(400, 'missing model id')
-#
-#     # Gets stored model using model number
-#     model = None
-#     if mwu.models[model_id] is not None:
-#         model = mwu.models[model_id]
-#     else:
-#         model = loadModelFromDatabase(model_id)
-#
-#     # 404 NOT FOUND if no model stored under provided number
-#     if model is None:
-#         abort(404, 'no stored model with id ' + model_id)
-#
-#     # Calls the appropriate prediction method and returns the results
-#     return mwu.call_do_predictions(prediction_tsv, model), 200
 
-
-# following didnt work for me when I used simple flask app:
-# @app.route('/api/predictor_models/models/predictDB', methods=['POST', 'GET'])
-# def predictDB(smiles, model_id):
-#     return predictFromDB(model_id, smiles)
-
-
-@app.route('/api/predictor_models/models/predictDB', methods=['POST', 'GET'])
+@app.route('/api/predictor_models/predictDB', methods=['POST', 'GET'])
 def predictDB():
     """Automates prediction and AD for single smiles using model in database
     """    
@@ -595,10 +494,9 @@ def predictDB():
     
     if "invalid" in modelResultsJson.lower():
         return modelResultsJson, 400
-
     
     if report_format == "html":
-        rc=ReportCreator()
+        rc = ReportCreator()
         html = rc.create_html_report_from_json(modelResultsJson)
         return html, 200
     else:
@@ -607,8 +505,7 @@ def predictDB():
     return mp.predictFromDB(model_id, smiles, report_format), 200
 
 
-
-@app.route('/api/predictor_models/models/predict_identifier', methods=['POST', 'GET'])
+@app.route('/api/predictor_models/predict_identifier', methods=['POST', 'GET'])
 def predict_identifier():
     """Automates prediction and AD for single identifier using model in database
     """    
@@ -637,83 +534,25 @@ def predict_identifier():
     if code != 200:
         return jsonify(error="not_found", message=f"Could not find {identifier}"), 404
     
-    if len(chemicals)>0:    
+    if len(chemicals) > 0: 
         smiles = chemicals[0]["chemical"]["smiles"]
     else:
         return jsonify(error="not_found", message=f"Could not find {identifier}"), 404
-    
         
     mp = ModelPredictor()
     modelResultsJson = mp.predictFromDB(model_id, smiles)
     
     if "invalid" in modelResultsJson.lower():
         return modelResultsJson, 400
-
     
     if report_format == "html":
-        rc=ReportCreator()
+        rc = ReportCreator()
         html = rc.create_html_report_from_json(modelResultsJson)
         return html, 200
     else:
         return modelResultsJson, 200
 
     return mp.predictFromDB(model_id, smiles, report_format), 200
-
-
-# def predictDB_POST(body):
-#     return predictDB(body['model_id'], body['smiles'],body['report_format'])
-#
-# @app.route('/api/predictor_models/models/predictDB', methods=['POST', 'GET'])
-# def predictDB(model_id, smiles, report_format):
-#     """Automates prediction and AD for single smiles using model in database"""
-#
-#     report_format = report_format.lower()
-#     if report_format not in ['json', 'html']:
-#         report_format = 'json'
-#
-#     mp = ModelPredictor()
-#     modelResultsJson = mp.predictFromDB(model_id, smiles)
-#
-#     if report_format == "html":
-#         rc=ReportCreator()
-#         html = rc.create_html_report_from_json(modelResultsJson)
-#         return html, 200
-#     else:
-#         return modelResultsJson, 200
-#
-#     return mp.predictFromDB(model_id, smiles, report_format)
-
-
-# @app.route('/api/predictor_models/models/predict', methods=['POST'])
-# def predict():
-#     """Makes predictions for a stored model on provided data"""
-#     obj = request.form
-#     model_id = obj.get('model_id')  # Retrieves the model number to use
-#
-#     prediction_tsv = obj.get('prediction_tsv')  # Retrieves the prediction data as a TSV
-#     if prediction_tsv is None:
-#         prediction_tsv = request.files.get('prediction_tsv').read().decode('UTF-8')
-#
-#     # Can't make predictions without data
-#     if prediction_tsv is None:
-#         abort(400, 'missing prediction tsv')
-#     # Can't make predictions without a model
-#     if model_id is None:
-#         abort(400, 'missing model id')
-#
-#     if models[model_id] is not None:
-#         # Gets stored model using model number
-#         model = models[model_id]
-#     else:
-#         abort(400, 'Need to init model or use predictDB API call instead')
-#
-#     # 404 NOT FOUND if no model stored under provided number
-#     if model is None:
-#         abort(404, 'no stored model with id ' + model_id)
-#
-#     # Calls the appropriate prediction method and returns the results
-#     return call_do_predictions(prediction_tsv, model), 200
-
 
 
 def _read_text_form_or_file(field_name: str):
@@ -730,14 +569,17 @@ def _read_text_form_or_file(field_name: str):
     val = request.form.get(field_name)
     return val
 
-@app.route('/api/predictor_models/models/predict', methods=['POST'])
+
+@app.route('/api/predictor_models/predict', methods=['POST'])
 def predict():
+    """input: model_id and prediction_tsv
+       output: predictions json (list of 'id', 'exp', 'pred')
+    """    
+
     obj = request.form
     model_id = obj.get('model_id')
 
     prediction_tsv = _read_text_form_or_file("prediction_tsv")
-    
-    # print(prediction_tsv)
 
     if prediction_tsv is None:
         abort(400, 'missing prediction tsv')
@@ -755,7 +597,7 @@ def predict():
     return call_do_predictions(prediction_tsv, model), 200
 
 
-@app.route('/api/predictor_models/models/plot', methods=['POST'])
+@app.route('/api/predictor_models/plot', methods=['POST'])
 def generate_plot():
     """Makes predictions for a stored model on provided data"""
     obj = request.form
@@ -794,20 +636,12 @@ def generate_plot():
     return call_generate_plot(training_tsv, prediction_tsv, model, model_name, plot_type), 200
 
 
-@app.route('/api/predictor_models/models/initPMML', methods=['POST'])
+@app.route('/api/predictor_models/initPMML', methods=['POST'])
 def initPMML():
     """Loads a model and stores it under the provided number"""
 
-    # print('enter initPMML')
-
-    # form_obj = request.form
-    # files_obj = request.files  # Retrieves the files attached to the request
-
     form_obj = request.get_json()
     model_id = form_obj.get('model_id')  # Retrieves the model number to use for persistent storage
-    # print('form_obj',form_obj)
-
-    # print('model_id=',model_id)
 
     # Can't store a model unless number is specified
     if model_id is None:
@@ -818,17 +652,8 @@ def initPMML():
         model = models[model_id]
         return model.get_model_description(), 201
 
-    # if mwu.models[model_id] is not None:
-    #     model = mwu.models[model_id]
-    #     print('Already have model loaded, description=:',model.get_model_description)
-    #     return model.get_model_description(), 201
-
     # Retrieves the model file from the request files
-    # model_file = files_obj['model']
     model_file = form_obj['model']
-
-    # print(model_file)
-    # return ""
 
     print('use_sklearn2mml in form_obj:', form_obj.get('use_sklearn2pmml'))
 
@@ -867,15 +692,10 @@ def initPMML():
     else:
         is_binary = form_obj['is_binary'].lower == 'true'
 
-    # print('is_categorical', is_categorical)
     model = instantiateModelForPrediction(qsar_method=form_obj['qsar_method'],
                                           is_binary=is_binary, pmml_file_path=pmml_file_path,
                                           use_sklearn2pmml=use_sklearn2pmml)  # init from app should take care of this when doing from java
     model.set_details(details=form_obj)
-
-    # print(model.model_obj)
-    # model.embedding = model.model_obj.dataDictionary.fieldNames
-    # model.embedding.remove('Property')
 
     # Stores model under provided number
     models[model_id] = model
@@ -891,7 +711,7 @@ def initPMML():
     return model.get_model_description(), 201
 
 
-@app.route('/api/predictor_models/models/initPickle', methods=['POST'])
+@app.route('/api/predictor_models/initPickle', methods=['POST'])
 def initPickle():
     """Loads a model and stores it under the provided number"""
     print('enter initPickle')
@@ -918,25 +738,12 @@ def initPickle():
         # print('is_categorical', is_categorical)
         model = pickle.loads(model_file.read())
 
-        # printEqn(model)
-
         if not hasattr(model, "is_binary"):
             print('model.is_binary is none, setting to false')
             model.is_binary = False
 
-            # if form_obj['is_binary']:
-            #     if isinstance(form_obj['is_binary'], bool):
-            #         model.is_binary = form_obj['is_binary']
-            #     else:
-            #         model.is_binary = form_obj['is_binary'].lower == 'true'
-            #     print(model.is_binary)
-
-        # model.modelId = model_id
-
         # Stores model under provided number
         models[model_id] = model
-        
-        
 
         print('After init model_description =', model.get_model_description())
         return model.get_model_description(), 201
@@ -944,7 +751,6 @@ def initPickle():
     else:
         # Can't store a model if none provided
         abort(400, 'missing model bytes')
-
 
 
 @app.get(pc.URL_LOCAL_FILE_API)
@@ -991,15 +797,12 @@ def get_file():
     )
        
 
-@app.route('/api/predictor_models/models/<string:model_id>', methods=['GET'])
+@app.route('/api/predictor_models/<string:model_id>', methods=['GET'])
 def details(model_id):
     """Returns a detailed description of the QSAR model with version and parameter information (also inits the model if needed)"""
 
-    mi=ModelInitializer()
-    # model = mwu.models[model_id]
+    mi = ModelInitializer()
     model = mi.init_model(model_id)
-
-    # print('details3', model.get_model_description())
 
     # 404 NOT FOUND if no model stored under provided number
     if model is None:
@@ -1013,44 +816,39 @@ def details(model_id):
 
     # Return description and 200 OK
     return model_details, 200
-#
-#
-#
+
+
 @app.route('/api/predictor_models/models', methods=['GET'])
 def available_models():
     """Returns a detailed description of the QSAR model with version and parameter information"""
 
     # model = mwu.models[model_id]
-    mi=ModelInitializer()
+    mi = ModelInitializer()
     models = mi.get_available_models()
 
     # Return description and 200 OK
     return models, 200
-#
-#
 
-@app.route('/api/predictor_models/models/reg_coeff/<string:model_id>', methods=['GET'])
+
+@app.route('/api/predictor_models/reg_coeff/<string:model_id>', methods=['GET'])
 def model_coeffs(model_id):
     """Returns a detailed description of the QSAR model with version and parameter information"""
 
-    mi=ModelInitializer()
+    mi = ModelInitializer()
     model = mi.init_model(model_id)
-
-    # print('details3', model.get_model_description())
 
     # 404 NOT FOUND if no model stored under provided number
     if model is None:
         abort(404, 'no stored model with id ' + model_id)
         
-        
     if hasattr(model, 'getOriginalRegressionCoefficients') and callable(getattr(model, 'getOriginalRegressionCoefficients')):
         coeff_dict = model.getOriginalRegressionCoefficients()
         return coeff_dict, 200
     else:
-        return "Cant return coefficients for "+model.qsar_method
+        return "Cant return coefficients for " + model.qsar_method
 
 
-@app.route('/api/predictor_models/models/<string:model_id>/object', methods=['GET'])
+@app.route('/api/predictor_models/<string:model_id>/object', methods=['GET'])
 def model_obj(model_id):
     """Returns model object"""
 
@@ -1069,7 +867,4 @@ def model_obj(model_id):
 
 
 if __name__ == '__main__':
-    # Limit logging output for easier readability
-    # log = logging.getLogger('werkzeug')
-    # log.setLevel(logging.ERROR)
     app.run(host='0.0.0.0', port=5004, debug=True)
