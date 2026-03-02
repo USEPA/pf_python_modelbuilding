@@ -33,10 +33,11 @@ from model_ws_utilities import get_model_info, call_build_model_with_preselected
 
 from applicability_domain import applicability_domain_utilities as adu
 
-load_dotenv()
+# load_dotenv()
 
 coloredlogs.install(level=DEBUG, milliseconds=True,
                     fmt='%(asctime)s - %(name)s - %(levelname)s - %(message)s (%(filename)s:%(lineno)d)')
+logging.basicConfig(level=logging.INFO)
 
 options = SwaggerUIOptions(spec_path="/api/predictor_models/swagger.yaml",
                            swagger_ui_path="/api/predictor_models/swagger")
@@ -50,8 +51,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.add_api('swagger.yaml', swagger_ui_options=options)
-
-app_flask = None
 
 
 def get_version():
@@ -955,8 +954,7 @@ def model_obj(model_id):
 
 
 if __name__ == '__main__':
-    app = Flask(__name__)
-    # Limit logging output for easier readability
-    log = logging.getLogger('werkzeug')
-    log.setLevel(logging.DEBUG)
-    app.run(host='0.0.0.0', port=5004, debug=True)
+    log = logging.getLogger('pymongo.topology')
+    log.setLevel(logging.INFO)
+    app.run(host='0.0.0.0', port=5004)
+
