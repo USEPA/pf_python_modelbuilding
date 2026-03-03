@@ -121,7 +121,7 @@ def set_significant_digits(value, significant_digits):
 
        
 def format2(value):
-    return format(value, ".2f")
+    return f"{value:.2f}" if value is not None else "N/A"
             
         
 def fmt_val(v: Any, default: str="—") -> str:
