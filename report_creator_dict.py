@@ -573,8 +573,13 @@ class ReportCreator:
             # print(source)
             
             if source and source != "N/A":
-                description = self.safe_text(rec[fieldName + "_description"])
-                url = self.safe_text(rec[fieldName + "_url"])
+                
+                if fieldName == 'literature_source':
+                    description = self.safe_text(rec[fieldName + "_citation"])
+                    url = self.safe_text(rec[fieldName + "_doi"])
+                else:
+                    description = self.safe_text(rec[fieldName + "_description"])                       
+                    url = self.safe_text(rec[fieldName + "_url"])
                 
                 with li(cls="no-indent"):
                     if url != "N/A" and description != "N/A":
@@ -586,42 +591,67 @@ class ReportCreator:
 
             return source
 
-        def addParam(self, params, param_name):
-            param = params[param_name]
+        def addParam(self, param):
+
             try:
+                
+                param_name = param["parameter_name"].replace("_", " ")
+                
                 with li():
-                    if param["value_min"] and param["value_max"]:
+
+                    if param["value_point_estimate"] is not None:
+                        if param["value_qualifier"] is not None:
+                            span(param_name + ": " + param["value_qualifier"] + " " + get_formatted_value(param["value_point_estimate"]) + " " + param["value_units"])
+                        else:
+                            span(param_name + ": " + get_formatted_value(False, param["value_point_estimate"], 3) + " " + param["value_units"])
+
+                    elif param["value_min"] is not None and param["value_max"] is not None:
                         minValue = get_formatted_value(False, param["value_min"], 3)
                         maxValue = get_formatted_value(False, param["value_max"], 3)
-                        # print(minValue, maxValue, param["units"])
-                        if param["units"]:
-                            span(param_name + ": " + minValue + " < " + param_name + " " + param["units"] + " < " + maxValue + " ")
+                        if param["value_units"] is not None:
+                            span(param_name + ": " + minValue + " < " + param_name + " " + param["value_units"] + " < " + maxValue + " ")
                         else:
                             span(param_name + ": " + minValue + " < " + param_name + " < " + maxValue)
+                    
+                    elif param["value_min"] is not None :
+                        minValue = get_formatted_value(False, param["value_min"], 3)
+                        if param["value_units"] is not None:
+                            span(param_name + ": " + param_name + " > " + minValue + " "+param["value_units"])
+                        else:
+                            span(param_name + ": " + param_name + " > " + minValue)
+
+                    elif param["value_max"] is not None :
+                        maxValue = get_formatted_value(False, param["value_max"], 3)
+                        if param["value_units"] is not None:
+                            span(param_name + ": " + param_name + " < " + maxValue + " "+param["value_units"])
+                        else:
+                            span(param_name + ": " + param_name + " < " + maxValue)
+                        
                     elif param["value_text"]:
                         span(param_name + ": " + param["value_text"])
-                    elif param["value_point_estimate"]:
-                        if param["value_qualifier"]:
-                            span(param_name + ": " + param["value_qualifier"] + " " + get_formatted_value(param["value_point_estimate"]) + " " + param["units"])
-                        else:
-                            span(param_name + ": " + get_formatted_value(False, param["value_point_estimate"], 3) + " " + param["units"])
                     else:
                         span(param_name + ": TODO")
+                        
             except Exception as e:
                 print(f"An unexpected error occurred: {e}")
 
         def addParams(self, rec, param_names):
+                        
             with td():
                 params = rec["params"]
-                if isinstance(params, dict):
+                                
+                if isinstance(params, list):
                     with ul(cls="no-indent"): 
                         for param_name in param_names:
-                            if param_name in params:
-                                self.addParam(params, param_name)
+                            for param in params:
+                                if param_name == param["parameter_name"]:
+                                    self.addParam(param)
+                                
+                            
                 else:
                     br()
         
-        def add_property_value_record(self, rec: Dict[str, Any], param_names) -> Any:
+        def add_property_value_record(self, rec: Dict[str, Any], param_names, is_median_value) -> Any:
 
             keys = ("source_chemical_name", "source_casrn", "source_smiles", "source_dtxsid", "source_dtxrid")
             identifiers = [self.safe_text(rec.get(k), placeholder=None) for k in keys]
@@ -631,10 +661,15 @@ class ReportCreator:
                     for identifier in identifiers:
                         li(identifier, cls="no-indent")
                         
-            property_value = float(self.safe_text(rec["property_value"]))
+            property_value = float(self.safe_text(rec["prop_value"]))
             str_property_value = get_formatted_value(False, property_value, 3)
-            td(str_property_value)
-            td(self.safe_text(rec["property_units"]), cls="compact")
+
+            if is_median_value:
+                td(str_property_value+"*")
+            else:
+                td(str_property_value)
+                
+            td(self.safe_text(rec["prop_unit"]), cls="compact")
             
             with td():
                 with ul(cls="no-indent"):
@@ -647,8 +682,10 @@ class ReportCreator:
                         li(a("Direct link", href=direct_url, title="Direct link"), cls="no-indent", target="_blank")
                         
                     brief_citation = self.safe_text(rec["brief_citation"])
+
+                    ls_name = self.safe_text(rec["literature_source_name"])
                     
-                    if brief_citation != "N/A":
+                    if brief_citation != "N/A" and ls_name =='N/A':
                         li(span(brief_citation, cls="no-indent"))
                                     
             self.addParams(rec, param_names)        
@@ -662,22 +699,37 @@ class ReportCreator:
                 with body():
                     with tr(style="background-color: #d3d3d3"):
                         th("Source Chemical", cls="compact")
-                        th("Property Value", cls="compact")
+                        th("Property Value*", cls="compact")
                         th("Property Units", cls="compact")
                         th("Source", width="400px", cls="compact")
                         th("Parameters", width="400px", cls="compact")
-                    for rec in records:
+
+                    for i, rec in enumerate(records, start=1):
                         
                         qsar_exp_prop_property_values_id = self.safe_text(rec["qsar_exp_prop_property_values_id"])
                         qsar_exp_prop_property_values_ids = qsar_exp_prop_property_values_id.split("|")
-                        property_values_id = self.safe_text(rec["property_values_id"])
+                        property_values_id = self.safe_text(rec["prop_value_id"])
                         
-                        if property_values_id in qsar_exp_prop_property_values_ids:
-                            with tr(style="background-color: #90EE90;"):
-                                self.add_property_value_record(rec, param_names)
-                        else:
-                            with tr():
-                                self.add_property_value_record(rec, param_names)
+                        # if property_values_id in qsar_exp_prop_property_values_ids:
+                        #     with tr(style="background-color: #90EE90;"):
+                        #         self.add_property_value_record(rec, param_names)
+                        # else:
+                        #     with tr():
+                        #         self.add_property_value_record(rec, param_names)
+                        
+                        row_style = "background-color: #ffffff;" if i % 2 else "background-color: #f7f7f7;"
+                        
+                        with tr(style=row_style):
+                            self.add_property_value_record(rec, param_names, property_values_id in qsar_exp_prop_property_values_ids )
+                
+                
+                with tfoot():
+                    with tr(style="background-color: #f2f2f2"):
+                        td(
+                            f"* Median property value used in modeling set, Total records: {len(records)}",
+                            colspan=5,
+                            cls="compact",
+                        )        
 
         def getPageStyle(self):
             return """
