@@ -89,6 +89,7 @@ class ModelToExcel:
             pd.DataFrame: Single-row dataframe with model overview information including property, dataset, and method details.
         """
         cover_sheet_df = {
+            "Model Name": [results_dict["model_details"].get("modelName", None)],
             "Property Name": [results_dict["model_details"].get("propertyName", None)],
             "Property Description": [results_dict["model_details"].get("propertyDescription", None)],
             "Property Units": [results_dict["model_details"].get("unitsModel", None)],
@@ -116,6 +117,7 @@ class ModelToExcel:
         """
         sql = text(f"""
         select
+            m.name as "Model Name",
             distinct prop.name as "Property Name",
             prop.description as "Property Description",
             u.abbreviation_ccd as "Property Units",
@@ -147,6 +149,7 @@ class ModelToExcel:
             m.id = {self.model_id}
             -- input model_id here
         group by
+            m.name,
             prop.name,
             prop.description,
             u.abbreviation_ccd,
