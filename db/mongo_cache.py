@@ -9,6 +9,10 @@ predictor_models_cache = None
 in_memory_cache = {}
 
 
+def _cache_disabled() -> bool:
+    return os.getenv("DISABLE_PREDICTION_CACHE", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _init_mongo():
 
     global predictor_models_cache
@@ -47,12 +51,18 @@ def _init_mongo():
 def _ensure_init():
     # Lazy initialize on first use to avoid network I/O at import, but safe if called multiple times
     global predictor_models_cache
+
+    if _cache_disabled():
+        return
     
     if predictor_models_cache is None:
         _init_mongo()
 
 
 def get_cached_prediction(key: str):
+    if _cache_disabled():
+        return None
+
     _ensure_init()
     if predictor_models_cache is not None:
         try:
@@ -64,6 +74,9 @@ def get_cached_prediction(key: str):
 
 
 def cache_prediction(key: str, prediction):
+    if _cache_disabled():
+        return
+
     _ensure_init()
     if predictor_models_cache is not None:
         try:
