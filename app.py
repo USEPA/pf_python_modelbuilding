@@ -196,6 +196,16 @@ def _predict_smiles_in_process(args):
     return _to_obj(pred)
 
 
+def _predict_batch_sequential(model_id, smiles_list):
+    mp = ModelPredictor()
+    modelResultsArray = []
+    for current_smiles in smiles_list:
+        logging.debug("Running %s", current_smiles)
+        pred = mp.predictFromDB(model_id, current_smiles)
+        modelResultsArray.append(_to_obj(pred))
+    return modelResultsArray
+
+
 def predictDB_POST(body):
     """Automates prediction and AD for batch smiles using model in database"""
     max_workers = int(os.getenv("PREDICT_BATCH_WORKERS", os.cpu_count() or 1))
@@ -204,6 +214,12 @@ def predictDB_POST(body):
     with ProcessPoolExecutor(max_workers=max_workers, initializer=_init_process_predictor) as executor:
         modelResultsArray = list(executor.map(_predict_smiles_in_process, ((body["model_id"], s) for s in body["smiles"])))
 
+    return JSONResponse(content=modelResultsArray)
+
+
+def old_predictDB_POST(body):
+    """Old sequential batch endpoint for predictions"""
+    modelResultsArray = _predict_batch_sequential(body["model_id"], body["smiles"])
     return JSONResponse(content=modelResultsArray)
 
 
