@@ -788,30 +788,37 @@ class ModelPredictor:
                 cache_prediction(key, prediction)
                 return prediction
         else:
-            result, missing = [], []
-            for smi in smiles:
+            smiles_list = list(smiles)
+            if not smiles_list:
+                return []
+
+            result = [None] * len(smiles_list)
+            missing = []
+
+            for idx, smi in enumerate(smiles_list):
                 key = f"{smi}-{model_id}"
                 prediction = get_cached_prediction(key)
-                if prediction:
-                    result.append(prediction)
+                if prediction is not None:
+                    result[idx] = prediction
                 else:
-                    missing.append(smi)
-    
-            with concurrent.futures.ThreadPoolExecutor() as pool:
-                
-                prediction, code = self.predict_model_smiles(model_id, smiles)
-                results = pool.map(prediction, [model_id for _ in missing], missing)
-    
-                for (prediction, code, smi) in results:
+                    missing.append((idx, smi))
+
+            if missing:
+                max_workers = int(os.getenv("PREDICT_THREAD_WORKERS", min(32, (os.cpu_count() or 1) * 5)))
+                max_workers = max(1, min(max_workers, len(missing)))
+
+                def _predict_one(item):
+                    idx, smi = item
+                    prediction, code = self.predict_model_smiles(model_id, smi)
                     if code != 200:
                         prediction = dict(smiles=smi, error=prediction)
-                        result.append(prediction)
-                    else:
-                        result.append(prediction)
-    
-                    key = f"{smi}-{model_id}"
-                    cache_prediction(key, prediction)
-    
+                    cache_prediction(f"{smi}-{model_id}", prediction)
+                    return idx, prediction
+
+                with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
+                    for idx, prediction in pool.map(_predict_one, missing):
+                        result[idx] = prediction
+
             return result
 
     def addPerformance(self, md: ModelDetails):
