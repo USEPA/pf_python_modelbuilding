@@ -9,9 +9,10 @@ Repository created 05/21/2021
 import io
 import json
 import logging
+import os
+from concurrent.futures import ProcessPoolExecutor
 import util.get_model_file as gmf
 from logging import DEBUG
-from report_creator_dict import ReportCreator
 
 import coloredlogs
 import connexion
@@ -22,6 +23,9 @@ from starlette.middleware.cors import CORSMiddleware
 from starlette.responses import HTMLResponse, Response, JSONResponse, StreamingResponse, FileResponse
 
 from model_ws_db_utilities import ModelPredictor
+from report_creator_dict import ReportCreator
+
+_PROCESS_PREDICTOR = None
 
 load_dotenv()
 
@@ -175,8 +179,32 @@ def _to_json_str(x):
     raise TypeError(f"Unsupported prediction type: {type(x)}")
 
 
+def _init_process_predictor():
+    global _PROCESS_PREDICTOR
+    _PROCESS_PREDICTOR = ModelPredictor()
+
+
+def _predict_smiles_in_process(args):
+    model_id, current_smiles = args
+    predictor = _PROCESS_PREDICTOR
+    if predictor is None:
+        _init_process_predictor()
+        predictor = _PROCESS_PREDICTOR
+    if predictor is None:
+        raise RuntimeError("Failed to initialize process predictor")
+    pred = predictor.predictFromDB(model_id, current_smiles)
+    return _to_obj(pred)
+
+
 def predictDB_POST(body):
-    return predictDB(body["smiles"], body["model_id"], "json")
+    """Automates prediction and AD for batch smiles using model in database"""
+    max_workers = int(os.getenv("PREDICT_BATCH_WORKERS", os.cpu_count() or 1))
+    max_workers = max(1, min(max_workers, len(body["smiles"])))
+
+    with ProcessPoolExecutor(max_workers=max_workers, initializer=_init_process_predictor) as executor:
+        modelResultsArray = list(executor.map(_predict_smiles_in_process, ((body["model_id"], s) for s in body["smiles"])))
+
+    return JSONResponse(content=modelResultsArray)
 
 
 def predictDB(smiles, model_id, report_format):
@@ -187,17 +215,6 @@ def predictDB(smiles, model_id, report_format):
         report_format = "json"
 
     mp = ModelPredictor()
-
-    # BATCH (POST)
-    if isinstance(smiles, list):
-        modelResultsArray = []
-        for current_smiles in smiles:
-            logging.debug("Running %s", current_smiles)
-            pred = mp.predictFromDB(model_id, current_smiles)  # может быть dict или json-str
-            modelResultsArray.append(_to_obj(pred))
-        return JSONResponse(content=modelResultsArray)
-
-    # SINGLETON (GET)
     pred = mp.predictFromDB(model_id, smiles)
 
     if report_format == "html":
