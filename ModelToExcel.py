@@ -838,7 +838,7 @@ class ModelToExcel:
         return training_cv_predictions
     
 
-    def training_cv_predictions(self, writer: Any, training_cv_predictions: Optional[pd.DataFrame]=None, x_col: str=None, y_col: str=None, chart_size_px: int=520, pad_ratio: float=0.02, integer_ticks: bool=True, yx_offset_rows: int=3, col_width_pad: int=5, min_col_width: int=7) -> pd.DataFrame:
+    def training_cv_predictions(self, writer: Any, training_cv_predictions: Optional[pd.DataFrame]=None, x_col: str=None, y_col: str=None, chart_size_px: int=520, pad_ratio: float=0.02, integer_ticks: bool=True, yx_offset_rows: int=3, col_width_pad: int=5, min_col_width: int=7, property_name: Optional[str]=None, property_units: Optional[str]=None) -> pd.DataFrame:
         """
         Create the training CV predictions sheet in the Excel workbook with scatter plot.
         
@@ -871,7 +871,7 @@ class ModelToExcel:
         ModelToExcel.set_column_width(writer, "Training CV Predictions", training_cv_predictions, min_col_width=min_col_width, col_width_pad=col_width_pad, how="header")
         ModelToExcel.add_filter(writer, "Training CV Predictions", training_cv_predictions)
         
-        ModelToExcel.add_plot(writer, workbook, "Training CV Predictions", "Training CV Predictions", training_cv_predictions, x_col=x_col, y_col=y_col, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, log_plot=self.log_plot, yx_offset_rows=yx_offset_rows)
+        ModelToExcel.add_plot(writer, workbook, "Training CV Predictions", "Training CV Predictions", training_cv_predictions, x_col=x_col, y_col=y_col, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, log_plot=self.log_plot, yx_offset_rows=yx_offset_rows, property_name=property_name, property_units=property_units)
 
         return training_cv_predictions
     
@@ -914,7 +914,7 @@ class ModelToExcel:
         return test_set_predictions
     
 
-    def test_set_predictions(self, writer: Any, test_set_predictions: Optional[pd.DataFrame]=None, x_col: str=None, y_col: str=None, chart_size_px: int=520, pad_ratio: float=0.02, integer_ticks: bool=True, yx_offset_rows: int=3, col_width_pad: int=5, min_col_width: int=7) -> pd.DataFrame:
+    def test_set_predictions(self, writer: Any, test_set_predictions: Optional[pd.DataFrame]=None, x_col: str=None, y_col: str=None, chart_size_px: int=520, pad_ratio: float=0.02, integer_ticks: bool=True, yx_offset_rows: int=3, col_width_pad: int=5, min_col_width: int=7, property_name: Optional[str]=None, property_units: Optional[str]=None) -> pd.DataFrame:
         """
         Create the test set predictions sheet in the Excel workbook with scatter plot.
         
@@ -947,7 +947,7 @@ class ModelToExcel:
         ModelToExcel.set_column_width(writer, "Test Set Predictions", test_set_predictions, min_col_width=min_col_width, col_width_pad=col_width_pad, how="header")
         ModelToExcel.add_filter(writer, "Test Set Predictions", test_set_predictions)
         
-        ModelToExcel.add_plot(writer, workbook, "Test Set Predictions", "Test Set Predictions", test_set_predictions, x_col=x_col, y_col=y_col, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, log_plot=self.log_plot, yx_offset_rows=yx_offset_rows)
+        ModelToExcel.add_plot(writer, workbook, "Test Set Predictions", "Test Set Predictions", test_set_predictions, x_col=x_col, y_col=y_col, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, log_plot=self.log_plot, yx_offset_rows=yx_offset_rows, property_name=property_name, property_units=property_units)
 
         return test_set_predictions
     
@@ -990,7 +990,7 @@ class ModelToExcel:
         return external_predictions
     
 
-    def external_predictions(self, writer: Any, external_predictions: Optional[pd.DataFrame]=None, x_col: str=None, y_col: str=None, chart_size_px: int=520, pad_ratio: float=0.02, integer_ticks: bool=True, yx_offset_rows: int=3, col_width_pad: int=5, min_col_width: int=7) -> Optional[pd.DataFrame]:
+    def external_predictions(self, writer: Any, external_predictions: Optional[pd.DataFrame]=None, x_col: str=None, y_col: str=None, chart_size_px: int=520, pad_ratio: float=0.02, integer_ticks: bool=True, yx_offset_rows: int=3, col_width_pad: int=5, min_col_width: int=7, property_name: Optional[str]=None, property_units: Optional[str]=None) -> Optional[pd.DataFrame]:
         """
         Create the external predictions sheet in the Excel workbook with scatter plot.
         
@@ -1025,7 +1025,7 @@ class ModelToExcel:
         ModelToExcel.set_column_width(writer, "External Predictions", external_predictions, min_col_width=min_col_width, col_width_pad=col_width_pad, how="header")
         ModelToExcel.add_filter(writer, "External Predictions", external_predictions)
         
-        ModelToExcel.add_plot(writer, workbook, "External Predictions", "External Predictions", external_predictions, x_col=x_col, y_col=y_col, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, log_plot=self.log_plot, yx_offset_rows=yx_offset_rows)
+        ModelToExcel.add_plot(writer, workbook, "External Predictions", "External Predictions", external_predictions, x_col=x_col, y_col=y_col, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, log_plot=self.log_plot, yx_offset_rows=yx_offset_rows, property_name=property_name, property_units=property_units)
         
         return external_predictions
 
@@ -1372,7 +1372,9 @@ class ModelToExcel:
         pad_ratio: float=0.02,
         integer_ticks: bool=True,
         log_plot: bool=True,
-        yx_offset_rows: int=3) -> None:
+        yx_offset_rows: int=3,
+        property_name: Optional[str] = None,
+        property_units: Optional[str] = None) -> None:
         """
         Add a prediction vs experimental scatter plot to the worksheet.
         
@@ -1402,8 +1404,14 @@ class ModelToExcel:
         # Get column indices for x and y columns (0-based)
         if x_col is None:
             x_col = "exp"
+            x_col_name = "Experimental"
+        else:
+            x_col_name = x_col
         if y_col is None:
             y_col = "pred"
+            y_col_name = "Predicted"
+        else:
+            y_col_name = y_col
         x_col_idx = df.columns.get_loc(x_col)
         y_col_idx = df.columns.get_loc(y_col)
         
@@ -1412,12 +1420,13 @@ class ModelToExcel:
             df[x_col], df[y_col], pad_ratio=pad_ratio, integer_ticks=integer_ticks, log_plot=log_plot, target_ticks=5)
         # Create scatter chart with markers
         chart = workbook.add_chart({"type":"scatter", "subtype":"straight_with_markers"})
-        chart.set_title({"name":f"{y_col.capitalize()} vs {x_col.capitalize()}"})
+        title = f"{sheet_name} for {property_name}" if property_name is not None else f"{y_col.capitalize()} vs {x_col.capitalize()}"
+        chart.set_title({"name": title})
         chart.set_style(10)
         # Series 1: data points (markers only)
         # Use the actual column indices from the dataframe
         chart.add_series({
-                "name":f"{y_col} vs {x_col}",
+                "name":title,
                 "categories":[sheet_name, 1, x_col_idx, nrows, x_col_idx],  # X column: row 2 to nrows+1
                 "values":[sheet_name, 1, y_col_idx, nrows, y_col_idx],  # Y column: row 2 to nrows+1
                 "marker":{"type":"circle", "size":6},
@@ -1437,15 +1446,17 @@ class ModelToExcel:
                 "marker":{"type":"none"},
                 "line":{"color":"#1f4e79", "width":2.25}})  # dark blue
         # Axes with same bounds, integer labels, no gridlines
+        x_axis_label = x_col if property_units is None else f"{x_col_name} ({property_units})"
         x_axis_opts = {
-            "name":x_col,
+            "name":x_axis_label,
             "min":mn, "max":mx,
             "num_format":"0",
             "crossing": "min",
             "major_gridlines":{"visible":False},
             "minor_gridlines":{"visible":False}}
+        y_axis_label = y_col if property_units is None else f"{y_col_name} ({property_units})"
         y_axis_opts = {
-            "name":y_col,
+            "name":y_axis_label,
             "min":mn, "max":mx,
             "num_format":"0",
             "crossing": "min",
@@ -1537,14 +1548,25 @@ class ModelToExcel:
             logging.info("Creating Model Descriptor Values...")
             df = self.model_descriptor_values(writer, self.model_descriptor_values_df)
 
+            try:
+                property_name = self.cover_sheet_df["Property Name"].iloc[0] if not self.cover_sheet_df["Property Name"].empty else None
+                if "koc" in property_name.lower():
+                    property_name = "KoC"
+            except Exception as e:
+                property_name = None
+            try:
+                property_units = self.cover_sheet_df["Property Units"].iloc[0] if not self.cover_sheet_df["Property Units"].empty else None
+            except Exception as e:
+                property_units = None
+
             logging.info("Creating Training CV Predictions...")
-            df = self.training_cv_predictions(writer, self.training_cv_predictions_df, x_col=x_col, y_col=y_col, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, yx_offset_rows=yx_offset_rows, col_width_pad=col_width_pad, min_col_width=min_col_width)
+            df = self.training_cv_predictions(writer, self.training_cv_predictions_df, x_col=x_col, y_col=y_col, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, yx_offset_rows=yx_offset_rows, col_width_pad=col_width_pad, min_col_width=min_col_width, property_name=property_name, property_units=property_units)
 
             logging.info("Creating Test Set Predictions...")
-            df = self.test_set_predictions(writer, self.test_set_predictions_df, x_col=x_col, y_col=y_col, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, yx_offset_rows=yx_offset_rows, col_width_pad=col_width_pad, min_col_width=min_col_width)
+            df = self.test_set_predictions(writer, self.test_set_predictions_df, x_col=x_col, y_col=y_col, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, yx_offset_rows=yx_offset_rows, col_width_pad=col_width_pad, min_col_width=min_col_width, property_name=property_name, property_units=property_units)
 
             logging.info("Creating External Predictions...")
-            df = self.external_predictions(writer, self.external_predictions_df, x_col=x_col, y_col=y_col, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, yx_offset_rows=yx_offset_rows, col_width_pad=col_width_pad, min_col_width=min_col_width)
+            df = self.external_predictions(writer, self.external_predictions_df, x_col=x_col, y_col=y_col, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, yx_offset_rows=yx_offset_rows, col_width_pad=col_width_pad, min_col_width=min_col_width, property_name=property_name, property_units=property_units)
 
             # logging.info("Done creating detailed Excel!")
             logging.info("Done with initial passthrough of all sheets!")
