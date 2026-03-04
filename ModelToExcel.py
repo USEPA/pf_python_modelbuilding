@@ -1,11 +1,9 @@
 from model_ws_db_utilities import getEngine, getSession
 import pandas as pd
 from sqlalchemy import text
-from pathlib import Path
 import math
 from typing import Optional, Dict, Any, Iterable, Tuple
-from openpyxl import load_workbook
-from openpyxl.styles import Font
+import os
 
 import logging
 logging.getLogger('sqlalchemy').setLevel(logging.ERROR)
@@ -384,7 +382,6 @@ class ModelToExcel:
 
         ModelToExcel.set_column_width(writer, "Statistics", statistics, how="full")
 
-        import os        
         img_path = os.path.join(os.getenv("PROJECT_ROOT"), "resources", "equations.png")        
         worksheet.insert_image("A8", img_path, {"x_scale": 0.7, "y_scale": 0.7, "x_offset": 10, "y_offset": 2})
 
@@ -832,7 +829,7 @@ class ModelToExcel:
         return training_cv_predictions
     
 
-    def training_cv_predictions(self, writer: Any, training_cv_predictions: Optional[pd.DataFrame]=None, chart_size_px: int=520, pad_ratio: float=0.02, integer_ticks: bool=True, yx_offset_rows: int=3) -> pd.DataFrame:
+    def training_cv_predictions(self, writer: Any, training_cv_predictions: Optional[pd.DataFrame]=None, x_col: str=None, y_col: str=None, chart_size_px: int=520, pad_ratio: float=0.02, integer_ticks: bool=True, yx_offset_rows: int=3, col_width_pad: int=5, min_col_width: int=7) -> pd.DataFrame:
         """
         Create the training CV predictions sheet in the Excel workbook with scatter plot.
         
@@ -841,10 +838,14 @@ class ModelToExcel:
         Args:
             writer: pandas ExcelWriter object for writing to the workbook.
             training_cv_predictions (pd.DataFrame, optional): Training predictions dataframe. If None, queries from database or uses instance dataframe.
+            x_col (str): Column name to use for x-axis in prediction plots. If None, defaults to 'exp'.
+            y_col (str): Column name to use for y-axis in prediction plots. If None, defaults to 'pred'.
             chart_size_px (int): Square chart size in pixels. Defaults to 520.
             pad_ratio (float): Axis padding as fraction of data span. Defaults to 0.02.
             integer_ticks (bool): Whether to use integer-based tick spacing. Defaults to True.
             yx_offset_rows (int): Empty rows between data and y=x helper points. Defaults to 3.
+            col_width_pad (int): Extra padding for column widths. Defaults to 5.
+            min_col_width (int): Minimum column width in characters. Defaults to 7.
         
         Returns:
             pd.DataFrame: The training predictions dataframe that was written.
@@ -858,10 +859,10 @@ class ModelToExcel:
         worksheet = writer.sheets["Training CV Predictions"]
         worksheet.freeze_panes(1, 0)
 
-        ModelToExcel.set_column_width(writer, "Training CV Predictions", training_cv_predictions, min_col_width=7, col_width_pad=5, how="header")
+        ModelToExcel.set_column_width(writer, "Training CV Predictions", training_cv_predictions, min_col_width=min_col_width, col_width_pad=col_width_pad, how="header")
         ModelToExcel.add_filter(writer, "Training CV Predictions", training_cv_predictions)
         
-        ModelToExcel.add_plot(writer, workbook, "Training CV Predictions", "Training CV Predictions", training_cv_predictions, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, log_plot=self.log_plot, yx_offset_rows=yx_offset_rows)
+        ModelToExcel.add_plot(writer, workbook, "Training CV Predictions", "Training CV Predictions", training_cv_predictions, x_col=x_col, y_col=y_col, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, log_plot=self.log_plot, yx_offset_rows=yx_offset_rows)
 
         return training_cv_predictions
     
@@ -904,7 +905,7 @@ class ModelToExcel:
         return test_set_predictions
     
 
-    def test_set_predictions(self, writer: Any, test_set_predictions: Optional[pd.DataFrame]=None, chart_size_px: int=520, pad_ratio: float=0.02, integer_ticks: bool=True, yx_offset_rows: int=3) -> pd.DataFrame:
+    def test_set_predictions(self, writer: Any, test_set_predictions: Optional[pd.DataFrame]=None, x_col: str=None, y_col: str=None, chart_size_px: int=520, pad_ratio: float=0.02, integer_ticks: bool=True, yx_offset_rows: int=3, col_width_pad: int=5, min_col_width: int=7) -> pd.DataFrame:
         """
         Create the test set predictions sheet in the Excel workbook with scatter plot.
         
@@ -913,10 +914,14 @@ class ModelToExcel:
         Args:
             writer: pandas ExcelWriter object for writing to the workbook.
             test_set_predictions (pd.DataFrame, optional): Test predictions dataframe. If None, queries from database or uses instance dataframe.
+            x_col (str): Column name to use for x-axis in prediction plots. If None, defaults to 'exp'.
+            y_col (str): Column name to use for y-axis in prediction plots. If None, defaults to 'pred'.
             chart_size_px (int): Square chart size in pixels. Defaults to 520.
             pad_ratio (float): Axis padding as fraction of data span. Defaults to 0.02.
             integer_ticks (bool): Whether to use integer-based tick spacing. Defaults to True.
             yx_offset_rows (int): Empty rows between data and y=x helper points. Defaults to 3.
+            col_width_pad (int): Extra padding for column widths. Defaults to 5.
+            min_col_width (int): Minimum column width in characters. Defaults to 7.
         
         Returns:
             pd.DataFrame: The test predictions dataframe that was written.
@@ -930,10 +935,10 @@ class ModelToExcel:
         worksheet = writer.sheets["Test Set Predictions"]
         worksheet.freeze_panes(1, 0)
 
-        ModelToExcel.set_column_width(writer, "Test Set Predictions", test_set_predictions, min_col_width=7, col_width_pad=5, how="header")
+        ModelToExcel.set_column_width(writer, "Test Set Predictions", test_set_predictions, min_col_width=min_col_width, col_width_pad=col_width_pad, how="header")
         ModelToExcel.add_filter(writer, "Test Set Predictions", test_set_predictions)
         
-        ModelToExcel.add_plot(writer, workbook, "Test Set Predictions", "Test Set Predictions", test_set_predictions, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, log_plot=self.log_plot, yx_offset_rows=yx_offset_rows)
+        ModelToExcel.add_plot(writer, workbook, "Test Set Predictions", "Test Set Predictions", test_set_predictions, x_col=x_col, y_col=y_col, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, log_plot=self.log_plot, yx_offset_rows=yx_offset_rows)
 
         return test_set_predictions
     
@@ -976,7 +981,7 @@ class ModelToExcel:
         return external_predictions
     
 
-    def external_predictions(self, writer: Any, external_predictions: Optional[pd.DataFrame]=None, chart_size_px: int=520, pad_ratio: float=0.02, integer_ticks: bool=True, yx_offset_rows: int=3) -> Optional[pd.DataFrame]:
+    def external_predictions(self, writer: Any, external_predictions: Optional[pd.DataFrame]=None, x_col: str=None, y_col: str=None, chart_size_px: int=520, pad_ratio: float=0.02, integer_ticks: bool=True, yx_offset_rows: int=3, col_width_pad: int=5, min_col_width: int=7) -> Optional[pd.DataFrame]:
         """
         Create the external predictions sheet in the Excel workbook with scatter plot.
         
@@ -985,10 +990,14 @@ class ModelToExcel:
         Args:
             writer: pandas ExcelWriter object for writing to the workbook.
             external_predictions (pd.DataFrame, optional): External predictions dataframe. If None, queries from database or uses instance dataframe.
+            x_col (str): Column name to use for x-axis in prediction plots. If None, defaults to 'exp'.
+            y_col (str): Column name to use for y-axis in prediction plots. If None, defaults to 'pred'.
             chart_size_px (int): Square chart size in pixels. Defaults to 520.
             pad_ratio (float): Axis padding as fraction of data span. Defaults to 0.02.
             integer_ticks (bool): Whether to use integer-based tick spacing. Defaults to True.
             yx_offset_rows (int): Empty rows between data and y=x helper points. Defaults to 3.
+            col_width_pad (int): Extra padding for column widths. Defaults to 5.
+            min_col_width (int): Minimum column width in characters. Defaults to 7.
         
         Returns:
             pd.DataFrame: The external predictions dataframe that was written, or None if no data available.
@@ -1004,10 +1013,10 @@ class ModelToExcel:
         worksheet = writer.sheets["External Predictions"]
         worksheet.freeze_panes(1, 0)
 
-        ModelToExcel.set_column_width(writer, "External Predictions", external_predictions, min_col_width=7, col_width_pad=5, how="header")
+        ModelToExcel.set_column_width(writer, "External Predictions", external_predictions, min_col_width=min_col_width, col_width_pad=col_width_pad, how="header")
         ModelToExcel.add_filter(writer, "External Predictions", external_predictions)
         
-        ModelToExcel.add_plot(writer, workbook, "External Predictions", "External Predictions", external_predictions, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, log_plot=self.log_plot, yx_offset_rows=yx_offset_rows)
+        ModelToExcel.add_plot(writer, workbook, "External Predictions", "External Predictions", external_predictions, x_col=x_col, y_col=y_col, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, log_plot=self.log_plot, yx_offset_rows=yx_offset_rows)
         
         return external_predictions
 
@@ -1017,8 +1026,8 @@ class ModelToExcel:
         writer: Any,
         sheet_name: str,
         df: pd.DataFrame,
-        col_width_pad: int=4,
-        min_col_width: int=5,
+        col_width_pad: int=5,
+        min_col_width: int=7,
         how: str="header",
         first_col_format: Optional[Any] = None) -> None:
         """
@@ -1147,11 +1156,12 @@ class ModelToExcel:
         target_sheet: str,
         df_source: pd.DataFrame,
         df_target: pd.DataFrame,
-        link_column: str = "exp_prop_id",
-        link_col_index: int = 1) -> None:
+        link_column: str = "exp_prop_id") -> None:
         """
         Add hyperlinks from source sheet to target sheet based on a matching column.
-        Uses openpyxl to add hyperlinks after the Excel file is written.
+        Uses pywin32 (win32com) to add hyperlinks via Excel COM API.
+        This approach preserves chart formatting by avoiding openpyxl's file manipulation.
+        Windows only, due to pywin32 dependencies.
         
         Args:
             excel_path: Path to the Excel file
@@ -1160,9 +1170,14 @@ class ModelToExcel:
             df_source: Source dataframe (used to verify column exists and get values)
             df_target: Target dataframe (used to create the mapping)
             link_column: Column name to match on (must exist in both dataframes)
-            link_col_index: Column index (1-based) in source sheet where hyperlinks will be added
         """
         logging.info(f"Processing hyperlinks for {source_sheet}")
+        
+        try:
+            import win32com.client
+        except ImportError:
+            logging.error("pywin32 (win32com.client) is not available. Install with: pip install pywin32")
+            return
         
         if df_source is None or df_source.empty:
             logging.warning(f"Source dataframe {source_sheet} is empty or None. Skipping hyperlinks.")
@@ -1176,17 +1191,30 @@ class ModelToExcel:
             logging.warning(f"Column '{link_column}' not found in target dataframe {target_sheet}.")
             return
         
+        xlApp = None
         try:
-            # Load the workbook with openpyxl
-            wb = load_workbook(excel_path)
-            ws_source = wb[source_sheet]
-            ws_target = wb[target_sheet]
-        except KeyError as e:
-            logging.warning(f"Sheet not found in workbook: {e}. Skipping hyperlinks.")
-            return
+            # Create Excel application instance
+            xlApp = win32com.client.Dispatch("Excel.Application")
+            xlApp.Visible = False
+            xlApp.DisplayAlerts = False
+            
+            # Open the workbook with absolute path
+            excel_path = os.path.abspath(excel_path)
+            wb = xlApp.Workbooks.Open(excel_path)
+            
+            # Get the worksheets
+            ws_source = wb.Sheets(source_sheet)
+            ws_target = wb.Sheets(target_sheet)
+            
         except Exception as e:
-            logging.warning(f"Failed to open workbook: {e}. Skipping hyperlinks.")
+            logging.error(f"Failed to open Excel workbook or worksheets: {e}. Skipping hyperlinks.")
+            if xlApp:
+                xlApp.Quit()
             return
+        
+        # Find the column index in the target sheet for the link_column (1-based for Excel)
+        target_link_col_index = df_target.columns.get_loc(link_column) + 1
+        target_link_col_letter = chr(64 + target_link_col_index)  # Convert 1-based index to column letter (A=65, B=66, etc.)
         
         # Create a mapping of link_column values to row numbers in target sheet
         # df_target is 0-indexed, but Excel rows are 1-indexed (with row 1 being header)
@@ -1197,46 +1225,69 @@ class ModelToExcel:
             target_row_map[key] = excel_row
         
         logging.info(f"Created target mapping with {len(target_row_map)} entries for {target_sheet}")
-        logging.info(f"Target column data type: {df_target[link_column].dtype}, Source column data type: {df_source[link_column].dtype}")
+        logging.info(f"Target link column: '{link_column}' at Excel column {target_link_col_letter}")
         
-        # Create hyperlink font (blue, underlined)
-        hyperlink_font = Font(color="0563C1", underline="single")
+        # Find the source column letter for the link column (where we'll add hyperlinks)
+        source_link_col_index = df_source.columns.get_loc(link_column) + 1
+        source_link_col_letter = chr(64 + source_link_col_index)
         
         # Add hyperlinks to source sheet
         hyperlinks_added = 0
         unmatched_count = 0
         
-        for src_idx, src_val in enumerate(df_source[link_column]):
-            src_val_str = str(src_val).strip() if pd.notna(src_val) else None
-            excel_row = src_idx + 2  # +2 for header and 1-based indexing
-            
-            if src_val_str and src_val_str in target_row_map:
-                target_row = target_row_map[src_val_str]
-                # Create the cell reference for the hyperlink
-                # Format: #SheetName!CellAddress
-                link_target = f"#'{target_sheet}'!A{target_row}"
-                
-                try:
-                    # Get the cell in the source sheet
-                    cell = ws_source.cell(row=excel_row, column=link_col_index)
-                    # Set the hyperlink
-                    cell.hyperlink = link_target
-                    # Apply hyperlink style (blue, underlined)
-                    cell.font = hyperlink_font
-                    hyperlinks_added += 1
-                except Exception as e:
-                    logging.warning(f"Failed to write hyperlink for {source_sheet} row {excel_row}: {e}")
-            else:
-                unmatched_count += 1
-        
-        # Save the modified workbook
         try:
-            wb.save(excel_path)
-            logging.info(f"Added {hyperlinks_added} hyperlinks from {source_sheet} to {target_sheet} ({unmatched_count} unmatched)")
+            for src_idx, src_val in enumerate(df_source[link_column]):
+                src_val_str = str(src_val).strip() if pd.notna(src_val) else None
+                excel_row = src_idx + 2  # +2 for header and 1-based indexing
+                
+                if src_val_str and src_val_str in target_row_map:
+                    target_row = target_row_map[src_val_str]
+                    
+                    # Create the cell reference for the hyperlink
+                    # Format for SubAddress: SheetName!CellAddress (no #)
+                    sub_address = f"'{target_sheet}'!{target_link_col_letter}{target_row}"
+                    
+                    try:
+                        # Get the cell range in the source sheet using Excel's Range method
+                        cell_range = ws_source.Range(f"{source_link_col_letter}{excel_row}")
+                        
+                        # Add the hyperlink using Excel COM API
+                        screen_tip = f"Link to {target_sheet} Row {target_row}"
+                        ws_source.Hyperlinks.Add(
+                            Anchor=cell_range,
+                            Address="",  # Empty address for internal links
+                            SubAddress=sub_address,
+                            ScreenTip=screen_tip,
+                            TextToDisplay=src_val_str
+                        )
+                                                
+                        hyperlinks_added += 1
+                    except Exception as e:
+                        logging.warning(f"Failed to write hyperlink for {source_sheet} row {excel_row}: {e}")
+                else:
+                    unmatched_count += 1
+        
         except Exception as e:
-            logging.warning(f"Failed to save workbook after adding hyperlinks: {e}")
+            logging.error(f"Error adding hyperlinks: {e}")
+        
+        finally:
+            # Save and close the workbook
+            try:
+                wb.Save()
+                logging.info(f"Added {hyperlinks_added} hyperlinks from {source_sheet} to {target_sheet} ({unmatched_count} unmatched)")
+            except Exception as e:
+                logging.error(f"Failed to save workbook: {e}")
+            finally:
+                try:
+                    wb.Close(False)  # False = don't save again
+                except:
+                    pass
+                try:
+                    xlApp.Quit()
+                except:
+                    pass
     
-
+    
     @staticmethod
     def compute_equal_axis_bounds(
         x_values: Iterable[float],
@@ -1306,6 +1357,8 @@ class ModelToExcel:
         sheet_name: str,
         sheet_name_plot: str,
         df: pd.DataFrame,
+        x_col: Optional[str] = None,
+        y_col: Optional[str] = None,
         chart_size_px: int=520,
         pad_ratio: float=0.02,
         integer_ticks: bool=True,
@@ -1320,9 +1373,11 @@ class ModelToExcel:
         Args:
             writer: pandas ExcelWriter object for accessing worksheets.
             workbook: xlsxwriter workbook object for creating the chart.
-            sheet_name (str): Name of the sheet containing data (must have 'exp' and 'pred' columns).
+            sheet_name (str): Name of the sheet containing data.
             sheet_name_plot (str): Name of the sheet where chart will be inserted.
-            df (pd.DataFrame): Dataframe with 'exp' and 'pred' columns.
+            df (pd.DataFrame): Dataframe with data to plot.
+            x_col (str): Name of the column to use for x-axis. Defaults to "exp".
+            y_col (str): Name of the column to use for y-axis. Defaults to "pred".
             chart_size_px (int): Square chart size in pixels. Defaults to 520.
             pad_ratio (float): Axis padding as fraction of data span. Defaults to 0.02.
             integer_ticks (bool): Whether to use integer-based tick spacing. Defaults to True.
@@ -1334,44 +1389,54 @@ class ModelToExcel:
         # Hide worksheet gridlines (screen + print)
         worksheet.hide_gridlines(2)
         nrows = len(df)
+        
+        # Get column indices for x and y columns (0-based)
+        if x_col is None:
+            x_col = "exp"
+        if y_col is None:
+            y_col = "pred"
+        x_col_idx = df.columns.get_loc(x_col)
+        y_col_idx = df.columns.get_loc(y_col)
+        
         # Compute unified bounds (also used for y=x line)
         mn, mx, major_unit = ModelToExcel.compute_equal_axis_bounds(
-            df["exp"], df["pred"], pad_ratio=pad_ratio, integer_ticks=integer_ticks, log_plot=log_plot, target_ticks=5)
+            df[x_col], df[y_col], pad_ratio=pad_ratio, integer_ticks=integer_ticks, log_plot=log_plot, target_ticks=5)
         # Create scatter chart with markers
         chart = workbook.add_chart({"type":"scatter", "subtype":"straight_with_markers"})
-        chart.set_title({"name":"Predicted vs Experimental"})
+        chart.set_title({"name":f"{y_col.capitalize()} vs {x_col.capitalize()}"})
         chart.set_style(10)
         # Series 1: data points (markers only)
-        # exp is column B (index 1), pred is column C (index 2) even after adding abs_diff (column D)
+        # Use the actual column indices from the dataframe
         chart.add_series({
-                "name":"Pred vs Exp",
-                "categories":[sheet_name, 1, 1, nrows, 1],  # B2..B(nrows+1)
-                "values":[sheet_name, 1, 2, nrows, 2],  # C2..C(nrows+1)
+                "name":f"{y_col} vs {x_col}",
+                "categories":[sheet_name, 1, x_col_idx, nrows, x_col_idx],  # X column: row 2 to nrows+1
+                "values":[sheet_name, 1, y_col_idx, nrows, y_col_idx],  # Y column: row 2 to nrows+1
                 "marker":{"type":"circle", "size":6},
                 "line":{"none":True}})
-        # Write y = x helper points a few rows below the data, in columns B/C
+        # Write y = x helper points a few rows below the data, using the same columns as the data
         yx_row_start = nrows + 1 + yx_offset_rows  # 0-based row index after header
-        worksheet.write_number(yx_row_start, 1, mn)  # B{yx_row_start+1}
-        worksheet.write_number(yx_row_start, 2, mn)  # C{yx_row_start+1}
-        worksheet.write_number(yx_row_start + 1, 1, mx)  # B{yx_row_start+2}
-        worksheet.write_number(yx_row_start + 1, 2, mx)  # C{yx_row_start+2}
+        worksheet.write_number(yx_row_start, x_col_idx, mn)  # Write min value to x column
+        worksheet.write_number(yx_row_start, y_col_idx, mn)  # Write min value to y column
+        worksheet.write_number(yx_row_start + 1, x_col_idx, mx)  # Write max value to x column
+        worksheet.write_number(yx_row_start + 1, y_col_idx, mx)  # Write max value to y column
         # Series 2: y = x line (dark blue, solid, no markers)
+        # Reference the helper points in the same columns as the data
         chart.add_series({
                 "name":"y = x",
-                "categories":[sheet_name, yx_row_start, 1, yx_row_start + 1, 1],  # B(r)..B(r+1)
-                "values":[sheet_name, yx_row_start, 2, yx_row_start + 1, 2],  # C(r)..C(r+1)
+                "categories":[sheet_name, yx_row_start, x_col_idx, yx_row_start + 1, x_col_idx],
+                "values":[sheet_name, yx_row_start, y_col_idx, yx_row_start + 1, y_col_idx],
                 "marker":{"type":"none"},
                 "line":{"color":"#1f4e79", "width":2.25}})  # dark blue
         # Axes with same bounds, integer labels, no gridlines
         x_axis_opts = {
-            "name":"exp",
+            "name":x_col,
             "min":mn, "max":mx,
             "num_format":"0",
             "crossing": "min",
             "major_gridlines":{"visible":False},
             "minor_gridlines":{"visible":False}}
         y_axis_opts = {
-            "name":"pred",
+            "name":y_col,
             "min":mn, "max":mx,
             "num_format":"0",
             "crossing": "min",
@@ -1415,6 +1480,8 @@ class ModelToExcel:
 
     def create_excel(
             self,
+            x_col: str=None,
+            y_col: str=None,
             chart_size_px: int=520,  # square chart size
             pad_ratio: float=0.02,
             integer_ticks: bool=True,
@@ -1430,6 +1497,8 @@ class ModelToExcel:
         as a post-processing step after the file is written.
         
         Args:
+            x_col (str): Column name to use for x-axis in prediction plots. If None, defaults to 'exp'.
+            y_col (str): Column name to use for y-axis in prediction plots. If None, defaults to 'pred'.
             chart_size_px (int): Square chart size in pixels for prediction plots. Defaults to 520.
             pad_ratio (float): Axis padding as fraction of data span. Defaults to 0.02.
             integer_ticks (bool): Whether to use integer-based tick spacing on charts. Defaults to True.
@@ -1447,49 +1516,29 @@ class ModelToExcel:
             logging.info("Creating Statistics...")
             self.statistics(writer, self.statistics_df)
 
-            # TODO: Write each sheet method below
-
-            # logging.info("Creating Training Set...")
-            # df = self.training_set(writer, self.training_set_df)
-            # logging.info(f"training_set:\n\t{df.head(2)}")
-
-            # logging.info("Creating Test Set...")
-            # df = self.test_set(writer, self.test_set_df)
-            # logging.info(f"test_set:\n\t{df.head(2)}")
-
             logging.info("Creating Records...")
             df = self.records(writer, self.records_df)
-            # logging.info(f"records:\n\t{df.head(2)}")
 
             logging.info("Creating Records Field Descriptions...")
             df = self.records_field_descriptions(writer, self.records_field_descriptions_df)
-            # logging.info(f"records_field_descriptions:\n\t{df.head(2)}")
-
-            # logging.info("Creating Test Set Predictions...")
-            # df = self.test_set_predictions(writer, self.test_set_predictions_df)
-            # logging.info(f"test_set_predictions:\n\t{df.head(2)}")
 
             logging.info("Creating Model Descriptors...")
             df = self.model_descriptors(writer, self.model_descriptors_df)
-            # logging.info(f"model_descriptors:\n\t{df.head(2)}")
 
             logging.info("Creating Model Descriptor Values...")
             df = self.model_descriptor_values(writer, self.model_descriptor_values_df)
-            # logging.info(f"model_descriptor_values:\n\t{df.head(2)}")
 
             logging.info("Creating Training CV Predictions...")
-            df = self.training_cv_predictions(writer, self.training_cv_predictions_df, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, yx_offset_rows=yx_offset_rows)
-            # logging.info(f"training_cv_predictions:\n\t{df.head(2)}")
+            df = self.training_cv_predictions(writer, self.training_cv_predictions_df, x_col=x_col, y_col=y_col, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, yx_offset_rows=yx_offset_rows, col_width_pad=col_width_pad, min_col_width=min_col_width)
 
             logging.info("Creating Test Set Predictions...")
-            df = self.test_set_predictions(writer, self.test_set_predictions_df, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, yx_offset_rows=yx_offset_rows)
-            # logging.info(f"test_set_predictions:\n\t{df.head(2)}")
+            df = self.test_set_predictions(writer, self.test_set_predictions_df, x_col=x_col, y_col=y_col, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, yx_offset_rows=yx_offset_rows, col_width_pad=col_width_pad, min_col_width=min_col_width)
 
             logging.info("Creating External Predictions...")
-            df = self.external_predictions(writer, self.external_predictions_df, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, yx_offset_rows=yx_offset_rows)
-            # logging.info(f"external_predictions:\n\t{df.head(2)}")
+            df = self.external_predictions(writer, self.external_predictions_df, x_col=x_col, y_col=y_col, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, yx_offset_rows=yx_offset_rows, col_width_pad=col_width_pad, min_col_width=min_col_width)
 
-            logging.info("Done creating detailed Excel!")
+            # logging.info("Done creating detailed Excel!")
+            logging.info("Done with initial passthrough of all sheets!")
         
         # Add hyperlinks AFTER the Excel file is written and closed
         # This allows us to use openpyxl to properly set hyperlinks with formatting
@@ -1500,8 +1549,6 @@ class ModelToExcel:
         if self.test_set_predictions_df is not None:
             self.add_hyperlinks_to_sheet(self.excel_path, "Test Set Predictions", "Records", self.test_set_predictions_df, self.records_df)
             self.add_hyperlinks_to_sheet(self.excel_path, "Records", "Test Set Predictions", self.records_df, self.test_set_predictions_df)
-        # if self.external_predictions_df is not None:
-        #     self.add_hyperlinks_to_sheet(self.excel_path, "External Predictions", "Records", self.external_predictions_df, self.records_df)
         logging.info("Hyperlinks added successfully!")
 
 
