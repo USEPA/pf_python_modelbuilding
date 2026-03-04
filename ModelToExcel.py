@@ -630,8 +630,14 @@ class ModelToExcel:
         variable_definitions_df['Symbol'] = variable_definitions_df['Symbol'].astype(str)
 
         # Merge the model's descriptors with their respective definitions and rename columns
-        result = model_descriptors_df.merge(variable_definitions_df, on="Symbol", how="left")
-        result = result.rename(columns={"Symbol": "Descriptor", "Category": "Class"})
+        temp = model_descriptors_df.merge(variable_definitions_df, on="Symbol", how="left")
+        temp = temp.rename(columns={"Symbol": "Descriptor", "Category": "Class"})
+
+        coefficients = pd.DataFrame(results_dict["model_details"]["model_coefficients"])
+        coefficients = coefficients.rename(columns={"name": "Descriptor", "coefficient": "Coefficient", "std_error": "Standard Error"})
+        coefficients["Descriptor"] = coefficients["Descriptor"].astype(str)
+
+        result = temp.merge(coefficients, on="Descriptor", how="right")
 
         result = ModelToExcel.handle_accidental_formulas(result, how="formula")
 
