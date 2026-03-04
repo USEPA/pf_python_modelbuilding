@@ -23,26 +23,19 @@ from db.mongo_cache import get_cached_prediction, cache_prediction
 
 from util import predict_constants as pc
 
-
-from db.mongo_cache import get_cached_prediction, cache_prediction
-
 from model_ws_utilities import call_do_predictions_from_df, models
 from models import df_utilities as dfu
 from models.ModelBuilder import Model
 
 import StatsCalculator as stats
 import pandas as pd
-from datetime import datetime, timezone
-import pytz
+# import pytz
 
 from sklearn.preprocessing import StandardScaler
 from sklearn.neighbors import NearestNeighbors
 import model_ws_utilities as mwu
 import numpy as np
 
-from report_creator_dict import ReportCreator
-
-import webbrowser
 from util.units_converter import UnitsConverter
 
 from utils import timer, print_first_row
@@ -50,15 +43,12 @@ from applicability_domain import applicability_domain_utilities as adu
 
 # debug = False
 import logging
-from pickle import TRUE
-from dns._features import have
 
 logging.getLogger('sqlalchemy').setLevel(logging.ERROR)
 
 fk_dsstox_snapshot_id = 1  # DSSTOX Snapshot 04/23 (Physchem models were created 2024-02-29), if use fk = 2 or 3 will have more missing records
 
 # Following records are cids in the physchem models that didnt make it into the dsstox_records table for fk_dsstox_snapshot_id = 1 (dsstox changed slightly) 
-
 # Following was created by ModelInitializer.findMissingDsstoxRecordsInPhyschemModelDatasets()
 dict_missing_dsstox_records = {    
                # "DTXCID001783033": {"smiles": "[H][C@]12[C@@H](Cl)[C@H](Cl)[C@](C(Cl)Cl)([C@@H](Cl)[C@@H]1Cl)C2(C)C(Cl)Cl"},#has no matching sid in dsstox
@@ -72,37 +62,16 @@ dict_missing_dsstox_records = {
 
 USE_TEMPORARY_MODEL_PLOTS = False
 
-
 imgURLCid = "https://comptox.epa.gov/dashboard-api/ccdapp1/chemical-files/image/by-dtxcid/";
 
 """
 Not completed:
-TODO: add qsarMethod and qsarMethodVersion
 TODO: make a batch mode
 TODO: Add experimental tab with raw data
-
-Completed:
-X TODO add similarities and colors (distances added)
-X TODO Add plot/ histo for overall sets (Use cross validation for plot for training)
-X TODO Add display units
-X TODO Add exp, pred values for neighbors
-X TODO Move ad code to that class
-X TODO Add experimental value to to predict tab
-X TODO Add propertyDescription, sourceName
-X TODO Add URL’s to excel and qmrf
-X TODO Add plots for neighbors
-X TODO fix error for melting point formatting (quantize error)
-X TODO make it still create reports if smiles or descriptors fails
-X TODO add green/red color box for AD result in report
-X TODO in report mention that the AD checks if distance is less than cutoff...
-X TODO run for smiles not in DSSTOX and fix code to still work 
-X TODO Fragment table for ocspp
-X TODO fix axis limits on neighbor plots
-X TODO Add size of training sets
+TODO: Add ability to export report as excel
 """
 
 lock = threading.Lock()
-
 
 
 def getEngine():
@@ -128,215 +97,8 @@ def getSession():
     return session
 
 
-def getSessionDsstox():
-    
-    # connect_url = URL.create(
-    #     drivername='postgresql+psycopg2',
-    #     username=os.getenv('DSSTOX_USER'),
-    #     password=os.getenv('DSSTOX_PASS'),
-    #     host=os.getenv('DSSTOX_HOST'),
-    #     port=os.getenv('DSSTOX_PORT'),
-    #     database=os.getenv('DSSTOX_DATABASE')
-    # )
-    
-    connect_url = URL.create(
-        drivername='mysql+pymysql',
-        username=os.getenv('DSSTOX_USER'),
-        password=os.getenv('DSSTOX_PASS'),
-        host=os.getenv('DSSTOX_HOST'),
-        port=int(os.getenv('DSSTOX_PORT', '3306')),
-        database=os.getenv('DSSTOX_DATABASE'),
-        query={'charset': 'utf8mb4'}  # recommended for full Unicode
-    )
-    
-    # print(connect_url)
-    engine = create_engine(connect_url, echo=False)
-    Session = sessionmaker(bind=engine)
-    session = Session()
-    return session
-
-
-    
-class ExpDataGetter:
-
-    def getSqlPropertyValues(self):
-        sqlPropertyValues = text("""    
-        select 
-            pv.id as property_values_id,
-            sc.source_chemical_name,
-            sc.source_smiles,sc.source_casrn, sc.source_dtxsid, sc.source_dtxrid,      
-            p.name_ccd  as property_name,
-            qsar_exp_prop_property_values_id,
-            dpc.property_value        as property_value,
-            u.abbreviation_ccd        as property_units,        
-            ps."name"                 as public_source_name,
-            ps.description            as public_source_description,
-            ps.url                    as public_source_url,
-            pv.page_url               as direct_url,
-            ls."name"                 as literature_source_name,
-            ls.citation               as literature_source_description,
-            ls.doi                    as literature_source_url,
-            pv.document_name          as brief_citation,--From OPERA2.9 usually
-            ps2."name"                as public_source_original_name, --For sources like toxval,pubchem, sander
-            ps2.description           as public_source_original_description,
-            ps2.url                   as public_source_original_url
-        from qsar_datasets.datasets d
-        join qsar_datasets.properties p on p.id=d.fk_property_id 
-        join qsar_datasets.data_points dp on dp.fk_dataset_id =d.id
-        join qsar_datasets.data_point_contributors dpc on dpc.fk_data_point_id =dp.id
-        join qsar_datasets.units u on u.id=d.fk_unit_id_contributor 
-        join exp_prop.property_values pv on pv.id = dpc.exp_prop_property_values_id 
-        join exp_prop.source_chemicals sc on sc.id=pv.fk_source_chemical_id 
-        left join exp_prop.literature_sources ls on ls.id=pv.fk_literature_source_id 
-        left join exp_prop.public_sources ps on ps.id=pv.fk_public_source_id
-        left join exp_prop.public_sources ps2 on ps2.id=pv.fk_public_source_original_id 
-        where d.name=:datasetName and dp.canon_qsar_smiles =:qsarSmiles
-        order by dpc.property_value asc
-        """)
-        return sqlPropertyValues
-    
-    def getSqlParameters(self):
-        sqlParameters = text("""
-        SELECT
-            pv.id as property_values_id,p.id as parameters_id, p.name, pv2.value_point_estimate, 
-            pv2.value_min,pv2.value_max ,pv2.value_text,pv2.value_error, 
-            pv2.value_qualifier, u2.abbreviation_ccd as units
-        from qsar_datasets.datasets d
-        join qsar_datasets.data_points dp on dp.fk_dataset_id =d.id
-        join qsar_datasets.data_point_contributors dpc on dpc.fk_data_point_id =dp.id
-        join exp_prop.property_values pv on pv.id = dpc.exp_prop_property_values_id 
-        join exp_prop.parameter_values pv2 on pv2.fk_property_value_id  = pv.id
-        join exp_prop.parameters p on p.id=pv2.fk_parameter_id 
-        join exp_prop.units u on u.id=pv2.fk_unit_id
-        left join qsar_datasets.units u2 on u2.name=u.name
-        where d.name=:datasetName and dp.canon_qsar_smiles =:qsarSmiles;
-        """)
-        return sqlParameters
-    
-    def get_raw_exp_data(self, session, datasetName, qsarSmiles):
-        
-        try:
-            
-            # TODO: need to sort the propertyvalues and mark the ones that were used in the qsar property value
-            
-            # print(sqlPropertyValues)            
-            resultsPropertyValues = session.execute(self.getSqlPropertyValues(), {"datasetName": datasetName, "qsarSmiles": qsarSmiles})
-            df_pv = pd.DataFrame(resultsPropertyValues.mappings().all())
-                                            
-            # Get the parameters separately to make the query manageable
-            resultsParameters = session.execute(self.getSqlParameters(), {"datasetName": datasetName, "qsarSmiles": qsarSmiles})
-            df_params = pd.DataFrame(resultsParameters.mappings().all())
-            df_params = df_params.dropna(subset=["name"]).copy()
-            df_params["name"] = df_params["name"].astype(str).str.strip()
-            df_params = df_params[df_params["name"] != ""]
-            
-            # Build dict: {name: {row fields...}}
-            # params_by_name = (
-            #     df_params
-            #     .drop_duplicates(subset=["name"], keep="last")
-            #     .set_index("name")
-            #     .to_dict(orient="index")
-            # )
-            #
-            # print(params_by_name)
-            #
-            # df_pv["params"] = df_pv["property_values_id"].map(params_by_name)
-            #
-            # printFirstRowDF(df_pv)
-            
-            params_map = {
-                int(pid): grp.to_dict("records")
-                for pid, grp in df_params.groupby("property_values_id", sort=False)
-            }
-            
-            params_map = {
-                int(pid): (
-                    grp.drop_duplicates(subset=["name"], keep="last")
-                       .set_index("name")
-                       .drop(columns=["property_values_id"], errors="ignore")
-                       .to_dict(orient="index")
-                )
-                for pid, grp in df_params.groupby("property_values_id", sort=False)
-            }
-            
-            df_pv["params"] = df_pv["property_values_id"].map(params_map)
-            
-            param_names = (
-                df_params["name"]
-                .dropna()
-                .drop_duplicates()
-                .tolist()
-            )
-            
-            # print(param_names)
-            return df_pv, param_names
-
-        except SQLAlchemyError as ex:
-            print(f"An error occurred: {ex}")
-        finally:
-            # print('done getting tsvs')
-            session.close()
-
-
 class ModelInitializer:
     
-    # def get_model_list(self, session):
-    #     """Gets model meta data (except training and test set tsvs).
-    #     TODO Should this info be stored directly in model object and then for new models we won't need to query the db since will be already in the pickled object?
-    #     Is this used?
-    #     """
-    #     try:
-    #         # SQL query to retrieve model details
-    #         sql = text("""
-    #                    SELECT m.name_ccd,
-    #                           d.id,
-    #                           d.name,
-    #                           u.abbreviation_ccd,
-    #                           d.dsstox_mapping_strategy,
-    #                           p.name_ccd,
-    #                           ds.id,
-    #                           ds.name,
-    #                           ds.descriptor_service,
-    #                           ds.headers_tsv,
-    #                           s.id,
-    #                           s.name,
-    #                           adm.name,
-    #                           de.embedding_tsv
-    #                    FROM qsar_models.models m
-    #                             LEFT JOIN qsar_datasets.datasets d ON d.name = m.dataset_name
-    #                             LEFT JOIN qsar_datasets.units u ON d.fk_unit_id = u.id
-    #                             LEFT JOIN qsar_datasets.properties p ON d.fk_property_id = p.id
-    #                             LEFT JOIN qsar_descriptors.descriptor_sets ds ON m.descriptor_set_name = ds.name
-    #                             LEFT JOIN qsar_datasets.splittings s ON m.splitting_name = s.name
-    #                             LEFT JOIN qsar_models.ad_methods adm ON m.fk_ad_method = adm.id
-    #                             LEFT JOIN qsar_models.descriptor_embeddings de ON m.fk_descriptor_embedding_id = de.id
-    #                    WHERE fk_source_id = 3
-    #                      and is_public = true
-    #                    """)
-    #
-    #         # Use left joins so can still get a result if something is missing (like fk_ad_method was not set for model)
-    #         # print(sql)
-    #
-    #         # Execute the query
-    #         rows = session.execute(sql).fetch()
-    #
-    #         models = []
-    #
-    #         for row in rows:
-    #             model_details = self.row_to_model_details(row)
-    #             models.append(model_details)
-    #
-    #         return models
-    #
-    #     except Exception as ex:
-    #         print(f"Exception occurred: {ex}")
-    #     finally:
-    #         # Close the session
-    #         print('done with details')
-    #         # session.close()
-    #
-    #     return None
-
     def init_model(self, model_id):
 
         with lock:
@@ -348,36 +110,6 @@ class ModelInitializer:
                 models[model_id] = model
 
         return model
-
-    # @timer
-    # def initModel(self, model_id):
-    #     session = getSession()
-    #     model_bytes = self.get_model_bytes(model_id, session)
-    #
-    #     import pickle
-    #     model = pickle.loads(model_bytes)
-    #
-    #     if debug:
-    #         print('model_description from pickled model:', model.get_model_description())
-    #
-    #     if not hasattr(model, "is_binary"):
-    #         print('model.is_binary is none, setting to false')
-    #         model.is_binary = False
-    #
-    #     # Stores model under provided number
-    #
-    #     self.get_model_details(model_id, model, session)
-    #
-    #     logging.debug(model.get_model_description_pretty())
-    #
-    #     # this wont be necessary if the training/test sets are in the pickled model:
-    #     self.get_training_prediction_instances(session, model)
-    #
-    #     # TODO: for the training/prediction instances, could also query the descriptor api but it would take longer and
-    #     #  sometimes the descriptors will come out different due to the fact that the descriptors will be pulled from the
-    #     #  cache by inchi key (TEST descriptors come out differently sometimes for two different structures with the same inchi key but different smiles
-    #
-    #     return model
 
     def get_model_bytes(self, model_id, session):
         """
@@ -430,8 +162,6 @@ class ModelInitializer:
 
             model.modelStatistics = stats
 
-            # print(model.modelStatistics)
-
         except SQLAlchemyError as ex:
             print("error getting stats for modelId=" + str(model.modelId))
     
@@ -453,15 +183,12 @@ class ModelInitializer:
             results = session.execute(sql, {'model_id': model.modelId,
                                             'fk_splitting_id': fk_splitting_id,
                                             'split_num': split_num})
-            import pandas as pd
             df = pd.DataFrame(results, columns=["id", "exp", "pred"])
-            # print(split_num, df.shape)
             return df
 
         except SQLAlchemyError as ex:
             print(f"An error occurred: {ex}")
         finally:
-            # print('done getting tsvs')
             session.close()
 
     def get_cv_predictions(self, session, model: Model):
@@ -479,13 +206,11 @@ class ModelInitializer:
         try:
             results = session.execute(sql, {'model_id': model.modelId})
             df = pd.DataFrame(results, columns=["id", "exp", "pred"])
-            # print('cv_shape', df.shape)
             return df
 
         except SQLAlchemyError as ex:
             print(f"An error occurred: {ex}")
         finally:
-            # print('done getting tsvs')
             session.close()
 
     def get_model_details(self, m: Model, session):
@@ -498,7 +223,6 @@ class ModelInitializer:
             sql = text(self.getModelMetaDataQuery() + "\nWHERE m.id = :model_id")
 
             # Use left joins so can still get a result if something is missing (like fk_ad_method was not set for m)
-            # print(sql)
 
             # Execute the query
             row = session.execute(sql, {'model_id': m.modelId}).fetchone()
@@ -510,10 +234,6 @@ class ModelInitializer:
         except Exception as ex:
             ex.with_traceback()
             print(f"Exception occurred: {ex}")
-        # finally:
-            # Close the session - close it later after get training/test sets
-            # print('done with details')
-            # session.close()
 
     def replace_id_with_dsstox_record(self, df_set, df_dsstoxRecords):
 
@@ -547,10 +267,8 @@ class ModelInitializer:
             pc.NINETY_SIX_HOUR_BLUEGILL_LC50,
             pc.FORTY_EIGHT_HR_TETRAHYMENA_PYRIFORMIS_IGC50,
             pc.FORTY_EIGHT_HR_DAPHNIA_MAGNA_LC50
-        ]:            
-            model.unitsDisplay = pc.MG_L # units that program office wants (Dashboard uses mol/L)
-
-
+        ]: 
+            model.unitsDisplay = pc.MG_L  # units that program office wants (Dashboard uses mol/L)
 
     @timer
     def initModel(self, model_id):
@@ -590,15 +308,7 @@ class ModelInitializer:
         model.df_preds_test = self.get_predictions(session, model=model, split_num=1, fk_splitting_id=1)
         model.df_preds_training_cv = self.get_cv_predictions(session, model)
 
-        # self.replace_id_with_dsstox_record(model.df_prediction, model.df_dsstoxRecords)
-        # self.replace_id_with_dsstox_record(model.df_training, model.df_dsstoxRecords)
-        # print('model_description with added metadata', model.get_model_description_pretty())
-
         logging.debug(f"model_description with added metadata:{model.get_model_description_pretty()}")
-
-        # TODO: for the training/prediction instances, could also query the descriptor api but it would take longer and
-        #  sometimes the descriptors will come out different due to the fact that the descriptors will be pulled from the
-        #  cache by inchi key (TEST descriptors come out differently sometimes for two different structures with the same inchi key but different smiles
 
         session.close()
 
@@ -637,9 +347,6 @@ class ModelInitializer:
             select dr.dtxsid, dr.preferred_name from qsar_models.dsstox_records dr
             where dr.dtxcid = :dtxcid and dr.fk_dsstox_snapshot_id=:fk_dsstox_snapshot_id;
             """)
-        
-        # where dr.dtxcid = :dtxcid and dr.fk_dsstox_snapshot_id=3;  
-        # print(sql,"*"+dtxcid+"*")
         
         try:
             connection = session.connection()
@@ -690,21 +397,10 @@ class ModelInitializer:
 
             model.df_dsstoxRecords = df;
             
-            # print(model.df_dsstoxRecords.to_json(indent=4));
-            # rows = df.loc[df["canonicalSmiles"].eq("CC1C=CC2CC(C)CCC=2C=1")]
-            # print(rows)
-            # print(df.head())
-
             none_sid_smiles = df[df['sid'].isnull()]['canonicalSmiles']
 
             if len(none_sid_smiles) > 0:
                 print(model.modelId, "Have canonicalSmiles in dataset that isn't in dsstox records:", none_sid_smiles)
-
-            # if not df.empty:
-            #     first_row_dict = df.iloc[0].to_dict()
-            #     pretty_json = json.dumps(first_row_dict, indent=4)
-            #     print("First row as pretty JSON:")
-            #     print(pretty_json)
 
             return df
 
@@ -760,7 +456,6 @@ class ModelInitializer:
             model.num_prediction = model.df_prediction.shape[0]
 
                     # Replace IDs in df_set
-
             
             logging.debug(f"trainingSet shape:{model.df_training.shape}")
             logging.debug(f"predictionSet shape:{model.df_prediction.shape}")
@@ -769,85 +464,15 @@ class ModelInitializer:
             print(f"An error occurred: {ex}")
         finally:
             pass
-            # print('done getting tsvs')
-            # session.close()
 
     def generate_instance(self, chemical_id, qsar_property_value, descriptors):
         return f"{chemical_id}\t{qsar_property_value}\t{descriptors}\n"
     
-    def findMissingDsstoxRecordsInPhyschemModelDatasets(self):
-        """Some datapoints are missing records in qsar_models.dsstox_records table in postgresql due to changes in dsstox over time"""
-        
-        session = getSession()
-        sessionDsstox = getSessionDsstox()
-        
-        fk_dsstox_snapshot_id = 1
-
-        sql1 = text("""
-                SELECT DISTINCT dp.canon_qsar_smiles, split_part(dp.qsar_dtxcid, '|', 1) AS cid 
-                from qsar_models.models m                
-                join qsar_datasets.datasets d on d.name = m.dataset_name 
-                JOIN qsar_datasets.data_points dp ON dp.fk_dataset_id = d.id
-                LEFT JOIN qsar_models.dsstox_records dr ON dr.dtxcid = split_part(dp.qsar_dtxcid, '|', 1) AND dr.fk_dsstox_snapshot_id = :fk_dsstox_snapshot_id
-                WHERE d.name LIKE :name_pattern and m.is_public =true AND dr.dtxcid IS NULL;
-            """)
-        
-        results = session.execute(sql1, {"name_pattern": "% v1 modeling", "fk_dsstox_snapshot_id": fk_dsstox_snapshot_id})
-        rows = results.mappings().all()  # list of dict-like rows
-        cids = [r["cid"] for r in rows]
-        
-        print(len(cids))         
-        print (cids, "\n")        
-        # there are 8 dtxcids not in my dsstox_records table
-        # DTXCID001783033 doesnt have a generic substance in dsstox 
-                
-        sql2a = text("""SELECT dsstox_compound_id as cid,  c.smiles, gs.dsstox_substance_id as sid, gs.casrn, gs.preferred_name 
-        FROM compounds c
-        join generic_substance_compounds gsc on gsc.fk_compound_id =c.id
-        join generic_substances gs on gs.id=gsc.fk_generic_substance_id
-         WHERE dsstox_compound_id IN :cids;        
-        """)
-
-        sql2 = sql2a.bindparams(bindparam("cids", expanding=True))
-        res = sessionDsstox.execute(sql2, {"cids": cids})
-        # print(list(res.keys()))
-        results = res.fetchall()
-        
-        cid_to_info = {}
-        for row in results:
-            cid, smiles, sid, casrn, name = row
-            cid_to_info[cid] = {"smiles":smiles, "sid":sid, "casrn":casrn, "name": name}
-                    
-        print(json.dumps(cid_to_info))
-        
-    def exportRandomDsstoxSample(self):
-        """Export sample smiles from dsstox"""
-        
-        sessionDsstox = getSessionDsstox()
-        
-        sql = text("""SELECT c.smiles
-                    FROM compounds AS c
-                    JOIN (SELECT FLOOR(RAND() * (SELECT MAX(id) FROM compounds)) AS start_id) AS r
-                    WHERE c.id >= r.start_id
-                    ORDER BY c.id
-                    LIMIT 1000;       
-        """)
-
-        results = sessionDsstox.execute(sql)
-
-        smiles = []
-        
-        for result in results:
-            smiles.append(result[0])
-        
-        smiles_list = [s for s in smiles if s is not None]
-        
-        OUTPUT_JSON = "dsstox smiles sample.json"
-        
-        with open(OUTPUT_JSON, "w", encoding="utf-8") as f:
-            json.dump(smiles_list, f, ensure_ascii=False, indent=2)
-    
     def getModelMetaDataQuery(self):
+        """
+        returns the query to get the model metadata
+         left joins so can still get a result if something is missing (like fk_ad_method was not set for model)
+        """
         return """
         SELECT 
                 m.id,
@@ -895,7 +520,6 @@ class ModelInitializer:
             # SQL query to retrieve model details
             sql = text(self.getModelMetaDataQuery() + "\nWHERE m.fk_source_id = 3 and m.is_public=true;")
 
-            # Use left joins so can still get a result if something is missing (like fk_ad_method was not set for model)
             # print(sql)
 
             # Execute the query
@@ -945,11 +569,6 @@ class ModelInitializer:
         m.modelMethodDescriptionURL
         ) = row
 
-        # model_details.descriptorEmbeddingTsv = row[13]  #dont need already have in pickled m
-        # print (type(details))
-        # print(details)
-        # print(m.modelId)
-        
         m.modelId = str(m.modelId)
         details = json.loads(m.detailsFile.tobytes().decode('utf-8'))  # it's stored as a file object in database for now
         m.is_binary = details['is_binary']
@@ -974,11 +593,6 @@ class ModelInitializer:
             m.qsar_method_version = details['qsar_method_version']
 
         m.include_standardization_in_pmml = details['include_standardization_in_pmml']
-
-        # omit for now:
-        #  'training_stats'
-        #  'training_descriptor_std_devs'
-        #  'training_descriptor_means'
 
         # Parse JSON for dsstox_mapping_strategy
         dsstox_mapping = json.loads(m.dsstox_mapping_strategy)
@@ -1017,9 +631,6 @@ class ModelDetails:
             
         self.propertyIsBinary = model.is_binary
 
-        # self.version = '0.0.1'
-        # self.description = model.description # TODO: in database
-        # self.description_url = model.description_url #TODO in database
         self.datasetName = model.datasetName
         
         self.unitsModel = model.unitsModel
@@ -1036,9 +647,6 @@ class ModelDetails:
         self.qsarReadyRuleSet = model.qsarReadyRuleSet
         self.embedding = model.embedding
         self.modelCoefficients = None
-
-# from pydantic import BaseModel
-# class ModelResults(BaseModel):
         
     
 class ModelResults:
@@ -1092,220 +700,6 @@ class Report:
 
     def to_json(self):
         return json.dumps(self.to_dict(), indent=4)
-    
-
-class ModelStatistics:
-
-    def redo_cv_stats(self, session, model: Model):
-
-        mi = ModelInitializer()
-        df_preds_training_cv = mi.get_cv_predictions(session, model)
-
-        stats_training_cv = stats.calculate_continuous_statistics(df_preds_training_cv, 0,
-            pc.TAG_CV + pc.TAG_TRAINING)
-
-        statistic_name = "RMSE_CV_Training"
-        statistic_value = stats_training_cv[statistic_name]
-        print(model.propertyName, stats_training_cv["RMSE_CV_Training"])
-        self.update_statistic_value(session, model.modelId, statistic_name, statistic_value, "tmarti02")
-
-        self.compare_stats(model, stats_training_cv)
-
-    def recalculate_test_set_stats(self, session, model):
-        """Recalculate stats using predictions stored in the db"""
-
-        mi = ModelInitializer()
-        mi.get_model_statistics(model, session)
-
-        df_preds_training = mi.get_predictions(session, model=model, split_num=0, fk_splitting_id=1)
-        df_preds_test = mi.get_predictions(session, model=model, split_num=1, fk_splitting_id=1)
-        mean_exp_training = stats.calculate_mean_exp_training(df_preds_training)
-        stats_test_set = stats.calculate_continuous_statistics(df_preds_test, mean_exp_training,
-            pc.TAG_TEST)
-
-        self.compare_stats(model, stats_test_set)
-
-    def calculate_ad_stats(self, session, model:Model):
-
-        mi = ModelInitializer()
-        mp = ModelPredictor()
-
-        mi.get_training_prediction_instances(session, model)
-
-        df_preds_test = mi.get_predictions(session, model=model, split_num=1, fk_splitting_id=1)
-        str_ad_results = mp.determineApplicabilityDomain(model, model.df_prediction)
-        ad_results = json.loads(str_ad_results)  # convert json to list of AD results
-        df_ad = pd.DataFrame(ad_results)  # convert to dataframe
-
-        self.calculate_AD_stats(df_ad, df_preds_test, pc.TAG_TEST, model.modelId, session)
-
-    def updateStatsPredictModuleModels(self):
-
-        try:
-
-            mi = ModelInitializer()
-
-            session = getSession()
-            sql = text(mi.getModelMetaDataQuery() + "\nWHERE m.fk_source_id = 3 and m.is_public=true order by m.id;")  # fk_source_id=3 => cheminformatics modules
-
-            # Use left joins so can still get a result if something is missing (like fk_ad_method was not set for model)
-            # print(sql)
-
-            # Execute the query
-            results = session.execute(sql).fetchall()
-
-            # Process the result
-            for row in results:
-                model = Model()
-                mi.row_to_model_details(model, row)
-                # self.recalculate_test_set_stats(session, model)
-                # self.redo_cv_stats(session, model)
-                self.calculate_ad_stats(session, model)
-
-                # if True:
-                #     break # stop after first model for testing
-
-        except Exception as ex:
-            ex.with_traceback()
-            print(f"Exception occurred: {ex}")
-        finally:
-            # Close the session - close it later after get training/test sets
-            session.close()
-
-    def calculate_AD_stats(self, df_ad, df_preds, tag, model_id, session):
-
-        merged_df = pd.merge(df_ad, df_preds, left_on='idTest', right_on='id')
-        # print(merged_df.columns)
-
-        df_inside_ad = merged_df[merged_df['AD']].loc[:, ['id', 'exp', 'pred']]
-        stats_test_inside_AD = stats.calculate_continuous_statistics(df_inside_ad, 0, tag + "_inside_AD")
-        # print(stats_test_inside_AD)
-        MAE_inside_AD = stats_test_inside_AD ["MAE" + tag + "_inside_AD"]
-        # print(MAE_Test_inside_AD)
-
-        df_outside_ad = merged_df[~merged_df['AD']].loc[:, ['id', 'exp', 'pred']]
-        stats_test_outside_AD = stats.calculate_continuous_statistics(df_outside_ad, 0, tag + "_outside_AD")
-        # print(stats_test_inside_AD)
-        MAE_outside_AD = stats_test_outside_AD ["MAE" + tag + "_outside_AD"]
-
-        count_inside = df_inside_ad.shape[0]
-        count_outside = df_outside_ad.shape[0]
-        coverage = count_inside / (count_inside + count_outside)
-
-        dict_stats = {}
-        dict_stats["MAE" + tag + "_inside_AD"] = MAE_inside_AD
-        dict_stats["MAE" + tag + "_outside_AD"] = MAE_outside_AD
-        dict_stats["Coverage" + tag] = coverage
-
-        for statistic_name in dict_stats:
-            new_statistic_value = dict_stats[statistic_name]
-            print(model_id, statistic_name, new_statistic_value)
-            self.update_statistic_value(session, model_id, statistic_name, new_statistic_value, "tmarti02")
-
-        # print(dict_stats)
-
-        return MAE_inside_AD, MAE_outside_AD, coverage
-
-    def update_statistic_value(self, session, model_id: int, statistic_name: str, new_statistic_value: float, user_id: str):
-        try:
-            # Query to find the statistic ID
-            statistic_id_result = session.execute(
-                text("SELECT id FROM qsar_models.\"statistics\" WHERE name = :name"),
-                {"name": statistic_name}
-            ).fetchone()
-
-            if statistic_id_result is None:
-                raise ValueError(f"Statistic '{statistic_name}' does not exist.")
-
-            statistic_id = statistic_id_result[0]
-
-            # Query to check if the statistic already exists for the model
-            existing_statistic_result = session.execute(
-                text("""
-                    SELECT 1 FROM qsar_models.model_statistics
-                    WHERE fk_model_id = :model_id AND fk_statistic_id = :statistic_id
-                """),
-                {"model_id": model_id, "statistic_id": statistic_id}
-
-            ).fetchone()
-            est = pytz.timezone('US/Eastern')
-            current_time_utc = datetime.now(timezone.utc)  # Use timezone-aware UTC now
-            current_time_est = current_time_utc.astimezone(est)
-
-            # print(existing_statistic_result, statistic_id)
-            #
-            # if True:
-            #     return
-
-            if existing_statistic_result is None:
-                # Insert if not exists
-                session.execute(
-                    text("""
-                        INSERT INTO qsar_models.model_statistics (
-                            fk_model_id, fk_statistic_id, statistic_value, created_at, updated_at, created_by, updated_by
-                        ) VALUES (
-                            :model_id, :statistic_id, :statistic_value, :created_at, :updated_at, :created_by, :updated_by
-                        )
-                    """),
-                    {
-                        "model_id": model_id,
-                        "statistic_id": statistic_id,
-                        "statistic_value": new_statistic_value,
-                        "created_at": current_time_est,
-                        "updated_at": current_time_est,
-                        "created_by": user_id,
-                        "updated_by": user_id
-                    }
-                )
-            else:
-                # Update if exists
-                session.execute(
-                    text("""
-                        UPDATE qsar_models.model_statistics
-                        SET statistic_value = :statistic_value,
-                            updated_at = :updated_at,
-                            updated_by = :updated_by
-                        WHERE fk_model_id = :model_id AND fk_statistic_id = :statistic_id
-                    """),
-                    {
-                        "model_id": model_id,
-                        "statistic_id": statistic_id,
-                        "statistic_value": new_statistic_value,
-                        "updated_at": current_time_est,
-                        "updated_by": user_id
-                    }
-                )
-
-            # Commit the transaction
-            session.commit()
-        except Exception as e:
-            e.with_traceback()
-            session.rollback()
-            raise e
-
-    def compare_stats(self, model, stats_new):
-
-        data = []
-
-        for stat_name in stats_new:
-
-            if stat_name == "Coverage_CV_Training":
-                continue
-
-            stat_value_old = model.modelStatistics.get(stat_name, "N/A")
-            stat_value_new = stats_new[stat_name]
-            data.append({
-                'Statistic': stat_name,
-                'Old Value': stat_value_old,
-                'New Value': stat_value_new
-            })
-
-        # Create a DataFrame
-        df = pd.DataFrame(data, columns=['Statistic', 'Old Value', 'New Value'])
-
-        # Print the DataFrame in a readable format
-        print("\n" + model.propertyName + "\n")
-        print(df.to_string(index=False, float_format='{:.3f}'.format))
 
 
 class NeighborGetter:
@@ -1369,120 +763,6 @@ class NeighborGetter:
 
         return neighbors, distances
 
-
-class PlotCreator:
-    
-    def upload_image_to_db(self, file_path, username, fk_model_id, fk_file_type_id, session):
-
-        try:
-        # Read the image file as binary
-            with open(file_path, 'rb') as file:
-                binary_data = file.read()
-        
-            # Prepare the SQL query
-            insert_query = text("""
-            INSERT INTO qsar_models.model_files (created_at, created_by, file, updated_at, updated_by, fk_file_type_id, fk_model_id)
-            VALUES (:created_at, :created_by, :file, :updated_at, :updated_by, :fk_file_type_id, :fk_model_id)
-            """)
-        
-            # Data to insert
-            data = {
-                'created_at': datetime.now(),
-                'created_by': username,
-                'file': binary_data,
-                'updated_at': datetime.now(),
-                'updated_by': username,
-                'fk_file_type_id': fk_file_type_id,  # Example foreign key value
-                'fk_model_id': fk_model_id  # Example foreign key value
-            }
-        
-            session.execute(insert_query, data)
-            session.commit()
-            
-        except Exception as e:
-            session.rollback()
-            print(f"An error occurred: {e}")
-    
-    def display_image(self, fk_model_id, fk_file_type_id, session):
-        try:
-            # Prepare the SQL query to retrieve the image using foreign keys
-            select_query = text("""
-            SELECT file FROM qsar_models.model_files 
-            WHERE fk_model_id = :fk_model_id AND fk_file_type_id = :fk_file_type_id
-            """)
-    
-            # Execute the query
-            result = session.execute(select_query, {'fk_model_id': fk_model_id, 'fk_file_type_id': fk_file_type_id})
-            row = result.fetchone()
-            
-            if row and row[0]:  # Access the first element of the tuple
-                # Get the binary data from the result
-                binary_data = row[0]
-                
-                # Define a temporary file path
-                temp_file_path = "data/plots/db/" + str(fk_model_id) + "_" + str(fk_file_type_id) + '.png'
-                
-                # Write the binary data to a temporary file
-                with open(temp_file_path, 'wb') as temp_file:
-                    temp_file.write(binary_data)
-                
-                # Open the image in the default web browser
-                webbrowser.open('file://' + os.path.realpath(temp_file_path))
-            else:
-                print("No image found with the specified foreign keys.")
-        except Exception as e:
-            print(f"An error occurred: {e}")
-            session.rollback()
-    
-    def createTrainingTestPlotsForReports(self):
-    
-            username = "tmarti02"
-    
-            try:
-                    
-                from models import make_test_plots as mtp 
-                            
-                script_dir = os.path.dirname(os.path.abspath(__file__))
-                folder_path = os.path.join(script_dir, "data/plots/")
-                os.makedirs(os.path.dirname(folder_path), exist_ok=True)
-    
-                mi = ModelInitializer()
-                models = mi.get_available_models()
-                
-                session = getSession()
-                
-                for model_dict in models:
-                    model = mi.init_model(model_dict["modelId"])
-                    print(model.modelId)              
-    
-                    mpsTraining = model.df_preds_training_cv.to_dict(orient='records')
-                    mpsTest = model.df_preds_test.to_dict(orient='records')
-                    
-                    # filePathOutScatter = os.path.join(folder_path, "scatter_plot_" + str(model.modelId) + ".png")
-                    # title = model.modelName + " results for " + model.propertyName
-                    # mtp.generateScatterPlot2(filePathOut=filePathOutScatter, title=title, unitName=model.unitsModel,
-                    #                          mpsTraining=mpsTraining, mpsTest=mpsTest,
-                    #                          seriesNameTrain="Training set (CV)", seriesNameTest="Test set")
-                    #
-                    #self.upload_image_to_db((filePathOutScatter, username, model.modelId, 3, session)
-                    # self.display_image(model.modelId, 3, session)
-                    
-                    filePathOutHistogram = os.path.join(folder_path, "histogram_" + str(model.modelId) + ".png")
-                    
-                    mtp.generateHistogram2(fileOutHistogram=filePathOutHistogram, property_name=model.propertyName, unit_name=model.unitsModel,
-                                           mpsTraining=mpsTraining, mpsTest=mpsTest,
-                                           seriesNameTrain="Training set", seriesNameTest="Test set")
-                    self.upload_image_to_db(filePathOutHistogram, username, model.modelId, 4, session)
-                    self.display_image(model.modelId, 4, session)
-                    
-            except Exception as ex:
-                ex.with_traceback()
-                print(f"Exception occurred: {ex}")
-            
-            finally:
-                session.close()
-
-
 # cache = {}
 
 
@@ -1497,7 +777,6 @@ class ModelPredictor:
         :param mwu:
         :return:
         """
-    
     
         if isinstance(smiles, str):
             key = f"{smiles}-{model_id}"
@@ -1519,7 +798,6 @@ class ModelPredictor:
                     missing.append(smi)
     
             with concurrent.futures.ThreadPoolExecutor() as pool:
-
                 
                 prediction, code = self.predict_model_smiles(model_id, smiles)
                 results = pool.map(prediction, [model_id for _ in missing], missing)
@@ -1536,32 +814,39 @@ class ModelPredictor:
     
             return result
 
-    
-    def addPerformance(self, md:ModelDetails):
-    
-        ms = md.modelStatistics
-            
+    def addPerformance(self, md: ModelDetails):
+        ms = md.modelStatistics or {}
+
+        def set_metric(block: dict, out_key: str, *candidates: str):
+            """Put first existing metric from candidates into block[out_key]."""
+            for k in candidates:
+                if k in ms and ms[k] is not None:
+                    block[out_key] = ms[k]
+                    return
+            block[out_key] = None
+
         md.performance = {}
+
         md.performance["train"] = {}
-        md.performance["train"]["R2"] = ms["PearsonRSQ_Training"]
-        md.performance["train"]["RMSE"] = ms["RMSE_Training"]
-        md.performance["train"]["MAE"] = ms["MAE_Training"]
-        
+        set_metric(md.performance["train"], "R2", "PearsonRSQ_Training", "R2_Training")
+        set_metric(md.performance["train"], "RMSE", "RMSE_Training")
+        set_metric(md.performance["train"], "MAE", "MAE_Training")
+
         md.performance["fiveFoldICV"] = {}
-        md.performance["fiveFoldICV"]["R2"] = ms["PearsonRSQ_CV_Training"]
-        md.performance["fiveFoldICV"]["RMSE"] = ms["RMSE_CV_Training"]
-        md.performance["fiveFoldICV"]["MAE"] = ms["MAE_CV_Training"]
-        
+        set_metric(md.performance["fiveFoldICV"], "R2", "PearsonRSQ_CV_Training", "PearsonRSQ_CV")
+        set_metric(md.performance["fiveFoldICV"], "RMSE", "RMSE_CV_Training", "RMSE_CV", "RMSE_CV_Train")
+        set_metric(md.performance["fiveFoldICV"], "MAE", "MAE_CV_Training", "MAE_CV")
+
         md.performance["external"] = {}
-        md.performance["external"]["R2"] = ms["PearsonRSQ_Test"]
-        md.performance["external"]["RMSE"] = ms["RMSE_Test"]
-        md.performance["external"]["MAE"] = ms["MAE_Test"]
-        
+        set_metric(md.performance["external"], "R2", "PearsonRSQ_Test", "R2_Test")
+        set_metric(md.performance["external"], "RMSE", "RMSE_Test")
+        set_metric(md.performance["external"], "MAE", "MAE_Test")
+
         md.performance["externalAD"] = {}
-        md.performance["externalAD"]["MAE_inside_AD"] = ms["MAE_Test_inside_AD"]
-        md.performance["externalAD"]["MAE_outside_AD"] = ms["MAE_Test_outside_AD"]
-        md.performance["externalAD"]["Fraction_inside_AD"] = ms["Coverage_Test"]
-        
+        set_metric(md.performance["externalAD"], "MAE_inside_AD", "MAE_Test_inside_AD")
+        set_metric(md.performance["externalAD"], "MAE_outside_AD", "MAE_Test_outside_AD")
+        set_metric(md.performance["externalAD"], "Fraction_inside_AD", "Coverage_Test")
+
         md.modelStatistics = None
     
     def smiles_to_base64(self, smiles_string, width=400, height=400):
@@ -1590,13 +875,8 @@ class ModelPredictor:
 
         qsarSmiles = chemical["canonicalSmiles"]
 
-        # print(qsarSmiles)
-
         matching_row_training = model.df_training[model.df_training['ID'] == qsarSmiles]
         matching_row_test = model.df_prediction[model.df_prediction['ID'] == qsarSmiles]
-
-        # print(model.df_training.shape)
-        # print(matching_row_training['Property'].values[0])
 
         if not matching_row_training.empty:
             modelResults.experimentalValueUnitsModel = matching_row_training['Property'].values[0]
@@ -1605,8 +885,6 @@ class ModelPredictor:
         if not matching_row_test.empty:
             modelResults.experimentalValueUnitsModel = matching_row_test['Property'].values[0]
             modelResults.experimentalValueSet = "Test"
-
-        # print(modelResults.experimentalValue,modelResults.experimentalValueSet )
 
     def setExpPredValuesForADAnalogs(self, model, analogs):
 
@@ -1664,14 +942,6 @@ class ModelPredictor:
                 else:
                     row_as_dict["name"] = dtxcid    
                 
-                # dtxsid, preferred_name = mi.getDtxsid(dtxcid, session)
-                #
-                # if dtxsid:
-                #     row_as_dict["sid"] = dtxsid
-                #     row_as_dict["name"] = preferred_name
-                # else:
-                #     row_as_dict["name"] = dtxcid
-                    
             else:
                 row_as_dict["name"] = qsarSmiles
 
@@ -1703,13 +973,6 @@ class ModelPredictor:
                 # print(neighbor +" not in dsstox records")
                 neighbors2.append(row_as_dict)
                 
-                # look up new dtxcids
-                # select dpc.dtxsid as dpc_dtxsid, dr.dtxcid from qsar_datasets.datasets d
-                # join qsar_datasets.data_points dp on dp.fk_dataset_id = d.id
-                # join qsar_datasets.data_point_contributors dpc on dpc.fk_data_point_id = dp.id
-                # left join qsar_models.dsstox_records dr on dr.dtxsid =dpc.dtxsid 
-                # where d.name = 'BP v1 modeling'  and dp.canon_qsar_smiles ='CC1C=CC2CC(C)CCC=2C=1' and dr.fk_dsstox_snapshot_id =3;
-
             # Find the matching row in model.df_preds_test
             matching_row_pred = df_preds[df_preds['id'] == neighbor]
             if not matching_row_pred.empty:
@@ -1723,13 +986,9 @@ class ModelPredictor:
     def addNeighborsFromSets(self, model:Model, modelResults: ModelResults, df_test_chemicals):
 
         ng = NeighborGetter()
-        # import time 
-        # t1 = time.time()
         
         neighborsTest, distances_test = ng.find_neighbors_in_set(model=model, df_set=model.df_prediction, df_test_chemicals=df_test_chemicals)
         neighborsTraining, distances_training = ng.find_neighbors_in_set(model=model, df_set=model.df_training, df_test_chemicals=df_test_chemicals)
-
-        # print(distances_test)
 
         neighborsTraining = self.setExpPredValuesForNeighbors(model, model.df_preds_training_cv, neighborsTraining, model.df_dsstoxRecords)
         neighborsTest = self.setExpPredValuesForNeighbors(model, model.df_preds_test, neighborsTest, model.df_dsstoxRecords)
@@ -1765,7 +1024,6 @@ class ModelPredictor:
         common_columns = df_new.columns.intersection(df_training.columns)
         
         # # Calculate min and max for each common column in df_training
-        # min_values = df_training[common_columns].apply(lambda col: col[col > 0].min())
         min_values = (df_training[common_columns].apply(lambda col: col[col > 0].min()).fillna(0))        
 
         max_values = df_training[common_columns].max()
@@ -1775,9 +1033,6 @@ class ModelPredictor:
             "training_min": min_values.to_dict(),
             "training_max": max_values.to_dict()
         }
-        
-        # modelResults.adResultsFrag = results
-        # print(json.dumps(modelResults.adResultsFrag, indent=4))
         
         outside_ad = False
         
@@ -1829,10 +1084,8 @@ class ModelPredictor:
         model = mi.init_model(model_id)
         
         if serverAPIs == "https://hcd.rtpnc.epa.gov/" and model.qsarReadyRuleSet == 'qsar-ready_04242025_0':
-            model.qsarReadyRuleSet = 'qsar-ready_04242025' #latest rules arent on there yet
+            model.qsarReadyRuleSet = 'qsar-ready_04242025'  # latest rules arent on there yet
         
-        
-        # print(hasattr(model, 'modelId'))
         if hasattr(model, 'modelId') == False:
             return f"Invalid model_id: {model_id}", 400
         
@@ -1843,18 +1096,13 @@ class ModelPredictor:
             X = model.df_training[model.embedding]
             modelDetails.modelCoefficients = json.loads(model.getOriginalRegressionCoefficients2(X, y))
         
-        
         self.addLinks(modelDetails, fileAPI)
         self.addPerformance(modelDetails)
         
         modelResults = ModelResults()
-
     
         # Standardize smiles:
         chemical, code = self.standardizeStructure(serverAPIs, smiles, model)
-        # print(json.dumps(chemical, indent=4))
-        
-        # print(chemical)
     
         if code != 200:
             
@@ -1891,18 +1139,11 @@ class ModelPredictor:
         descriptorAPI = DescriptorsAPI()
         df_prediction, code = descriptorAPI.calculate_descriptors(serverAPIs, qsarSmiles,
                                                                   model.descriptorService)
-        # print(printFirstRowDF(df_prediction))
-        
-        # print(df_prediction, code)
         
         if code != 200:
             report = Report(chemical, modelDetails, modelResults)
             modelResults.predictionError = df_prediction
             return report.to_json(), 200
-    
-        # Run model prediction:
-        # df_prediction = model.model_details.predictionSet #all chemicals in the model's prediction set, for testing
-        # print("for qsarSmiles="+qsarSmiles+", descriptors="+json.dumps(descriptorsResults,indent=4))
                 
         json_predictions = call_do_predictions_from_df(df_prediction, model)        
         # print(json_predictions)
@@ -1921,12 +1162,6 @@ class ModelPredictor:
         else:
             print('AD method for model was not set:', model_id)
 
-
-        # print("adEstimates:")
-        # print(json.dumps(modelResults.adEstimates, indent=4))
-
-        
-        # TODO add values in display units here: 
         modelResults.predictionValueUnitsModel = pred_value
         modelResults.unitsModel = model.unitsModel  # duplicated so displayed near prediction value
 
@@ -1944,55 +1179,55 @@ class ModelPredictor:
             modelResults.experimentalValueUnitsDisplay = uc.convert_units(model.propertyName, modelResults.experimentalValueUnitsModel, model.unitsModel, model.unitsDisplay,
                                                                     chemical["sid"], chemical["averageMass"])
         
-        # TODO:  convert to unitsDisplay and add here
         modelResults.predictionValueUnitsDisplay = uc.convert_units(model.propertyName, pred_value, model.unitsModel, model.unitsDisplay,
                                                                     chemical["sid"], chemical["averageMass"])
         modelResults.unitsDisplay = model.unitsDisplay
                 
-        # print("modelResults.predictionValueUnitsDisplay", modelResults.predictionValueUnitsDisplay)
-        
-        # print("modelResults", modelResults.to_json)
         report = Report(chemical, modelDetails, modelResults)
 
         if generate_report:
             report.neighborResultsTraining, report.neighborResultsPrediction = self.addNeighborsFromSets(model, modelResults, df_prediction)
             
-            # TODO make it so that it instead gets the fragment AD from the adu helper class
-
-            # self.getFragmentAD(df_prediction, model.df_training, modelResults)
-            # print(useFileAPI)
-            
-        # print(results_json)
-        
         return report.to_json(), 200
-        # return modelResults
     
-    
-
     def addLinks(self, modelDetails, file_api=pc.URL_CTX_API):
-        
-        modelId = modelDetails.modelId
-        
+        modelId = str(modelDetails.modelId)
+    
+        from util.web_utils import append_query
+    
         if USE_TEMPORARY_MODEL_PLOTS:
             script_dir = os.path.dirname(os.path.abspath(__file__))
-            file_path_scatter = os.path.join(script_dir, "data/plots", "scatter_plot_" + modelId + ".png")
+            file_path_scatter = os.path.join(script_dir, "data/plots", f"scatter_plot_{modelId}.png")
             modelDetails.imgSrcPlotScatter = pathlib.Path(file_path_scatter).as_uri()
-            file_path_histogram = os.path.join(script_dir, "data/plots", "histogram_" + modelId + ".png")
+    
+            file_path_histogram = os.path.join(script_dir, "data/plots", f"histogram_{modelId}.png")
             modelDetails.imgSrcPlotHistogram = pathlib.Path(file_path_histogram).as_uri()
-            
-        elif file_api is not None:
-            
-            modelDetails.imgSrcPlotScatter = file_api + "?type_id=3&model_id=" + modelDetails.modelId
-            modelDetails.imgSrcPlotHistogram = file_api + "?type_id=4&model_id=" + modelDetails.modelId
-            modelDetails.urlQMRF = file_api + "?type_id=1&model_id=" + modelDetails.modelId
-            modelDetails.urlExcelSummary = file_api + "?type_id=2&model_id=" + modelDetails.modelId
-            # these need to be added to ctx api:
+    
+        elif file_api:
+            base = str(file_api)
+    
+            # ctx search endpoint (must be .../search/ before '?')
+            if "chemical/property/model/file/search" in base:
+                force_slash = True
+                modelDetails.imgSrcPlotScatter = append_query(base, {"typeId": 3, "modelId": modelId}, force_trailing_slash=force_slash)
+                modelDetails.imgSrcPlotHistogram = append_query(base, {"typeId": 4, "modelId": modelId}, force_trailing_slash=force_slash)
+                modelDetails.urlQMRF = append_query(base, {"typeId": 1, "modelId": modelId}, force_trailing_slash=force_slash)
+                modelDetails.urlExcelSummary = append_query(base, {"typeId": 2, "modelId": modelId}, force_trailing_slash=force_slash)
+    
+            # predictor models endpoint
+            elif "api/predictor_models/model/file" in base:
+                # This endpoint typically doesn’t require the trailing slash, but you can enforce if needed
+                modelDetails.imgSrcPlotScatter = append_query(base, {"type_id": 3, "model_id": modelId})
+                modelDetails.imgSrcPlotHistogram = append_query(base, {"type_id": 4, "model_id": modelId})
+                modelDetails.urlQMRF = append_query(base, {"type_id": 1, "model_id": modelId})
+                modelDetails.urlExcelSummary = append_query(base, {"type_id": 2, "model_id": modelId})
+    
+            else:
+                logging.error(f"Invalid file_api: {file_api}")
+    
         else:
-            # TODO generate plot and hardcode in the html
-            # plot_base64 = self.generateScatterPlot(neighbors, md.unitsModel, "Results for "+modelResults.modelDetails.modelName, "Exp. vs Pred.")                                    
-            # modelResults.modelDetails.imgSrcPlotScatter="data:image/png;base64,"+plot_base64
+            # TODO: generate plots inline and embed as data URLs if no API is available
             pass
-        
 
     @timer
     def standardizeStructure(self, serverAPIs, smiles, model: Model):
@@ -2003,7 +1238,6 @@ class ModelPredictor:
         
         if code == 400:
             return chemicals, code
-                
                 
         if len(chemicals) == 0:
             # logging.debug('Standardization failed')
@@ -2017,7 +1251,6 @@ class ModelPredictor:
         qsarSmiles = chemical["canonicalSmiles"]
         logging.debug(f"qsarSmiles: {qsarSmiles}")
         return chemical, 200
-    
         
     def standardizeStructure2(self, serverAPIs, smiles, qsarReadyRuleSet, omitSalts):
         useFullStandardize = False
@@ -2095,39 +1328,13 @@ class ModelPredictor:
                 pred_results = json.loads(mwu.call_do_predictions_from_df(df_prediction, model))
                 pred_value = pred_results[0]['pred']
 
-                ad_results = self.determineApplicabilityDomain(model, df_prediction)
-                # ad_results = json.loads(str_ad_results)
-                # pred_AD = ad_results[0]["AD"]
+                ad_results = self.determineApplicabilityDomain(model, model.applicabilityDomainName, df_prediction)
                 pred_AD = ad_results["AD"]
 
                 line = smiles + "\t" + qsarSmiles + "\t" + str(pred_value) + "\t" + str(pred_AD) + "\n"
                 print(line)
                 file.write(line)
                 file.flush()
-
-        if True:
-            return
-
-        # Standardize smiles:
-
-        # Descriptor calcs:
-
-        # Run model prediction:
-        # df_prediction = model.model_details.predictionSet #all chemicals in the model's prediction set, for testing
-        # print("for qsarSmiles="+qsarSmiles+", descriptors="+json.dumps(descriptorsResults,indent=4))
-
-        logging.debug(pred_results)
-
-        # # applicability domain calcs:
-        # ad_results = None
-        # if model.applicabilityDomainName:
-        #     str_ad_results = determineApplicabilityDomain(model, df_prediction)
-        #     # str_ad_results = determineApplicabilityDomain(model, model.df_prediction) #testing AD method using multiple chemicals in df
-        #
-        #     ad_results = json.loads(str_ad_results)[0]  # TODO check len first?
-        #     print(ad_results)
-        # else:
-        #     print('AD method for model was not set:', model_id)
 
         return "OK", 200
 
@@ -2150,10 +1357,6 @@ class ModelPredictor:
             # applicability_domain=model.applicabilityDomainName,
             applicability_domain=applicabilityDomainName,
             filterColumnsInBothSets=True)
-
-        # print("output from ad:")
-        # print_first_row(output)
-        # print(model.modelMethod)
 
         AD = output['AD'].tolist()[0]
         
@@ -2184,11 +1387,10 @@ class ModelPredictor:
                 results["reasoning"] = f"Avg. distance ({results['value']:.2f}) > {ad_cutoff:.2f}"
                 
             results["analogs"] = self.setExpPredValuesForADAnalogs(model, results["analogs"])
-            results["adMethod"]["description"] = 'Whether or not the average Euclidean distance of the three closest training set neighbors exceeds a cutoff defined so that 95% of the training set is within in AD'
+            results["adMethod"]["description"] = 'Whether or not the average Euclidean distance of the three closest training set neighbors exceeds a cutoff defined so that 95% of the training set is within the AD'
 
             self.addDistances(results["analogs"], results["distances"])        
             del results['distances']
-
                 
         elif applicabilityDomainName == pc.Applicability_Domain_TEST_Fragment_Counts:
 
@@ -2217,433 +1419,22 @@ class ModelPredictor:
                     if "*" not in fragment["fragment"]:
                         fragment["fragment"] += "*"            
 
-
         else:
-            print("handle "+applicabilityDomainName+" in determineApplicabilityDomain()")
+            print("handle " + applicabilityDomainName + " in determineApplicabilityDomain()")
             
-        # print(results)
-        # print(json.dumps(dicts,indent=4))
         return results  # gives an array instead of each object on separate line
-
-
-   
-
-# def createHmtlReportFromJson():
-#
-#     # model_id = str(1065)  # HLC, smallest dataset
-#     # model_id = str(1066)  # WS
-#     # model_id = str(1067)  # VP
-#     # model_id = str(1068)  # BP
-#     # model_id = str(1069)  # LogKow
-#     model_id = str(1070) # MP, biggest dataset
-#     smiles = "c1ccccc1"
-#
-#     script_dir = os.path.dirname(os.path.abspath(__file__))
-#     file_path = os.path.join(script_dir, model_id + "_report.json")
-#     with open(file_path, 'r') as file:
-#         modelResults = json.load(file)
-#
-#     modelResults=ModelResults(**modelResults)
-#
-#     print(json.dumps(modelResults.modelDetails,indent=4))
-#
-#     from report_creator import ReportCreator
-#     rc = ReportCreator()
-#     html=rc.create_html_report(modelResults)
-#
-#     file_path = os.path.join(script_dir, model_id + "_report.html")
-#
-#     # Write the HTML to the specified file path
-#     with open(file_path, 'w') as f:
-#         f.write(html)
-#
-#     # mi=ModelInitializer()
-#     # models=mi.get_available_models()
-#     # session=getSession()
-#     # for model in models:
-#     #     print(model['modelId'])
-#     #     mi.get_dsstox_records_for_dataset(model['modelId'], session)
-#
-#     webbrowser.open(f'file://{file_path}')
-
-# def safe_smiles(smiles):
-#     """
-#     Convert a SMILES string into a safe version for use in file paths.
-#     """
-#     import re
-#     # Define a regex pattern to match unsafe characters
-#     unsafe_chars = r'[<>:"/\\|?*()=]'
-#     # Replace unsafe characters with underscores
-#     safe_version = re.sub(unsafe_chars, '_', smiles)
-#     # Optionally, replace spaces with underscores
-#     safe_version = safe_version.replace(' ', '_')
-#     return safe_version
-#
-#
-# def runExample2(model_id, smiles, generate_report, file_format, useValeryCode):
-#
-#     if useValeryCode:
-#         output, code, smiles = predict_model_smiles(model_id, smiles) #doesnt create reports
-#         file_name = model_id + "_report_valery_" + safe_smiles(smiles) + ".json"
-#     else:
-#         mp = ModelPredictor()
-#         file_name = model_id + "_report_todd_" + safe_smiles(smiles) + ".json"
-#         output, code = mp.predict_model_smiles(model_id, smiles, generate_report=generate_report, useFileAPI=True)
-#         # print(output)
-#
-#
-#     script_dir = os.path.dirname(os.path.abspath(__file__))
-#     file_path = os.path.join(script_dir, "data/reports", file_name)
-#
-#     # Ensure the directory exists
-#     os.makedirs(os.path.dirname(file_path), exist_ok=True)
-#
-#     with open(file_path, 'w', encoding='utf-8') as f:
-#         f.write(output)
-#
-#     # webbrowser.open(f'file://{file_path}')
-#
-#     if file_format == "html":
-#
-#         rc=ReportCreator()
-#
-#         with open(file_path, 'r') as file:
-#             modelResults = json.load(file)
-#             # print(type(modelResults))
-#             # print(modelResults)
-#             html=rc.create_html_report(mr=modelResults)
-#             file_path_html = file_path.replace(".json", ".html")
-#             with open(file_path_html, 'w', encoding='utf-8') as f:
-#                 f.write(html)
-#             htmlPath = pathlib.Path(file_path_html)
-#             webbrowser.open(htmlPath)
-
-
-def printFirstRowDF(df):
-    first_row_dict = df.loc[0].to_dict()
-    print(json.dumps(first_row_dict, indent=4))
-    return first_row_dict
-
-
-def runRandomSample():
-
-    OUTPUT_JSON = "dsstox smiles sample.json"
-    with open(OUTPUT_JSON, "r", encoding="utf-8") as f:
-        smiles_list = json.load(f)
-    mp = ModelPredictor()
-    
-    out_path = "dsstox smiles sample.txt"
-    
-    start_smiles = "CC(=O)OC1CCN2C1=NC1=C2C(=O)C(C)=C(N2CC2)C1=O"
-    
-    start = False
-    
-    with open(out_path, "a", encoding="utf-8") as f:
-        for idx, smiles in enumerate(smiles_list):
             
-            if smiles == start_smiles:
-                start = True
-                
-            if not start:
-                continue
-            
-            for model_id in range(1065, 1071):
-                _, code = mp.predict_model_smiles(model_id, smiles)
-                print(idx, model_id, smiles, code, file=f, sep="\t")
-                f.flush()
-            
-
-def runExample():
-
-    global USE_TEMPORARY_MODEL_PLOTS
-    USE_TEMPORARY_MODEL_PLOTS = False
-
-    # model_id = str(1065)  # HLC, smallest dataset
-    # model_id = str(1066)  # WS
-    # model_id = str(1067)  # VP
-    # model_id = str(1068)  # BP
-    # model_id = str(1069)  # LogP/LogKow
-    # model_id = str(1070) # MP, biggest dataset
-    # model_id = str(1615) # Koc, MLR model
-    # model_id = str(1069)
-    model_id = str(1065)
-
-    smiles_list = []
-    
-    # smiles_list.append("c1ccccc1")  # benzene
-    smiles_list.append("CC(=O)C") 
-    # smiles_list.append("OC(=O)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)F")  # PFOA
-    # smiles_list.append("COCOCOCOCCCCCCOCCCCOCOCOCCC")  # not in DssTox
-    # smiles_list.append("C[Sb]")  # passes standardizer, fails test descriptors
-    # smiles_list.append("C[As]C[As]C")  # violates frag AD
-    # smiles_list.append("XX")  # fails standardizer
-    # smiles_list.append("CCC.Cl")  # not mixture according to qsarReadySmiles
-    # smiles_list.append("CCCCC.CCCC")  # mixture according to qsarReadySmiles
-    
-    # For LogP model, following use additional code to get dsstox record for neighbor / analogs:
-    # smiles_list.append("[H][C@]12[C@@H](Cl)[C@H](Cl)[C@](C(Cl)Cl)([C@@H](Cl)[C@@H]1Cl)C2(C)C(Cl)Cl")  # DTXCID001783033
-    # smiles_list.append("[H][C@]12O[C@@]1([H])[C@@]1([H])[C@@]([H])([C@H]2Cl)[C@@]2(Cl)C(Cl)=C(Cl)[C@]1(Cl)C2(Cl)Cl")  # DTXCID501783733
-    # smiles_list.append("[H][C@]12CC(Cl)(Cl)[C@](CCl)([C@@H](Cl)[C@@H]1Cl)C2(CCl)CCl")  # DTXCID501782985
-    # smiles_list.append("[H][C@]12CO[S@@](=O)OC[C@@]1([H])[C@@]1(Cl)C(Cl)=C(Cl)[C@]2(Cl)C1(Cl)Cl")  # DTXCID601783831, fails standardization!
-    # smiles_list.append("CCCCCCCc1ccccc1") # one of neighbors for test set doesnt have matching dtxsid for the dtxcid (not in dsstox_records table)
-
-    current_directory = os.getcwd()
-    folder_path = os.path.join(current_directory, "data", "reports")
-    os.makedirs(os.path.dirname(folder_path), exist_ok=True)
-    
-    mp = ModelPredictor()
-    
-    for smiles in smiles_list:
-        print("\nRunning " + smiles)
-        runChemical(mp, model_id, smiles, folder_path)
-    # run all models:
-    # for smiles in smiles_list:
-    #     for model_id in range(1065, 1071):
-    #         print("\nRunning " + smiles)
-    #         runChemical(mp, str(model_id), smiles, folder_path)
-
-
-def runChemical(mp, model_id, smiles, folder_path):
-    
-    output, code = mp.predict_model_smiles(model_id, smiles)
-
-    report = json.loads(output)
-    chemical = report["chemicalIdentifiers"]
-
-    chemId = chemical.get("chemId", "N/A")
-
-    # file_path = os.path.join(folder_path, model_id + "_" + chemId + ".json")
-
-    folder_path2 = os.path.join(folder_path, chemId)
-    os.makedirs(folder_path2, exist_ok=True)
-    file_path = os.path.join(folder_path2, model_id + ".json")
-    
-    
-    # Ensure the directory exists
-    
-    with open(file_path, 'w', encoding='utf-8') as f:
-        f.write(output)
-        
-    # webbrowser.open(f'file://{file_path}')
-    # file_name2 = model_id + "_" + chemId + "_2.json"
-    # file_path2 = os.path.join(folder_path, file_name2)
-    # report = create_standardized_report(modelResults)
-    # with open(file_path2, 'w', encoding='utf-8') as f:
-    #     f.write(json.dumps(report, indent=4))
-    # webbrowser.open(file_path2)
-    
-    rc = ReportCreator()
-    
-    with open(file_path, 'r') as file:
-        modelResults = json.load(file)
-        # print(type(modelResults))
-        # print(modelResults)
-        html = rc.create_html_report(report=modelResults)
-
-        file_path_html = file_path.replace(".json", ".html")
-        with open(file_path_html, 'w', encoding='utf-8') as f:
-            f.write(html)
-        htmlPath = pathlib.Path(file_path_html)
-        webbrowser.open(htmlPath)
-            
-
-def runExamplePredictPost():
-    
-    import requests
-    
-    url = "http://localhost:5005/api/predictor_models/predict"
-
-    payload = json.dumps({
-      "smiles": [
-        "c1ccccc1",
-        "CCO"
-      ],
-      "model_id": 1065,
-    })
-    
-    # dont need report_format because gonna get back json array - doesnt make sense to get array of html
-
-    
-    headers = {
-      'Content-Type': 'application/json'
-    }
-    
-    response = requests.request("POST", url, headers=headers, data=payload)
-    pretty_json = json.dumps(response.json(), indent=4)
-    print(pretty_json)
-    
-    
-
-
-def runExampleFromService():
-    
-
-    import requests
-
-    # Define the parameters
-    smiles = "c1ccccc1"
-    model_id = "1065"
-    # report_format = "json"
-    report_format = "html"
-
-    use_uvicorn = True
-
-    # Define the base URL
-    if use_uvicorn:
-        base_url = "http://localhost:5005/api/predictor_models/predict"
-    else:
-        base_url = "http://localhost:5004/api/predictor_models/models/predictDB"
-        
-
-    # Set up the parameters as a dictionary
-    params = {
-        'smiles': smiles,
-        'model_id': model_id,
-        'report_format': report_format
-    }
-
-    # Define headers if necessary
-    headers = {
-        'Accept-Encoding': 'json'
-    }
-
-    # Make the GET request with parameters
-    response = requests.get(base_url, headers=headers, params=params)
-
-    # Check the response
-    if not response.ok:
-        print(f"Request failed with status code: {response.status_code}")
-        return
-
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    file_path = os.path.join(script_dir, model_id + "_report." + report_format)
-
-    # Write the HTML to the specified file path
-    with open(file_path, 'w') as f:
-        f.write(response.text)
-
-    # mi=ModelInitializer()
-    # models=mi.get_available_models()
-    # session=getSession()
-    # for model in models:
-    #     print(model['modelId'])
-    #     mi.get_dsstox_records_for_dataset(model['modelId'], session)
-
-    webbrowser.open(f'file://{file_path}')
-
-
-def test_say_hello():
-    import requests
-    # Define the name to test
-    test_name = "World"
-    # Send a GET request to the /hello/<name> endpoint on localhost
-    response = requests.get(f'http://localhost:5004/hello/{test_name}')
-    print(response.text)
-
-
-def test_get_exp_data():
-
-    temp_file_path = "data/reports/property_records.json"
-    # datasetName = 'BP v1 modeling'
-    # datasetName = 'LogP v1 modeling'
-    datasetName = 'WS v1 modeling'
-    qsarSmiles = 'C#C'
-    propertyName = pc.WATER_SOLUBILITY
-    
-    session = getSession()
-    edg = ExpDataGetter()
-    df_pv, param_names = edg.get_raw_exp_data(session, datasetName, qsarSmiles)
-    df_pv.to_json(path_or_buf=temp_file_path, orient='records', indent=4)
-            
-    # df_pv = pd.read_json(temp_file_path,orient='records')
-    
-    # print(df_pv.to_json(orient="records", indent=2))
-                
-    rc = ReportCreator()
-    es = rc.RawExpDataSection()
-    html = es.create_exp_records_webpage(df_pv, param_names, title_text="Experimental Property Records for " + propertyName)
-    
-    temp_file_path = "data/reports/property_records.html"
-    with open(temp_file_path, "w", encoding="utf-8") as f:
-        f.write(html)
-        webbrowser.open('file://' + os.path.realpath(temp_file_path))
-    
-    # printFirstRowDF(df)
-
-
-def add_model_prediction_to_df(df, model_id, pred_name, add_squared_column=True):
-    mi = ModelInitializer()
-    model = mi.init_model(model_id)
-    json_test_set_kow = call_do_predictions_from_df(df, model)
-    test_set_kow = json.loads(json_test_set_kow)
-    
-    df_kow = pd.DataFrame(test_set_kow).drop(columns=['exp'], errors='ignore').rename(columns={'id':'ID', 'pred':pred_name})
-# Optional: enforce column order
-    df_kow = df_kow[['ID', pred_name]]
-    
-    if add_squared_column:
-        df_kow[f'{pred_name}_squared'] = df_kow[pred_name] ** 2
-    
-# print(test_set_kow[0])
-    df = df.merge(df_kow, on='ID', how='left', validate='m:1')
-    
-    # print(f"{df.iloc[0]['ID']}, ALOGP={df.iloc[0]['ALOGP']}, XLOGP={df.iloc[0]['XLOGP']}, {pred_name}={df.iloc[0][pred_name]}")
-
-    return df
-
-def getLogKowPredictionsForDataset():
-    
-
-    from models import dataset_utilities_db as du
-    dataset_name = "KOC v1 modeling"
-    session = getSession()
-    descriptor_set_name = "WebTEST-default"
-    splitting_name = "RND_REPRESENTATIVE"
-    df_training, df_prediction = du.get_training_prediction_instances(session, dataset_name, descriptor_set_name, splitting_name)
-
-    model_id = str(1069)
-    pred_name = 'LOGP_Martin'
-
-    df_prediction = add_model_prediction_to_df(df_prediction, model_id, pred_name)
-    df_training = add_model_prediction_to_df(df_training, model_id, pred_name)
-    
-    # print_first_row(df_kow)
-    # print_first_row(df_prediction)
-    # print_first_row(df_training)
-
-
 
 def main():
     
     from dotenv import load_dotenv
-    load_dotenv()
-
-    runExample()
-    # runExampleFromService()
-    # runExamplePredictPost()
-    # runRandomSample()
-    
+    load_dotenv('personal.env')
     ######################################################################################################
-    # mi=ModelInitializer()
-    # mi.findMissingDsstoxRecordsInPhyschemModelDatasets()
-    # mi.exportRandomDsstoxSample()
-    ######################################################################################################
-    # test_get_exp_data()
-    ######################################################################################################
-    # pc = PlotCreator()
-    # pc.createTrainingTestPlotsForReports()
-    # pc.display_image(1065, 3, getSession())
-    # pc.display_image(1065, 4, getSession())
-    ######################################################################################################
-    # excel_file_path = r"C:\Users\TMARTI02\OneDrive - Environmental Protection Agency (EPA)\0 java\0 model_management\hibernate_qsar_model_building\data\reports\prediction reports upload\WebTEST2.1\HLC v1 modeling_RND_REPRESENTATIVE.xlsx"
-    # mp=ModelPredictor()
-    # mp.predictSetFromDB_SmilesFromExcel(1065,excel_file_path,'Test set')
-    ######################################################################################################
-    # modelStatistics = ModelStatistics()
-    # modelStatistics.updateStatsPredictModuleModels()
+    excel_file_path = r"C:\Users\TMARTI02\OneDrive - Environmental Protection Agency (EPA)\0 java\0 model_management\hibernate_qsar_model_building\data\reports\prediction reports upload\WebTEST2.1\HLC v1 modeling_RND_REPRESENTATIVE.xlsx"
+    mp = ModelPredictor()
+    mp.predictSetFromDB_SmilesFromExcel(1065, excel_file_path, 'Test set')
     ######################################################################################################
 
 
 if __name__ == '__main__':
     main()
-    # getLogKowPredictionsForDataset()

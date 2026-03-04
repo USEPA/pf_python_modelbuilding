@@ -9,6 +9,7 @@ import json
 
 
 class TestPredict(TestCase):
+
     def setUp(self):
         self.df_ext_pred_set = load_df_from_file(TEST_DATA_FOLDER + "ext_pred_set.tsv")
         self.descriptors_api = DescriptorsAPI()
@@ -54,7 +55,6 @@ class TestPredict(TestCase):
 
 
     
-    
     def test_descriptors_get(self):
         r = self.descriptors_api.call_descriptors_get(self.serverAPIs,
                                                       "c1ccccc1",
@@ -68,5 +68,5 @@ class TestPredict(TestCase):
         print(r)
 
 
-if __name__ == '__main__':
+if __name__ == '__main__':    
     main()

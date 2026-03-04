@@ -8,14 +8,14 @@ import statistics as stats
 # To avoid having to type rmb. for each method
 # alternatively could have made this file extend the same class 
 
-from models.run_model_building import save_json_file
-from models.run_model_building import model_parameters
-from models.run_model_building import getEmbedding
-from models.run_model_building import buildModel
-from models.run_model_building import lookAtResults
-from models.run_model_building import calc_stats
-from models.run_model_building import EmbeddingImporter
-from models.run_model_building import get_descriptors_dataframe
+from models.case_studies.run_model_building import save_json_file
+from models.case_studies.run_model_building import model_parameters
+from models.case_studies.run_model_building import getEmbedding
+from models.case_studies.run_model_building import buildModel
+from models.case_studies.run_model_building import lookAtResults
+from models.case_studies.run_model_building import calc_stats
+from models.case_studies.run_model_building import EmbeddingImporter
+from models.case_studies.run_model_building import get_descriptors_dataframe
 
 
 
@@ -28,9 +28,10 @@ from models import df_utilities as dfu
 import applicability_domain.applicability_domain_utilities as adu
 import models.results_utilities as ru
 
+from util import predict_constants as pc
 
 
-def a_runCaseStudiesInhalationCV_merge_on_fly(adMeasure=adu.strTESTApplicabilityDomainEmbeddingEuclidean):
+def a_runCaseStudiesInhalationCV_merge_on_fly(adMeasure=pc.Applicability_Domain_TEST_Embedding_Euclidean):
     units = 'ppm'
     # units = 'mgL'
 
@@ -297,7 +298,7 @@ def a_runCaseStudiesInhalationCV_merge_on_fly(adMeasure=adu.strTESTApplicability
     lookAtResults(resultsFolder, useMean=True)
 
 
-def a_runCaseStudiesInhalationCV_merge_on_fly_charlie(adMeasure=adu.strTESTApplicabilityDomainEmbeddingEuclidean):
+def a_runCaseStudiesInhalationCV_merge_on_fly_charlie(adMeasure=pc.Applicability_Domain_TEST_Embedding_Euclidean):
     units = 'ppm'
     # units = 'mgL'
 
@@ -550,7 +551,7 @@ def a_runCaseStudiesInhalationCV_merge_on_fly_charlie(adMeasure=adu.strTESTAppli
     lookAtResults(resultsFolder, useMean=True)
 
 
-def a_runCaseStudiesInhalationCV_merge_on_flyFinalModel(adMeasure=adu.strTESTApplicabilityDomainEmbeddingEuclidean):
+def a_runCaseStudiesInhalationCV_merge_on_flyFinalModel(adMeasure=pc.Applicability_Domain_TEST_Embedding_Euclidean):
     units = 'ppm'
     # units = 'mgL'
     columnForSpecialSmiles = 'QSAR_READY_SMILES_SDE_LONGEST'
@@ -768,7 +769,7 @@ def a_runCaseStudiesInhalationCV_merge_on_flyFinalModel(adMeasure=adu.strTESTApp
     df_results.to_csv(fileOut, index=False)  # writes results with AD
 
 
-def a_runCaseStudiesInhalationCV_merge_on_flyFinalModel2(adMeasure=adu.strTESTApplicabilityDomainEmbeddingEuclidean):
+def a_runCaseStudiesInhalationCV_merge_on_flyFinalModel2(adMeasure=pc.Applicability_Domain_TEST_Embedding_Euclidean):
     """This version runs all the records in the predictions descriptor file and then merges with prediction set file at the end"""
 
     units = 'ppm'
@@ -939,7 +940,7 @@ def a_runCaseStudiesInhalationCV_merge_on_flyFinalModel2(adMeasure=adu.strTESTAp
     df_results.to_csv(fileOut, index=False)  # writes results with AD
 
 
-def a_runCaseStudiesInhalationCV_merge_on_flyFinalModelTrain(adMeasure=adu.strTESTApplicabilityDomainEmbeddingEuclidean):
+def a_runCaseStudiesInhalationCV_merge_on_flyFinalModelTrain(adMeasure=pc.Applicability_Domain_TEST_Embedding_Euclidean):
     """This version runs all the records in the predictions descriptor file and then merges with prediction set file at the end"""
 
     units = 'ppm'

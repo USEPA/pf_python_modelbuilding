@@ -48,7 +48,7 @@ from ModelToExcel import ModelToExcel
 
 import StatsCalculator as sc
 
-import models.dataset_utilities_db as du
+import models.db_utilities.dataset_utilities_db as du
 
 from utils import print_first_row, row_to_json, to_json_safe
 
@@ -1414,7 +1414,7 @@ def add_log_p_martin_columns(df_training, df_prediction, cross_validate, df_cv_d
     """
     model_id = str(1069)
     pred_name = 'LOGP_Martin'
-    from model_ws_db_utilities import add_model_prediction_to_df as add_mp
+    from models.db_utilities.dataset_utilities_db import add_model_prediction_to_df as add_mp
     df_prediction = add_mp(df_prediction, model_id, pred_name)  # will generate some XGB warnings
     df_training = add_mp(df_training, model_id, pred_name)
     
@@ -1674,7 +1674,8 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
             df_test_model = df_prediction[columns]
             df_training_model = df_training[columns]
 
-        df_pv = du.getMappedPropertyValues(session, dataset_name)
+        df_pv = du.ExpDataGetter.getMappedPropertyValues(session, dataset_name)
+        
         # print_first_row(df_pv, row=1)
         
         df_dps = du.getMappedDatapoints(session, dataset_name)
