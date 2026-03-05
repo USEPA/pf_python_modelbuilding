@@ -19,13 +19,8 @@ def load_smiles(path: Path) -> list[str]:
     return smiles
 
 
-def run_endpoint_benchmark(name: str, url: str, payload: dict, warmup: int, runs: int, timeout: int) -> list[float]:
+def run_endpoint_benchmark(name: str, url: str, payload: dict, runs: int, timeout: int) -> list[float]:
     print(f"\n{name}: {url}")
-
-    for idx in range(warmup):
-        response = requests.post(url, json=payload, timeout=timeout)
-        response.raise_for_status()
-        print(f"  warmup {idx + 1}/{warmup}: {response.status_code}")
 
     durations = []
     for idx in range(runs):
@@ -70,7 +65,7 @@ def main():
     )
     parser.add_argument(
         "--compare-base-url",
-        default="https://cim-dev.sciencedataexperts.com/api/predictor_models",
+        default="http://192.168.1.7:5005/api/predictor_models",
         help="Secondary base API URL for comparison (without trailing slash)",
     )
     parser.add_argument(
@@ -84,10 +79,9 @@ def main():
         default=1065,
         help="model_id to use in requests",
     )
-    parser.add_argument("--warmup", type=int, default=1, help="Warmup runs per endpoint")
     parser.add_argument("--runs", type=int, default=3, help="Measured runs per endpoint")
     parser.add_argument(
-        "--timeout", type=int, default=60, help="Timeout (seconds) per request"
+        "--timeout", type=int, default=600, help="Timeout (seconds) per request"
     )
     args = parser.parse_args()
 
@@ -108,7 +102,6 @@ def main():
         name=f"PRIMARY ({base})",
         url=predict_url,
         payload=payload,
-        warmup=args.warmup,
         runs=args.runs,
         timeout=args.timeout,
     )
@@ -117,7 +110,6 @@ def main():
         name=f"COMPARE ({compare_base})",
         url=compare_predict_url,
         payload=payload,
-        warmup=args.warmup,
         runs=args.runs,
         timeout=args.timeout,
     )
