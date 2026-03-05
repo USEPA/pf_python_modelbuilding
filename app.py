@@ -11,18 +11,18 @@ import json
 import logging
 import os
 from concurrent.futures import ProcessPoolExecutor
-from time import perf_counter
-import util.get_model_file as gmf
 from logging import DEBUG
+from time import perf_counter
 
 import coloredlogs
 import connexion
-from dotenv import load_dotenv
 from connexion.middleware import MiddlewarePosition
 from connexion.options import SwaggerUIOptions
+from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
-from starlette.responses import HTMLResponse, Response, JSONResponse, StreamingResponse, FileResponse
+from starlette.responses import HTMLResponse, Response, JSONResponse, StreamingResponse
 
+import util.get_model_file as gmf
 from model_ws_db_utilities import ModelPredictor
 from report_creator_dict import ReportCreator
 
@@ -62,13 +62,25 @@ def get_version():
                 build_id=BUILD_NUMBER)
 
 
+_metadata = None
+
+
 def get_metadata():
-    return dict(
-        version=get_version()
-    )
+    global _metadata
+    if _metadata is None:
+        _smiles = "C1CCCCC1"
+        with ProcessPoolExecutor(max_workers=6, initializer=_init_process_predictor) as executor:
+            modelResultsArray = list(executor.map(_predict_smiles_in_process, zip(range(1065, 1071), [_smiles] * 6)))
+
+        _metadata = dict(
+            version=get_version(),
+            endpoints=list(r['modelDetails'] for r in modelResultsArray)
+        )
+
+    return _metadata
 
 
-def get_file(type_id: int=None, model_id: int=None):
+def get_file(type_id: int = None, model_id: int = None):
     if type_id is None or model_id is None:
         return JSONResponse(
             {"error": "Missing required query params: type_id and model_id"},
@@ -110,7 +122,7 @@ def get_file(type_id: int=None, model_id: int=None):
     )
 
 
-def predict_identifier(identifier: str, model_id: int, report_format: str="json"):
+def predict_identifier(identifier: str, model_id: int, report_format: str = "json"):
     """Automates prediction and AD for single identifier using model in database"""
 
     # normalize report_format
@@ -261,7 +273,7 @@ def predictDB_POST(body):
             batch_size,
             len(smiles_batches),
             max_workers,
-            perf_counter() - request_start,
+            perf_counter() - request_start if request_start else 0
         )
 
     return JSONResponse(content=modelResultsArray)
@@ -270,12 +282,12 @@ def predictDB_POST(body):
 def predictDB(smiles, model_id, report_format):
     """Automates prediction and AD for single smiles using model in database"""
 
+    mp = ModelPredictor()
+    pred = mp.predictFromDB(model_id, smiles)
+
     report_format = (report_format or "json").lower()
     if report_format not in ("json", "html"):
         report_format = "json"
-
-    mp = ModelPredictor()
-    pred = mp.predictFromDB(model_id, smiles)
 
     if report_format == "html":
         rc = ReportCreator()
