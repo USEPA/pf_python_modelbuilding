@@ -1,4 +1,5 @@
-# import concurrent
+import concurrent.futures
+import asyncio
 import json
 import os
 import threading
@@ -9,6 +10,7 @@ from time import perf_counter
 from indigo import Indigo
 from indigo.renderer import IndigoRenderer
 import base64
+import httpx
 
 from sqlalchemy import create_engine
 from sqlalchemy.engine import URL
@@ -76,6 +78,26 @@ lock = threading.Lock()
 
 def _timing_enabled() -> bool:
     return os.getenv("PREDICT_TIMING_LOG", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_flag(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_int(name: str, default: int, min_value: int = 1) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        value = default
+    return max(min_value, value)
+
+
+def _chunked_list(items, chunk_size):
+    for i in range(0, len(items), chunk_size):
+        yield items[i:i + chunk_size]
 
 
 def getEngine():
@@ -850,28 +872,98 @@ class ModelPredictor:
         standardize_errors: list = [None] * len(smiles_list)
         standardize_start = perf_counter() if timing_on else None
 
-        useFullStandardize = False
-        chemicals_batch, std_code = QsarSmilesAPI.call_qsar_ready_standardize_post(
-            server_host=serverAPIs,
-            smiles=smiles_list,
-            full=useFullStandardize,
-            workflow=model.qsarReadyRuleSet,
-        )
+        standardize_batch_size = _env_int("PREDICT_STANDARDIZE_BATCH_SIZE", 250)
+        standardize_workers = _env_int("PREDICT_STANDARDIZE_WORKERS", 4)
+        serverapis_timeout = _env_int("PREDICT_SERVERAPIS_TIMEOUT_SEC", 120)
 
-        if std_code == 200 and isinstance(chemicals_batch, list) and len(chemicals_batch) == len(smiles_list):
-            for idx, (smi, item) in enumerate(zip(smiles_list, chemicals_batch)):
-                chemical, code = self._parse_batch_standardized_item(item, smi, model.omitSalts)
-                if code == 200:
-                    standardized[idx] = chemical
-                else:
-                    standardize_errors[idx] = chemical
-        else:
-            for idx, smi in enumerate(smiles_list):
+        indexed_smiles = list(enumerate(smiles_list))
+        standardize_tasks = list(_chunked_list(indexed_smiles, standardize_batch_size))
+
+        def _parse_standardize_chunk_result(task, chemicals_batch, std_code):
+            idxs = [idx for idx, _ in task]
+            smiles_chunk = [smi for _, smi in task]
+
+            chunk_standardized = {}
+            chunk_errors = {}
+
+            if std_code == 200 and isinstance(chemicals_batch, list) and len(chemicals_batch) == len(smiles_chunk):
+                for idx, smi, item in zip(idxs, smiles_chunk, chemicals_batch):
+                    chemical, code = self._parse_batch_standardized_item(item, smi, model.omitSalts)
+                    if code == 200:
+                        chunk_standardized[idx] = chemical
+                    else:
+                        chunk_errors[idx] = chemical
+
+            return chunk_standardized, chunk_errors
+
+        async def _standardize_all_async():
+            timeout = httpx.Timeout(serverapis_timeout)
+            limits = httpx.Limits(max_connections=standardize_workers, max_keepalive_connections=standardize_workers)
+            semaphore = asyncio.Semaphore(standardize_workers)
+
+            async with httpx.AsyncClient(timeout=timeout, limits=limits) as client:
+                async def _run_task(task):
+                    async with semaphore:
+                        smiles_chunk = [smi for _, smi in task]
+                        useFullStandardize = False
+                        chemicals_batch, std_code = await QsarSmilesAPI.call_qsar_ready_standardize_post_async(
+                            client=client,
+                            server_host=serverAPIs,
+                            smiles=smiles_chunk,
+                            full=useFullStandardize,
+                            workflow=model.qsarReadyRuleSet,
+                        )
+                        return task, chemicals_batch, std_code
+
+                coros = [_run_task(task) for task in standardize_tasks]
+                return await asyncio.gather(*coros, return_exceptions=True)
+
+        def _standardize_chunk_fallback(task):
+            chunk_standardized = {}
+            chunk_errors = {}
+            for idx, smi in task:
                 chemical, code = self.standardizeStructure(serverAPIs, smi, model)
                 if code == 200:
-                    standardized[idx] = chemical
+                    chunk_standardized[idx] = chemical
                 else:
-                    standardize_errors[idx] = chemical
+                    chunk_errors[idx] = chemical
+            return chunk_standardized, chunk_errors
+
+        if len(standardize_tasks) == 1:
+            task = standardize_tasks[0]
+            smiles_chunk = [smi for _, smi in task]
+            useFullStandardize = False
+            chemicals_batch, std_code = QsarSmilesAPI.call_qsar_ready_standardize_post(
+                server_host=serverAPIs,
+                smiles=smiles_chunk,
+                full=useFullStandardize,
+                workflow=model.qsarReadyRuleSet,
+            )
+
+            std_map, err_map = _parse_standardize_chunk_result(task, chemicals_batch, std_code)
+            if len(std_map) + len(err_map) < len(task):
+                std_map, err_map = _standardize_chunk_fallback(task)
+
+            for idx, value in std_map.items():
+                standardized[idx] = value
+            for idx, value in err_map.items():
+                standardize_errors[idx] = value
+        else:
+            async_results = asyncio.run(_standardize_all_async())
+            for async_result in async_results:
+                if isinstance(async_result, Exception):
+                    logging.exception("Async standardize chunk failed", exc_info=async_result)
+                    continue
+
+                task, chemicals_batch, std_code = async_result
+                std_map, err_map = _parse_standardize_chunk_result(task, chemicals_batch, std_code)
+                if len(std_map) + len(err_map) < len(task):
+                    std_map, err_map = _standardize_chunk_fallback(task)
+
+                for idx, value in std_map.items():
+                    standardized[idx] = value
+                for idx, value in err_map.items():
+                    standardize_errors[idx] = value
 
         descriptor_errors: list = [None] * len(smiles_list)
         dfs_by_index: list = [None] * len(smiles_list)
@@ -884,40 +976,113 @@ class ModelPredictor:
         used_descriptor_batch = False
         descriptor_fallback_count = 0
         if valid_indices:
-            descriptorAPI = DescriptorsAPI()
-            qsar_smiles_batch = [standardized[idx]["canonicalSmiles"] for idx in valid_indices]
+            descriptor_batch_size = _env_int("PREDICT_DESCRIPTORS_BATCH_SIZE", 250)
+            descriptor_workers = _env_int("PREDICT_DESCRIPTORS_WORKERS", 4)
 
-            descriptor_payload, desc_code = descriptorAPI.call_descriptors_post_with_status(
-                server_host=serverAPIs,
-                qsar_smiles=qsar_smiles_batch,
-                descriptor_name=model.descriptorService,
-            )
+            valid_pairs = [(idx, standardized[idx]["canonicalSmiles"]) for idx in valid_indices]
+            descriptor_tasks = list(_chunked_list(valid_pairs, descriptor_batch_size))
+            descriptor_headers = list(model.df_training.columns[2:])
 
-            dfs = None
-            if desc_code == 200 and isinstance(descriptor_payload, dict):
-                dfs = descriptorAPI.response_json_to_dfs(
-                    descriptor_payload,
-                    qsar_smiles_batch,
-                    descriptor_headers=list(model.df_training.columns[2:]),
-                )
+            def _descriptor_chunk_parse(task, payload, status_code):
+                idxs = [idx for idx, _ in task]
+                smiles_chunk = [smi for _, smi in task]
 
-            if dfs is not None and len(dfs) == len(valid_indices):
-                used_descriptor_batch = True
-                for idx, df_prediction in zip(valid_indices, dfs):
-                    dfs_by_index[idx] = df_prediction
-            else:
-                descriptor_fallback_count = len(valid_indices)
-                for idx in valid_indices:
-                    qsar_smiles = standardized[idx]["canonicalSmiles"]
+                descriptorAPI = DescriptorsAPI()
+
+                if status_code == 200 and isinstance(payload, dict):
+                    dfs = descriptorAPI.response_json_to_dfs(
+                        payload,
+                        smiles_chunk,
+                        descriptor_headers=descriptor_headers,
+                    )
+                    if dfs is not None and len(dfs) == len(task):
+                        return {idx: df for idx, df in zip(idxs, dfs)}, {}, True, 0
+
+                return None
+
+            def _descriptor_chunk_fallback(task):
+                descriptorAPI = DescriptorsAPI()
+                chunk_dfs = {}
+                chunk_errs = {}
+                for idx, qsar_smiles in task:
                     df_prediction, code = descriptorAPI.calculate_descriptors(
                         serverAPIs,
                         qsar_smiles,
                         model.descriptorService,
                     )
                     if code == 200:
-                        dfs_by_index[idx] = df_prediction
+                        chunk_dfs[idx] = df_prediction
                     else:
-                        descriptor_errors[idx] = df_prediction
+                        chunk_errs[idx] = df_prediction
+                return chunk_dfs, chunk_errs
+
+            async def _descriptors_all_async():
+                timeout = httpx.Timeout(serverapis_timeout)
+                limits = httpx.Limits(max_connections=descriptor_workers, max_keepalive_connections=descriptor_workers)
+                semaphore = asyncio.Semaphore(descriptor_workers)
+
+                async with httpx.AsyncClient(timeout=timeout, limits=limits) as client:
+                    async def _run_task(task):
+                        async with semaphore:
+                            descriptorAPI = DescriptorsAPI()
+                            smiles_chunk = [smi for _, smi in task]
+                            payload, status_code = await descriptorAPI.call_descriptors_post_with_status_async(
+                                client=client,
+                                server_host=serverAPIs,
+                                qsar_smiles=smiles_chunk,
+                                descriptor_name=model.descriptorService,
+                            )
+                            return task, payload, status_code
+
+                    coros = [_run_task(task) for task in descriptor_tasks]
+                    return await asyncio.gather(*coros, return_exceptions=True)
+
+            if len(descriptor_tasks) == 1:
+                task = descriptor_tasks[0]
+                descriptorAPI = DescriptorsAPI()
+                smiles_chunk = [smi for _, smi in task]
+                payload, status_code = descriptorAPI.call_descriptors_post_with_status(
+                    server_host=serverAPIs,
+                    qsar_smiles=smiles_chunk,
+                    descriptor_name=model.descriptorService,
+                )
+
+                parsed = _descriptor_chunk_parse(task, payload, status_code)
+                if parsed is None:
+                    dfs_map, err_map = _descriptor_chunk_fallback(task)
+                    chunk_used_batch = False
+                    fallback_count = len(task)
+                else:
+                    dfs_map, err_map, chunk_used_batch, fallback_count = parsed
+
+                used_descriptor_batch = chunk_used_batch
+                descriptor_fallback_count += fallback_count
+                for idx, value in dfs_map.items():
+                    dfs_by_index[idx] = value
+                for idx, value in err_map.items():
+                    descriptor_errors[idx] = value
+            else:
+                async_results = asyncio.run(_descriptors_all_async())
+                for async_result in async_results:
+                    if isinstance(async_result, Exception):
+                        logging.exception("Async descriptors chunk failed", exc_info=async_result)
+                        continue
+
+                    task, payload, status_code = async_result
+                    parsed = _descriptor_chunk_parse(task, payload, status_code)
+                    if parsed is None:
+                        dfs_map, err_map = _descriptor_chunk_fallback(task)
+                        chunk_used_batch = False
+                        fallback_count = len(task)
+                    else:
+                        dfs_map, err_map, chunk_used_batch, fallback_count = parsed
+
+                    used_descriptor_batch = used_descriptor_batch or chunk_used_batch
+                    descriptor_fallback_count += fallback_count
+                    for idx, value in dfs_map.items():
+                        dfs_by_index[idx] = value
+                    for idx, value in err_map.items():
+                        descriptor_errors[idx] = value
         descriptor_elapsed = 0.0
         if timing_on and descriptor_start is not None:
             descriptor_elapsed = perf_counter() - descriptor_start
@@ -945,7 +1110,7 @@ class ModelPredictor:
                 modelDetails=modelDetails,
                 chemical=chemical,
                 df_prediction=dfs_by_index[idx],
-                generate_report=True,
+                generate_report=_env_flag("PREDICT_GENERATE_NEIGHBORS", True),
             )
             predictions.append(prediction)
 

@@ -251,16 +251,16 @@ def predictDB_POST(body):
     smiles = body["smiles"]
     batch_size = int(os.getenv("PREDICT_SMILES_BATCH_SIZE", 100))
     batch_size = max(1, batch_size)
-    smiles_batches = list(_chunked(smiles, batch_size))
+    num_batches = (len(smiles) + batch_size - 1) // batch_size if smiles else 0
 
     max_workers = int(os.getenv("PREDICT_BATCH_WORKERS", os.cpu_count() or 1))
-    max_workers = max(1, min(max_workers, len(smiles_batches)))
+    max_workers = max(1, min(max_workers, num_batches if num_batches else 1))
 
     with ProcessPoolExecutor(max_workers=max_workers, initializer=_init_process_predictor) as executor:
         batch_results = list(
             executor.map(
                 _predict_smiles_batch_in_process,
-                ((body["model_id"], batch) for batch in smiles_batches),
+                ((body["model_id"], batch) for batch in _chunked(smiles, batch_size)),
             )
         )
 
@@ -271,7 +271,7 @@ def predictDB_POST(body):
             "timing.endpoint predictDB_POST size=%d chunk_size=%d chunks=%d workers=%d total=%.3fs",
             len(smiles),
             batch_size,
-            len(smiles_batches),
+            num_batches,
             max_workers,
             perf_counter() - request_start if request_start else 0
         )
