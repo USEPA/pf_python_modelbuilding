@@ -20,9 +20,16 @@ class TestPredict(TestCase):
         r = get_metadata()
         self.assertEqual(len(r['endpoints']), 6)
 
+    def test_model_predict_1065_identifier(self):
+        print('Running test_model_predict_1065')
+        r = predictDB(model_id=1065, identifier='benzene', report_format='json')
+        body_bytes = r.body
+        generic_response_data = json.loads(body_bytes.decode('utf-8'))
+        print(generic_response_data)  # print(r.json())
+
     def test_model_predict_1065(self):
         print('Running test_model_predict_1065')
-        r = predictDB(smiles='c1ccccc1', model_id=1065, report_format='json')
+        r = predictDB(model_id=1065, smiles='c1ccccc1', report_format='json')
         body_bytes = r.body
         generic_response_data = json.loads(body_bytes.decode('utf-8'))
         print(generic_response_data)  # print(r.json())
@@ -52,7 +59,7 @@ class TestPredict(TestCase):
             "[H][C@]12CO[S@@](=O)OC[C@@]1([H])[C@@]1(Cl)C(Cl)=C(Cl)[C@]2(Cl)C1(Cl)Cl")  # DTXCID601783831, fails standardization!
 
         # r = predictDB(smiles = ['c1ccccc1', 'CCCC'], model_id=1065, report_format='json')
-        r = predictDB(smiles=smiles_list, model_id=1065, report_format='json')
+        r = predictDB(model_id=1065, smiles=smiles_list, report_format='json')
         body_bytes = r.body
         generic_response_data = json.loads(body_bytes.decode('utf-8'))
 
