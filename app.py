@@ -196,6 +196,23 @@ def _predict_smiles_in_process(args):
     return _to_obj(pred)
 
 
+def _chunked(items, chunk_size):
+    for i in range(0, len(items), chunk_size):
+        yield items[i:i + chunk_size]
+
+
+def _predict_smiles_batch_in_process(args):
+    model_id, smiles_batch = args
+    predictor = _PROCESS_PREDICTOR
+    if predictor is None:
+        _init_process_predictor()
+        predictor = _PROCESS_PREDICTOR
+    if predictor is None:
+        raise RuntimeError("Failed to initialize process predictor")
+    pred = predictor.predictFromDB(model_id, smiles_batch)
+    return _to_obj(pred)
+
+
 def _predict_batch_sequential(model_id, smiles_list):
     mp = ModelPredictor()
     modelResultsArray = []
@@ -208,11 +225,23 @@ def _predict_batch_sequential(model_id, smiles_list):
 
 def predictDB_POST(body):
     """Automates prediction and AD for batch smiles using model in database"""
+    smiles = body["smiles"]
+    batch_size = int(os.getenv("PREDICT_SMILES_BATCH_SIZE", 100))
+    batch_size = max(1, batch_size)
+    smiles_batches = list(_chunked(smiles, batch_size))
+
     max_workers = int(os.getenv("PREDICT_BATCH_WORKERS", os.cpu_count() or 1))
-    max_workers = max(1, min(max_workers, len(body["smiles"])))
+    max_workers = max(1, min(max_workers, len(smiles_batches)))
 
     with ProcessPoolExecutor(max_workers=max_workers, initializer=_init_process_predictor) as executor:
-        modelResultsArray = list(executor.map(_predict_smiles_in_process, ((body["model_id"], s) for s in body["smiles"])))
+        batch_results = list(
+            executor.map(
+                _predict_smiles_batch_in_process,
+                ((body["model_id"], batch) for batch in smiles_batches),
+            )
+        )
+
+    modelResultsArray = [item for batch in batch_results for item in batch]
 
     return JSONResponse(content=modelResultsArray)
 
