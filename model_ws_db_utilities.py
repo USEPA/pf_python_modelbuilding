@@ -1160,8 +1160,8 @@ class ModelPredictor:
         # applicability domain calcs:
         if model.applicabilityDomainName:
             applicabilityDomains = modelDetails.applicabilityDomainName.split(" and ")
-            if pc.Applicability_Domain_TEST_Fragment_Counts not in applicabilityDomains:
-                applicabilityDomains.append(pc.Applicability_Domain_TEST_Fragment_Counts)
+            # if pc.Applicability_Domain_TEST_Fragment_Counts not in applicabilityDomains:
+            #     applicabilityDomains.append(pc.Applicability_Domain_TEST_Fragment_Counts)
 
             for applicabilityDomain in applicabilityDomains:
                 ad_results = self.determineApplicabilityDomain(model, applicabilityDomain, df_prediction)
