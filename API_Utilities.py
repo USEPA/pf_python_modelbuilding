@@ -111,6 +111,56 @@ class DescriptorsAPI:
             # Handle the error appropriately
             return response.text
 
+    def call_descriptors_post_with_status(self, server_host: str, qsar_smiles: list[str], descriptor_name: str):
+        url = f"{server_host}/api/descriptors"
+        params = {
+            "type": descriptor_name,
+            "chemicals": qsar_smiles,
+            "headers": "true"
+        }
+
+        response = requests.post(url, json=params)
+        if response.status_code == 200:
+            return response.json(), 200
+        return response.text, response.status_code
+
+    def response_json_to_df(self, descriptor_dict, qsarSmiles, chemical_index=0):
+        headers = descriptor_dict['headers']
+        headers.insert(0, "Property")
+        headers.insert(0, "ID")
+
+        chemicals = descriptor_dict['chemicals']
+        chemical = chemicals[chemical_index]
+
+        descriptors = [float(descriptor) if descriptor is not None else np.nan for descriptor in chemical['descriptors']]
+
+        descriptors.insert(0, None)
+        descriptors.insert(0, qsarSmiles)
+
+        import pandas as pd
+        return pd.DataFrame([descriptors], columns=headers)
+
+    def response_json_to_dfs(self, descriptor_dict, qsar_smiles_list):
+        headers = list(descriptor_dict.get('headers') or [])
+        chemicals = list(descriptor_dict.get('chemicals') or [])
+
+        if len(chemicals) != len(qsar_smiles_list):
+            return None
+
+        headers.insert(0, "Property")
+        headers.insert(0, "ID")
+
+        import pandas as pd
+
+        dfs = []
+        for qsar_smiles, chemical in zip(qsar_smiles_list, chemicals):
+            descriptors = [float(descriptor) if descriptor is not None else np.nan for descriptor in chemical['descriptors']]
+            descriptors.insert(0, None)
+            descriptors.insert(0, qsar_smiles)
+            dfs.append(pd.DataFrame([descriptors], columns=headers))
+
+        return dfs
+
     def response_to_df(self, response, qsarSmiles):
         
         descriptor_dict = response.json()
@@ -165,11 +215,16 @@ class QsarSmilesAPI:
 
     @staticmethod
     def call_qsar_ready_standardize_post(server_host, smiles, full, workflow):
+        if isinstance(smiles, (list, tuple)):
+            chemicals_payload = [{"smiles": s} for s in smiles]
+        else:
+            chemicals_payload = [{"smiles": smiles}]
+
         # Construct the JSON body
         jo_body = {
             "full": full,
             "options": {"workflow": workflow},
-            "chemicals": [{"smiles": smiles}]
+            "chemicals": chemicals_payload
         }
         json_body = json.dumps(jo_body)
 

@@ -188,21 +188,6 @@ paths:
           description: Success
           content: {}
 
-  /api/predictor_models/old/predict:
-    post:
-      operationId: app.old_predictDB_POST
-      summary: Generate predictions for multiple molecules (old sequential mode)
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/Request"
-      responses:
-        '200':
-          description: Success
-          content: {}
-
 components:
   schemas:
     Request:

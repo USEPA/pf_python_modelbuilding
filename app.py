@@ -213,16 +213,6 @@ def _predict_smiles_batch_in_process(args):
     return _to_obj(pred)
 
 
-def _predict_batch_sequential(model_id, smiles_list):
-    mp = ModelPredictor()
-    modelResultsArray = []
-    for current_smiles in smiles_list:
-        logging.debug("Running %s", current_smiles)
-        pred = mp.predictFromDB(model_id, current_smiles)
-        modelResultsArray.append(_to_obj(pred))
-    return modelResultsArray
-
-
 def predictDB_POST(body):
     """Automates prediction and AD for batch smiles using model in database"""
     smiles = body["smiles"]
@@ -241,14 +231,8 @@ def predictDB_POST(body):
             )
         )
 
-    modelResultsArray = [item for batch in batch_results for item in batch]
+    modelResultsArray = [_to_obj(item) for batch in batch_results for item in batch]
 
-    return JSONResponse(content=modelResultsArray)
-
-
-def old_predictDB_POST(body):
-    """Old sequential batch endpoint for predictions"""
-    modelResultsArray = _predict_batch_sequential(body["model_id"], body["smiles"])
     return JSONResponse(content=modelResultsArray)
 
 

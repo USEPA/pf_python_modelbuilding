@@ -37,3 +37,4 @@ my.env
 contractor.env
 *.ipynb
 *.pkl
+.DS_Store
