@@ -1165,6 +1165,103 @@ class ModelToExcel:
     
 
     @staticmethod
+    def add_hyperlinks_to_sheet_xlsxwriter(
+        writer: pd.ExcelWriter,
+        source_sheet: str,
+        target_sheet: str,
+        df_source: pd.DataFrame,
+        df_target: pd.DataFrame,
+        link_column: str = "exp_prop_id") -> None:
+        """
+        Add hyperlinks from source sheet to target sheet based on a matching column.
+        Uses xlsxwriter to add hyperlinks. Avoids needing to close and reopen the file,
+        and Windows specific dependencies.
+        This approach preserves chart formatting by avoiding openpyxl's file manipulation.
+        
+        Args:
+            writer: Excel writer instance
+            source_sheet: Name of the source sheet (e.g., "Training CV Predictions")
+            target_sheet: Name of the target sheet (e.g., "Records")
+            df_source: Source dataframe (used to verify column exists and get values)
+            df_target: Target dataframe (used to create the mapping)
+            link_column: Column name to match on (must exist in both dataframes)
+        """
+        logging.info(f"Processing hyperlinks for {source_sheet}")
+        
+        
+        if df_source is None or df_source.empty:
+            logging.warning(f"Source dataframe {source_sheet} is empty or None. Skipping hyperlinks.")
+            return
+        
+        if link_column not in df_source.columns:
+            logging.warning(f"Column '{link_column}' not found in source dataframe {source_sheet}.")
+            return
+        
+        if link_column not in df_target.columns:
+            logging.warning(f"Column '{link_column}' not found in target dataframe {target_sheet}.")
+            return
+        
+        # Get the worksheets
+        wb = writer.book
+        ws_source = writer.sheets[source_sheet]
+                
+        # Find the column index in the target sheet for the link_column (1-based for Excel)
+        target_link_col_index = df_target.columns.get_loc(link_column) + 1
+        target_link_col_letter = chr(64 + target_link_col_index)  # Convert 1-based index to column letter (A=65, B=66, etc.)
+        
+        # Create a mapping of link_column values to row numbers in target sheet
+        # df_target is 0-indexed, but Excel rows are 1-indexed (with row 1 being header)
+        target_row_map = {}
+        for idx, val in enumerate(df_target[link_column]):
+            excel_row = idx + 2  # +2 to account for header (row 1) and 1-based indexing
+            key = str(val).strip() if pd.notna(val) else None
+            target_row_map[key] = excel_row
+        
+        logging.info(f"Created target mapping with {len(target_row_map)} entries for {target_sheet}")
+        logging.info(f"Target link column: '{link_column}' at Excel column {target_link_col_letter}")
+        
+        # Find the source column letter for the link column (where we'll add hyperlinks)
+        source_link_col_index = df_source.columns.get_loc(link_column) + 1
+        source_link_col_letter = chr(64 + source_link_col_index)
+        
+        # Add hyperlinks to source sheet
+        hyperlinks_added = 0
+        unmatched_count = 0
+
+        try:
+            for src_idx, src_val in enumerate(df_source[link_column]):
+                src_val_str = str(src_val).strip() if pd.notna(src_val) else None
+                excel_row = src_idx + 2  # +2 for header and 1-based indexing
+                
+                if src_val_str and src_val_str in target_row_map:
+                    target_row = target_row_map[src_val_str]
+                    
+                    # Create the cell reference for the hyperlink
+                    # Format for SubAddress: SheetName!CellAddress (no #)
+                    address = f"internal:'{target_sheet}'!{target_link_col_letter}{target_row}"
+                    
+                    try:
+                        # Get the cell range in the source sheet using Excel's Range method
+                        cell_range = f"{source_link_col_letter}{excel_row}"
+                        
+                        # Add the hyperlink using Excel COM API
+                        screen_tip = f"Link to {target_sheet} Row {target_row}"
+
+                        ws_source.write_url(cell_range, url=address, string=src_val_str, tip=screen_tip)
+
+                        hyperlinks_added += 1
+                    except Exception as e:
+                        logging.warning(f"Failed to write hyperlink for {source_sheet} row {excel_row}: {e}")
+                else:
+                    unmatched_count += 1
+        
+        except Exception as e:
+            logging.error(f"Error adding hyperlinks: {e}")
+        
+        logging.info(f"Added {hyperlinks_added} hyperlinks from {source_sheet} to {target_sheet} ({unmatched_count} unmatched)")
+
+
+    @staticmethod
     def add_hyperlinks_to_sheet(
         excel_path: str,
         source_sheet: str,
@@ -1578,17 +1675,36 @@ class ModelToExcel:
 
             # logging.info("Done creating detailed Excel!")
             logging.info("Done with initial passthrough of all sheets!")
-        
+
+            # Add Hyperlinks
+            logging.info("Adding hyperlinks...")
+            try:
+                ModelToExcel.add_hyperlinks_to_sheet_xlsxwriter(writer, "Records", "Training CV Predictions", self.records_df, self.training_cv_predictions_df)
+            except Exception as e:
+                logging.error(f"Error adding hyperlinks: {e}")
+            try:
+                ModelToExcel.add_hyperlinks_to_sheet_xlsxwriter(writer, "Records", "Test Set Predictions", self.records_df, self.test_set_predictions_df)
+            except Exception as e:
+                logging.error(f"Error adding hyperlinks: {e}")
+            try:
+                ModelToExcel.add_hyperlinks_to_sheet_xlsxwriter(writer, "Training CV Predictions", "Records", self.training_cv_predictions_df, self.records_df)
+            except Exception as e:
+                logging.error(f"Error adding hyperlinks: {e}")
+            try:
+                ModelToExcel.add_hyperlinks_to_sheet_xlsxwriter(writer, "Test Set Predictions", "Records", self.test_set_predictions_df, self.records_df)
+            except Exception as e:
+                logging.error(f"Error adding hyperlinks: {e}")
+
         # Add hyperlinks AFTER the Excel file is written and closed
         # This allows us to use openpyxl to properly set hyperlinks with formatting
-        logging.info("Adding hyperlinks to Excel file...")
-        if self.training_cv_predictions_df is not None:
-            self.add_hyperlinks_to_sheet(self.excel_path, "Training CV Predictions", "Records", self.training_cv_predictions_df, self.records_df)
-            self.add_hyperlinks_to_sheet(self.excel_path, "Records", "Training CV Predictions", self.records_df, self.training_cv_predictions_df)
-        if self.test_set_predictions_df is not None:
-            self.add_hyperlinks_to_sheet(self.excel_path, "Test Set Predictions", "Records", self.test_set_predictions_df, self.records_df)
-            self.add_hyperlinks_to_sheet(self.excel_path, "Records", "Test Set Predictions", self.records_df, self.test_set_predictions_df)
-        logging.info("Hyperlinks added successfully!")
+        # logging.info("Adding hyperlinks to Excel file...")
+        # if self.training_cv_predictions_df is not None:
+        #     self.add_hyperlinks_to_sheet(self.excel_path, "Training CV Predictions", "Records", self.training_cv_predictions_df, self.records_df)
+        #     self.add_hyperlinks_to_sheet(self.excel_path, "Records", "Training CV Predictions", self.records_df, self.training_cv_predictions_df)
+        # if self.test_set_predictions_df is not None:
+        #     self.add_hyperlinks_to_sheet(self.excel_path, "Test Set Predictions", "Records", self.test_set_predictions_df, self.records_df)
+        #     self.add_hyperlinks_to_sheet(self.excel_path, "Records", "Test Set Predictions", self.records_df, self.test_set_predictions_df)
+        # logging.info("Hyperlinks added successfully!")
 
 
 def main():
