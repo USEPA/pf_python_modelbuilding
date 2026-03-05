@@ -11,6 +11,7 @@ import json
 import logging
 import os
 from concurrent.futures import ProcessPoolExecutor
+from time import perf_counter
 import util.get_model_file as gmf
 from logging import DEBUG
 
@@ -201,6 +202,10 @@ def _chunked(items, chunk_size):
         yield items[i:i + chunk_size]
 
 
+def _timing_enabled() -> bool:
+    return os.getenv("PREDICT_TIMING_LOG", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _predict_smiles_batch_in_process(args):
     model_id, smiles_batch = args
     predictor = _PROCESS_PREDICTOR
@@ -209,12 +214,28 @@ def _predict_smiles_batch_in_process(args):
         predictor = _PROCESS_PREDICTOR
     if predictor is None:
         raise RuntimeError("Failed to initialize process predictor")
-    pred = predictor.predictFromDB(model_id, smiles_batch)
-    return _to_obj(pred)
+
+    try:
+        batch_pred = predictor.predictFromDB(model_id, smiles_batch)
+        batch_results = _to_obj(batch_pred)
+        if isinstance(batch_results, list) and len(batch_results) == len(smiles_batch):
+            return batch_results
+    except Exception:
+        logging.exception("Batch predictor path failed; fallback to per-smiles mode")
+
+    fallback_results = []
+    for current_smiles in smiles_batch:
+        pred = predictor.predictFromDB(model_id, current_smiles)
+        fallback_results.append(_to_obj(pred))
+
+    return fallback_results
 
 
 def predictDB_POST(body):
     """Automates prediction and AD for batch smiles using model in database"""
+    timing_on = _timing_enabled()
+    request_start = perf_counter() if timing_on else None
+
     smiles = body["smiles"]
     batch_size = int(os.getenv("PREDICT_SMILES_BATCH_SIZE", 100))
     batch_size = max(1, batch_size)
@@ -232,6 +253,16 @@ def predictDB_POST(body):
         )
 
     modelResultsArray = [_to_obj(item) for batch in batch_results for item in batch]
+
+    if timing_on:
+        logging.info(
+            "timing.endpoint predictDB_POST size=%d chunk_size=%d chunks=%d workers=%d total=%.3fs",
+            len(smiles),
+            batch_size,
+            len(smiles_batches),
+            max_workers,
+            perf_counter() - request_start,
+        )
 
     return JSONResponse(content=modelResultsArray)
 

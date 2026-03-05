@@ -5,6 +5,7 @@ import threading
 from io import BytesIO
 import pathlib
 import traceback
+from time import perf_counter
 from indigo import Indigo
 from indigo.renderer import IndigoRenderer
 import base64
@@ -71,6 +72,10 @@ TODO: Add ability to export report as excel
 """
 
 lock = threading.Lock()
+
+
+def _timing_enabled() -> bool:
+    return os.getenv("PREDICT_TIMING_LOG", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def getEngine():
@@ -816,6 +821,9 @@ class ModelPredictor:
         if not smiles_list:
             return []
 
+        timing_on = _timing_enabled()
+        total_start = perf_counter() if timing_on else None
+
         serverAPIs = os.getenv("CIM_API_SERVER", "https://cim-dev.sciencedataexperts.com")
         fileAPI = os.getenv("FILE_API_SERVER", pc.URL_CTX_API)
 
@@ -840,6 +848,7 @@ class ModelPredictor:
 
         standardized: list = [None] * len(smiles_list)
         standardize_errors: list = [None] * len(smiles_list)
+        standardize_start = perf_counter() if timing_on else None
 
         useFullStandardize = False
         chemicals_batch, std_code = QsarSmilesAPI.call_qsar_ready_standardize_post(
@@ -867,7 +876,13 @@ class ModelPredictor:
         descriptor_errors: list = [None] * len(smiles_list)
         dfs_by_index: list = [None] * len(smiles_list)
         valid_indices = [idx for idx, chemical in enumerate(standardized) if chemical is not None]
+        standardize_elapsed = 0.0
+        if timing_on and standardize_start is not None:
+            standardize_elapsed = perf_counter() - standardize_start
 
+        descriptor_start = perf_counter() if timing_on else None
+        used_descriptor_batch = False
+        descriptor_fallback_count = 0
         if valid_indices:
             descriptorAPI = DescriptorsAPI()
             qsar_smiles_batch = [standardized[idx]["canonicalSmiles"] for idx in valid_indices]
@@ -880,12 +895,18 @@ class ModelPredictor:
 
             dfs = None
             if desc_code == 200 and isinstance(descriptor_payload, dict):
-                dfs = descriptorAPI.response_json_to_dfs(descriptor_payload, qsar_smiles_batch)
+                dfs = descriptorAPI.response_json_to_dfs(
+                    descriptor_payload,
+                    qsar_smiles_batch,
+                    descriptor_headers=list(model.df_training.columns[2:]),
+                )
 
             if dfs is not None and len(dfs) == len(valid_indices):
+                used_descriptor_batch = True
                 for idx, df_prediction in zip(valid_indices, dfs):
                     dfs_by_index[idx] = df_prediction
             else:
+                descriptor_fallback_count = len(valid_indices)
                 for idx in valid_indices:
                     qsar_smiles = standardized[idx]["canonicalSmiles"]
                     df_prediction, code = descriptorAPI.calculate_descriptors(
@@ -897,7 +918,11 @@ class ModelPredictor:
                         dfs_by_index[idx] = df_prediction
                     else:
                         descriptor_errors[idx] = df_prediction
+        descriptor_elapsed = 0.0
+        if timing_on and descriptor_start is not None:
+            descriptor_elapsed = perf_counter() - descriptor_start
 
+        report_start = perf_counter() if timing_on else None
         predictions = []
         for idx, smi in enumerate(smiles_list):
             chemical = standardized[idx]
@@ -923,6 +948,28 @@ class ModelPredictor:
                 generate_report=True,
             )
             predictions.append(prediction)
+
+        report_elapsed = 0.0
+        if timing_on and report_start is not None:
+            report_elapsed = perf_counter() - report_start
+
+        if timing_on:
+            total_elapsed = 0.0
+            if total_start is not None:
+                total_elapsed = perf_counter() - total_start
+            logging.info(
+                "timing.batch model_id=%s size=%d standardized_ok=%d standardize=%.3fs descriptors=%.3fs "
+                "descriptor_mode=%s fallback_count=%d report=%.3fs total=%.3fs",
+                model_id,
+                len(smiles_list),
+                len(valid_indices),
+                standardize_elapsed,
+                descriptor_elapsed,
+                "batch" if used_descriptor_batch else "single-fallback",
+                descriptor_fallback_count,
+                report_elapsed,
+                total_elapsed,
+            )
 
         return predictions
 

@@ -140,12 +140,17 @@ class DescriptorsAPI:
         import pandas as pd
         return pd.DataFrame([descriptors], columns=headers)
 
-    def response_json_to_dfs(self, descriptor_dict, qsar_smiles_list):
+    def response_json_to_dfs(self, descriptor_dict, qsar_smiles_list, descriptor_headers=None):
         headers = list(descriptor_dict.get('headers') or [])
         chemicals = list(descriptor_dict.get('chemicals') or [])
 
         if len(chemicals) != len(qsar_smiles_list):
             return None
+
+        fallback_headers = list(descriptor_headers or [])
+
+        if not headers and fallback_headers:
+            headers = fallback_headers
 
         headers.insert(0, "Property")
         headers.insert(0, "ID")
@@ -157,7 +162,16 @@ class DescriptorsAPI:
             descriptors = [float(descriptor) if descriptor is not None else np.nan for descriptor in chemical['descriptors']]
             descriptors.insert(0, None)
             descriptors.insert(0, qsar_smiles)
-            dfs.append(pd.DataFrame([descriptors], columns=headers))
+
+            if len(descriptors) != len(headers):
+                if fallback_headers and len(descriptors) == len(fallback_headers) + 2:
+                    active_headers = ["ID", "Property", *fallback_headers]
+                else:
+                    return None
+            else:
+                active_headers = headers
+
+            dfs.append(pd.DataFrame([descriptors], columns=active_headers))
 
         return dfs
 

@@ -61,12 +61,17 @@ def print_summary(summary: dict):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Benchmark batch prediction endpoint"
+        description="Benchmark and compare batch prediction endpoints"
     )
     parser.add_argument(
         "--base-url",
         default="http://192.168.1.7:5004/api/predictor_models",
-        help="Base API URL (without trailing slash)",
+        help="Primary base API URL (without trailing slash)",
+    )
+    parser.add_argument(
+        "--compare-base-url",
+        default="https://cim-dev.sciencedataexperts.com/api/predictor_models",
+        help="Secondary base API URL for comparison (without trailing slash)",
     )
     parser.add_argument(
         "--smiles-file",
@@ -82,7 +87,7 @@ def main():
     parser.add_argument("--warmup", type=int, default=1, help="Warmup runs per endpoint")
     parser.add_argument("--runs", type=int, default=3, help="Measured runs per endpoint")
     parser.add_argument(
-        "--timeout", type=int, default=600, help="Timeout (seconds) per request"
+        "--timeout", type=int, default=60, help="Timeout (seconds) per request"
     )
     args = parser.parse_args()
 
@@ -92,13 +97,15 @@ def main():
     payload = {"smiles": smiles, "model_id": args.model_id}
 
     base = args.base_url.rstrip("/")
+    compare_base = args.compare_base_url.rstrip("/")
     predict_url = f"{base}/predict"
+    compare_predict_url = f"{compare_base}/predict"
 
     print(f"SMILES loaded: {len(smiles)}")
     print(f"model_id: {args.model_id}")
 
-    times = run_endpoint_benchmark(
-        name="PREDICT (batch)",
+    times_primary = run_endpoint_benchmark(
+        name=f"PRIMARY ({base})",
         url=predict_url,
         payload=payload,
         warmup=args.warmup,
@@ -106,9 +113,24 @@ def main():
         timeout=args.timeout,
     )
 
+    times_compare = run_endpoint_benchmark(
+        name=f"COMPARE ({compare_base})",
+        url=compare_predict_url,
+        payload=payload,
+        warmup=args.warmup,
+        runs=args.runs,
+        timeout=args.timeout,
+    )
+
     print("\nSummary")
-    summary = summarize("PREDICT (batch)", times)
-    print_summary(summary)
+    summary_primary = summarize("PRIMARY", times_primary)
+    summary_compare = summarize("COMPARE", times_compare)
+    print_summary(summary_primary)
+    print_summary(summary_compare)
+
+    if summary_compare["avg"] > 0:
+        speedup = summary_compare["avg"] / summary_primary["avg"] if summary_primary["avg"] > 0 else float("inf")
+        print(f"Speedup (compare/primary by avg): {speedup:.2f}x")
 
 
 if __name__ == "__main__":
