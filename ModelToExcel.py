@@ -2,7 +2,7 @@ from model_ws_db_utilities import getEngine, getSession
 import pandas as pd
 from sqlalchemy import text
 import math
-from typing import Optional, Dict, Any, Iterable, Tuple
+from typing import Optional, Dict, Any, Iterable, Tuple, Union
 import os
 
 import logging
@@ -855,6 +855,8 @@ class ModelToExcel:
             yx_offset_rows (int): Empty rows between data and y=x helper points. Defaults to 3.
             col_width_pad (int): Extra padding for column widths. Defaults to 5.
             min_col_width (int): Minimum column width in characters. Defaults to 7.
+            property_name (str, optional): Name of the property being modeled. Used for chart labeling. If None, uses y_col name.
+            property_units (str, optional): Units of the property (e.g., 'mg/L', 'log scale'). Appended to y-axis label if provided.
         
         Returns:
             pd.DataFrame: The training predictions dataframe that was written.
@@ -931,6 +933,8 @@ class ModelToExcel:
             yx_offset_rows (int): Empty rows between data and y=x helper points. Defaults to 3.
             col_width_pad (int): Extra padding for column widths. Defaults to 5.
             min_col_width (int): Minimum column width in characters. Defaults to 7.
+            property_name (str, optional): Name of the property being modeled. Used for chart labeling. If None, uses y_col name.
+            property_units (str, optional): Units of the property (e.g., 'mg/L', 'log scale'). Appended to y-axis label if provided.
         
         Returns:
             pd.DataFrame: The test predictions dataframe that was written.
@@ -1007,6 +1011,8 @@ class ModelToExcel:
             yx_offset_rows (int): Empty rows between data and y=x helper points. Defaults to 3.
             col_width_pad (int): Extra padding for column widths. Defaults to 5.
             min_col_width (int): Minimum column width in characters. Defaults to 7.
+            property_name (str, optional): Name of the property being modeled. Used for chart labeling. If None, uses y_col name.
+            property_units (str, optional): Units of the property (e.g., 'mg/L', 'log scale'). Appended to y-axis label if provided.
         
         Returns:
             pd.DataFrame: The external predictions dataframe that was written, or None if no data available.
@@ -1394,6 +1400,8 @@ class ModelToExcel:
             integer_ticks (bool): Whether to use integer-based tick spacing. Defaults to True.
             log_plot (bool): Whether this is a log-scale plot. Defaults to True.
             yx_offset_rows (int): Empty rows between data and y=x helper points. Defaults to 3.
+            property_name (str, optional): Name of the property being modeled. Used for chart labeling. If None, uses y_col name.
+            property_units (str, optional): Units of the property (e.g., 'mg/L', 'log scale'). Appended to y-axis label if provided.
         """
         worksheet = writer.sheets[sheet_name]
         worksheet_plot = writer.sheets[sheet_name_plot]
