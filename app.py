@@ -22,12 +22,15 @@ from starlette.middleware.cors import CORSMiddleware
 from starlette.responses import HTMLResponse, Response, JSONResponse, StreamingResponse
 
 import util.get_model_file as gmf
+from API_Utilities import SearchAPI
 from model_ws_db_utilities import ModelPredictor
 from report_creator_dict import ReportCreator
 
 _PROCESS_PREDICTOR = None
 
 load_dotenv()
+
+CIM_API_SERVER = os.getenv("CIM_API_SERVER", "https://cim-dev.sciencedataexperts.com")
 
 coloredlogs.install(level=DEBUG, milliseconds=True,
                     fmt='%(asctime)s - %(name)s - %(levelname)s - %(message)s (%(filename)s:%(lineno)d)')
@@ -121,58 +124,6 @@ def get_file(type_id: int = None, model_id: int = None):
     )
 
 
-def predict_identifier(identifier: str, model_id: int, report_format: str = "json"):
-    """Automates prediction and AD for single identifier using model in database"""
-
-    # normalize report_format
-    report_format = (report_format or "json").lower()
-    if report_format not in ("json", "html"):
-        report_format = "json"
-
-    # model_id -> int
-    try:
-        model_id = int(model_id)
-    except (TypeError, ValueError):
-        return JSONResponse({"error": "bad_request", "message": "model_id must be integer"}, status_code=400)
-
-    if not identifier:
-        return JSONResponse({"error": "bad_request", "message": "identifier is required"}, status_code=400)
-
-    # Resolve identifier -> SMILES
-    from API_Utilities import SearchAPI
-    import os
-
-    serverAPIs = os.getenv("CIM_API_SERVER", "https://cim-dev.sciencedataexperts.com")
-    chemicals, code = SearchAPI.call_resolver_get(serverAPIs, identifier)
-
-    if code != 200 or not chemicals:
-        return JSONResponse(
-            {"error": "not_found", "message": f"Could not find {identifier}"},
-            status_code=404,
-        )
-
-    smiles = (chemicals[0].get("chemical") or {}).get("smiles")
-    if not smiles:
-        return JSONResponse(
-            {"error": "not_found", "message": f"Could not find {identifier}"},
-            status_code=404,
-        )
-
-    # Predict
-    mp = ModelPredictor()
-    modelResultsJson = mp.predictFromDB(model_id, smiles)
-
-    if isinstance(modelResultsJson, str) and "invalid" in modelResultsJson.lower():
-        return JSONResponse({"error": "invalid", "message": modelResultsJson}, status_code=400)
-
-    if report_format == "html":
-        rc = ReportCreator()
-        html = rc.create_html_report_from_json(modelResultsJson)
-        return HTMLResponse(html, status_code=200)
-
-    return Response(content=_to_json_str(modelResultsJson), media_type="application/json")
-
-
 def _to_obj(x):
     if isinstance(x, (dict, list)):
         return x
@@ -220,8 +171,29 @@ def predictDB_POST(body):
     return JSONResponse(content=modelResultsArray)
 
 
-def predictDB(smiles, model_id, report_format):
+def predictDB(model_id, smiles=None, identifier=None, report_format='json'):
     """Automates prediction and AD for single smiles using model in database"""
+
+    if smiles and identifier:
+        return JSONResponse(
+            {"error": "bad request", "message": f"Both SMILES '{smiles}' and identifier {identifier} are provided"},
+            status_code=400,
+        )
+
+    if identifier:
+        chemicals, code = SearchAPI.call_resolver_get(CIM_API_SERVER, identifier)
+        if code != 200 or not chemicals:
+            return JSONResponse(
+                {"error": "not_found", "message": f"Could not find {identifier}"},
+                status_code=404,
+            )
+        smiles = (chemicals[0].get("chemical") or {}).get("smiles")
+
+    if not smiles:
+        return JSONResponse(
+            {"error": "not_found", "message": f"Could not find {identifier}"},
+            status_code=404,
+        )
 
     mp = ModelPredictor()
     pred = mp.predictFromDB(model_id, smiles)
