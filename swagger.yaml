@@ -48,72 +48,6 @@ paths:
         '200':
           description: Success
 
-  /api/predictor_models/predict_identifier:
-    get:
-      operationId: app.predict_identifier
-      parameters:
-        - name: identifier
-          in: query
-          description: identifier to generate predictions for
-          required: true
-          schema:
-            type: string
-          examples:
-            example1:
-              summary: CASRN
-              value: 71-43-2
-            example2:
-              summary: CHEMICAL NAME
-              value: benzene
-            example3:
-              summary: DTXSID
-              value: DTXSID3039242
-            example4:
-              summary: SMILES
-              value: c1ccccc1
-        - name: model_id
-          in: query
-          description: Model ID to use
-          required: true
-          schema:
-            type: integer
-          examples:
-            example1:
-              summary: HLC-XGB Martin 2024
-              value: 1065
-            example2:
-              summary: WS-XGB Martin 2024
-              value: 1066
-            example3:
-              summary: VP-XGB Martin 2024
-              value: 1067
-            example4:
-              summary: BP-XGB Martin 2024
-              value: 1068
-            example5:
-              summary: LogP-XGB Martin 2024
-              value: 1069
-            example6:
-              summary: MP-XGB Martin 2024
-              value: 1070
-        - name: report_format
-          in: query
-          description: which format to return
-          required: false
-          schema:
-            type: string
-          examples:
-            example1:
-              summary: JSON
-              value: json
-            example2:
-              summary: HTML
-              value: html
-      responses:
-        '200':
-          description: Success
-          content: {}
-                    
   /api/predictor_models/predict:
     get:
       operationId: app.predictDB
@@ -131,6 +65,22 @@ paths:
             example2:
               summary: Triphenyl phosphite
               value: c1ccc(OP(Oc2ccccc2)Oc2ccccc2)cc1
+        - name: identifier
+          in: query
+          description: identifier to generate predictions for
+          required: true
+          schema:
+            type: string
+          examples:
+            example1:
+              summary: CASRN
+              value: 71-43-2
+            example2:
+              summary: CHEMICAL NAME
+              value: benzene
+            example3:
+              summary: DTXSID
+              value: DTXSID3039242
         - name: model_id
           in: query
           description: Model ID to use
