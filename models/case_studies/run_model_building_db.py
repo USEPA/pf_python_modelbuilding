@@ -3,7 +3,6 @@
 Created on Dec 30, 2025
 @author: TMARTI02
 '''
-
 """
 from __future__ import annotations lets you:
 -Use forward references without quotes (refer to classes not yet defined)
@@ -1674,9 +1673,16 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
             df_test_model = df_prediction[columns]
             df_training_model = df_training[columns]
 
-        df_pv = du.ExpDataGetter.getMappedPropertyValues(session, dataset_name)
-        
+                
+        logging.info("start getting mapped property values from db")
+        snapshot_id = 4 # TODO move to parameter or constant
+        duplicate_strategy="id_suffix"
+        from models.db_utilities.raw_exp_data_db import ExpDataGetter
+        edg = ExpDataGetter()
+        df_pv, unique_params = edg.get_mapped_property_values(session, dataset_name, snapshot_id, duplicate_strategy=duplicate_strategy)
+        logging.info("done getting mapped property values from db")        
         # print_first_row(df_pv, row=1)
+        
         
         df_dps = du.getMappedDatapoints(session, dataset_name)
 
