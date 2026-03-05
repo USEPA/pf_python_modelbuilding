@@ -55,10 +55,12 @@ paths:
         - name: smiles
           in: query
           description: SMILES to generate predictions for
-          required: true
           schema:
             type: string
           examples:
+            example0:
+              summary: Empty
+              value:
             example1:
               summary: 2-Isopropylthioxanthone
               value: CC(C)c1ccc2sc3ccccc3c(=O)c2c1
@@ -68,10 +70,12 @@ paths:
         - name: identifier
           in: query
           description: identifier to generate predictions for
-          required: true
           schema:
             type: string
           examples:
+            example0:
+              summary: Empty
+              value:
             example1:
               summary: CASRN
               value: 71-43-2
