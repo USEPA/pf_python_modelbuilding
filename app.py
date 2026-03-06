@@ -279,8 +279,9 @@ def predictDB(model_id, smiles=None, identifier=None, report_format='json'):
             status_code=404,
         )
 
-    mp = ModelPredictor()
-    pred = mp.predictFromDB(model_id, smiles)
+    pool = _get_pool()
+    future = pool.submit(_predict_smiles_in_process, (model_id, smiles))
+    pred = future.result()
 
     report_format = (report_format or "json").lower()
     if report_format not in ("json", "html"):
@@ -291,7 +292,7 @@ def predictDB(model_id, smiles=None, identifier=None, report_format='json'):
         modelResultsHtml = rc.create_html_report_from_json(_to_json_str(pred))
         return HTMLResponse(content=modelResultsHtml)
 
-    return Response(content=_to_json_str(pred), media_type="application/json")
+    return JSONResponse(content=pred)
 
 
 if __name__ == '__main__':

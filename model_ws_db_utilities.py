@@ -1,50 +1,37 @@
-import concurrent.futures
 import asyncio
-import json
-import os
-import threading
-from io import BytesIO
-import pathlib
-import traceback
-from time import perf_counter
-from indigo import Indigo
-from indigo.renderer import IndigoRenderer
 import base64
 import httpx
-
-from sqlalchemy import create_engine
-from sqlalchemy.engine import URL
-from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy import text, bindparam
-
-from API_Utilities import QsarSmilesAPI, DescriptorsAPI
-
-# from db.mongo_cache import get_cached_prediction, cache_prediction
-from db.mongo_cache import get_cached_prediction, cache_prediction
-
-from util import predict_constants as pc
-
-from model_ws_utilities import call_do_predictions_from_df, models
-from models import df_utilities as dfu
-from models.ModelBuilder import Model
-
-import StatsCalculator as stats
+import json
+import logging
+import numpy as np
+import os
 import pandas as pd
-# import pytz
+import pathlib
+import traceback
+import threading
+from io import BytesIO
+from indigo import Indigo
+from indigo.renderer import IndigoRenderer
+from time import perf_counter
 
 from sklearn.preprocessing import StandardScaler
 from sklearn.neighbors import NearestNeighbors
+from sqlalchemy import create_engine, text
+from sqlalchemy.engine import URL
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import sessionmaker
+
 import model_ws_utilities as mwu
-import numpy as np
-
-from util.units_converter import UnitsConverter
-
-from utils import timer, print_first_row
+import StatsCalculator as stats
+from API_Utilities import QsarSmilesAPI, DescriptorsAPI
 from applicability_domain import applicability_domain_utilities as adu
-
-# debug = False
-import logging
+from db.mongo_cache import get_cached_prediction, cache_prediction
+from model_ws_utilities import call_do_predictions_from_df, models
+from models import df_utilities as dfu
+from models.ModelBuilder import Model
+from util import predict_constants as pc
+from utils import timer, print_first_row
+from util.units_converter import UnitsConverter
 
 logging.getLogger('sqlalchemy').setLevel(logging.ERROR)
 
