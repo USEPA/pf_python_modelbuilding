@@ -25,12 +25,15 @@ from starlette.responses import HTMLResponse, Response, JSONResponse, StreamingR
 
 import util.get_model_file as gmf
 from API_Utilities import SearchAPI
+from model_ws_db_utilities_async import AsyncModelPredictor
 from model_ws_db_utilities import ModelPredictor
 from report_creator_dict import ReportCreator
 
 _PROCESS_PREDICTOR = None
 _LOCAL_PREDICTOR = None
 _LOCAL_PREDICTOR_LOCK = threading.Lock()
+_ASYNC_PREDICTOR = None
+_ASYNC_PREDICTOR_LOCK = threading.Lock()
 
 # ---- Persistent process pool (survives across requests) ----
 _POOL: ProcessPoolExecutor | None = None
@@ -189,6 +192,16 @@ def _get_local_predictor() -> ModelPredictor:
     return _LOCAL_PREDICTOR
 
 
+def _get_async_predictor() -> AsyncModelPredictor:
+    global _ASYNC_PREDICTOR
+    if _ASYNC_PREDICTOR is None:
+        with _ASYNC_PREDICTOR_LOCK:
+            if _ASYNC_PREDICTOR is None:
+                _ASYNC_PREDICTOR = AsyncModelPredictor()
+                logging.info("Async predictor initialized")
+    return _ASYNC_PREDICTOR
+
+
 def _predict_smiles_in_process(args):
     model_id, current_smiles = args
     predictor = _PROCESS_PREDICTOR
@@ -235,48 +248,25 @@ def _predict_smiles_batch_in_process(args):
     return fallback_results
 
 
-def predictDB_POST(body):
+async def predictDB_POST(body):
     """Automates prediction and AD for batch smiles using model in database"""
     timing_on = _timing_enabled()
     request_start = perf_counter() if timing_on else None
 
     smiles = body["smiles"]
-    batch_mode = os.getenv("PREDICT_BATCH_EXECUTION_MODE", "direct").strip().lower()
-
-    if batch_mode == "pool":
-        workers = max(1, int(os.getenv("PREDICT_BATCH_WORKERS", os.cpu_count() or 1)))
-        env_batch_size = int(os.getenv("PREDICT_SMILES_BATCH_SIZE", 0))
-        if env_batch_size > 0:
-            batch_size = env_batch_size
-        else:
-            batch_size = max(200, (len(smiles) + workers - 1) // workers) if smiles else 1
-
-        batch_size = max(1, batch_size)
-        num_batches = (len(smiles) + batch_size - 1) // batch_size if smiles else 0
-
-        pool = _get_pool()
-        batch_results = list(
-            pool.map(
-                _predict_smiles_batch_in_process,
-                ((body["model_id"], batch) for batch in _chunked(smiles, batch_size)),
-            )
-        )
-
-        modelResultsArray = [_to_obj(item) for batch in batch_results for item in batch]
-    else:
-        predictor = _get_local_predictor()
-        modelResultsArray = _to_obj(predictor.predictFromDB(body["model_id"], smiles))
-        batch_size = len(smiles) if smiles else 0
-        num_batches = 1 if smiles else 0
+    predictor = _get_async_predictor()
+    modelResultsArray = await predictor.predict_from_db(body["model_id"], smiles)
+    batch_size = len(smiles) if smiles else 0
+    num_batches = 1 if smiles else 0
 
     if timing_on:
+        async_workers = max(1, int(os.getenv("PREDICT_CPU_WORKERS", os.cpu_count() or 1)))
         logging.info(
-            "timing.endpoint predictDB_POST mode=%s size=%d chunk_size=%d chunks=%d workers=%d total=%.3fs",
-            batch_mode,
+            "timing.endpoint predictDB_POST mode=async size=%d chunk_size=%d chunks=%d workers=%d total=%.3fs",
             len(smiles),
             batch_size,
             num_batches,
-            _POOL_SIZE,
+            async_workers,
             perf_counter() - request_start if request_start else 0
         )
 
