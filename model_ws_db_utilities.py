@@ -1088,29 +1088,96 @@ class ModelPredictor:
             descriptor_elapsed = perf_counter() - descriptor_start
 
         report_start = perf_counter() if timing_on else None
+        generate_neighbors = _env_flag("PREDICT_GENERATE_NEIGHBORS", True)
+        skip_images = _env_flag("PREDICT_SKIP_IMAGES", False)
+
+        # --- Collect indices with valid standardization + descriptors ---
+        valid_pred_indices = [
+            idx for idx in range(len(smiles_list))
+            if standardized[idx] is not None and dfs_by_index[idx] is not None
+        ]
+
+        # --- Batch model predictions (one model.do_predictions call) ---
+        pred_values_map: dict = {}
+        all_pred_dfs = None
+        if valid_pred_indices:
+            all_pred_dfs = pd.concat(
+                [dfs_by_index[idx] for idx in valid_pred_indices],
+                ignore_index=True,
+            )
+            batch_json = call_do_predictions_from_df(all_pred_dfs, model)
+            batch_pred_results = json.loads(batch_json)
+            for i, idx in enumerate(valid_pred_indices):
+                pred_values_map[idx] = batch_pred_results[i]['pred']
+
+        # --- Batch AD calculations ---
+        ad_results_map: dict = {idx: [] for idx in valid_pred_indices}
+        if valid_pred_indices and model.applicabilityDomainName:
+            applicabilityDomains = modelDetails.applicabilityDomainName.split(" and ")
+            if pc.Applicability_Domain_TEST_Fragment_Counts not in applicabilityDomains:
+                applicabilityDomains.append(pc.Applicability_Domain_TEST_Fragment_Counts)
+
+            for ad_name in applicabilityDomains:
+                if ad_name == pc.Applicability_Domain_TEST_Fragment_Counts:
+                    # Fragment AD: run per-SMILES (output row count may differ from input)
+                    for i, idx in enumerate(valid_pred_indices):
+                        try:
+                            ad_result = self.determineApplicabilityDomain(model, ad_name, dfs_by_index[idx])
+                            ad_results_map[idx].append(ad_result)
+                        except Exception:
+                            logging.exception("Fragment AD failed for idx=%d", idx)
+                else:
+                    # Distance-based AD: run once for all test chemicals (avoids N × O(N_train²) KNN fits)
+                    try:
+                        output, ad_cutoff = adu.generate_applicability_domain_with_preselected_descriptors_from_dfs(
+                            train_df=model.df_training,
+                            test_df=all_pred_dfs.copy(),
+                            remove_log_p=model.remove_log_p_descriptors,
+                            embedding=model.embedding,
+                            applicability_domain=ad_name,
+                            filterColumnsInBothSets=True,
+                        )
+                        for i, idx in enumerate(valid_pred_indices):
+                            ad_result = self._parse_ad_result_for_row(output, i, ad_cutoff, ad_name, model)
+                            ad_results_map[idx].append(ad_result)
+                    except Exception:
+                        logging.exception("Batch AD failed for %s; falling back to per-SMILES", ad_name)
+                        for i, idx in enumerate(valid_pred_indices):
+                            try:
+                                ad_result = self.determineApplicabilityDomain(model, ad_name, dfs_by_index[idx])
+                                ad_results_map[idx].append(ad_result)
+                            except Exception:
+                                logging.exception("Per-SMILES AD fallback failed for idx=%d", idx)
+        elif valid_pred_indices:
+            logging.warning('AD method for model was not set: %s', model_id)
+
+        # --- Assemble reports ---
         predictions = []
         for idx, smi in enumerate(smiles_list):
             chemical = standardized[idx]
 
             if chemical is None:
-                predictions.append(self._build_error_report_json(smi, modelDetails, standardize_errors[idx]))
+                predictions.append(self._build_error_report_dict(smi, modelDetails, standardize_errors[idx]))
                 continue
 
-            self._set_chemical_image(chemical)
+            if not skip_images:
+                self._set_chemical_image(chemical)
 
             if dfs_by_index[idx] is None:
                 err = descriptor_errors[idx] if descriptor_errors[idx] is not None else "Descriptor calculation failed"
-                predictions.append(self._build_error_report_json(smi, modelDetails, err, chemical=chemical))
+                predictions.append(self._build_error_report_dict(smi, modelDetails, err, chemical=chemical))
                 continue
 
-            prediction = self._build_prediction_report_from_df(
+            prediction = self._build_report_from_precomputed(
                 model_id=model_id,
                 smiles=smi,
                 model=model,
                 modelDetails=modelDetails,
                 chemical=chemical,
+                pred_value=pred_values_map[idx],
+                ad_estimates=ad_results_map.get(idx, []),
                 df_prediction=dfs_by_index[idx],
-                generate_report=_env_flag("PREDICT_GENERATE_NEIGHBORS", True),
+                generate_neighbors=generate_neighbors,
             )
             predictions.append(prediction)
 
@@ -1239,6 +1306,128 @@ class ModelPredictor:
             )
 
         return report.to_json()
+
+    # ---- Batch-optimised helpers (used by predict_model_smiles_batch) ----
+
+    def _build_error_report_dict(self, smiles, modelDetails, error, chemical=None):
+        """Same as _build_error_report_json but returns a plain dict (avoids JSON round-trip)."""
+        if chemical is None:
+            chemical = {
+                "chemId": smiles,
+                "smiles": smiles,
+            }
+            self._set_chemical_image(chemical)
+
+        modelResults = ModelResults()
+        modelResults.predictionError = error
+        report = Report(chemical, modelDetails, modelResults)
+        return report.to_dict()
+
+    def _build_report_from_precomputed(self, model_id, smiles, model, modelDetails, chemical,
+                                       pred_value, ad_estimates, df_prediction, generate_neighbors=True):
+        """Build report using already-computed prediction value and AD estimates (batch path)."""
+        modelResults = ModelResults()
+        modelResults.predictionValueUnitsModel = pred_value
+        modelResults.unitsModel = model.unitsModel
+        modelResults.adEstimates = ad_estimates
+
+        if not model.applicabilityDomainName:
+            logging.warning('AD method for model was not set: %s', model_id)
+
+        self.setExpValue(chemical, model, modelResults)
+
+        uc = UnitsConverter()
+
+        if "sid" not in chemical:
+            chemical["sid"] = "N/A"
+            chemical["cid"] = "N/A"
+            chemical["name"] = "N/A"
+
+        if modelResults.experimentalValueUnitsModel:
+            modelResults.experimentalValueUnitsDisplay = uc.convert_units(
+                model.propertyName,
+                modelResults.experimentalValueUnitsModel,
+                model.unitsModel,
+                model.unitsDisplay,
+                chemical["sid"],
+                chemical["averageMass"],
+            )
+
+        modelResults.predictionValueUnitsDisplay = uc.convert_units(
+            model.propertyName,
+            pred_value,
+            model.unitsModel,
+            model.unitsDisplay,
+            chemical["sid"],
+            chemical["averageMass"],
+        )
+        modelResults.unitsDisplay = model.unitsDisplay
+
+        report = Report(chemical, modelDetails, modelResults)
+
+        if generate_neighbors:
+            report.neighborResultsTraining, report.neighborResultsPrediction = self.addNeighborsFromSets(
+                model,
+                modelResults,
+                df_prediction,
+            )
+
+        return report.to_dict()
+
+    def _parse_ad_result_for_row(self, output, row_idx, ad_cutoff, ad_name, model):
+        """Extract AD result for a specific row from a batched AD output DataFrame."""
+        AD_val = bool(output['AD'].iloc[row_idx])
+
+        has_ids = 'ids' in output.columns
+        has_distances = 'distances' in output.columns
+
+        if has_ids and has_distances:
+            analogsAD = output['ids'].iloc[row_idx]
+            distances = list(output["distances"].iloc[row_idx])
+            results = {"AD": AD_val, "analogs": analogsAD, "distances": distances, "AD_Cutoff": ad_cutoff}
+        else:
+            results = {"AD": AD_val}
+
+        results["adMethod"] = {}
+        results["adMethod"]["name"] = ad_name
+
+        if ad_name == pc.Applicability_Domain_TEST_Embedding_Euclidean \
+                or ad_name == pc.Applicability_Domain_TEST_All_Descriptors_Euclidean:
+
+            if "distances" in results:
+                results["value"] = sum(results["distances"]) / len(results["distances"])
+
+                if AD_val:
+                    results["conclusion"] = "Inside"
+                    results["reasoning"] = f"Avg. distance ({results['value']:.2f}) < {ad_cutoff:.2f}"
+                else:
+                    results["conclusion"] = "Outside"
+                    results["reasoning"] = f"Avg. distance ({results['value']:.2f}) > {ad_cutoff:.2f}"
+
+                results["analogs"] = self.setExpPredValuesForADAnalogs(model, results["analogs"])
+                results["adMethod"]["description"] = (
+                    'Whether or not the average Euclidean distance of the three closest training set '
+                    'neighbors exceeds a cutoff defined so that 95% of the training set is within the AD'
+                )
+                self.addDistances(results["analogs"], results["distances"])
+                del results['distances']
+
+        elif ad_name == pc.Applicability_Domain_TEST_Fragment_Counts:
+            # Fragment AD is handled per-SMILES; this branch is a safety fallback only
+            results["adMethod"]["description"] = 'Whether the TEST fragments are within the training set range'
+            if 'fragment_table' in output.columns:
+                results["fragment_table"] = output["fragment_table"].iloc[row_idx]
+
+            if AD_val:
+                results["conclusion"] = "Inside"
+                results["reasoning"] = "Fragments in test chemical are within the training set ranges"
+            else:
+                results["conclusion"] = "Outside"
+                results["reasoning"] = "Fragments in test chemical are NOT within the training set ranges"
+        else:
+            logging.debug("Unhandled AD method in batch: %s", ad_name)
+
+        return results
 
     def addPerformance(self, md: ModelDetails):
         ms = md.modelStatistics or {}

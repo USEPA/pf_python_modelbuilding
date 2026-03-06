@@ -106,23 +106,23 @@ def main():
         timeout=args.timeout,
     )
 
-    times_compare = run_endpoint_benchmark(
-        name=f"COMPARE ({compare_base})",
-        url=compare_predict_url,
-        payload=payload,
-        runs=args.runs,
-        timeout=args.timeout,
-    )
+    # times_compare = run_endpoint_benchmark(
+    #     name=f"COMPARE ({compare_base})",
+    #     url=compare_predict_url,
+    #     payload=payload,
+    #     runs=args.runs,
+    #     timeout=args.timeout,
+    # )
 
     print("\nSummary")
     summary_primary = summarize("PRIMARY", times_primary)
-    summary_compare = summarize("COMPARE", times_compare)
+    # summary_compare = summarize("COMPARE", times_compare)
     print_summary(summary_primary)
-    print_summary(summary_compare)
+    # print_summary(summary_compare)
 
-    if summary_compare["avg"] > 0:
-        speedup = summary_compare["avg"] / summary_primary["avg"] if summary_primary["avg"] > 0 else float("inf")
-        print(f"Speedup (compare/primary by avg): {speedup:.2f}x")
+    # if summary_compare["avg"] > 0:
+    #     speedup = summary_compare["avg"] / summary_primary["avg"] if summary_primary["avg"] > 0 else float("inf")
+    #     print(f"Speedup (compare/primary by avg): {speedup:.2f}x")
 
 
 if __name__ == "__main__":

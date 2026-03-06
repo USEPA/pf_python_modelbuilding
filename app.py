@@ -10,6 +10,7 @@ import io
 import json
 import logging
 import os
+import threading
 from concurrent.futures import ProcessPoolExecutor
 from logging import DEBUG
 from time import perf_counter
@@ -28,6 +29,33 @@ from model_ws_db_utilities import ModelPredictor
 from report_creator_dict import ReportCreator
 
 _PROCESS_PREDICTOR = None
+
+# ---- Persistent process pool (survives across requests) ----
+_POOL: ProcessPoolExecutor | None = None
+_POOL_LOCK = threading.Lock()
+_POOL_SIZE: int = 0
+
+
+def _get_pool() -> ProcessPoolExecutor:
+    """Lazy-init a persistent ProcessPoolExecutor.
+
+    Keeps model caches alive across requests instead of re-loading
+    models from the database on every request.
+    """
+    global _POOL, _POOL_SIZE
+    if _POOL is None:
+        with _POOL_LOCK:
+            if _POOL is None:
+                size = int(os.getenv("PREDICT_BATCH_WORKERS", os.cpu_count() or 1))
+                size = max(1, size)
+                _POOL = ProcessPoolExecutor(
+                    max_workers=size,
+                    initializer=_init_process_predictor,
+                )
+                _POOL_SIZE = size
+                logging.info("Persistent process pool created with %d workers", size)
+    return _POOL
+
 
 load_dotenv()
 
@@ -204,16 +232,13 @@ def predictDB_POST(body):
     batch_size = max(1, batch_size)
     num_batches = (len(smiles) + batch_size - 1) // batch_size if smiles else 0
 
-    max_workers = int(os.getenv("PREDICT_BATCH_WORKERS", os.cpu_count() or 1))
-    max_workers = max(1, min(max_workers, num_batches if num_batches else 1))
-
-    with ProcessPoolExecutor(max_workers=max_workers, initializer=_init_process_predictor) as executor:
-        batch_results = list(
-            executor.map(
-                _predict_smiles_batch_in_process,
-                ((body["model_id"], batch) for batch in _chunked(smiles, batch_size)),
-            )
+    pool = _get_pool()
+    batch_results = list(
+        pool.map(
+            _predict_smiles_batch_in_process,
+            ((body["model_id"], batch) for batch in _chunked(smiles, batch_size)),
         )
+    )
 
     modelResultsArray = [_to_obj(item) for batch in batch_results for item in batch]
 
@@ -223,7 +248,7 @@ def predictDB_POST(body):
             len(smiles),
             batch_size,
             num_batches,
-            max_workers,
+            _POOL_SIZE,
             perf_counter() - request_start if request_start else 0
         )
 
