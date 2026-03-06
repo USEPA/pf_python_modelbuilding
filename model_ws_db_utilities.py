@@ -317,6 +317,17 @@ class ModelInitializer:
         self.get_training_prediction_instances(session, model)
         self.get_dsstox_records_for_dataset(model, session)
 
+        # Build fast lookups used repeatedly during reporting.
+        if hasattr(model, "df_training") and "ID" in model.df_training.columns and "Property" in model.df_training.columns:
+            model._train_exp_by_id = model.df_training.set_index("ID")["Property"].to_dict()
+        else:
+            model._train_exp_by_id = {}
+
+        if hasattr(model, "df_prediction") and "ID" in model.df_prediction.columns and "Property" in model.df_prediction.columns:
+            model._test_exp_by_id = model.df_prediction.set_index("ID")["Property"].to_dict()
+        else:
+            model._test_exp_by_id = {}
+
         # get following for pred values for neighbors:
         model.df_preds_test = self.get_predictions(session, model=model, split_num=1, fk_splitting_id=1)
         model.df_preds_training_cv = self.get_cv_predictions(session, model)
@@ -776,10 +787,52 @@ class NeighborGetter:
 
         return neighbors, distances
 
+    def find_neighbors_in_set_batch(self, model, df_set, df_test_chemicals, n_neighbors=10):
+        """Return neighbor IDs and distances for each test row in a single fit/kneighbors call."""
+        nbrs = NearestNeighbors(n_neighbors=n_neighbors, algorithm='brute', metric='euclidean')
+
+        useEmbedding = True
+
+        if useEmbedding:
+            TrainSet = df_set[model.embedding]
+            TestSet = df_test_chemicals[model.embedding]
+            scaler = StandardScaler().fit(TrainSet)
+            train_x, test_x = scaler.transform(TrainSet), scaler.transform(TestSet)
+        else:
+            TrainSet = df_set
+            TestSet = df_test_chemicals
+            ids_train, labels_train, features_train, column_names_train, is_binary = dfu.prepare_instances(
+                df=TrainSet,
+                which_set="Training",
+                remove_logp=model.remove_log_p_descriptors,
+                remove_corr=False,
+                remove_constant=True,
+            )
+            features_test = TestSet[features_train.columns]
+            scaler = StandardScaler().fit(features_train)
+            train_x, test_x = scaler.transform(features_train), scaler.transform(features_test)
+
+        nbrs.fit(train_x)
+        test_distances, test_indices = nbrs.kneighbors(test_x)
+
+        id_series = df_set[df_set.columns[0]]
+        neighbors_per_row = []
+        distances_per_row = []
+        for row_idx in range(test_indices.shape[0]):
+            indices = test_indices[row_idx]
+            neighbors_per_row.append(id_series.iloc[indices].tolist())
+            distances_per_row.append(list(test_distances[row_idx]))
+
+        return neighbors_per_row, distances_per_row
+
 # cache = {}
 
 
 class ModelPredictor:
+
+    def __init__(self):
+        # Cache for expensive fallback DB lookups keyed by (datasetName, qsarSmiles).
+        self._missing_dsstox_cache = {}
 
     @timer
     def predictFromDB(self, model_id, smiles):
@@ -1097,6 +1150,22 @@ class ModelPredictor:
             for i, idx in enumerate(valid_pred_indices):
                 pred_values_map[idx] = batch_pred_results[i]['pred']
 
+        # --- Batch nearest neighbors (compute once, then map to each report row) ---
+        precomputed_neighbors_map: dict = {}
+        if generate_neighbors and valid_pred_indices and all_pred_dfs is not None:
+            try:
+                precomputed_neighbors = self._precompute_neighbors_for_batch(
+                    model=model,
+                    df_test_chemicals=all_pred_dfs,
+                )
+                for i, idx in enumerate(valid_pred_indices):
+                    precomputed_neighbors_map[idx] = {
+                        "training": precomputed_neighbors["training"][i],
+                        "prediction": precomputed_neighbors["prediction"][i],
+                    }
+            except Exception:
+                logging.exception("Batch neighbor precompute failed; falling back to per-SMILES")
+
         # --- Batch AD calculations ---
         ad_results_map: dict = {idx: [] for idx in valid_pred_indices}
         if valid_pred_indices and model.applicabilityDomainName:
@@ -1165,6 +1234,7 @@ class ModelPredictor:
                 ad_estimates=ad_results_map.get(idx, []),
                 df_prediction=dfs_by_index[idx],
                 generate_neighbors=generate_neighbors,
+                precomputed_neighbors=precomputed_neighbors_map.get(idx),
             )
             predictions.append(prediction)
 
@@ -1311,7 +1381,8 @@ class ModelPredictor:
         return report.to_dict()
 
     def _build_report_from_precomputed(self, model_id, smiles, model, modelDetails, chemical,
-                                       pred_value, ad_estimates, df_prediction, generate_neighbors=True):
+                                       pred_value, ad_estimates, df_prediction, generate_neighbors=True,
+                                       precomputed_neighbors=None):
         """Build report using already-computed prediction value and AD estimates (batch path)."""
         modelResults = ModelResults()
         modelResults.predictionValueUnitsModel = pred_value
@@ -1353,13 +1424,87 @@ class ModelPredictor:
         report = Report(chemical, modelDetails, modelResults)
 
         if generate_neighbors:
-            report.neighborResultsTraining, report.neighborResultsPrediction = self.addNeighborsFromSets(
-                model,
-                modelResults,
-                df_prediction,
-            )
+            if precomputed_neighbors is not None:
+                report.neighborResultsTraining = precomputed_neighbors["training"]
+                report.neighborResultsPrediction = precomputed_neighbors["prediction"]
+            else:
+                report.neighborResultsTraining, report.neighborResultsPrediction = self.addNeighborsFromSets(
+                    model,
+                    modelResults,
+                    df_prediction,
+                )
 
         return report.to_dict()
+
+    def _precompute_neighbors_for_batch(self, model: Model, df_test_chemicals: pd.DataFrame):
+        """Compute neighbor blocks once for all batch rows and return report-ready entries per row."""
+        ng = NeighborGetter()
+
+        n_neighbors = 10
+
+        # Test-set neighbors
+        test_neighbors_ids, test_distances_all = ng.find_neighbors_in_set_batch(
+            model=model,
+            df_set=model.df_prediction,
+            df_test_chemicals=df_test_chemicals,
+            n_neighbors=n_neighbors,
+        )
+
+        # Training-set neighbors
+        train_neighbors_ids, train_distances_all = ng.find_neighbors_in_set_batch(
+            model=model,
+            df_set=model.df_training,
+            df_test_chemicals=df_test_chemicals,
+            n_neighbors=n_neighbors,
+        )
+
+        prediction_results = []
+        training_results = []
+
+        for row_idx in range(len(df_test_chemicals)):
+            neighbors_test = self.setExpPredValuesForNeighbors(
+                model,
+                model.df_preds_test,
+                test_neighbors_ids[row_idx],
+                model.df_dsstoxRecords,
+            )
+            neighbors_training = self.setExpPredValuesForNeighbors(
+                model,
+                model.df_preds_training_cv,
+                train_neighbors_ids[row_idx],
+                model.df_dsstoxRecords,
+            )
+
+            self.addDistances(neighbors_test, test_distances_all[row_idx])
+            self.addDistances(neighbors_training, train_distances_all[row_idx])
+
+            df_neighbors_test = pd.DataFrame(neighbors_test)
+            stats_test = stats.calculate_continuous_statistics(df_neighbors_test, 0, pc.TAG_TEST)
+            neighbors_test_mae = stats_test[pc.MAE + pc.TAG_TEST]
+
+            df_neighbors_training = pd.DataFrame(neighbors_training)
+            stats_training = stats.calculate_continuous_statistics(df_neighbors_training, 0, pc.TAG_TRAINING)
+            neighbors_training_mae = stats_training[pc.MAE + pc.TAG_TRAINING]
+
+            prediction_results.append({
+                "set": "Test",
+                "neighbors": neighbors_test,
+                "MAE": neighbors_test_mae,
+                "unitNeighbor": model.unitsModel,
+                "title": "Nearest Neighbors from Test Set (External Predictions)",
+            })
+            training_results.append({
+                "set": "Training",
+                "neighbors": neighbors_training,
+                "MAE": neighbors_training_mae,
+                "unitNeighbor": model.unitsModel,
+                "title": "Nearest Neighbors from Training Set (Cross Validation Predictions)",
+            })
+
+        return {
+            "prediction": prediction_results,
+            "training": training_results,
+        }
 
     def _parse_ad_result_for_row(self, output, row_idx, ad_cutoff, ad_name, model):
         """Extract AD result for a specific row from a batched AD output DataFrame."""
@@ -1477,6 +1622,19 @@ class ModelPredictor:
 
         qsarSmiles = chemical["canonicalSmiles"]
 
+        train_lookup = getattr(model, "_train_exp_by_id", None)
+        if train_lookup is not None and qsarSmiles in train_lookup:
+            modelResults.experimentalValueUnitsModel = train_lookup[qsarSmiles]
+            modelResults.experimentalValueSet = "Training"
+
+        test_lookup = getattr(model, "_test_exp_by_id", None)
+        if test_lookup is not None and qsarSmiles in test_lookup:
+            modelResults.experimentalValueUnitsModel = test_lookup[qsarSmiles]
+            modelResults.experimentalValueSet = "Test"
+
+        if train_lookup is not None or test_lookup is not None:
+            return
+
         matching_row_training = model.df_training[model.df_training['ID'] == qsarSmiles]
         matching_row_test = model.df_prediction[model.df_prediction['ID'] == qsarSmiles]
 
@@ -1522,6 +1680,10 @@ class ModelPredictor:
             analog["distance"] = distances[index] 
 
     def fixMissingNeighborDsstoxRecord(self, datasetName, qsarSmiles):
+        cache_key = (datasetName, qsarSmiles)
+        if cache_key in self._missing_dsstox_cache:
+            return dict(self._missing_dsstox_cache[cache_key])
+
         row_as_dict = {
             "canonicalSmiles":qsarSmiles}
         mi = ModelInitializer()
@@ -1554,6 +1716,7 @@ class ModelPredictor:
         except Exception as e:
             print(e)
 
+        self._missing_dsstox_cache[cache_key] = dict(row_as_dict)
         return row_as_dict
 
     def setExpPredValuesForNeighbors(self, model:Model, df_preds, neighbors, df_dsstoxRecords):
