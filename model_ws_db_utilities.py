@@ -332,6 +332,21 @@ class ModelInitializer:
         model.df_preds_test = self.get_predictions(session, model=model, split_num=1, fk_splitting_id=1)
         model.df_preds_training_cv = self.get_cv_predictions(session, model)
 
+        if hasattr(model, "df_dsstoxRecords") and "canonicalSmiles" in model.df_dsstoxRecords.columns:
+            model._dsstox_by_smiles = model.df_dsstoxRecords.set_index("canonicalSmiles").to_dict(orient="index")
+        else:
+            model._dsstox_by_smiles = {}
+
+        if hasattr(model, "df_preds_test") and "id" in model.df_preds_test.columns:
+            model._preds_test_by_id = model.df_preds_test.set_index("id").to_dict(orient="index")
+        else:
+            model._preds_test_by_id = {}
+
+        if hasattr(model, "df_preds_training_cv") and "id" in model.df_preds_training_cv.columns:
+            model._preds_training_cv_by_id = model.df_preds_training_cv.set_index("id").to_dict(orient="index")
+        else:
+            model._preds_training_cv_by_id = {}
+
         logging.debug(f"model_description with added metadata:{model.get_model_description_pretty()}")
 
         session.close()
@@ -1650,25 +1665,24 @@ class ModelPredictor:
 
         analogs2 = []
 
-        df_preds = model.df_preds_training_cv
+        preds_lookup = getattr(model, "_preds_training_cv_by_id", {})
+        dsstox_lookup = getattr(model, "_dsstox_by_smiles", {})
 
         for analog in analogs:  # these are just the qsarSmiles
 
-            matching_row_dsstox = model.df_dsstoxRecords[model.df_dsstoxRecords['canonicalSmiles'] == analog]
-
-            if not matching_row_dsstox.empty:
-                row_as_dict = matching_row_dsstox.iloc[0].to_dict()
+            if analog in dsstox_lookup:
+                row_as_dict = dict(dsstox_lookup[analog])
             else:
                 row_as_dict = self.fixMissingNeighborDsstoxRecord(model.datasetName, analog)
 
             analogs2.append(row_as_dict)
 
             # Find the matching row in model.df_preds_test
-            matching_row_pred = df_preds[df_preds['id'] == analog]
-            if not matching_row_pred.empty:
+            pred_row = preds_lookup.get(analog)
+            if pred_row is not None:
                 # Add exp and pred values to the record
-                row_as_dict['exp'] = matching_row_pred['exp'].values[0]
-                row_as_dict['pred'] = matching_row_pred['pred'].values[0]
+                row_as_dict['exp'] = pred_row.get('exp')
+                row_as_dict['pred'] = pred_row.get('pred')
         
         # print(json.dumps(analogs2,indent=4))
         
@@ -1723,12 +1737,18 @@ class ModelPredictor:
 
         neighbors2 = []
 
+        dsstox_lookup = getattr(model, "_dsstox_by_smiles", {})
+        if df_preds is model.df_preds_test:
+            preds_lookup = getattr(model, "_preds_test_by_id", {})
+        elif df_preds is model.df_preds_training_cv:
+            preds_lookup = getattr(model, "_preds_training_cv_by_id", {})
+        else:
+            preds_lookup = df_preds.set_index('id').to_dict(orient='index') if 'id' in df_preds.columns else {}
+
         for neighbor in neighbors:  # these are just the qsarSmiles
 
-            matching_row_dsstox = df_dsstoxRecords[df_dsstoxRecords['canonicalSmiles'] == neighbor]
-
-            if not matching_row_dsstox.empty:
-                row_as_dict = matching_row_dsstox.iloc[0].to_dict()
+            if neighbor in dsstox_lookup:
+                row_as_dict = dict(dsstox_lookup[neighbor])
                 neighbors2.append(row_as_dict)
             else:
                 logging.debug("Finding missing dsstox info for " + neighbor)  # only happens for 8 dtxcids
@@ -1739,11 +1759,11 @@ class ModelPredictor:
                 neighbors2.append(row_as_dict)
                 
             # Find the matching row in model.df_preds_test
-            matching_row_pred = df_preds[df_preds['id'] == neighbor]
-            if not matching_row_pred.empty:
+            pred_row = preds_lookup.get(neighbor)
+            if pred_row is not None:
                 # Add exp and pred values to the record
-                row_as_dict['exp'] = matching_row_pred['exp'].values[0]
-                row_as_dict['pred'] = matching_row_pred['pred'].values[0]
+                row_as_dict['exp'] = pred_row.get('exp')
+                row_as_dict['pred'] = pred_row.get('pred')
 
         return neighbors2
 

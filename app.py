@@ -29,6 +29,8 @@ from model_ws_db_utilities import ModelPredictor
 from report_creator_dict import ReportCreator
 
 _PROCESS_PREDICTOR = None
+_LOCAL_PREDICTOR = None
+_LOCAL_PREDICTOR_LOCK = threading.Lock()
 
 # ---- Persistent process pool (survives across requests) ----
 _POOL: ProcessPoolExecutor | None = None
@@ -176,6 +178,17 @@ def _init_process_predictor():
     _PROCESS_PREDICTOR = ModelPredictor()
 
 
+def _get_local_predictor() -> ModelPredictor:
+    """Lazy-init singleton predictor in the app process for direct batch mode."""
+    global _LOCAL_PREDICTOR
+    if _LOCAL_PREDICTOR is None:
+        with _LOCAL_PREDICTOR_LOCK:
+            if _LOCAL_PREDICTOR is None:
+                _LOCAL_PREDICTOR = ModelPredictor()
+                logging.info("Local predictor initialized for direct batch mode")
+    return _LOCAL_PREDICTOR
+
+
 def _predict_smiles_in_process(args):
     model_id, current_smiles = args
     predictor = _PROCESS_PREDICTOR
@@ -228,23 +241,39 @@ def predictDB_POST(body):
     request_start = perf_counter() if timing_on else None
 
     smiles = body["smiles"]
-    batch_size = int(os.getenv("PREDICT_SMILES_BATCH_SIZE", 100))
-    batch_size = max(1, batch_size)
-    num_batches = (len(smiles) + batch_size - 1) // batch_size if smiles else 0
+    batch_mode = os.getenv("PREDICT_BATCH_EXECUTION_MODE", "direct").strip().lower()
 
-    pool = _get_pool()
-    batch_results = list(
-        pool.map(
-            _predict_smiles_batch_in_process,
-            ((body["model_id"], batch) for batch in _chunked(smiles, batch_size)),
+    if batch_mode == "pool":
+        workers = max(1, int(os.getenv("PREDICT_BATCH_WORKERS", os.cpu_count() or 1)))
+        env_batch_size = int(os.getenv("PREDICT_SMILES_BATCH_SIZE", 0))
+        if env_batch_size > 0:
+            batch_size = env_batch_size
+        else:
+            # By default, use larger chunks to reduce per-chunk overhead.
+            batch_size = max(200, (len(smiles) + workers - 1) // workers) if smiles else 1
+
+        batch_size = max(1, batch_size)
+        num_batches = (len(smiles) + batch_size - 1) // batch_size if smiles else 0
+
+        pool = _get_pool()
+        batch_results = list(
+            pool.map(
+                _predict_smiles_batch_in_process,
+                ((body["model_id"], batch) for batch in _chunked(smiles, batch_size)),
+            )
         )
-    )
 
-    modelResultsArray = [_to_obj(item) for batch in batch_results for item in batch]
+        modelResultsArray = [_to_obj(item) for batch in batch_results for item in batch]
+    else:
+        predictor = _get_local_predictor()
+        modelResultsArray = _to_obj(predictor.predictFromDB(body["model_id"], smiles))
+        batch_size = len(smiles) if smiles else 0
+        num_batches = 1 if smiles else 0
 
     if timing_on:
         logging.info(
-            "timing.endpoint predictDB_POST size=%d chunk_size=%d chunks=%d workers=%d total=%.3fs",
+            "timing.endpoint predictDB_POST mode=%s size=%d chunk_size=%d chunks=%d workers=%d total=%.3fs",
+            batch_mode,
             len(smiles),
             batch_size,
             num_batches,
