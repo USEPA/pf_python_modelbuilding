@@ -12,7 +12,7 @@ from models.case_studies.run_model_building_db import run_dataset, Results, Para
 
 from util import predict_constants as pc
 from model_ws_db_utilities import getEngine, getSession
-from ModelToExcel import ModelToExcel
+from models.ModelToExcel import ModelToExcel
 import logging
 import json
 from typing import List, Dict, Any
@@ -52,8 +52,11 @@ def run_Koc():
     # ad_measure_model = [pc.Applicability_Domain_TEST_Embedding_Euclidean, pc.Applicability_Domain_TEST_Fragment_Counts]
     ad_measure_model = [pc.Applicability_Domain_TEST_Embedding_Euclidean, pc.Applicability_Domain_TEST_Fragment_Counts]
 
+    # run_dataset(dataset_name=dataset_name, qsar_method='gcm', feature_selection=False, ad_measure_model=ad_measure_model,
+    #             write_to_db=write_to_db, create_unique_excel=create_unique_excel, create_detailed_excel=False)  # OK
+    
     run_dataset(dataset_name=dataset_name, qsar_method='gcm', feature_selection=False, ad_measure_model=ad_measure_model,
-                write_to_db=write_to_db, create_unique_excel=create_unique_excel, create_detailed_excel=False)  # OK
+                write_to_db=write_to_db, create_unique_excel=create_unique_excel, create_detailed_excel=True)  # OK
 
     # Models to upload:
     # for method in ['rf','xgb', 'reg','knn']:

@@ -43,7 +43,7 @@ from model_ws_utilities import call_build_embedding_ga_db, call_build_model_with
 from models.EmbeddingFromImportance import perform_iterative_recursive_feature_elimination as run_rfe
 from models.EmbeddingFromImportance import perform_sequential_feature_selection as run_sfs
 
-from ModelToExcel import ModelToExcel
+from models.ModelToExcel import ModelToExcel
 
 import StatsCalculator as sc
 
@@ -1732,15 +1732,20 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         # logging.info(f"model description={json.dumps(json.loads(model.get_model_description()), indent=4)}")
 
         if create_detailed_excel:
+            logging.info("Creating DataFrames for detailed Excel report...")
+
+            actual_ads = params.ad_measure
+
             cover_sheet_df = ModelToExcel.get_cover_sheet_df(results_dict)
             statistics_df = ModelToExcel.get_statistics_df(results_dict)
             records_df = ModelToExcel.get_records_df(df_pv)
             model_descriptors_df = ModelToExcel.get_model_descriptors_df(results_dict)
             model_descriptor_values_df = ModelToExcel.get_model_descriptor_values_df(results_dict, df_pred_cv, df_pred_test, df_training_model, df_test_model)
             training_cv_predictions_df = ModelToExcel.get_training_cv_predictions_df(df_pred_cv)
-            test_set_predictions_df = ModelToExcel.get_test_set_predictions_df(df_pred_test)
+            test_set_predictions_df = ModelToExcel.get_test_set_predictions_df(df_pred_test, actual_ads)
             external_predictions_df = ModelToExcel.get_external_predictions_df(df_pred_ext)
             log_plot = "log" in results_dict["model_details"].get("unitsModel", "").lower()
+            add_subtotals = True  # Set to True to add subtotals in the Excel report
 
             # training_set_df = df_pred_cv # TODO: Might need to adjust?
             # test_set_df = df_pred_test # TODO: Might need to adjust?
@@ -1756,7 +1761,8 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
                 records_df=records_df,
                 model_descriptors_df=model_descriptors_df,
                 model_descriptor_values_df=model_descriptor_values_df,
-                log_plot=log_plot
+                log_plot=log_plot,
+                add_subtotals=add_subtotals
             )
             mte.create_excel()
     

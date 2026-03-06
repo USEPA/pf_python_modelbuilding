@@ -3,6 +3,7 @@ import pandas as pd
 from sqlalchemy import text
 import math
 from typing import Optional, Dict, Any, Iterable, Tuple, Union
+from xlsxwriter.utility import xl_rowcol_to_cell
 import os
 
 import logging
@@ -28,7 +29,8 @@ class ModelToExcel:
             engine=None,
             session=None,
             model_id: int=1065,
-            log_plot: bool=True
+            log_plot: bool=True,
+            add_subtotals: bool=False
         ) -> None:
         """
         Initialize ModelToExcel instance for generating QSAR model summary reports.
@@ -50,6 +52,7 @@ class ModelToExcel:
             session: SQLAlchemy session for database queries. If None, creates a new session.
             model_id: Database ID of the model. Defaults to 1065.
             log_plot: Whether to use log scale for prediction plots. Defaults to True.
+            add_subtotals: Whether to add subtotals in the relevant sheets. Defaults to False.
         """
         # TODO: Determine correct default for excel_path given model_id
         #       Maybe write a new method that can be ran post init to
@@ -75,6 +78,7 @@ class ModelToExcel:
         self.session = session
         self.model_id = model_id
         self.log_plot = log_plot
+        self.add_subtotals = add_subtotals
     
 
     @staticmethod
@@ -424,7 +428,7 @@ class ModelToExcel:
             "source_smiles": df_pv["source_smiles"],
             "mapped_dtxcid": df_pv["mapped_dtxcid"],
             "mapped_dtxsid": df_pv["mapped_dtxsid"],
-            "mapped_cas": df_pv["source_casrn"], # Assuming the source and mapped casrn are equal
+            "mapped_cas": df_pv["mapped_casrn"],
             "mapped_chemical_name": df_pv["mapped_chemical_name"],
             "mapped_smiles": df_pv["mapped_smiles"],
             "mapped_molweight": df_pv["mapped_mol_weight"],
@@ -435,9 +439,9 @@ class ModelToExcel:
             "value_units": df_pv["prop_unit"],
             "qsar_property_value": df_pv["qsar_property_value"],
             "qsar_property_units": df_pv["qsar_property_unit"],
-            "temperature_c": df_pv["exp_details_temperature_c"],
+            "temperature_c": df_pv["exp_details_temperature_value_point_estimate"],
             "pressure_mmHg": None,
-            "pH": df_pv["exp_details_ph"],
+            "pH": df_pv["exp_details_ph_value_point_estimate"],
             "notes": None,
             "qc_flag": None,
         }
@@ -465,7 +469,7 @@ class ModelToExcel:
         return records
     
 
-    def records(self, writer: Any, records: Optional[pd.DataFrame]=None) -> pd.DataFrame:
+    def records(self, writer: Any, records: Optional[pd.DataFrame]=None, add_subtotals: bool=False) -> pd.DataFrame:
         """
         Create the records sheet in the Excel workbook with detailed experimental data.
         
@@ -481,14 +485,19 @@ class ModelToExcel:
         if records is None:
             records = self.query_records_df() if self.records_df is None else self.records_df
         
-        records.to_excel(writer, sheet_name="Records", index=False)
+        start_row = ModelToExcel.get_header_row(has_subtotals=add_subtotals)
+        records.to_excel(writer, sheet_name="Records", index=False, startrow=start_row)
 
         workbook = writer.book
         worksheet = writer.sheets["Records"]
-        worksheet.freeze_panes(1, 0)
+        if add_subtotals:
+            ModelToExcel.add_subtotals(writer, "Records", records)
+            worksheet.freeze_panes(2, 0)
+        else:
+            worksheet.freeze_panes(1, 0)
 
-        ModelToExcel.set_column_width(writer, "Records", records, col_width_pad=5, how="header")
-        ModelToExcel.add_filter(writer, "Records", records)
+        ModelToExcel.set_column_width(writer, "Records", records, col_width_pad=5, how="header", has_subtotals=add_subtotals)
+        ModelToExcel.add_filter(writer, "Records", records, has_subtotals=add_subtotals)
 
         return records
 
@@ -667,7 +676,7 @@ class ModelToExcel:
         return model_descriptors
     
 
-    def model_descriptors(self, writer: Any, model_descriptors: Optional[pd.DataFrame]=None) -> pd.DataFrame:
+    def model_descriptors(self, writer: Any, model_descriptors: Optional[pd.DataFrame]=None, add_subtotals: bool=False) -> pd.DataFrame:
         """
         Create the model descriptors sheet in the Excel workbook.
         
@@ -683,14 +692,19 @@ class ModelToExcel:
         if model_descriptors is None:
             model_descriptors = self.query_model_descriptors_df() if self.model_descriptors_df is None else self.model_descriptors_df
         
-        model_descriptors.to_excel(writer, sheet_name="Model Descriptors", index=False)
+        start_row = ModelToExcel.get_header_row(has_subtotals=add_subtotals)
+        model_descriptors.to_excel(writer, sheet_name="Model Descriptors", index=False, startrow=start_row)
 
         workbook = writer.book
         worksheet = writer.sheets["Model Descriptors"]
-        worksheet.freeze_panes(1, 0)
+        if add_subtotals:
+            ModelToExcel.add_subtotals(writer, "Model Descriptors", model_descriptors)
+            worksheet.freeze_panes(2, 0)
+        else:
+            worksheet.freeze_panes(1, 0)
 
-        ModelToExcel.set_column_width(writer, "Model Descriptors", model_descriptors, how="full")
-        ModelToExcel.add_filter(writer, "Model Descriptors", model_descriptors)
+        ModelToExcel.set_column_width(writer, "Model Descriptors", model_descriptors, how="full", has_subtotals=add_subtotals)
+        ModelToExcel.add_filter(writer, "Model Descriptors", model_descriptors, has_subtotals=add_subtotals)
 
         return model_descriptors
 
@@ -775,7 +789,7 @@ class ModelToExcel:
         return model_descriptor_values
     
 
-    def model_descriptor_values(self, writer: Any, model_descriptor_values: Optional[pd.DataFrame]=None) -> pd.DataFrame:
+    def model_descriptor_values(self, writer: Any, model_descriptor_values: Optional[pd.DataFrame]=None, add_subtotals: bool=False) -> pd.DataFrame:
         """
         Create the model descriptor values sheet in the Excel workbook.
         
@@ -791,14 +805,19 @@ class ModelToExcel:
         if model_descriptor_values is None:
             model_descriptor_values = self.query_model_descriptor_values_df() if self.model_descriptor_values_df is None else self.model_descriptor_values_df
         
-        model_descriptor_values.to_excel(writer, sheet_name="Model Descriptor Values", index=False)
+        start_row = ModelToExcel.get_header_row(has_subtotals=add_subtotals)
+        model_descriptor_values.to_excel(writer, sheet_name="Model Descriptor Values", index=False, startrow=start_row)
 
         workbook = writer.book
         worksheet = writer.sheets["Model Descriptor Values"]
-        worksheet.freeze_panes(1, 0)
+        if add_subtotals:
+            ModelToExcel.add_subtotals(writer, "Model Descriptor Values", model_descriptor_values)
+            worksheet.freeze_panes(2, 0)
+        else:
+            worksheet.freeze_panes(1, 0)
 
-        ModelToExcel.set_column_width(writer, "Model Descriptor Values", model_descriptor_values, min_col_width=7, col_width_pad=5, how="header")
-        ModelToExcel.add_filter(writer, "Model Descriptor Values", model_descriptor_values)
+        ModelToExcel.set_column_width(writer, "Model Descriptor Values", model_descriptor_values, min_col_width=7, col_width_pad=5, how="header", has_subtotals=add_subtotals)
+        ModelToExcel.add_filter(writer, "Model Descriptor Values", model_descriptor_values, has_subtotals=add_subtotals)
 
         return model_descriptor_values
     
@@ -841,7 +860,7 @@ class ModelToExcel:
         return training_cv_predictions
     
 
-    def training_cv_predictions(self, writer: Any, training_cv_predictions: Optional[pd.DataFrame]=None, x_col: str=None, y_col: str=None, chart_size_px: int=520, pad_ratio: float=0.02, integer_ticks: bool=True, yx_offset_rows: int=3, col_width_pad: int=5, min_col_width: int=7, property_name: Optional[str]=None, property_units: Optional[str]=None) -> pd.DataFrame:
+    def training_cv_predictions(self, writer: Any, training_cv_predictions: Optional[pd.DataFrame]=None, add_subtotals: bool=False, x_col: str=None, y_col: str=None, chart_size_px: int=520, pad_ratio: float=0.02, integer_ticks: bool=True, yx_offset_rows: int=3, col_width_pad: int=5, min_col_width: int=7, property_name: Optional[str]=None, property_units: Optional[str]=None) -> pd.DataFrame:
         """
         Create the training CV predictions sheet in the Excel workbook with scatter plot.
         
@@ -867,22 +886,27 @@ class ModelToExcel:
         if training_cv_predictions is None:
             training_cv_predictions = self.query_training_cv_predictions_df() if self.training_cv_predictions_df is None else self.training_cv_predictions_df
         
-        training_cv_predictions.to_excel(writer, sheet_name="Training CV Predictions", index=False)
+        start_row = ModelToExcel.get_header_row(has_subtotals=add_subtotals)
+        training_cv_predictions.to_excel(writer, sheet_name="Training CV Predictions", index=False, startrow=start_row)
 
         workbook = writer.book
         worksheet = writer.sheets["Training CV Predictions"]
-        worksheet.freeze_panes(1, 0)
+        if add_subtotals:
+            ModelToExcel.add_subtotals(writer, "Training CV Predictions", training_cv_predictions)
+            worksheet.freeze_panes(2, 0)
+        else:
+            worksheet.freeze_panes(1, 0)
 
-        ModelToExcel.set_column_width(writer, "Training CV Predictions", training_cv_predictions, min_col_width=min_col_width, col_width_pad=col_width_pad, how="header")
-        ModelToExcel.add_filter(writer, "Training CV Predictions", training_cv_predictions)
+        ModelToExcel.set_column_width(writer, "Training CV Predictions", training_cv_predictions, min_col_width=min_col_width, col_width_pad=col_width_pad, how="header", has_subtotals=add_subtotals)
+        ModelToExcel.add_filter(writer, "Training CV Predictions", training_cv_predictions, has_subtotals=add_subtotals)
         
-        ModelToExcel.add_plot(writer, workbook, "Training CV Predictions", "Training CV Predictions", training_cv_predictions, x_col=x_col, y_col=y_col, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, log_plot=self.log_plot, yx_offset_rows=yx_offset_rows, property_name=property_name, property_units=property_units)
+        ModelToExcel.add_plot(writer, workbook, "Training CV Predictions", "Training CV Predictions", training_cv_predictions, x_col=x_col, y_col=y_col, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, log_plot=self.log_plot, yx_offset_rows=yx_offset_rows, property_name=property_name, property_units=property_units, has_subtotals=add_subtotals)
 
         return training_cv_predictions
     
 
     @staticmethod
-    def get_test_set_predictions_df(df_test: pd.DataFrame) -> pd.DataFrame:
+    def get_test_set_predictions_df(df_test: pd.DataFrame, actual_ads: Optional[list]=None) -> pd.DataFrame:
         """
         Prepare test set predictions for Excel output.
         
@@ -896,6 +920,14 @@ class ModelToExcel:
         """
         exp_prop_id = df_test.pop("exp_prop_id")
         df_test.insert(0, "exp_prop_id", exp_prop_id)
+
+        if actual_ads is not None:
+            applicability_domain_cols = [col for col in df_test.columns if "AD" in col]
+            for col in applicability_domain_cols:
+                temp_name = col.replace("AD_", "")
+                temp_name = temp_name.replace("_", " ")
+                if temp_name not in actual_ads:
+                    df_test.pop(col)
         return df_test
     
 
@@ -919,7 +951,7 @@ class ModelToExcel:
         return test_set_predictions
     
 
-    def test_set_predictions(self, writer: Any, test_set_predictions: Optional[pd.DataFrame]=None, x_col: str=None, y_col: str=None, chart_size_px: int=520, pad_ratio: float=0.02, integer_ticks: bool=True, yx_offset_rows: int=3, col_width_pad: int=5, min_col_width: int=7, property_name: Optional[str]=None, property_units: Optional[str]=None) -> pd.DataFrame:
+    def test_set_predictions(self, writer: Any, test_set_predictions: Optional[pd.DataFrame]=None, add_subtotals: bool=False, x_col: str=None, y_col: str=None, chart_size_px: int=520, pad_ratio: float=0.02, integer_ticks: bool=True, yx_offset_rows: int=3, col_width_pad: int=5, min_col_width: int=7, property_name: Optional[str]=None, property_units: Optional[str]=None) -> pd.DataFrame:
         """
         Create the test set predictions sheet in the Excel workbook with scatter plot.
         
@@ -945,16 +977,21 @@ class ModelToExcel:
         if test_set_predictions is None:
             test_set_predictions = self.query_test_set_predictions_df() if self.test_set_predictions_df is None else self.test_set_predictions_df
         
-        test_set_predictions.to_excel(writer, sheet_name="Test Set Predictions", index=False)
+        start_row = ModelToExcel.get_header_row(has_subtotals=add_subtotals)
+        test_set_predictions.to_excel(writer, sheet_name="Test Set Predictions", index=False, startrow=start_row)
 
         workbook = writer.book
         worksheet = writer.sheets["Test Set Predictions"]
-        worksheet.freeze_panes(1, 0)
+        if add_subtotals:
+            ModelToExcel.add_subtotals(writer, "Test Set Predictions", test_set_predictions)
+            worksheet.freeze_panes(2, 0)
+        else:
+            worksheet.freeze_panes(1, 0)
 
-        ModelToExcel.set_column_width(writer, "Test Set Predictions", test_set_predictions, min_col_width=min_col_width, col_width_pad=col_width_pad, how="header")
-        ModelToExcel.add_filter(writer, "Test Set Predictions", test_set_predictions)
+        ModelToExcel.set_column_width(writer, "Test Set Predictions", test_set_predictions, min_col_width=min_col_width, col_width_pad=col_width_pad, how="header", has_subtotals=add_subtotals)
+        ModelToExcel.add_filter(writer, "Test Set Predictions", test_set_predictions, has_subtotals=add_subtotals)
         
-        ModelToExcel.add_plot(writer, workbook, "Test Set Predictions", "Test Set Predictions", test_set_predictions, x_col=x_col, y_col=y_col, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, log_plot=self.log_plot, yx_offset_rows=yx_offset_rows, property_name=property_name, property_units=property_units)
+        ModelToExcel.add_plot(writer, workbook, "Test Set Predictions", "Test Set Predictions", test_set_predictions, x_col=x_col, y_col=y_col, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, log_plot=self.log_plot, yx_offset_rows=yx_offset_rows, property_name=property_name, property_units=property_units, has_subtotals=add_subtotals)
 
         return test_set_predictions
     
@@ -997,7 +1034,7 @@ class ModelToExcel:
         return external_predictions
     
 
-    def external_predictions(self, writer: Any, external_predictions: Optional[pd.DataFrame]=None, x_col: str=None, y_col: str=None, chart_size_px: int=520, pad_ratio: float=0.02, integer_ticks: bool=True, yx_offset_rows: int=3, col_width_pad: int=5, min_col_width: int=7, property_name: Optional[str]=None, property_units: Optional[str]=None) -> Optional[pd.DataFrame]:
+    def external_predictions(self, writer: Any, external_predictions: Optional[pd.DataFrame]=None, add_subtotals: bool=False, x_col: str=None, y_col: str=None, chart_size_px: int=520, pad_ratio: float=0.02, integer_ticks: bool=True, yx_offset_rows: int=3, col_width_pad: int=5, min_col_width: int=7, property_name: Optional[str]=None, property_units: Optional[str]=None) -> Optional[pd.DataFrame]:
         """
         Create the external predictions sheet in the Excel workbook with scatter plot.
         
@@ -1025,16 +1062,21 @@ class ModelToExcel:
             if external_predictions is None:
                 return external_predictions
         
-        external_predictions.to_excel(writer, sheet_name="External Predictions", index=False)
+        start_row = ModelToExcel.get_header_row(has_subtotals=add_subtotals)
+        external_predictions.to_excel(writer, sheet_name="External Predictions", index=False, startrow=start_row)
 
         workbook = writer.book
         worksheet = writer.sheets["External Predictions"]
-        worksheet.freeze_panes(1, 0)
+        if add_subtotals:
+            ModelToExcel.add_subtotals(writer, "External Predictions", external_predictions)
+            worksheet.freeze_panes(2, 0)
+        else:
+            worksheet.freeze_panes(1, 0)
 
-        ModelToExcel.set_column_width(writer, "External Predictions", external_predictions, min_col_width=min_col_width, col_width_pad=col_width_pad, how="header")
-        ModelToExcel.add_filter(writer, "External Predictions", external_predictions)
+        ModelToExcel.set_column_width(writer, "External Predictions", external_predictions, min_col_width=min_col_width, col_width_pad=col_width_pad, how="header", has_subtotals=add_subtotals)
+        ModelToExcel.add_filter(writer, "External Predictions", external_predictions, has_subtotals=add_subtotals)
         
-        ModelToExcel.add_plot(writer, workbook, "External Predictions", "External Predictions", external_predictions, x_col=x_col, y_col=y_col, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, log_plot=self.log_plot, yx_offset_rows=yx_offset_rows, property_name=property_name, property_units=property_units)
+        ModelToExcel.add_plot(writer, workbook, "External Predictions", "External Predictions", external_predictions, x_col=x_col, y_col=y_col, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, log_plot=self.log_plot, yx_offset_rows=yx_offset_rows, property_name=property_name, property_units=property_units, has_subtotals=add_subtotals)
         
         return external_predictions
 
@@ -1047,7 +1089,8 @@ class ModelToExcel:
         col_width_pad: int=5,
         min_col_width: int=7,
         how: str="header",
-        first_col_format: Optional[Any] = None) -> None:
+        first_col_format: Optional[Any] = None,
+        has_subtotals: bool = False) -> None:
         """
         Set column widths in Excel sheet based on content or header width.
         
@@ -1059,8 +1102,11 @@ class ModelToExcel:
             min_col_width (int): Minimum column width. Defaults to 5.
             how (str): Method for calculating width - 'header' uses header length, 'full' scans all data. Defaults to 'header'.
             first_col_format: Optional cell format to apply to the first column.
+            has_subtotals (bool): Whether subtotals are present above headers. Defaults to False.
         """
         worksheet = writer.sheets[sheet_name]
+        data_start_row = ModelToExcel.get_data_start_row(has_subtotals)
+        
         for col_idx in range(len(df.columns)):
             if how == "header":
                 header_entry = df.columns[col_idx]
@@ -1083,25 +1129,90 @@ class ModelToExcel:
 
 
     @staticmethod
-    def add_filter(writer: Any, sheet_name: str, df: pd.DataFrame) -> None:
+    def get_header_row(has_subtotals: bool = False) -> int:
+        """
+        Get the row number where headers are located.
+        
+        Args:
+            has_subtotals (bool): Whether subtotals are present above headers. Defaults to False.
+        
+        Returns:
+            int: The 0-based row index of the header row.
+        """
+        return 1 if has_subtotals else 0
+    
+
+    @staticmethod
+    def get_data_start_row(has_subtotals: bool = False) -> int:
+        """
+        Get the row number where data starts (first row after headers).
+        
+        Args:
+            has_subtotals (bool): Whether subtotals are present above headers. Defaults to False.
+        
+        Returns:
+            int: The 0-based row index of the first data row.
+        """
+        return 2 if has_subtotals else 1
+
+
+    @staticmethod
+    def add_subtotals(writer: Any, sheet_name: str, df: pd.DataFrame) -> None:
+        """
+        Add SUBTOTAL formulas above table headers to count visible cells per column.
+        
+        Inserts a row at the top of the sheet with SUBTOTAL(3, column_range) formulas,
+        which count non-empty cells in each column that are currently visible (respecting filters).
+        This shifts the data down one row and requires using has_subtotals=True in other methods.
+        
+        Args:
+            writer: pandas ExcelWriter object for accessing the worksheet.
+            sheet_name (str): Name of the sheet where subtotals will be added.
+            df (pd.DataFrame): Dataframe providing column information.
+        """
+        ws = writer.sheets[sheet_name]
+        nrows, ncols = df.shape
+        
+        # Add SUBTOTAL formulas to each column
+        # SUBTOTAL(3, range) uses COUNTA function to count non-empty cells
+        # The data now starts at row 3 (0-indexed row 2) after insertion
+        for col_idx in range(ncols):
+            start_cell = xl_rowcol_to_cell(2, col_idx)  # Ensure we are using the correct row index for the formula range
+            end_cell = xl_rowcol_to_cell(nrows + 1, col_idx)  # Data ends at row nrows + 2 (accounting for header and subtotal row)
+            # Range: from row 3 to row (nrows + 3) since we inserted 1 row
+            # (original row 2 is now row 3 due to the insertion)
+            range_str = f"{start_cell}:{end_cell}"
+            formula = f"=SUBTOTAL(3,{range_str})"
+            ws.write_formula(0, col_idx, formula)
+        
+        logging.info(f"Added SUBTOTAL formulas to {sheet_name} with {ncols} columns")
+
+
+    @staticmethod
+    def add_filter(writer: Any, sheet_name: str, df: pd.DataFrame, has_subtotals: bool = False) -> None:
         """
         Add autofilter to a sheet for easy data filtering.
         
-        Enables filter dropdown buttons on all column headers.
+        Enables filter dropdown buttons on all column headers. Automatically adjusts for subtotal rows.
         
         Args:
             writer: pandas ExcelWriter object for accessing the worksheet.
             sheet_name (str): Name of the sheet to add filter to.
             df (pd.DataFrame): Dataframe providing shape information for filter range.
+            has_subtotals (bool): Whether subtotals are present above headers. Defaults to False.
         """
         # Get the worksheet object
         ws = writer.sheets[sheet_name]
 
         # Determine the range (0-indexed for xlsxwriter)
         nrows, ncols = df.shape
+        
+        # Get the header row based on whether subtotals exist
+        header_row = ModelToExcel.get_header_row(has_subtotals)
 
-        # Add an auto-filter to the full range (header row is 0; data ends at row nrows)
-        ws.autofilter(0, 0, nrows, ncols - 1)
+        # Add an auto-filter to the full range (header row position; data ends at row nrows + offset for subtotals)
+        data_end_row = nrows + (1 if has_subtotals else 0)
+        ws.autofilter(header_row, 0, data_end_row, ncols - 1)
     
 
     @staticmethod
@@ -1168,13 +1279,14 @@ class ModelToExcel:
     
 
     @staticmethod
-    def add_hyperlinks_to_sheet_xlsxwriter(
+    def add_hyperlinks_to_sheet(
         writer: pd.ExcelWriter,
         source_sheet: str,
         target_sheet: str,
         df_source: pd.DataFrame,
         df_target: pd.DataFrame,
-        link_column: str = "exp_prop_id") -> None:
+        link_column: str = "exp_prop_id",
+        has_subtotals: bool=False) -> None:
         """
         Add hyperlinks from source sheet to target sheet based on a matching column.
         Uses xlsxwriter to add hyperlinks. Avoids needing to close and reopen the file,
@@ -1210,13 +1322,13 @@ class ModelToExcel:
                 
         # Find the column index in the target sheet for the link_column (1-based for Excel)
         target_link_col_index = df_target.columns.get_loc(link_column) + 1
-        target_link_col_letter = chr(64 + target_link_col_index)  # Convert 1-based index to column letter (A=65, B=66, etc.)
-        
+        target_link_col_letter = xl_rowcol_to_cell(0, target_link_col_index - 1)[0]  # Get the column letter using xlsxwriter utility
+
         # Create a mapping of link_column values to row numbers in target sheet
         # df_target is 0-indexed, but Excel rows are 1-indexed (with row 1 being header)
         target_row_map = {}
         for idx, val in enumerate(df_target[link_column]):
-            excel_row = idx + 2  # +2 to account for header (row 1) and 1-based indexing
+            excel_row = idx + ModelToExcel.get_data_start_row(has_subtotals=has_subtotals) + 1  # Accounts for header and optional subtotal row
             key = str(val).strip() if pd.notna(val) else None
             target_row_map[key] = excel_row
         
@@ -1225,7 +1337,7 @@ class ModelToExcel:
         
         # Find the source column letter for the link column (where we'll add hyperlinks)
         source_link_col_index = df_source.columns.get_loc(link_column) + 1
-        source_link_col_letter = chr(64 + source_link_col_index)
+        source_link_col_letter = xl_rowcol_to_cell(0, source_link_col_index - 1)[0]  # Get the column letter using xlsxwriter utility
         
         # Add hyperlinks to source sheet
         hyperlinks_added = 0
@@ -1234,7 +1346,7 @@ class ModelToExcel:
         try:
             for src_idx, src_val in enumerate(df_source[link_column]):
                 src_val_str = str(src_val).strip() if pd.notna(src_val) else None
-                excel_row = src_idx + 2  # +2 for header and 1-based indexing
+                excel_row = src_idx + ModelToExcel.get_data_start_row(has_subtotals=has_subtotals) + 1  # Accounts for header and optional subtotal row
                 
                 if src_val_str and src_val_str in target_row_map:
                     target_row = target_row_map[src_val_str]
@@ -1263,145 +1375,6 @@ class ModelToExcel:
         
         logging.info(f"Added {hyperlinks_added} hyperlinks from {source_sheet} to {target_sheet} ({unmatched_count} unmatched)")
 
-
-    @staticmethod
-    def add_hyperlinks_to_sheet(
-        excel_path: str,
-        source_sheet: str,
-        target_sheet: str,
-        df_source: pd.DataFrame,
-        df_target: pd.DataFrame,
-        link_column: str = "exp_prop_id") -> None:
-        """
-        Add hyperlinks from source sheet to target sheet based on a matching column.
-        Uses pywin32 (win32com) to add hyperlinks via Excel COM API.
-        This approach preserves chart formatting by avoiding openpyxl's file manipulation.
-        Windows only, due to pywin32 dependencies.
-        
-        Args:
-            excel_path: Path to the Excel file
-            source_sheet: Name of the source sheet (e.g., "Training CV Predictions")
-            target_sheet: Name of the target sheet (e.g., "Records")
-            df_source: Source dataframe (used to verify column exists and get values)
-            df_target: Target dataframe (used to create the mapping)
-            link_column: Column name to match on (must exist in both dataframes)
-        """
-        logging.info(f"Processing hyperlinks for {source_sheet}")
-        
-        try:
-            import win32com.client
-        except ImportError:
-            logging.error("pywin32 (win32com.client) is not available. Install with: pip install pywin32")
-            return
-        
-        if df_source is None or df_source.empty:
-            logging.warning(f"Source dataframe {source_sheet} is empty or None. Skipping hyperlinks.")
-            return
-        
-        if link_column not in df_source.columns:
-            logging.warning(f"Column '{link_column}' not found in source dataframe {source_sheet}.")
-            return
-        
-        if link_column not in df_target.columns:
-            logging.warning(f"Column '{link_column}' not found in target dataframe {target_sheet}.")
-            return
-        
-        xlApp = None
-        try:
-            # Create Excel application instance
-            xlApp = win32com.client.Dispatch("Excel.Application")
-            xlApp.Visible = False
-            xlApp.DisplayAlerts = False
-            
-            # Open the workbook with absolute path
-            excel_path = os.path.abspath(excel_path)
-            wb = xlApp.Workbooks.Open(excel_path)
-            
-            # Get the worksheets
-            ws_source = wb.Sheets(source_sheet)
-            ws_target = wb.Sheets(target_sheet)
-            
-        except Exception as e:
-            logging.error(f"Failed to open Excel workbook or worksheets: {e}. Skipping hyperlinks.")
-            if xlApp:
-                xlApp.Quit()
-            return
-        
-        # Find the column index in the target sheet for the link_column (1-based for Excel)
-        target_link_col_index = df_target.columns.get_loc(link_column) + 1
-        target_link_col_letter = chr(64 + target_link_col_index)  # Convert 1-based index to column letter (A=65, B=66, etc.)
-        
-        # Create a mapping of link_column values to row numbers in target sheet
-        # df_target is 0-indexed, but Excel rows are 1-indexed (with row 1 being header)
-        target_row_map = {}
-        for idx, val in enumerate(df_target[link_column]):
-            excel_row = idx + 2  # +2 to account for header (row 1) and 1-based indexing
-            key = str(val).strip() if pd.notna(val) else None
-            target_row_map[key] = excel_row
-        
-        logging.info(f"Created target mapping with {len(target_row_map)} entries for {target_sheet}")
-        logging.info(f"Target link column: '{link_column}' at Excel column {target_link_col_letter}")
-        
-        # Find the source column letter for the link column (where we'll add hyperlinks)
-        source_link_col_index = df_source.columns.get_loc(link_column) + 1
-        source_link_col_letter = chr(64 + source_link_col_index)
-        
-        # Add hyperlinks to source sheet
-        hyperlinks_added = 0
-        unmatched_count = 0
-        
-        try:
-            for src_idx, src_val in enumerate(df_source[link_column]):
-                src_val_str = str(src_val).strip() if pd.notna(src_val) else None
-                excel_row = src_idx + 2  # +2 for header and 1-based indexing
-                
-                if src_val_str and src_val_str in target_row_map:
-                    target_row = target_row_map[src_val_str]
-                    
-                    # Create the cell reference for the hyperlink
-                    # Format for SubAddress: SheetName!CellAddress (no #)
-                    sub_address = f"'{target_sheet}'!{target_link_col_letter}{target_row}"
-                    
-                    try:
-                        # Get the cell range in the source sheet using Excel's Range method
-                        cell_range = ws_source.Range(f"{source_link_col_letter}{excel_row}")
-                        
-                        # Add the hyperlink using Excel COM API
-                        screen_tip = f"Link to {target_sheet} Row {target_row}"
-                        ws_source.Hyperlinks.Add(
-                            Anchor=cell_range,
-                            Address="",  # Empty address for internal links
-                            SubAddress=sub_address,
-                            ScreenTip=screen_tip,
-                            TextToDisplay=src_val_str
-                        )
-                                                
-                        hyperlinks_added += 1
-                    except Exception as e:
-                        logging.warning(f"Failed to write hyperlink for {source_sheet} row {excel_row}: {e}")
-                else:
-                    unmatched_count += 1
-        
-        except Exception as e:
-            logging.error(f"Error adding hyperlinks: {e}")
-        
-        finally:
-            # Save and close the workbook
-            try:
-                wb.Save()
-                logging.info(f"Added {hyperlinks_added} hyperlinks from {source_sheet} to {target_sheet} ({unmatched_count} unmatched)")
-            except Exception as e:
-                logging.error(f"Failed to save workbook: {e}")
-            finally:
-                try:
-                    wb.Close(False)  # False = don't save again
-                except:
-                    pass
-                try:
-                    xlApp.Quit()
-                except:
-                    pass
-    
     
     @staticmethod
     def compute_equal_axis_bounds(
@@ -1480,7 +1453,8 @@ class ModelToExcel:
         log_plot: bool=True,
         yx_offset_rows: int=3,
         property_name: Optional[str] = None,
-        property_units: Optional[str] = None) -> None:
+        property_units: Optional[str] = None,
+        has_subtotals: bool = False) -> None:
         """
         Add a prediction vs experimental scatter plot to the worksheet.
         
@@ -1502,12 +1476,16 @@ class ModelToExcel:
             yx_offset_rows (int): Empty rows between data and y=x helper points. Defaults to 3.
             property_name (str, optional): Name of the property being modeled. Used for chart labeling. If None, uses y_col name.
             property_units (str, optional): Units of the property (e.g., 'mg/L', 'log scale'). Appended to y-axis label if provided.
+            has_subtotals (bool): Whether subtotals are present above headers. Defaults to False.
         """
         worksheet = writer.sheets[sheet_name]
         worksheet_plot = writer.sheets[sheet_name_plot]
         # Hide worksheet gridlines (screen + print)
         worksheet.hide_gridlines(2)
         nrows = len(df)
+        
+        # Calculate the actual data row position based on subtotals and headers
+        data_start_row = ModelToExcel.get_data_start_row(has_subtotals)
         
         # Get column indices for x and y columns (0-based)
         if x_col is None:
@@ -1529,18 +1507,20 @@ class ModelToExcel:
         # Create scatter chart with markers
         chart = workbook.add_chart({"type":"scatter", "subtype":"straight_with_markers"})
         title = f"{sheet_name} for {property_name}" if property_name is not None else f"{y_col.capitalize()} vs {x_col.capitalize()}"
+        series_name = f"{y_col.capitalize()} vs {x_col.capitalize()}"
         chart.set_title({"name": title})
         chart.set_style(10)
         # Series 1: data points (markers only)
-        # Use the actual column indices from the dataframe
+        # Use the actual column indices from the dataframe, with dynamic row calculation
+        data_end_row = data_start_row + nrows - 1
         chart.add_series({
-                "name":title,
-                "categories":[sheet_name, 1, x_col_idx, nrows, x_col_idx],  # X column: row 2 to nrows+1
-                "values":[sheet_name, 1, y_col_idx, nrows, y_col_idx],  # Y column: row 2 to nrows+1
+                "name":series_name,
+                "categories":[sheet_name, data_start_row, x_col_idx, data_end_row, x_col_idx],
+                "values":[sheet_name, data_start_row, y_col_idx, data_end_row, y_col_idx],
                 "marker":{"type":"circle", "size":6},
                 "line":{"none":True}})
         # Write y = x helper points a few rows below the data, using the same columns as the data
-        yx_row_start = nrows + 1 + yx_offset_rows  # 0-based row index after header
+        yx_row_start = data_end_row + 1 + yx_offset_rows  # 0-based row index after header and data
         worksheet.write_number(yx_row_start, x_col_idx, mn)  # Write min value to x column
         worksheet.write_number(yx_row_start, y_col_idx, mn)  # Write min value to y column
         worksheet.write_number(yx_row_start + 1, x_col_idx, mx)  # Write max value to x column
@@ -1599,7 +1579,7 @@ class ModelToExcel:
             num_data_cols = len(df.columns)
             # Add some buffer columns for spacing (typically 1-2 columns)
             chart_start_col = num_data_cols + 1
-            chart_position = f"{chr(65 + chart_start_col)}" + "2"  # Start at row 2
+            chart_position = xl_rowcol_to_cell(data_start_row, chart_start_col)  # Convert to Excel cell reference # TODO: Handle case where there are subtotal rows
             worksheet_plot.insert_chart(chart_position, chart, {"x_offset":20, "y_offset":10})
         else:
             # If chart is on a separate sheet, place it at top-left
@@ -1645,16 +1625,16 @@ class ModelToExcel:
             self.statistics(writer, self.statistics_df)
 
             logging.info("Creating Records...")
-            df = self.records(writer, self.records_df)
+            df = self.records(writer, self.records_df, add_subtotals=self.add_subtotals)
 
             logging.info("Creating Records Field Descriptions...")
             df = self.records_field_descriptions(writer, self.records_field_descriptions_df)
 
             logging.info("Creating Model Descriptors...")
-            df = self.model_descriptors(writer, self.model_descriptors_df)
+            df = self.model_descriptors(writer, self.model_descriptors_df, add_subtotals=self.add_subtotals)
 
             logging.info("Creating Model Descriptor Values...")
-            df = self.model_descriptor_values(writer, self.model_descriptor_values_df)
+            df = self.model_descriptor_values(writer, self.model_descriptor_values_df, add_subtotals=self.add_subtotals)
 
             try:
                 property_name = self.cover_sheet_df["Property Name"].iloc[0] if not self.cover_sheet_df["Property Name"].empty else None
@@ -1668,13 +1648,13 @@ class ModelToExcel:
                 property_units = None
 
             logging.info("Creating Training CV Predictions...")
-            df = self.training_cv_predictions(writer, self.training_cv_predictions_df, x_col=x_col, y_col=y_col, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, yx_offset_rows=yx_offset_rows, col_width_pad=col_width_pad, min_col_width=min_col_width, property_name=property_name, property_units=property_units)
+            df = self.training_cv_predictions(writer, self.training_cv_predictions_df, add_subtotals=self.add_subtotals, x_col=x_col, y_col=y_col, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, yx_offset_rows=yx_offset_rows, col_width_pad=col_width_pad, min_col_width=min_col_width, property_name=property_name, property_units=property_units)
 
             logging.info("Creating Test Set Predictions...")
-            df = self.test_set_predictions(writer, self.test_set_predictions_df, x_col=x_col, y_col=y_col, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, yx_offset_rows=yx_offset_rows, col_width_pad=col_width_pad, min_col_width=min_col_width, property_name=property_name, property_units=property_units)
+            df = self.test_set_predictions(writer, self.test_set_predictions_df, add_subtotals=self.add_subtotals, x_col=x_col, y_col=y_col, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, yx_offset_rows=yx_offset_rows, col_width_pad=col_width_pad, min_col_width=min_col_width, property_name=property_name, property_units=property_units)
 
             logging.info("Creating External Predictions...")
-            df = self.external_predictions(writer, self.external_predictions_df, x_col=x_col, y_col=y_col, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, yx_offset_rows=yx_offset_rows, col_width_pad=col_width_pad, min_col_width=min_col_width, property_name=property_name, property_units=property_units)
+            df = self.external_predictions(writer, self.external_predictions_df, add_subtotals=self.add_subtotals, x_col=x_col, y_col=y_col, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, yx_offset_rows=yx_offset_rows, col_width_pad=col_width_pad, min_col_width=min_col_width, property_name=property_name, property_units=property_units)
 
             # logging.info("Done creating detailed Excel!")
             logging.info("Done with initial passthrough of all sheets!")
@@ -1682,32 +1662,21 @@ class ModelToExcel:
             # Add Hyperlinks
             logging.info("Adding hyperlinks...")
             try:
-                ModelToExcel.add_hyperlinks_to_sheet_xlsxwriter(writer, "Records", "Training CV Predictions", self.records_df, self.training_cv_predictions_df)
+                ModelToExcel.add_hyperlinks_to_sheet(writer, "Records", "Training CV Predictions", self.records_df, self.training_cv_predictions_df, has_subtotals=self.add_subtotals)
             except Exception as e:
                 logging.error(f"Error adding hyperlinks: {e}")
             try:
-                ModelToExcel.add_hyperlinks_to_sheet_xlsxwriter(writer, "Records", "Test Set Predictions", self.records_df, self.test_set_predictions_df)
+                ModelToExcel.add_hyperlinks_to_sheet(writer, "Records", "Test Set Predictions", self.records_df, self.test_set_predictions_df, has_subtotals=self.add_subtotals)
             except Exception as e:
                 logging.error(f"Error adding hyperlinks: {e}")
             try:
-                ModelToExcel.add_hyperlinks_to_sheet_xlsxwriter(writer, "Training CV Predictions", "Records", self.training_cv_predictions_df, self.records_df)
+                ModelToExcel.add_hyperlinks_to_sheet(writer, "Training CV Predictions", "Records", self.training_cv_predictions_df, self.records_df, has_subtotals=self.add_subtotals)
             except Exception as e:
                 logging.error(f"Error adding hyperlinks: {e}")
             try:
-                ModelToExcel.add_hyperlinks_to_sheet_xlsxwriter(writer, "Test Set Predictions", "Records", self.test_set_predictions_df, self.records_df)
+                ModelToExcel.add_hyperlinks_to_sheet(writer, "Test Set Predictions", "Records", self.test_set_predictions_df, self.records_df, has_subtotals=self.add_subtotals)
             except Exception as e:
                 logging.error(f"Error adding hyperlinks: {e}")
-
-        # Add hyperlinks AFTER the Excel file is written and closed
-        # This allows us to use openpyxl to properly set hyperlinks with formatting
-        # logging.info("Adding hyperlinks to Excel file...")
-        # if self.training_cv_predictions_df is not None:
-        #     self.add_hyperlinks_to_sheet(self.excel_path, "Training CV Predictions", "Records", self.training_cv_predictions_df, self.records_df)
-        #     self.add_hyperlinks_to_sheet(self.excel_path, "Records", "Training CV Predictions", self.records_df, self.training_cv_predictions_df)
-        # if self.test_set_predictions_df is not None:
-        #     self.add_hyperlinks_to_sheet(self.excel_path, "Test Set Predictions", "Records", self.test_set_predictions_df, self.records_df)
-        #     self.add_hyperlinks_to_sheet(self.excel_path, "Records", "Test Set Predictions", self.records_df, self.test_set_predictions_df)
-        # logging.info("Hyperlinks added successfully!")
 
 
 def main():
