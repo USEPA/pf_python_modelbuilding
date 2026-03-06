@@ -307,9 +307,8 @@ def predictDB(model_id, smiles=None, identifier=None, report_format='json'):
             status_code=404,
         )
 
-    pool = _get_pool()
-    future = pool.submit(_predict_smiles_in_process, (model_id, smiles))
-    pred = future.result()
+    mp = ModelPredictor()
+    pred = mp.predictFromDB(model_id, smiles)
 
     report_format = (report_format or "json").lower()
     if report_format not in ("json", "html"):
