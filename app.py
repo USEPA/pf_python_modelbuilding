@@ -249,7 +249,6 @@ def predictDB_POST(body):
         if env_batch_size > 0:
             batch_size = env_batch_size
         else:
-            # By default, use larger chunks to reduce per-chunk overhead.
             batch_size = max(200, (len(smiles) + workers - 1) // workers) if smiles else 1
 
         batch_size = max(1, batch_size)
