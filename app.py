@@ -10,8 +10,10 @@ import io
 import json
 import logging
 import os
+import threading
 from concurrent.futures import ProcessPoolExecutor
 from logging import DEBUG
+from time import perf_counter
 
 import coloredlogs
 import connexion
@@ -23,10 +25,42 @@ from starlette.responses import HTMLResponse, Response, JSONResponse, StreamingR
 
 import util.get_model_file as gmf
 from API_Utilities import SearchAPI
+from model_ws_db_utilities_async import AsyncModelPredictor
 from model_ws_db_utilities import ModelPredictor
 from report_creator_dict import ReportCreator
 
 _PROCESS_PREDICTOR = None
+_LOCAL_PREDICTOR = None
+_LOCAL_PREDICTOR_LOCK = threading.Lock()
+_ASYNC_PREDICTOR = None
+_ASYNC_PREDICTOR_LOCK = threading.Lock()
+
+# ---- Persistent process pool (survives across requests) ----
+_POOL: ProcessPoolExecutor | None = None
+_POOL_LOCK = threading.Lock()
+_POOL_SIZE: int = 0
+
+
+def _get_pool() -> ProcessPoolExecutor:
+    """Lazy-init a persistent ProcessPoolExecutor.
+
+    Keeps model caches alive across requests instead of re-loading
+    models from the database on every request.
+    """
+    global _POOL, _POOL_SIZE
+    if _POOL is None:
+        with _POOL_LOCK:
+            if _POOL is None:
+                size = int(os.getenv("PREDICT_BATCH_WORKERS", os.cpu_count() or 1))
+                size = max(1, size)
+                _POOL = ProcessPoolExecutor(
+                    max_workers=size,
+                    initializer=_init_process_predictor,
+                )
+                _POOL_SIZE = size
+                logging.info("Persistent process pool created with %d workers", size)
+    return _POOL
+
 
 load_dotenv()
 
@@ -147,6 +181,27 @@ def _init_process_predictor():
     _PROCESS_PREDICTOR = ModelPredictor()
 
 
+def _get_local_predictor() -> ModelPredictor:
+    """Lazy-init singleton predictor in the app process for direct batch mode."""
+    global _LOCAL_PREDICTOR
+    if _LOCAL_PREDICTOR is None:
+        with _LOCAL_PREDICTOR_LOCK:
+            if _LOCAL_PREDICTOR is None:
+                _LOCAL_PREDICTOR = ModelPredictor()
+                logging.info("Local predictor initialized for direct batch mode")
+    return _LOCAL_PREDICTOR
+
+
+def _get_async_predictor() -> AsyncModelPredictor:
+    global _ASYNC_PREDICTOR
+    if _ASYNC_PREDICTOR is None:
+        with _ASYNC_PREDICTOR_LOCK:
+            if _ASYNC_PREDICTOR is None:
+                _ASYNC_PREDICTOR = AsyncModelPredictor()
+                logging.info("Async predictor initialized")
+    return _ASYNC_PREDICTOR
+
+
 def _predict_smiles_in_process(args):
     model_id, current_smiles = args
     predictor = _PROCESS_PREDICTOR
@@ -159,14 +214,61 @@ def _predict_smiles_in_process(args):
     return _to_obj(pred)
 
 
-def predictDB_POST(body):
-    """Automates prediction and AD for batch smiles using model in database"""
-    max_workers = int(os.getenv("PREDICT_BATCH_WORKERS", os.cpu_count() or 1))
-    max_workers = max(1, min(max_workers, len(body["smiles"])))
+def _chunked(items, chunk_size):
+    for i in range(0, len(items), chunk_size):
+        yield items[i:i + chunk_size]
 
-    with ProcessPoolExecutor(max_workers=max_workers, initializer=_init_process_predictor) as executor:
-        modelResultsArray = list(
-            executor.map(_predict_smiles_in_process, ((body["model_id"], s) for s in body["smiles"])))
+
+def _timing_enabled() -> bool:
+    return os.getenv("PREDICT_TIMING_LOG", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _predict_smiles_batch_in_process(args):
+    model_id, smiles_batch = args
+    predictor = _PROCESS_PREDICTOR
+    if predictor is None:
+        _init_process_predictor()
+        predictor = _PROCESS_PREDICTOR
+    if predictor is None:
+        raise RuntimeError("Failed to initialize process predictor")
+
+    try:
+        batch_pred = predictor.predictFromDB(model_id, smiles_batch)
+        batch_results = _to_obj(batch_pred)
+        if isinstance(batch_results, list) and len(batch_results) == len(smiles_batch):
+            return batch_results
+    except Exception:
+        logging.exception("Batch predictor path failed; fallback to per-smiles mode")
+
+    fallback_results = []
+    for current_smiles in smiles_batch:
+        pred = predictor.predictFromDB(model_id, current_smiles)
+        fallback_results.append(_to_obj(pred))
+
+    return fallback_results
+
+
+async def predictDB_POST(body):
+    """Automates prediction and AD for batch smiles using model in database"""
+    timing_on = _timing_enabled()
+    request_start = perf_counter() if timing_on else None
+
+    smiles = body["smiles"]
+    predictor = _get_async_predictor()
+    modelResultsArray = await predictor.predict_from_db(body["model_id"], smiles)
+    batch_size = len(smiles) if smiles else 0
+    num_batches = 1 if smiles else 0
+
+    if timing_on:
+        async_workers = max(1, int(os.getenv("PREDICT_CPU_WORKERS", os.cpu_count() or 1)))
+        logging.info(
+            "timing.endpoint predictDB_POST mode=async size=%d chunk_size=%d chunks=%d workers=%d total=%.3fs",
+            len(smiles),
+            batch_size,
+            num_batches,
+            async_workers,
+            perf_counter() - request_start if request_start else 0
+        )
 
     return JSONResponse(content=modelResultsArray)
 
@@ -207,7 +309,7 @@ def predictDB(model_id, smiles=None, identifier=None, report_format='json'):
         modelResultsHtml = rc.create_html_report_from_json(_to_json_str(pred))
         return HTMLResponse(content=modelResultsHtml)
 
-    return Response(content=_to_json_str(pred), media_type="application/json")
+    return JSONResponse(content=pred)
 
 
 if __name__ == '__main__':

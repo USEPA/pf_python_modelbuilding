@@ -1,48 +1,37 @@
-# import concurrent
-import concurrent.futures
+import asyncio
+import base64
+import httpx
 import json
+import logging
+import numpy as np
 import os
-import threading
-from io import BytesIO
+import pandas as pd
 import pathlib
 import traceback
+import threading
+from io import BytesIO
 from indigo import Indigo
 from indigo.renderer import IndigoRenderer
-import base64
-
-from sqlalchemy import create_engine
-from sqlalchemy.engine import URL
-from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy import text, bindparam
-
-from API_Utilities import QsarSmilesAPI, DescriptorsAPI
-
-# from db.mongo_cache import get_cached_prediction, cache_prediction
-from db.mongo_cache import get_cached_prediction, cache_prediction
-
-from util import predict_constants as pc
-
-from model_ws_utilities import call_do_predictions_from_df, models
-from models import df_utilities as dfu
-from models.ModelBuilder import Model
-
-import StatsCalculator as stats
-import pandas as pd
-# import pytz
+from time import perf_counter
 
 from sklearn.preprocessing import StandardScaler
 from sklearn.neighbors import NearestNeighbors
+from sqlalchemy import create_engine, text
+from sqlalchemy.engine import URL
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import sessionmaker
+
 import model_ws_utilities as mwu
-import numpy as np
-
-from util.units_converter import UnitsConverter
-
-from utils import timer, print_first_row
+import StatsCalculator as stats
+from API_Utilities import QsarSmilesAPI, DescriptorsAPI
 from applicability_domain import applicability_domain_utilities as adu
-
-# debug = False
-import logging
+from db.mongo_cache import get_cached_prediction, cache_prediction
+from model_ws_utilities import call_do_predictions_from_df, models
+from models import df_utilities as dfu
+from models.ModelBuilder import Model
+from util import predict_constants as pc
+from utils import timer, print_first_row
+from util.units_converter import UnitsConverter
 
 logging.getLogger('sqlalchemy').setLevel(logging.ERROR)
 
@@ -72,6 +61,30 @@ TODO: Add ability to export report as excel
 """
 
 lock = threading.Lock()
+
+
+def _timing_enabled() -> bool:
+    return os.getenv("PREDICT_TIMING_LOG", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_flag(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_int(name: str, default: int, min_value: int = 1) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        value = default
+    return max(min_value, value)
+
+
+def _chunked_list(items, chunk_size):
+    for i in range(0, len(items), chunk_size):
+        yield items[i:i + chunk_size]
 
 
 def getEngine():
@@ -304,9 +317,35 @@ class ModelInitializer:
         self.get_training_prediction_instances(session, model)
         self.get_dsstox_records_for_dataset(model, session)
 
+        # Build fast lookups used repeatedly during reporting.
+        if hasattr(model, "df_training") and "ID" in model.df_training.columns and "Property" in model.df_training.columns:
+            model._train_exp_by_id = model.df_training.set_index("ID")["Property"].to_dict()
+        else:
+            model._train_exp_by_id = {}
+
+        if hasattr(model, "df_prediction") and "ID" in model.df_prediction.columns and "Property" in model.df_prediction.columns:
+            model._test_exp_by_id = model.df_prediction.set_index("ID")["Property"].to_dict()
+        else:
+            model._test_exp_by_id = {}
+
         # get following for pred values for neighbors:
         model.df_preds_test = self.get_predictions(session, model=model, split_num=1, fk_splitting_id=1)
         model.df_preds_training_cv = self.get_cv_predictions(session, model)
+
+        if hasattr(model, "df_dsstoxRecords") and "canonicalSmiles" in model.df_dsstoxRecords.columns:
+            model._dsstox_by_smiles = model.df_dsstoxRecords.set_index("canonicalSmiles").to_dict(orient="index")
+        else:
+            model._dsstox_by_smiles = {}
+
+        if hasattr(model, "df_preds_test") and "id" in model.df_preds_test.columns:
+            model._preds_test_by_id = model.df_preds_test.set_index("id").to_dict(orient="index")
+        else:
+            model._preds_test_by_id = {}
+
+        if hasattr(model, "df_preds_training_cv") and "id" in model.df_preds_training_cv.columns:
+            model._preds_training_cv_by_id = model.df_preds_training_cv.set_index("id").to_dict(orient="index")
+        else:
+            model._preds_training_cv_by_id = {}
 
         logging.debug(f"model_description with added metadata:{model.get_model_description_pretty()}")
 
@@ -763,10 +802,52 @@ class NeighborGetter:
 
         return neighbors, distances
 
+    def find_neighbors_in_set_batch(self, model, df_set, df_test_chemicals, n_neighbors=10):
+        """Return neighbor IDs and distances for each test row in a single fit/kneighbors call."""
+        nbrs = NearestNeighbors(n_neighbors=n_neighbors, algorithm='brute', metric='euclidean')
+
+        useEmbedding = True
+
+        if useEmbedding:
+            TrainSet = df_set[model.embedding]
+            TestSet = df_test_chemicals[model.embedding]
+            scaler = StandardScaler().fit(TrainSet)
+            train_x, test_x = scaler.transform(TrainSet), scaler.transform(TestSet)
+        else:
+            TrainSet = df_set
+            TestSet = df_test_chemicals
+            ids_train, labels_train, features_train, column_names_train, is_binary = dfu.prepare_instances(
+                df=TrainSet,
+                which_set="Training",
+                remove_logp=model.remove_log_p_descriptors,
+                remove_corr=False,
+                remove_constant=True,
+            )
+            features_test = TestSet[features_train.columns]
+            scaler = StandardScaler().fit(features_train)
+            train_x, test_x = scaler.transform(features_train), scaler.transform(features_test)
+
+        nbrs.fit(train_x)
+        test_distances, test_indices = nbrs.kneighbors(test_x)
+
+        id_series = df_set[df_set.columns[0]]
+        neighbors_per_row = []
+        distances_per_row = []
+        for row_idx in range(test_indices.shape[0]):
+            indices = test_indices[row_idx]
+            neighbors_per_row.append(id_series.iloc[indices].tolist())
+            distances_per_row.append(list(test_distances[row_idx]))
+
+        return neighbors_per_row, distances_per_row
+
 # cache = {}
 
 
 class ModelPredictor:
+
+    def __init__(self):
+        # Cache for expensive fallback DB lookups keyed by (datasetName, qsarSmiles).
+        self._missing_dsstox_cache = {}
 
     @timer
     def predictFromDB(self, model_id, smiles):
@@ -792,7 +873,7 @@ class ModelPredictor:
             if not smiles_list:
                 return []
 
-            result = [None] * len(smiles_list)
+            result: list = [None] * len(smiles_list)
             missing = []
 
             for idx, smi in enumerate(smiles_list):
@@ -804,22 +885,696 @@ class ModelPredictor:
                     missing.append((idx, smi))
 
             if missing:
-                max_workers = int(os.getenv("PREDICT_THREAD_WORKERS", min(32, (os.cpu_count() or 1) * 5)))
-                max_workers = max(1, min(max_workers, len(missing)))
+                missing_smiles = [smi for _, smi in missing]
+                predictions = self.predict_model_smiles_batch(model_id, missing_smiles)
 
-                def _predict_one(item):
-                    idx, smi = item
-                    prediction, code = self.predict_model_smiles(model_id, smi)
-                    if code != 200:
-                        prediction = dict(smiles=smi, error=prediction)
+                for (idx, smi), prediction in zip(missing, predictions):
                     cache_prediction(f"{smi}-{model_id}", prediction)
-                    return idx, prediction
-
-                with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
-                    for idx, prediction in pool.map(_predict_one, missing):
-                        result[idx] = prediction
+                    result[idx] = prediction
 
             return result
+
+    def predict_model_smiles_batch(self, model_id, smiles_list):
+        if not smiles_list:
+            return []
+
+        timing_on = _timing_enabled()
+        total_start = perf_counter() if timing_on else None
+
+        serverAPIs = os.getenv("CIM_API_SERVER", "https://cim-dev.sciencedataexperts.com")
+        fileAPI = os.getenv("FILE_API_SERVER", pc.URL_CTX_API)
+
+        mi = ModelInitializer()
+        model = mi.init_model(model_id)
+
+        if hasattr(model, 'modelId') == False:
+            return [dict(smiles=s, error=f"Invalid model_id: {model_id}") for s in smiles_list]
+
+        if serverAPIs == "https://hcd.rtpnc.epa.gov/" and model.qsarReadyRuleSet == 'qsar-ready_04242025_0':
+            model.qsarReadyRuleSet = 'qsar-ready_04242025'
+
+        modelDetails = ModelDetails(model)
+
+        if 'reg_' in model.modelMethod or 'las_' in model.modelMethod or 'gcm_' in model.modelMethod:
+            y = model.df_training[model.df_training.columns[1]]
+            X = model.df_training[model.embedding]
+            modelDetails.modelCoefficients = json.loads(model.getOriginalRegressionCoefficients2(X, y))
+
+        self.addLinks(modelDetails, fileAPI)
+        self.addPerformance(modelDetails)
+
+        standardized: list = [None] * len(smiles_list)
+        standardize_errors: list = [None] * len(smiles_list)
+        standardize_start = perf_counter() if timing_on else None
+
+        standardize_batch_size = _env_int("PREDICT_STANDARDIZE_BATCH_SIZE", 250)
+        standardize_workers = _env_int("PREDICT_STANDARDIZE_WORKERS", 4)
+        serverapis_timeout = _env_int("PREDICT_SERVERAPIS_TIMEOUT_SEC", 120)
+
+        indexed_smiles = list(enumerate(smiles_list))
+        standardize_tasks = list(_chunked_list(indexed_smiles, standardize_batch_size))
+
+        def _parse_standardize_chunk_result(task, chemicals_batch, std_code):
+            idxs = [idx for idx, _ in task]
+            smiles_chunk = [smi for _, smi in task]
+
+            chunk_standardized = {}
+            chunk_errors = {}
+
+            if std_code == 200 and isinstance(chemicals_batch, list) and len(chemicals_batch) == len(smiles_chunk):
+                for idx, smi, item in zip(idxs, smiles_chunk, chemicals_batch):
+                    chemical, code = self._parse_batch_standardized_item(item, smi, model.omitSalts)
+                    if code == 200:
+                        chunk_standardized[idx] = chemical
+                    else:
+                        chunk_errors[idx] = chemical
+
+            return chunk_standardized, chunk_errors
+
+        async def _standardize_all_async():
+            timeout = httpx.Timeout(serverapis_timeout)
+            limits = httpx.Limits(max_connections=standardize_workers, max_keepalive_connections=standardize_workers)
+            semaphore = asyncio.Semaphore(standardize_workers)
+
+            async with httpx.AsyncClient(timeout=timeout, limits=limits) as client:
+                async def _run_task(task):
+                    async with semaphore:
+                        smiles_chunk = [smi for _, smi in task]
+                        useFullStandardize = False
+                        chemicals_batch, std_code = await QsarSmilesAPI.call_qsar_ready_standardize_post_async(
+                            client=client,
+                            server_host=serverAPIs,
+                            smiles=smiles_chunk,
+                            full=useFullStandardize,
+                            workflow=model.qsarReadyRuleSet,
+                        )
+                        return task, chemicals_batch, std_code
+
+                coros = [_run_task(task) for task in standardize_tasks]
+                return await asyncio.gather(*coros, return_exceptions=True)
+
+        def _standardize_chunk_fallback(task):
+            chunk_standardized = {}
+            chunk_errors = {}
+            for idx, smi in task:
+                chemical, code = self.standardizeStructure(serverAPIs, smi, model)
+                if code == 200:
+                    chunk_standardized[idx] = chemical
+                else:
+                    chunk_errors[idx] = chemical
+            return chunk_standardized, chunk_errors
+
+        if len(standardize_tasks) == 1:
+            task = standardize_tasks[0]
+            smiles_chunk = [smi for _, smi in task]
+            useFullStandardize = False
+            chemicals_batch, std_code = QsarSmilesAPI.call_qsar_ready_standardize_post(
+                server_host=serverAPIs,
+                smiles=smiles_chunk,
+                full=useFullStandardize,
+                workflow=model.qsarReadyRuleSet,
+            )
+
+            std_map, err_map = _parse_standardize_chunk_result(task, chemicals_batch, std_code)
+            if len(std_map) + len(err_map) < len(task):
+                std_map, err_map = _standardize_chunk_fallback(task)
+
+            for idx, value in std_map.items():
+                standardized[idx] = value
+            for idx, value in err_map.items():
+                standardize_errors[idx] = value
+        else:
+            async_results = asyncio.run(_standardize_all_async())
+            for async_result in async_results:
+                if isinstance(async_result, Exception):
+                    logging.exception("Async standardize chunk failed", exc_info=async_result)
+                    continue
+
+                task, chemicals_batch, std_code = async_result
+                std_map, err_map = _parse_standardize_chunk_result(task, chemicals_batch, std_code)
+                if len(std_map) + len(err_map) < len(task):
+                    std_map, err_map = _standardize_chunk_fallback(task)
+
+                for idx, value in std_map.items():
+                    standardized[idx] = value
+                for idx, value in err_map.items():
+                    standardize_errors[idx] = value
+
+        descriptor_errors: list = [None] * len(smiles_list)
+        dfs_by_index: list = [None] * len(smiles_list)
+        valid_indices = [idx for idx, chemical in enumerate(standardized) if chemical is not None]
+        standardize_elapsed = 0.0
+        if timing_on and standardize_start is not None:
+            standardize_elapsed = perf_counter() - standardize_start
+
+        descriptor_start = perf_counter() if timing_on else None
+        used_descriptor_batch = False
+        descriptor_fallback_count = 0
+        if valid_indices:
+            descriptor_batch_size = _env_int("PREDICT_DESCRIPTORS_BATCH_SIZE", 250)
+            descriptor_workers = _env_int("PREDICT_DESCRIPTORS_WORKERS", 4)
+
+            valid_pairs = [(idx, standardized[idx]["canonicalSmiles"]) for idx in valid_indices]
+            descriptor_tasks = list(_chunked_list(valid_pairs, descriptor_batch_size))
+            descriptor_headers = list(model.df_training.columns[2:])
+
+            def _descriptor_chunk_parse(task, payload, status_code):
+                idxs = [idx for idx, _ in task]
+                smiles_chunk = [smi for _, smi in task]
+
+                descriptorAPI = DescriptorsAPI()
+
+                if status_code == 200 and isinstance(payload, dict):
+                    dfs = descriptorAPI.response_json_to_dfs(
+                        payload,
+                        smiles_chunk,
+                        descriptor_headers=descriptor_headers,
+                    )
+                    if dfs is not None and len(dfs) == len(task):
+                        return {idx: df for idx, df in zip(idxs, dfs)}, {}, True, 0
+
+                return None
+
+            def _descriptor_chunk_fallback(task):
+                descriptorAPI = DescriptorsAPI()
+                chunk_dfs = {}
+                chunk_errs = {}
+                for idx, qsar_smiles in task:
+                    df_prediction, code = descriptorAPI.calculate_descriptors(
+                        serverAPIs,
+                        qsar_smiles,
+                        model.descriptorService,
+                    )
+                    if code == 200:
+                        chunk_dfs[idx] = df_prediction
+                    else:
+                        chunk_errs[idx] = df_prediction
+                return chunk_dfs, chunk_errs
+
+            async def _descriptors_all_async():
+                timeout = httpx.Timeout(serverapis_timeout)
+                limits = httpx.Limits(max_connections=descriptor_workers, max_keepalive_connections=descriptor_workers)
+                semaphore = asyncio.Semaphore(descriptor_workers)
+
+                async with httpx.AsyncClient(timeout=timeout, limits=limits) as client:
+                    async def _run_task(task):
+                        async with semaphore:
+                            descriptorAPI = DescriptorsAPI()
+                            smiles_chunk = [smi for _, smi in task]
+                            payload, status_code = await descriptorAPI.call_descriptors_post_with_status_async(
+                                client=client,
+                                server_host=serverAPIs,
+                                qsar_smiles=smiles_chunk,
+                                descriptor_name=model.descriptorService,
+                            )
+                            return task, payload, status_code
+
+                    coros = [_run_task(task) for task in descriptor_tasks]
+                    return await asyncio.gather(*coros, return_exceptions=True)
+
+            if len(descriptor_tasks) == 1:
+                task = descriptor_tasks[0]
+                descriptorAPI = DescriptorsAPI()
+                smiles_chunk = [smi for _, smi in task]
+                payload, status_code = descriptorAPI.call_descriptors_post_with_status(
+                    server_host=serverAPIs,
+                    qsar_smiles=smiles_chunk,
+                    descriptor_name=model.descriptorService,
+                )
+
+                parsed = _descriptor_chunk_parse(task, payload, status_code)
+                if parsed is None:
+                    dfs_map, err_map = _descriptor_chunk_fallback(task)
+                    chunk_used_batch = False
+                    fallback_count = len(task)
+                else:
+                    dfs_map, err_map, chunk_used_batch, fallback_count = parsed
+
+                used_descriptor_batch = chunk_used_batch
+                descriptor_fallback_count += fallback_count
+                for idx, value in dfs_map.items():
+                    dfs_by_index[idx] = value
+                for idx, value in err_map.items():
+                    descriptor_errors[idx] = value
+            else:
+                async_results = asyncio.run(_descriptors_all_async())
+                for async_result in async_results:
+                    if isinstance(async_result, Exception):
+                        logging.exception("Async descriptors chunk failed", exc_info=async_result)
+                        continue
+
+                    task, payload, status_code = async_result
+                    parsed = _descriptor_chunk_parse(task, payload, status_code)
+                    if parsed is None:
+                        dfs_map, err_map = _descriptor_chunk_fallback(task)
+                        chunk_used_batch = False
+                        fallback_count = len(task)
+                    else:
+                        dfs_map, err_map, chunk_used_batch, fallback_count = parsed
+
+                    used_descriptor_batch = used_descriptor_batch or chunk_used_batch
+                    descriptor_fallback_count += fallback_count
+                    for idx, value in dfs_map.items():
+                        dfs_by_index[idx] = value
+                    for idx, value in err_map.items():
+                        descriptor_errors[idx] = value
+        descriptor_elapsed = 0.0
+        if timing_on and descriptor_start is not None:
+            descriptor_elapsed = perf_counter() - descriptor_start
+
+        report_start = perf_counter() if timing_on else None
+        generate_neighbors = _env_flag("PREDICT_GENERATE_NEIGHBORS", True)
+        skip_images = _env_flag("PREDICT_SKIP_IMAGES", False)
+
+        # --- Collect indices with valid standardization + descriptors ---
+        valid_pred_indices = [
+            idx for idx in range(len(smiles_list))
+            if standardized[idx] is not None and dfs_by_index[idx] is not None
+        ]
+
+        # --- Batch model predictions (one model.do_predictions call) ---
+        pred_values_map: dict = {}
+        all_pred_dfs = None
+        if valid_pred_indices:
+            all_pred_dfs = pd.concat(
+                [dfs_by_index[idx] for idx in valid_pred_indices],
+                ignore_index=True,
+            )
+            batch_json = call_do_predictions_from_df(all_pred_dfs, model)
+            batch_pred_results = json.loads(batch_json)
+            for i, idx in enumerate(valid_pred_indices):
+                pred_values_map[idx] = batch_pred_results[i]['pred']
+
+        # --- Batch nearest neighbors (compute once, then map to each report row) ---
+        precomputed_neighbors_map: dict = {}
+        if generate_neighbors and valid_pred_indices and all_pred_dfs is not None:
+            try:
+                precomputed_neighbors = self._precompute_neighbors_for_batch(
+                    model=model,
+                    df_test_chemicals=all_pred_dfs,
+                )
+                for i, idx in enumerate(valid_pred_indices):
+                    precomputed_neighbors_map[idx] = {
+                        "training": precomputed_neighbors["training"][i],
+                        "prediction": precomputed_neighbors["prediction"][i],
+                    }
+            except Exception:
+                logging.exception("Batch neighbor precompute failed; falling back to per-SMILES")
+
+        # --- Batch AD calculations ---
+        ad_results_map: dict = {idx: [] for idx in valid_pred_indices}
+        if valid_pred_indices and model.applicabilityDomainName:
+            applicabilityDomains = modelDetails.applicabilityDomainName.split(" and ")
+            if pc.Applicability_Domain_TEST_Fragment_Counts not in applicabilityDomains:
+                applicabilityDomains.append(pc.Applicability_Domain_TEST_Fragment_Counts)
+
+            for ad_name in applicabilityDomains:
+                if ad_name == pc.Applicability_Domain_TEST_Fragment_Counts:
+                    # Fragment AD: run per-SMILES (output row count may differ from input)
+                    for i, idx in enumerate(valid_pred_indices):
+                        try:
+                            ad_result = self.determineApplicabilityDomain(model, ad_name, dfs_by_index[idx])
+                            ad_results_map[idx].append(ad_result)
+                        except Exception:
+                            logging.exception("Fragment AD failed for idx=%d", idx)
+                else:
+                    # Distance-based AD: run once for all test chemicals (avoids N × O(N_train²) KNN fits)
+                    try:
+                        output, ad_cutoff = adu.generate_applicability_domain_with_preselected_descriptors_from_dfs(
+                            train_df=model.df_training,
+                            test_df=all_pred_dfs.copy(),
+                            remove_log_p=model.remove_log_p_descriptors,
+                            embedding=model.embedding,
+                            applicability_domain=ad_name,
+                            filterColumnsInBothSets=True,
+                        )
+                        for i, idx in enumerate(valid_pred_indices):
+                            ad_result = self._parse_ad_result_for_row(output, i, ad_cutoff, ad_name, model)
+                            ad_results_map[idx].append(ad_result)
+                    except Exception:
+                        logging.exception("Batch AD failed for %s; falling back to per-SMILES", ad_name)
+                        for i, idx in enumerate(valid_pred_indices):
+                            try:
+                                ad_result = self.determineApplicabilityDomain(model, ad_name, dfs_by_index[idx])
+                                ad_results_map[idx].append(ad_result)
+                            except Exception:
+                                logging.exception("Per-SMILES AD fallback failed for idx=%d", idx)
+        elif valid_pred_indices:
+            logging.warning('AD method for model was not set: %s', model_id)
+
+        # --- Assemble reports ---
+        predictions = []
+        for idx, smi in enumerate(smiles_list):
+            chemical = standardized[idx]
+
+            if chemical is None:
+                predictions.append(self._build_error_report_dict(smi, modelDetails, standardize_errors[idx]))
+                continue
+
+            if not skip_images:
+                self._set_chemical_image(chemical)
+
+            if dfs_by_index[idx] is None:
+                err = descriptor_errors[idx] if descriptor_errors[idx] is not None else "Descriptor calculation failed"
+                predictions.append(self._build_error_report_dict(smi, modelDetails, err, chemical=chemical))
+                continue
+
+            prediction = self._build_report_from_precomputed(
+                model_id=model_id,
+                smiles=smi,
+                model=model,
+                modelDetails=modelDetails,
+                chemical=chemical,
+                pred_value=pred_values_map[idx],
+                ad_estimates=ad_results_map.get(idx, []),
+                df_prediction=dfs_by_index[idx],
+                generate_neighbors=generate_neighbors,
+                precomputed_neighbors=precomputed_neighbors_map.get(idx),
+            )
+            predictions.append(prediction)
+
+        report_elapsed = 0.0
+        if timing_on and report_start is not None:
+            report_elapsed = perf_counter() - report_start
+
+        if timing_on:
+            total_elapsed = 0.0
+            if total_start is not None:
+                total_elapsed = perf_counter() - total_start
+            logging.info(
+                "timing.batch model_id=%s size=%d standardized_ok=%d standardize=%.3fs descriptors=%.3fs "
+                "descriptor_mode=%s fallback_count=%d report=%.3fs total=%.3fs",
+                model_id,
+                len(smiles_list),
+                len(valid_indices),
+                standardize_elapsed,
+                descriptor_elapsed,
+                "batch" if used_descriptor_batch else "single-fallback",
+                descriptor_fallback_count,
+                report_elapsed,
+                total_elapsed,
+            )
+
+        return predictions
+
+    def _parse_batch_standardized_item(self, item, smiles, omit_salts):
+        if isinstance(item, list):
+            if len(item) == 0:
+                return f"{smiles} failed standardization" if smiles else 'No Structure', 400
+            if len(item) > 1 and omit_salts:
+                return f"{smiles}: model can't run mixtures", 400
+            item = item[0]
+
+        if isinstance(item, dict):
+            if "chemicals" in item and isinstance(item["chemicals"], list):
+                return self._parse_batch_standardized_item(item["chemicals"], smiles, omit_salts)
+            if "canonicalSmiles" in item:
+                return item, 200
+            if "error" in item:
+                return item["error"], 400
+
+        return f"{smiles} failed standardization" if smiles else 'No Structure', 400
+
+    def _set_chemical_image(self, chemical):
+        if "smiles" in chemical and "cid" not in chemical:
+            img_base64 = self.smiles_to_base64(chemical["smiles"])
+            if img_base64:
+                chemical["imageSrc"] = f'data:image/png;base64,{img_base64}'
+            else:
+                chemical["imageSrc"] = "N/A"
+        else:
+            chemical["imageSrc"] = imgURLCid + chemical.get("cid", "N/A")
+
+    def _build_error_report_json(self, smiles, modelDetails, error, chemical=None):
+        if chemical is None:
+            chemical = {
+                "chemId": smiles,
+                "smiles": smiles,
+            }
+            self._set_chemical_image(chemical)
+
+        modelResults = ModelResults()
+        modelResults.predictionError = error
+        report = Report(chemical, modelDetails, modelResults)
+        return report.to_json()
+
+    def _build_prediction_report_from_df(self, model_id, smiles, model, modelDetails, chemical, df_prediction, generate_report=True):
+        modelResults = ModelResults()
+
+        json_predictions = call_do_predictions_from_df(df_prediction, model)
+        pred_results = json.loads(json_predictions)
+        pred_value = pred_results[0]['pred']
+
+        if model.applicabilityDomainName:
+            applicabilityDomains = modelDetails.applicabilityDomainName.split(" and ")
+            if pc.Applicability_Domain_TEST_Fragment_Counts not in applicabilityDomains:
+                applicabilityDomains.append(pc.Applicability_Domain_TEST_Fragment_Counts)
+
+            for applicabilityDomain in applicabilityDomains:
+                ad_results = self.determineApplicabilityDomain(model, applicabilityDomain, df_prediction)
+                modelResults.adEstimates.append(ad_results)
+        else:
+            print('AD method for model was not set:', model_id)
+
+        modelResults.predictionValueUnitsModel = pred_value
+        modelResults.unitsModel = model.unitsModel
+
+        self.setExpValue(chemical, model, modelResults)
+
+        uc = UnitsConverter()
+
+        if "sid" not in chemical:
+            chemical["sid"] = "N/A"
+            chemical["cid"] = "N/A"
+            chemical["name"] = "N/A"
+
+        if modelResults.experimentalValueUnitsModel:
+            modelResults.experimentalValueUnitsDisplay = uc.convert_units(
+                model.propertyName,
+                modelResults.experimentalValueUnitsModel,
+                model.unitsModel,
+                model.unitsDisplay,
+                chemical["sid"],
+                chemical["averageMass"],
+            )
+
+        modelResults.predictionValueUnitsDisplay = uc.convert_units(
+            model.propertyName,
+            pred_value,
+            model.unitsModel,
+            model.unitsDisplay,
+            chemical["sid"],
+            chemical["averageMass"],
+        )
+        modelResults.unitsDisplay = model.unitsDisplay
+
+        report = Report(chemical, modelDetails, modelResults)
+
+        if generate_report:
+            report.neighborResultsTraining, report.neighborResultsPrediction = self.addNeighborsFromSets(
+                model,
+                modelResults,
+                df_prediction,
+            )
+
+        return report.to_json()
+
+    # ---- Batch-optimised helpers (used by predict_model_smiles_batch) ----
+
+    def _build_error_report_dict(self, smiles, modelDetails, error, chemical=None):
+        """Same as _build_error_report_json but returns a plain dict (avoids JSON round-trip)."""
+        if chemical is None:
+            chemical = {
+                "chemId": smiles,
+                "smiles": smiles,
+            }
+            self._set_chemical_image(chemical)
+
+        modelResults = ModelResults()
+        modelResults.predictionError = error
+        report = Report(chemical, modelDetails, modelResults)
+        return report.to_dict()
+
+    def _build_report_from_precomputed(self, model_id, smiles, model, modelDetails, chemical,
+                                       pred_value, ad_estimates, df_prediction, generate_neighbors=True,
+                                       precomputed_neighbors=None):
+        """Build report using already-computed prediction value and AD estimates (batch path)."""
+        modelResults = ModelResults()
+        modelResults.predictionValueUnitsModel = pred_value
+        modelResults.unitsModel = model.unitsModel
+        modelResults.adEstimates = ad_estimates
+
+        if not model.applicabilityDomainName:
+            logging.warning('AD method for model was not set: %s', model_id)
+
+        self.setExpValue(chemical, model, modelResults)
+
+        uc = UnitsConverter()
+
+        if "sid" not in chemical:
+            chemical["sid"] = "N/A"
+            chemical["cid"] = "N/A"
+            chemical["name"] = "N/A"
+
+        if modelResults.experimentalValueUnitsModel:
+            modelResults.experimentalValueUnitsDisplay = uc.convert_units(
+                model.propertyName,
+                modelResults.experimentalValueUnitsModel,
+                model.unitsModel,
+                model.unitsDisplay,
+                chemical["sid"],
+                chemical["averageMass"],
+            )
+
+        modelResults.predictionValueUnitsDisplay = uc.convert_units(
+            model.propertyName,
+            pred_value,
+            model.unitsModel,
+            model.unitsDisplay,
+            chemical["sid"],
+            chemical["averageMass"],
+        )
+        modelResults.unitsDisplay = model.unitsDisplay
+
+        report = Report(chemical, modelDetails, modelResults)
+
+        if generate_neighbors:
+            if precomputed_neighbors is not None:
+                report.neighborResultsTraining = precomputed_neighbors["training"]
+                report.neighborResultsPrediction = precomputed_neighbors["prediction"]
+            else:
+                report.neighborResultsTraining, report.neighborResultsPrediction = self.addNeighborsFromSets(
+                    model,
+                    modelResults,
+                    df_prediction,
+                )
+
+        return report.to_dict()
+
+    def _precompute_neighbors_for_batch(self, model: Model, df_test_chemicals: pd.DataFrame):
+        """Compute neighbor blocks once for all batch rows and return report-ready entries per row."""
+        ng = NeighborGetter()
+
+        n_neighbors = 10
+
+        # Test-set neighbors
+        test_neighbors_ids, test_distances_all = ng.find_neighbors_in_set_batch(
+            model=model,
+            df_set=model.df_prediction,
+            df_test_chemicals=df_test_chemicals,
+            n_neighbors=n_neighbors,
+        )
+
+        # Training-set neighbors
+        train_neighbors_ids, train_distances_all = ng.find_neighbors_in_set_batch(
+            model=model,
+            df_set=model.df_training,
+            df_test_chemicals=df_test_chemicals,
+            n_neighbors=n_neighbors,
+        )
+
+        prediction_results = []
+        training_results = []
+
+        for row_idx in range(len(df_test_chemicals)):
+            neighbors_test = self.setExpPredValuesForNeighbors(
+                model,
+                model.df_preds_test,
+                test_neighbors_ids[row_idx],
+                model.df_dsstoxRecords,
+            )
+            neighbors_training = self.setExpPredValuesForNeighbors(
+                model,
+                model.df_preds_training_cv,
+                train_neighbors_ids[row_idx],
+                model.df_dsstoxRecords,
+            )
+
+            self.addDistances(neighbors_test, test_distances_all[row_idx])
+            self.addDistances(neighbors_training, train_distances_all[row_idx])
+
+            df_neighbors_test = pd.DataFrame(neighbors_test)
+            stats_test = stats.calculate_continuous_statistics(df_neighbors_test, 0, pc.TAG_TEST)
+            neighbors_test_mae = stats_test[pc.MAE + pc.TAG_TEST]
+
+            df_neighbors_training = pd.DataFrame(neighbors_training)
+            stats_training = stats.calculate_continuous_statistics(df_neighbors_training, 0, pc.TAG_TRAINING)
+            neighbors_training_mae = stats_training[pc.MAE + pc.TAG_TRAINING]
+
+            prediction_results.append({
+                "set": "Test",
+                "neighbors": neighbors_test,
+                "MAE": neighbors_test_mae,
+                "unitNeighbor": model.unitsModel,
+                "title": "Nearest Neighbors from Test Set (External Predictions)",
+            })
+            training_results.append({
+                "set": "Training",
+                "neighbors": neighbors_training,
+                "MAE": neighbors_training_mae,
+                "unitNeighbor": model.unitsModel,
+                "title": "Nearest Neighbors from Training Set (Cross Validation Predictions)",
+            })
+
+        return {
+            "prediction": prediction_results,
+            "training": training_results,
+        }
+
+    def _parse_ad_result_for_row(self, output, row_idx, ad_cutoff, ad_name, model):
+        """Extract AD result for a specific row from a batched AD output DataFrame."""
+        AD_val = bool(output['AD'].iloc[row_idx])
+
+        has_ids = 'ids' in output.columns
+        has_distances = 'distances' in output.columns
+
+        if has_ids and has_distances:
+            analogsAD = output['ids'].iloc[row_idx]
+            distances = list(output["distances"].iloc[row_idx])
+            results = {"AD": AD_val, "analogs": analogsAD, "distances": distances, "AD_Cutoff": ad_cutoff}
+        else:
+            results = {"AD": AD_val}
+
+        results["adMethod"] = {}
+        results["adMethod"]["name"] = ad_name
+
+        if ad_name == pc.Applicability_Domain_TEST_Embedding_Euclidean \
+                or ad_name == pc.Applicability_Domain_TEST_All_Descriptors_Euclidean:
+
+            if "distances" in results:
+                results["value"] = sum(results["distances"]) / len(results["distances"])
+
+                if AD_val:
+                    results["conclusion"] = "Inside"
+                    results["reasoning"] = f"Avg. distance ({results['value']:.2f}) < {ad_cutoff:.2f}"
+                else:
+                    results["conclusion"] = "Outside"
+                    results["reasoning"] = f"Avg. distance ({results['value']:.2f}) > {ad_cutoff:.2f}"
+
+                results["analogs"] = self.setExpPredValuesForADAnalogs(model, results["analogs"])
+                results["adMethod"]["description"] = (
+                    'Whether or not the average Euclidean distance of the three closest training set '
+                    'neighbors exceeds a cutoff defined so that 95% of the training set is within the AD'
+                )
+                self.addDistances(results["analogs"], results["distances"])
+                del results['distances']
+
+        elif ad_name == pc.Applicability_Domain_TEST_Fragment_Counts:
+            # Fragment AD is handled per-SMILES; this branch is a safety fallback only
+            results["adMethod"]["description"] = 'Whether the TEST fragments are within the training set range'
+            if 'fragment_table' in output.columns:
+                results["fragment_table"] = output["fragment_table"].iloc[row_idx]
+
+            if AD_val:
+                results["conclusion"] = "Inside"
+                results["reasoning"] = "Fragments in test chemical are within the training set ranges"
+            else:
+                results["conclusion"] = "Outside"
+                results["reasoning"] = "Fragments in test chemical are NOT within the training set ranges"
+        else:
+            logging.debug("Unhandled AD method in batch: %s", ad_name)
+
+        return results
 
     def addPerformance(self, md: ModelDetails):
         ms = md.modelStatistics or {}
@@ -882,6 +1637,19 @@ class ModelPredictor:
 
         qsarSmiles = chemical["canonicalSmiles"]
 
+        train_lookup = getattr(model, "_train_exp_by_id", None)
+        if train_lookup is not None and qsarSmiles in train_lookup:
+            modelResults.experimentalValueUnitsModel = train_lookup[qsarSmiles]
+            modelResults.experimentalValueSet = "Training"
+
+        test_lookup = getattr(model, "_test_exp_by_id", None)
+        if test_lookup is not None and qsarSmiles in test_lookup:
+            modelResults.experimentalValueUnitsModel = test_lookup[qsarSmiles]
+            modelResults.experimentalValueSet = "Test"
+
+        if train_lookup is not None or test_lookup is not None:
+            return
+
         matching_row_training = model.df_training[model.df_training['ID'] == qsarSmiles]
         matching_row_test = model.df_prediction[model.df_prediction['ID'] == qsarSmiles]
 
@@ -897,25 +1665,24 @@ class ModelPredictor:
 
         analogs2 = []
 
-        df_preds = model.df_preds_training_cv
+        preds_lookup = getattr(model, "_preds_training_cv_by_id", {})
+        dsstox_lookup = getattr(model, "_dsstox_by_smiles", {})
 
         for analog in analogs:  # these are just the qsarSmiles
 
-            matching_row_dsstox = model.df_dsstoxRecords[model.df_dsstoxRecords['canonicalSmiles'] == analog]
-
-            if not matching_row_dsstox.empty:
-                row_as_dict = matching_row_dsstox.iloc[0].to_dict()
+            if analog in dsstox_lookup:
+                row_as_dict = dict(dsstox_lookup[analog])
             else:
                 row_as_dict = self.fixMissingNeighborDsstoxRecord(model.datasetName, analog)
 
             analogs2.append(row_as_dict)
 
             # Find the matching row in model.df_preds_test
-            matching_row_pred = df_preds[df_preds['id'] == analog]
-            if not matching_row_pred.empty:
+            pred_row = preds_lookup.get(analog)
+            if pred_row is not None:
                 # Add exp and pred values to the record
-                row_as_dict['exp'] = matching_row_pred['exp'].values[0]
-                row_as_dict['pred'] = matching_row_pred['pred'].values[0]
+                row_as_dict['exp'] = pred_row.get('exp')
+                row_as_dict['pred'] = pred_row.get('pred')
         
         # print(json.dumps(analogs2,indent=4))
         
@@ -927,6 +1694,10 @@ class ModelPredictor:
             analog["distance"] = distances[index] 
 
     def fixMissingNeighborDsstoxRecord(self, datasetName, qsarSmiles):
+        cache_key = (datasetName, qsarSmiles)
+        if cache_key in self._missing_dsstox_cache:
+            return dict(self._missing_dsstox_cache[cache_key])
+
         row_as_dict = {
             "canonicalSmiles":qsarSmiles}
         mi = ModelInitializer()
@@ -959,18 +1730,25 @@ class ModelPredictor:
         except Exception as e:
             print(e)
 
+        self._missing_dsstox_cache[cache_key] = dict(row_as_dict)
         return row_as_dict
 
     def setExpPredValuesForNeighbors(self, model:Model, df_preds, neighbors, df_dsstoxRecords):
 
         neighbors2 = []
 
+        dsstox_lookup = getattr(model, "_dsstox_by_smiles", {})
+        if df_preds is model.df_preds_test:
+            preds_lookup = getattr(model, "_preds_test_by_id", {})
+        elif df_preds is model.df_preds_training_cv:
+            preds_lookup = getattr(model, "_preds_training_cv_by_id", {})
+        else:
+            preds_lookup = df_preds.set_index('id').to_dict(orient='index') if 'id' in df_preds.columns else {}
+
         for neighbor in neighbors:  # these are just the qsarSmiles
 
-            matching_row_dsstox = df_dsstoxRecords[df_dsstoxRecords['canonicalSmiles'] == neighbor]
-
-            if not matching_row_dsstox.empty:
-                row_as_dict = matching_row_dsstox.iloc[0].to_dict()
+            if neighbor in dsstox_lookup:
+                row_as_dict = dict(dsstox_lookup[neighbor])
                 neighbors2.append(row_as_dict)
             else:
                 logging.debug("Finding missing dsstox info for " + neighbor)  # only happens for 8 dtxcids
@@ -981,11 +1759,11 @@ class ModelPredictor:
                 neighbors2.append(row_as_dict)
                 
             # Find the matching row in model.df_preds_test
-            matching_row_pred = df_preds[df_preds['id'] == neighbor]
-            if not matching_row_pred.empty:
+            pred_row = preds_lookup.get(neighbor)
+            if pred_row is not None:
                 # Add exp and pred values to the record
-                row_as_dict['exp'] = matching_row_pred['exp'].values[0]
-                row_as_dict['pred'] = matching_row_pred['pred'].values[0]
+                row_as_dict['exp'] = pred_row.get('exp')
+                row_as_dict['pred'] = pred_row.get('pred')
 
         return neighbors2
 
@@ -1160,8 +1938,8 @@ class ModelPredictor:
         # applicability domain calcs:
         if model.applicabilityDomainName:
             applicabilityDomains = modelDetails.applicabilityDomainName.split(" and ")
-            if pc.Applicability_Domain_TEST_Fragment_Counts not in applicabilityDomains:
-                applicabilityDomains.append(pc.Applicability_Domain_TEST_Fragment_Counts)
+            # if pc.Applicability_Domain_TEST_Fragment_Counts not in applicabilityDomains:
+            #     applicabilityDomains.append(pc.Applicability_Domain_TEST_Fragment_Counts)
 
             for applicabilityDomain in applicabilityDomains:
                 ad_results = self.determineApplicabilityDomain(model, applicabilityDomain, df_prediction)

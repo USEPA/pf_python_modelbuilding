@@ -1,5 +1,6 @@
 import json
 
+import httpx
 import requests
 from indigo import Indigo
 
@@ -111,6 +112,83 @@ class DescriptorsAPI:
             # Handle the error appropriately
             return response.text
 
+    def call_descriptors_post_with_status(self, server_host: str, qsar_smiles: list[str], descriptor_name: str):
+        url = f"{server_host}/api/descriptors"
+        params = {
+            "type": descriptor_name,
+            "chemicals": qsar_smiles,
+            "headers": "true"
+        }
+
+        response = requests.post(url, json=params)
+        if response.status_code == 200:
+            return response.json(), 200
+        return response.text, response.status_code
+
+    async def call_descriptors_post_with_status_async(self, client: httpx.AsyncClient, server_host: str, qsar_smiles: list[str], descriptor_name: str):
+        url = f"{server_host}/api/descriptors"
+        params = {
+            "type": descriptor_name,
+            "chemicals": qsar_smiles,
+            "headers": "true"
+        }
+
+        response = await client.post(url, json=params)
+        if response.status_code == 200:
+            return response.json(), 200
+        return response.text, response.status_code
+
+    def response_json_to_df(self, descriptor_dict, qsarSmiles, chemical_index=0):
+        headers = descriptor_dict['headers']
+        headers.insert(0, "Property")
+        headers.insert(0, "ID")
+
+        chemicals = descriptor_dict['chemicals']
+        chemical = chemicals[chemical_index]
+
+        descriptors = [float(descriptor) if descriptor is not None else np.nan for descriptor in chemical['descriptors']]
+
+        descriptors.insert(0, None)
+        descriptors.insert(0, qsarSmiles)
+
+        import pandas as pd
+        return pd.DataFrame([descriptors], columns=headers)
+
+    def response_json_to_dfs(self, descriptor_dict, qsar_smiles_list, descriptor_headers=None):
+        headers = list(descriptor_dict.get('headers') or [])
+        chemicals = list(descriptor_dict.get('chemicals') or [])
+
+        if len(chemicals) != len(qsar_smiles_list):
+            return None
+
+        fallback_headers = list(descriptor_headers or [])
+
+        if not headers and fallback_headers:
+            headers = fallback_headers
+
+        headers.insert(0, "Property")
+        headers.insert(0, "ID")
+
+        import pandas as pd
+
+        dfs = []
+        for qsar_smiles, chemical in zip(qsar_smiles_list, chemicals):
+            descriptors = [float(descriptor) if descriptor is not None else np.nan for descriptor in chemical['descriptors']]
+            descriptors.insert(0, None)
+            descriptors.insert(0, qsar_smiles)
+
+            if len(descriptors) != len(headers):
+                if fallback_headers and len(descriptors) == len(fallback_headers) + 2:
+                    active_headers = ["ID", "Property", *fallback_headers]
+                else:
+                    return None
+            else:
+                active_headers = headers
+
+            dfs.append(pd.DataFrame([descriptors], columns=active_headers))
+
+        return dfs
+
     def response_to_df(self, response, qsarSmiles):
         
         descriptor_dict = response.json()
@@ -165,11 +243,16 @@ class QsarSmilesAPI:
 
     @staticmethod
     def call_qsar_ready_standardize_post(server_host, smiles, full, workflow):
+        if isinstance(smiles, (list, tuple)):
+            chemicals_payload = [{"smiles": s} for s in smiles]
+        else:
+            chemicals_payload = [{"smiles": smiles}]
+
         # Construct the JSON body
         jo_body = {
             "full": full,
             "options": {"workflow": workflow},
-            "chemicals": [{"smiles": smiles}]
+            "chemicals": chemicals_payload
         }
         json_body = json.dumps(jo_body)
 
@@ -187,6 +270,27 @@ class QsarSmilesAPI:
         else:
             # Handle the error appropriately
             return response.text,  response.status_code
+
+    @staticmethod
+    async def call_qsar_ready_standardize_post_async(client: httpx.AsyncClient, server_host, smiles, full, workflow):
+        if isinstance(smiles, (list, tuple)):
+            chemicals_payload = [{"smiles": s} for s in smiles]
+        else:
+            chemicals_payload = [{"smiles": smiles}]
+
+        jo_body = {
+            "full": full,
+            "options": {"workflow": workflow},
+            "chemicals": chemicals_payload
+        }
+
+        headers = {"Content-Type": "application/json"}
+        url = f"{server_host}/api/stdizer/chemicals"
+        response = await client.post(url, headers=headers, json=jo_body)
+
+        if response.status_code == 200:
+            return response.json(), 200
+        return response.text, response.status_code
 
 
 
