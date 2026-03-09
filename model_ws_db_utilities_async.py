@@ -467,7 +467,10 @@ class AsyncModelPredictor:
                 continue
 
             for idx, df in zip(idxs, dfs):
-                dfs_by_idx[idx] = df
+                if df is None:
+                    errors[idx] = "Descriptor calculation failed"
+                else:
+                    dfs_by_idx[idx] = df
 
         return dfs_by_idx, errors
 
