@@ -69,6 +69,18 @@ _WORKER_PREDICTOR = None
 _WORKER_MODEL_CACHE = {}
 
 
+def _ad_failure_result(ad_name: str, err: Exception):
+    return {
+        "AD": False,
+        "adMethod": {
+            "name": ad_name,
+            "description": "Applicability domain calculation failed",
+        },
+        "conclusion": "Outside",
+        "reasoning": f"AD calculation failed: {err}",
+    }
+
+
 def _init_cpu_worker():
     global _WORKER_PREDICTOR, _WORKER_MODEL_CACHE
     _WORKER_PREDICTOR = ModelPredictor()
@@ -167,7 +179,11 @@ def _cpu_predict_chunk(args):
             for ad_name in applicability_domains:
                 if ad_name == pc.Applicability_Domain_TEST_Fragment_Counts:
                     for i, df_pred in enumerate(valid_dfs):
-                        ad_result = predictor.determineApplicabilityDomain(model, ad_name, df_pred)
+                        try:
+                            ad_result = predictor.determineApplicabilityDomain(model, ad_name, df_pred)
+                        except Exception as exc:
+                            logging.exception("Per-row AD failed for %s", ad_name)
+                            ad_result = _ad_failure_result(ad_name, exc)
                         ad_results_by_pos[i].append(ad_result)
                 else:
                     try:
@@ -185,7 +201,11 @@ def _cpu_predict_chunk(args):
                     except Exception:
                         logging.exception("Batch AD failed for %s; fallback to per-row", ad_name)
                         for i, df_pred in enumerate(valid_dfs):
-                            ad_result = predictor.determineApplicabilityDomain(model, ad_name, df_pred)
+                            try:
+                                ad_result = predictor.determineApplicabilityDomain(model, ad_name, df_pred)
+                            except Exception as exc:
+                                logging.exception("Per-row AD fallback failed for %s", ad_name)
+                                ad_result = _ad_failure_result(ad_name, exc)
                             ad_results_by_pos[i].append(ad_result)
 
         precomputed_neighbors_by_pos = [None for _ in range(len(valid_items))]

@@ -1,0 +1,6 @@
+run=1	request=2	smiles=CO	error=500 Server Error: Internal Server Error for url: http://192.168.1.7:5004/api/predictor_models/predict
+run=1	request=5	smiles=[Na+].C[O-]	error=500 Server Error: Internal Server Error for url: http://192.168.1.7:5004/api/predictor_models/predict
+run=1	request=44	smiles=[Zn++].C[O-].C[O-]	error=500 Server Error: Internal Server Error for url: http://192.168.1.7:5004/api/predictor_models/predict
+run=1	request=72	smiles=[CH2]O	error=500 Server Error: Internal Server Error for url: http://192.168.1.7:5004/api/predictor_models/predict
+run=1	request=114	smiles=[2H]C([2H])([2H])[O]	error=500 Server Error: Internal Server Error for url: http://192.168.1.7:5004/api/predictor_models/predict
+run=1	request=156	smiles=<batch-level>	error=batch failed but single-smile checks passed: HTTPConnectionPool(host='192.168.1.7', port=5004): Read timed out. (read timeout=600)

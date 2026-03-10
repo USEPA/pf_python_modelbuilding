@@ -64,14 +64,9 @@ def load_smiles_from_mysql(
         connection.close()
 
     smiles = []
-    for idx, row in enumerate(rows, start=1):
+    for row in rows:
         if row[0] and str(row[0]).strip():
             smiles.append(str(row[0]).strip())
-        if idx % 1000 == 0:
-            print(f"MySQL progress: processed {idx} rows")
-
-    if rows and len(rows) % 1000 != 0:
-        print(f"MySQL progress: processed {len(rows)} rows")
 
     if not smiles:
         raise ValueError(
@@ -85,10 +80,30 @@ def chunk_list(values: list[str], chunk_size: int):
         yield values[i : i + chunk_size]
 
 
-def post_predict_batch(url: str, model_id: int, smiles_batch: list[str], timeout: int) -> None:
+def post_predict_batch(url: str, model_id: int, smiles_batch: list[str], timeout: int) -> requests.Response:
     payload = {"smiles": smiles_batch, "model_id": model_id}
     response = requests.post(url, json=payload, timeout=timeout)
-    response.raise_for_status()
+    return response
+
+
+def find_failed_smiles(url: str, model_id: int, smiles_batch: list[str], timeout: int) -> list[tuple[str, str]]:
+    failed = []
+    for smile in smiles_batch:
+        try:
+            response = post_predict_batch(url, model_id, [smile], timeout)
+            response.raise_for_status()
+        except requests.RequestException as exc:
+            failed.append((smile, str(exc)))
+    return failed
+
+
+def append_errors(errors_file: Path, failed: list[tuple[str, str]], run_no: int, request_no: int) -> None:
+    if not failed:
+        return
+
+    with errors_file.open("a", encoding="utf-8") as fh:
+        for smile, err in failed:
+            fh.write(f"run={run_no}\trequest={request_no}\tsmiles={smile}\terror={err}\n")
 
 
 def run_endpoint_benchmark(
@@ -101,6 +116,7 @@ def run_endpoint_benchmark(
     batch_size: int,
 ) -> list[float]:
     print(f"\n{name}: {url}")
+    errors_file = Path("errors.txt")
 
     batches = list(chunk_list(smiles, batch_size))
     print(f"Batches prepared: {len(batches)} (batch_size={batch_size}, sequential mode)")
@@ -109,18 +125,51 @@ def run_endpoint_benchmark(
     for idx in range(runs):
         start = time.perf_counter()
         total_processed = 0
+        success_batches = 0
+        failed_batches = 0
 
         for request_idx, smiles_batch in enumerate(batches, start=1):
-            post_predict_batch(url, model_id, smiles_batch, timeout)
+            batch_start = time.perf_counter()
+            try:
+                response = post_predict_batch(url, model_id, smiles_batch, timeout)
+                response.raise_for_status()
+            except requests.RequestException as exc:
+                batch_elapsed = time.perf_counter() - batch_start
+                failed_batches += 1
+                failed_smiles = find_failed_smiles(url, model_id, smiles_batch, timeout)
+                if failed_smiles:
+                    append_errors(errors_file, failed_smiles, idx + 1, request_idx)
+                    print(
+                        f"    identified failed smiles in batch: {len(failed_smiles)} "
+                        f"(saved to {errors_file})"
+                    )
+                else:
+                    append_errors(
+                        errors_file,
+                        [("<batch-level>", f"batch failed but single-smile checks passed: {exc}")],
+                        idx + 1,
+                        request_idx,
+                    )
+                print(
+                    f"  run {idx + 1}/{runs}, request {request_idx}/{len(batches)} failed, "
+                    f"batch time: {batch_elapsed:.3f}s, error: {exc}"
+                )
+                continue
+
+            batch_elapsed = time.perf_counter() - batch_start
+            success_batches += 1
             total_processed += len(smiles_batch)
             print(
                 f"  run {idx + 1}/{runs}, request {request_idx}/{len(batches)} done, "
-                f"total smiles processed: {total_processed}"
+                f"batch time: {batch_elapsed:.3f}s, total smiles processed: {total_processed}"
             )
 
         elapsed = time.perf_counter() - start
         durations.append(elapsed)
-        print(f"  run {idx + 1}/{runs}: {elapsed:.3f}s")
+        print(
+            f"  run {idx + 1}/{runs}: {elapsed:.3f}s "
+            f"(success_batches={success_batches}, failed_batches={failed_batches})"
+        )
 
     return durations
 
