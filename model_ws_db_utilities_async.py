@@ -11,6 +11,7 @@ import pandas as pd
 
 from API_Utilities import DescriptorsAPI, QsarSmilesAPI
 from applicability_domain import applicability_domain_utilities as adu
+from db.mongo_cache import get_cached_prediction, cache_prediction
 from model_ws_db_utilities import ModelDetails, ModelInitializer, ModelPredictor
 from model_ws_utilities import call_do_predictions_from_df
 from util import predict_constants as pc
@@ -269,9 +270,40 @@ class AsyncModelPredictor:
 
     async def predict_from_db(self, model_id, smiles):
         if isinstance(smiles, str):
+            key = f"{smiles}-{model_id}"
+            prediction = get_cached_prediction(key)
+            if prediction is not None:
+                return prediction
+
             results = await self.predict_model_smiles_batch(model_id, [smiles])
-            return results[0] if results else {}
-        return await self.predict_model_smiles_batch(model_id, list(smiles))
+            prediction = results[0] if results else {}
+            cache_prediction(key, prediction)
+            return prediction
+
+        smiles_list = list(smiles)
+        if not smiles_list:
+            return []
+
+        result = [None] * len(smiles_list)
+        missing = []
+
+        for idx, smi in enumerate(smiles_list):
+            key = f"{smi}-{model_id}"
+            prediction = get_cached_prediction(key)
+            if prediction is not None:
+                result[idx] = prediction
+            else:
+                missing.append((idx, smi))
+
+        if missing:
+            missing_smiles = [smi for _, smi in missing]
+            predictions = await self.predict_model_smiles_batch(model_id, missing_smiles)
+
+            for (idx, smi), prediction in zip(missing, predictions):
+                cache_prediction(f"{smi}-{model_id}", prediction)
+                result[idx] = prediction
+
+        return result
 
     async def predict_model_smiles_batch(self, model_id, smiles_list):
         if not smiles_list:

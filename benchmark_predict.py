@@ -80,6 +80,65 @@ def chunk_list(values: list[str], chunk_size: int):
         yield values[i : i + chunk_size]
 
 
+def write_smiles_cache(path: Path, smiles: list[str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as fh:
+        for smi in smiles:
+            fh.write(f"{smi}\n")
+
+
+def count_smiles_in_file(path: Path) -> int:
+    count = 0
+    with path.open("r", encoding="utf-8") as fh:
+        for raw_line in fh:
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            count += 1
+    return count
+
+
+def iter_smiles_batches(path: Path, batch_size: int):
+    batch = []
+    with path.open("r", encoding="utf-8") as fh:
+        for raw_line in fh:
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            batch.append(line)
+            if len(batch) >= batch_size:
+                yield batch
+                batch = []
+    if batch:
+        yield batch
+
+
+def ensure_local_smiles_cache(args) -> Path:
+    cache_path = Path(args.local_smiles_cache)
+    if cache_path.exists() and cache_path.stat().st_size > 0:
+        print(f"Using local SMILES cache: {cache_path}")
+        return cache_path
+
+    print(f"Creating local SMILES cache: {cache_path}")
+    if args.input_source == "mysql":
+        smiles = load_smiles_from_mysql(
+            host=args.mysql_host,
+            port=args.mysql_port,
+            user=args.mysql_user,
+            password=args.mysql_password,
+            database=args.mysql_database,
+            table=args.mysql_table,
+            column=args.mysql_column,
+            limit=args.mysql_limit if args.mysql_limit > 0 else None,
+        )
+    else:
+        smiles = load_smiles_from_file(Path(args.smiles_file))
+
+    write_smiles_cache(cache_path, smiles)
+    print(f"Local cache saved: {cache_path} ({len(smiles)} SMILES)")
+    return cache_path
+
+
 def post_predict_batch(url: str, model_id: int, smiles_batch: list[str], timeout: int) -> requests.Response:
     payload = {"smiles": smiles_batch, "model_id": model_id}
     response = requests.post(url, json=payload, timeout=timeout)
@@ -109,7 +168,8 @@ def append_errors(errors_file: Path, failed: list[tuple[str, str]], run_no: int,
 def run_endpoint_benchmark(
     name: str,
     url: str,
-    smiles: list[str],
+    smiles_file: Path,
+    smiles_count: int,
     model_id: int,
     runs: int,
     timeout: int,
@@ -118,8 +178,8 @@ def run_endpoint_benchmark(
     print(f"\n{name}: {url}")
     errors_file = Path("errors.txt")
 
-    batches = list(chunk_list(smiles, batch_size))
-    print(f"Batches prepared: {len(batches)} (batch_size={batch_size}, sequential mode)")
+    total_batches = (smiles_count + batch_size - 1) // batch_size
+    print(f"Batches prepared: {total_batches} (batch_size={batch_size}, source=file)")
 
     durations = []
     for idx in range(runs):
@@ -128,7 +188,10 @@ def run_endpoint_benchmark(
         success_batches = 0
         failed_batches = 0
 
-        for request_idx, smiles_batch in enumerate(batches, start=1):
+        for request_idx, smiles_batch in enumerate(
+            iter_smiles_batches(smiles_file, batch_size),
+            start=1,
+        ):
             batch_start = time.perf_counter()
             try:
                 response = post_predict_batch(url, model_id, smiles_batch, timeout)
@@ -151,7 +214,7 @@ def run_endpoint_benchmark(
                         request_idx,
                     )
                 print(
-                    f"  run {idx + 1}/{runs}, request {request_idx}/{len(batches)} failed, "
+                    f"  run {idx + 1}/{runs}, request {request_idx}/{total_batches} failed, "
                     f"batch time: {batch_elapsed:.3f}s, error: {exc}"
                 )
                 continue
@@ -160,7 +223,7 @@ def run_endpoint_benchmark(
             success_batches += 1
             total_processed += len(smiles_batch)
             print(
-                f"  run {idx + 1}/{runs}, request {request_idx}/{len(batches)} done, "
+                f"  run {idx + 1}/{runs}, request {request_idx}/{total_batches} done, "
                 f"batch time: {batch_elapsed:.3f}s, total smiles processed: {total_processed}"
             )
 
@@ -253,6 +316,11 @@ def main():
     parser.add_argument(
         "--batch-size", type=int, default=1000, help="SMILES per request"
     )
+    parser.add_argument(
+        "--local-smiles-cache",
+        default="smiles_cache.smi",
+        help="Local file cache for SMILES data",
+    )
     args = parser.parse_args()
 
     if args.batch_size <= 0:
@@ -260,36 +328,28 @@ def main():
 
     benchmark_runs = args.runs
 
-    if args.input_source == "mysql":
-        if args.runs != 1:
-            print("MySQL mode: forcing --runs to 1")
+    if args.input_source == "mysql" and args.runs != 1:
+        print("MySQL mode: forcing --runs to 1")
         benchmark_runs = 1
-        smiles = load_smiles_from_mysql(
-            host=args.mysql_host,
-            port=args.mysql_port,
-            user=args.mysql_user,
-            password=args.mysql_password,
-            database=args.mysql_database,
-            table=args.mysql_table,
-            column=args.mysql_column,
-            limit=args.mysql_limit if args.mysql_limit > 0 else None,
-        )
-    else:
-        smiles_path = Path(args.smiles_file)
-        smiles = load_smiles_from_file(smiles_path)
+
+    local_smiles_file = ensure_local_smiles_cache(args)
+    smiles_count = count_smiles_in_file(local_smiles_file)
+    if smiles_count == 0:
+        raise ValueError(f"No SMILES found in local cache file: {local_smiles_file}")
 
     base = args.base_url.rstrip("/")
     compare_base = args.compare_base_url.rstrip("/")
     predict_url = f"{base}/predict"
     compare_predict_url = f"{compare_base}/predict"
 
-    print(f"SMILES loaded: {len(smiles)}")
+    print(f"SMILES loaded from cache: {smiles_count}")
     print(f"model_id: {args.model_id}")
 
     times_primary = run_endpoint_benchmark(
         name=f"PRIMARY ({base})",
         url=predict_url,
-        smiles=smiles,
+        smiles_file=local_smiles_file,
+        smiles_count=smiles_count,
         model_id=args.model_id,
         runs=benchmark_runs,
         timeout=args.timeout,

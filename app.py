@@ -70,6 +70,20 @@ coloredlogs.install(level=DEBUG, milliseconds=True,
                     fmt='%(asctime)s - %(name)s - %(levelname)s - %(message)s (%(filename)s:%(lineno)d)')
 logging.basicConfig(level=logging.INFO)
 
+
+def _configure_mongo_logging() -> None:
+    """Ensure pymongo logs are visible both in direct run and ASGI run modes."""
+    level_name = os.getenv("MONGO_LOG_LEVEL", "INFO").upper()
+    level = getattr(logging, level_name, logging.INFO)
+
+    for logger_name in ("pymongo", "pymongo.topology"):
+        logger = logging.getLogger(logger_name)
+        logger.setLevel(level)
+        logger.propagate = True
+
+
+_configure_mongo_logging()
+
 options = SwaggerUIOptions(spec_path="/api/predictor_models/swagger.yaml",
                            swagger_ui_path="/api/predictor_models/swagger")
 app = connexion.AsyncApp(__name__, swagger_ui_options=options)
@@ -256,6 +270,11 @@ async def predictDB_POST(body):
     smiles = body["smiles"]
     predictor = _get_async_predictor()
     modelResultsArray = await predictor.predict_from_db(body["model_id"], smiles)
+    if isinstance(modelResultsArray, list):
+        modelResultsArray = [_to_obj(item) for item in modelResultsArray]
+    else:
+        modelResultsArray = _to_obj(modelResultsArray)
+
     batch_size = len(smiles) if smiles else 0
     num_batches = 1 if smiles else 0
 
@@ -313,6 +332,4 @@ def predictDB(model_id, smiles=None, identifier=None, report_format='json'):
 
 
 if __name__ == '__main__':
-    log = logging.getLogger('pymongo.topology')
-    log.setLevel(logging.INFO)
     app.run(host='0.0.0.0', port=5004)
