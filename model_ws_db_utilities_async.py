@@ -69,6 +69,19 @@ def _split_evenly(items, n_parts):
     return chunks
 
 
+def _effective_cpu_workers(total_items: int, configured_workers: int) -> int:
+    if total_items <= 0:
+        return 1
+
+    workers = max(1, min(configured_workers, total_items))
+
+    # Small batches are usually faster without process fan-out overhead.
+    if total_items <= 4:
+        return 1
+
+    return workers
+
+
 _CPU_POOL = None
 _CPU_POOL_LOCK = threading.Lock()
 _CPU_POOL_SIZE = 0
@@ -142,6 +155,12 @@ def _get_cpu_pool(max_workers: int) -> ProcessPoolExecutor:
                 )
                 _CPU_POOL_SIZE = max_workers
                 logging.info("Async CPU pool created with %d workers", max_workers)
+    elif _CPU_POOL_SIZE != max_workers:
+        logging.info(
+            "Async CPU pool already initialized with %d workers; requested=%d",
+            _CPU_POOL_SIZE,
+            max_workers,
+        )
     return _CPU_POOL
 
 
@@ -323,6 +342,8 @@ class AsyncModelPredictor:
     def __init__(self):
         self._descriptor_api = DescriptorsAPI()
         self._io_model_cache = {}
+        self._cpu_batch_concurrency = _env_int("PREDICT_CPU_BATCH_CONCURRENCY", 2)
+        self._cpu_batch_semaphore = asyncio.Semaphore(self._cpu_batch_concurrency)
 
     async def _get_io_model_config(self, model_id):
         if model_id in self._io_model_cache:
@@ -471,22 +492,29 @@ class AsyncModelPredictor:
                 "descriptor_error": descriptor_errors[idx],
             })
 
-        cpu_workers = _env_int("PREDICT_CPU_WORKERS", os.cpu_count() or 1)
+        configured_cpu_workers = 1
+        cpu_workers = 1
         chunks = _split_evenly(payload_items, cpu_workers)
 
         loop = asyncio.get_running_loop()
-        pool = _get_cpu_pool(cpu_workers)
+        pool = _get_cpu_pool(configured_cpu_workers)
+        cpu_queue_start = perf_counter() if timing_on else None
+        cpu_queue_wait = 0.0
 
-        cpu_tasks = [
-            loop.run_in_executor(
-                pool,
-                _cpu_predict_chunk,
-                (model_id, chunk, generate_neighbors, skip_images),
-            )
-            for chunk in chunks
-        ]
+        async with self._cpu_batch_semaphore:
+            if cpu_queue_start is not None:
+                cpu_queue_wait = perf_counter() - cpu_queue_start
 
-        chunk_results = await asyncio.gather(*cpu_tasks)
+            cpu_tasks = [
+                loop.run_in_executor(
+                    pool,
+                    _cpu_predict_chunk,
+                    (model_id, chunk, generate_neighbors, skip_images),
+                )
+                for chunk in chunks
+            ]
+
+            chunk_results = await asyncio.gather(*cpu_tasks)
 
         ordered = [None] * len(smiles_list)
         for chunk_result in chunk_results:
@@ -496,9 +524,17 @@ class AsyncModelPredictor:
         if timing_on:
             total_elapsed = perf_counter() - total_start if total_start is not None else 0.0
             logging.info(
-                "timing.async_batch model_id=%s size=%d cpu_workers=%d chunks=%d total=%.3fs",
+                "timing.async_batch_queue model_id=%s size=%d queue_wait=%.3fs cpu_batch_concurrency=%d",
                 model_id,
                 len(smiles_list),
+                cpu_queue_wait,
+                self._cpu_batch_concurrency,
+            )
+            logging.info(
+                "timing.async_batch model_id=%s size=%d configured_cpu_workers=%d cpu_workers=%d chunks=%d total=%.3fs",
+                model_id,
+                len(smiles_list),
+                configured_cpu_workers,
                 cpu_workers,
                 len(chunks),
                 total_elapsed,

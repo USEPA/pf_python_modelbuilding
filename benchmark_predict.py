@@ -238,7 +238,7 @@ def main():
     parser.add_argument(
         "--skip-first",
         type=int,
-        default=230000,
+        default=0,
         help="Skip first N non-empty SMILES entries from input file",
     )
     args = parser.parse_args()
