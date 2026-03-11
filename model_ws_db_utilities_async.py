@@ -11,7 +11,13 @@ import pandas as pd
 
 from API_Utilities import DescriptorsAPI, QsarSmilesAPI
 from applicability_domain import applicability_domain_utilities as adu
-from db.mongo_cache import get_cached_prediction, cache_prediction
+from db.mongo_cache import (
+    cache_prediction,
+    delete_cached_prediction,
+    get_cached_prediction,
+    has_failed_standardization,
+    log_failed_standardization_key,
+)
 from model_ws_db_utilities import ModelDetails, ModelInitializer, ModelPredictor
 from model_ws_utilities import call_do_predictions_from_df
 from util import predict_constants as pc
@@ -272,11 +278,22 @@ class AsyncModelPredictor:
         if isinstance(smiles, str):
             key = f"{smiles}-{model_id}"
             prediction = get_cached_prediction(key)
-            if prediction is not None:
+            if prediction is not None and not has_failed_standardization(prediction):
                 return prediction
+            if prediction is not None:
+                logging.info("Ignoring cached failed standardization prediction for key=%s", key)
+                delete_cached_prediction(key)
 
             results = await self.predict_model_smiles_batch(model_id, [smiles])
             prediction = results[0] if results else {}
+            if has_failed_standardization(prediction):
+                retry_results = await self.predict_model_smiles_batch(model_id, [smiles])
+                retry_prediction = retry_results[0] if retry_results else prediction
+                if has_failed_standardization(retry_prediction):
+                    await asyncio.to_thread(log_failed_standardization_key, key, retry_prediction)
+                    return retry_prediction
+                prediction = retry_prediction
+
             cache_prediction(key, prediction)
             return prediction
 
@@ -290,18 +307,46 @@ class AsyncModelPredictor:
         for idx, smi in enumerate(smiles_list):
             key = f"{smi}-{model_id}"
             prediction = get_cached_prediction(key)
-            if prediction is not None:
+            if prediction is not None and not has_failed_standardization(prediction):
                 result[idx] = prediction
             else:
+                if prediction is not None:
+                    logging.info("Ignoring cached failed standardization prediction for key=%s", key)
+                    delete_cached_prediction(key)
                 missing.append((idx, smi))
 
         if missing:
             missing_smiles = [smi for _, smi in missing]
             predictions = await self.predict_model_smiles_batch(model_id, missing_smiles)
 
-            for (idx, smi), prediction in zip(missing, predictions):
-                cache_prediction(f"{smi}-{model_id}", prediction)
+            failed_standardization = []
+            for pos, (idx, smi) in enumerate(missing):
+                if pos >= len(predictions):
+                    logging.warning("Missing prediction output for model_id=%s smiles=%s", model_id, smi)
+                    result[idx] = {}
+                    continue
+
+                prediction = predictions[pos]
                 result[idx] = prediction
+                if has_failed_standardization(prediction):
+                    failed_standardization.append((idx, smi, prediction))
+                    continue
+
+                cache_prediction(f"{smi}-{model_id}", prediction)
+
+            if failed_standardization:
+                retry_smiles = [smi for _, smi, _ in failed_standardization]
+                retry_predictions = await self.predict_model_smiles_batch(model_id, retry_smiles)
+
+                for pos, (idx, smi, prediction) in enumerate(failed_standardization):
+                    retry_prediction = retry_predictions[pos] if pos < len(retry_predictions) else prediction
+                    result[idx] = retry_prediction
+                    if has_failed_standardization(retry_prediction):
+                        key = f"{smi}-{model_id}"
+                        await asyncio.to_thread(log_failed_standardization_key, key, retry_prediction)
+                        continue
+
+                    cache_prediction(f"{smi}-{model_id}", retry_prediction)
 
         return result
 
