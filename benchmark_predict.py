@@ -1,15 +1,8 @@
 import argparse
-import statistics
 import time
 from pathlib import Path
-from typing import Optional
 
 import requests
-
-try:
-    import pymysql
-except ImportError:  # pragma: no cover - runtime dependency check
-    pymysql = None
 
 
 def load_smiles_from_file(path: Path) -> list[str]:
@@ -25,85 +18,31 @@ def load_smiles_from_file(path: Path) -> list[str]:
     return smiles
 
 
-def load_smiles_from_mysql(
-    host: str,
-    port: int,
-    user: str,
-    password: str,
-    database: str,
-    table: str,
-    column: str,
-    limit: Optional[int] = None,
-) -> list[str]:
-    if pymysql is None:
-        raise RuntimeError(
-            "pymysql is not installed. Install it with: pip install pymysql"
-        )
-
-    query = f"SELECT `{column}` FROM `{table}` WHERE `{column}` IS NOT NULL"
-    if limit and limit > 0:
-        query += " LIMIT %s"
-
-    connection = pymysql.connect(
-        host=host,
-        port=port,
-        user=user,
-        password=password,
-        database=database,
-        charset="utf8mb4",
-        cursorclass=pymysql.cursors.Cursor,
-    )
-    try:
-        with connection.cursor() as cursor:
-            if limit and limit > 0:
-                cursor.execute(query, (limit,))
-            else:
-                cursor.execute(query)
-            rows = cursor.fetchall()
-    finally:
-        connection.close()
-
-    smiles = []
-    for row in rows:
-        if row[0] and str(row[0]).strip():
-            smiles.append(str(row[0]).strip())
-
-    if not smiles:
-        raise ValueError(
-            f"No SMILES found in MySQL source {database}.{table}.{column}"
-        )
-    return smiles
-
-
-def chunk_list(values: list[str], chunk_size: int):
-    for i in range(0, len(values), chunk_size):
-        yield values[i : i + chunk_size]
-
-
-def write_smiles_cache(path: Path, smiles: list[str]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as fh:
-        for smi in smiles:
-            fh.write(f"{smi}\n")
-
-
-def count_smiles_in_file(path: Path) -> int:
+def count_smiles_in_file(path: Path, skip_first: int = 0) -> int:
     count = 0
+    seen = 0
     with path.open("r", encoding="utf-8") as fh:
         for raw_line in fh:
             line = raw_line.strip()
             if not line or line.startswith("#"):
                 continue
+            seen += 1
+            if seen <= skip_first:
+                continue
             count += 1
     return count
 
 
-def iter_smiles_batches(path: Path, batch_size: int):
+def iter_smiles_batches(path: Path, batch_size: int, skip_first: int = 0):
     batch = []
+    seen = 0
     with path.open("r", encoding="utf-8") as fh:
         for raw_line in fh:
             line = raw_line.strip()
             if not line or line.startswith("#"):
+                continue
+            seen += 1
+            if seen <= skip_first:
                 continue
             batch.append(line)
             if len(batch) >= batch_size:
@@ -111,32 +50,6 @@ def iter_smiles_batches(path: Path, batch_size: int):
                 batch = []
     if batch:
         yield batch
-
-
-def ensure_local_smiles_cache(args) -> Path:
-    cache_path = Path(args.local_smiles_cache)
-    if cache_path.exists() and cache_path.stat().st_size > 0:
-        print(f"Using local SMILES cache: {cache_path}")
-        return cache_path
-
-    print(f"Creating local SMILES cache: {cache_path}")
-    if args.input_source == "mysql":
-        smiles = load_smiles_from_mysql(
-            host=args.mysql_host,
-            port=args.mysql_port,
-            user=args.mysql_user,
-            password=args.mysql_password,
-            database=args.mysql_database,
-            table=args.mysql_table,
-            column=args.mysql_column,
-            limit=args.mysql_limit if args.mysql_limit > 0 else None,
-        )
-    else:
-        smiles = load_smiles_from_file(Path(args.smiles_file))
-
-    write_smiles_cache(cache_path, smiles)
-    print(f"Local cache saved: {cache_path} ({len(smiles)} SMILES)")
-    return cache_path
 
 
 def post_predict_batch(url: str, model_id: int, smiles_batch: list[str], timeout: int) -> requests.Response:
@@ -171,137 +84,84 @@ def run_endpoint_benchmark(
     smiles_file: Path,
     smiles_count: int,
     model_id: int,
-    runs: int,
     timeout: int,
     batch_size: int,
-) -> list[float]:
+    skip_first: int,
+) -> float:
     print(f"\n{name}: {url}")
     errors_file = Path("errors.txt")
 
     total_batches = (smiles_count + batch_size - 1) // batch_size
-    print(f"Batches prepared: {total_batches} (batch_size={batch_size}, source=file)")
+    print(
+        f"Batches prepared: {total_batches} "
+        f"(batch_size={batch_size}, source=file, skip_first={skip_first})"
+    )
 
-    durations = []
-    for idx in range(runs):
-        start = time.perf_counter()
-        total_processed = 0
-        success_batches = 0
-        failed_batches = 0
+    start = time.perf_counter()
+    total_processed = 0
+    success_batches = 0
+    failed_batches = 0
 
-        for request_idx, smiles_batch in enumerate(
-            iter_smiles_batches(smiles_file, batch_size),
-            start=1,
-        ):
-            batch_start = time.perf_counter()
-            try:
-                response = post_predict_batch(url, model_id, smiles_batch, timeout)
-                response.raise_for_status()
-            except requests.RequestException as exc:
-                batch_elapsed = time.perf_counter() - batch_start
-                failed_batches += 1
-                failed_smiles = find_failed_smiles(url, model_id, smiles_batch, timeout)
-                if failed_smiles:
-                    append_errors(errors_file, failed_smiles, idx + 1, request_idx)
-                    print(
-                        f"    identified failed smiles in batch: {len(failed_smiles)} "
-                        f"(saved to {errors_file})"
-                    )
-                else:
-                    append_errors(
-                        errors_file,
-                        [("<batch-level>", f"batch failed but single-smile checks passed: {exc}")],
-                        idx + 1,
-                        request_idx,
-                    )
-                print(
-                    f"  run {idx + 1}/{runs}, request {request_idx}/{total_batches} failed, "
-                    f"batch time: {batch_elapsed:.3f}s, error: {exc}"
-                )
-                continue
-
+    for request_idx, smiles_batch in enumerate(
+        iter_smiles_batches(smiles_file, batch_size, skip_first=skip_first),
+        start=1,
+    ):
+        batch_start = time.perf_counter()
+        try:
+            response = post_predict_batch(url, model_id, smiles_batch, timeout)
+            response.raise_for_status()
+        except requests.RequestException as exc:
             batch_elapsed = time.perf_counter() - batch_start
-            success_batches += 1
-            total_processed += len(smiles_batch)
+            failed_batches += 1
+            failed_smiles = find_failed_smiles(url, model_id, smiles_batch, timeout)
+            if failed_smiles:
+                append_errors(errors_file, failed_smiles, 1, request_idx)
+                print(
+                    f"    identified failed smiles in batch: {len(failed_smiles)} "
+                    f"(saved to {errors_file})"
+                )
+            else:
+                append_errors(
+                    errors_file,
+                    [("<batch-level>", f"batch failed but single-smile checks passed: {exc}")],
+                    1,
+                    request_idx,
+                )
             print(
-                f"  run {idx + 1}/{runs}, request {request_idx}/{total_batches} done, "
-                f"batch time: {batch_elapsed:.3f}s, total smiles processed: {total_processed}"
+                f"  request {request_idx}/{total_batches} failed, "
+                f"batch time: {batch_elapsed:.3f}s, error: {exc}"
             )
+            continue
 
-        elapsed = time.perf_counter() - start
-        durations.append(elapsed)
+        batch_elapsed = time.perf_counter() - batch_start
+        success_batches += 1
+        total_processed += len(smiles_batch)
         print(
-            f"  run {idx + 1}/{runs}: {elapsed:.3f}s "
-            f"(success_batches={success_batches}, failed_batches={failed_batches})"
+            f"  request {request_idx}/{total_batches} done, "
+            f"batch time: {batch_elapsed:.3f}s, total smiles processed: {total_processed}"
         )
 
-    return durations
-
-
-def summarize(name: str, durations: list[float]) -> dict:
-    return {
-        "name": name,
-        "min": min(durations),
-        "max": max(durations),
-        "avg": statistics.mean(durations),
-        "median": statistics.median(durations),
-    }
-
-
-def print_summary(summary: dict):
+    elapsed = time.perf_counter() - start
     print(
-        f"{summary['name']}: "
-        f"avg={summary['avg']:.3f}s, "
-        f"median={summary['median']:.3f}s, "
-        f"min={summary['min']:.3f}s, "
-        f"max={summary['max']:.3f}s"
+        f"  total: {elapsed:.3f}s "
+        f"(success_batches={success_batches}, failed_batches={failed_batches})"
     )
+    return elapsed
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Benchmark and compare batch prediction endpoints"
+        description="Benchmark batch prediction endpoint"
     )
     parser.add_argument(
         "--base-url",
         default="http://192.168.1.7:5004/api/predictor_models",
-        help="Primary base API URL (without trailing slash)",
-    )
-    parser.add_argument(
-        "--compare-base-url",
-        default="http://192.168.1.7:5005/api/predictor_models",
-        help="Secondary base API URL for comparison (without trailing slash)",
-    )
-    parser.add_argument(
-        "--input-source",
-        choices=["mysql", "file"],
-        default="mysql",
-        help="Source of SMILES data",
+        help="Base API URL (without trailing slash)",
     )
     parser.add_argument(
         "--smiles-file",
-        default="test_smiles1.smi",
+        default="smiles_cache.smi",
         help="Path to text file with one SMILES per line",
-    )
-    parser.add_argument("--mysql-host", default="192.168.1.3", help="MySQL host")
-    parser.add_argument("--mysql-port", type=int, default=3306, help="MySQL port")
-    parser.add_argument("--mysql-user", default="root", help="MySQL username")
-    parser.add_argument(
-        "--mysql-password", default="qqq123", help="MySQL user password"
-    )
-    parser.add_argument(
-        "--mysql-database", default="dsstox_2026_01", help="MySQL database"
-    )
-    parser.add_argument(
-        "--mysql-table", default="compounds", help="MySQL table with SMILES"
-    )
-    parser.add_argument(
-        "--mysql-column", default="smiles", help="MySQL column containing SMILES"
-    )
-    parser.add_argument(
-        "--mysql-limit",
-        type=int,
-        default=0,
-        help="Optional MySQL row limit (0 means no limit)",
     )
     parser.add_argument(
         "--model-id",
@@ -309,7 +169,6 @@ def main():
         default=1065,
         help="model_id to use in requests",
     )
-    parser.add_argument("--runs", type=int, default=3, help="Measured runs per endpoint")
     parser.add_argument(
         "--timeout", type=int, default=600, help="Timeout (seconds) per request"
     )
@@ -317,62 +176,48 @@ def main():
         "--batch-size", type=int, default=1000, help="SMILES per request"
     )
     parser.add_argument(
-        "--local-smiles-cache",
-        default="smiles_cache.smi",
-        help="Local file cache for SMILES data",
+        "--skip-first",
+        type=int,
+        default=230000,
+        help="Skip first N non-empty SMILES entries from input file",
     )
     args = parser.parse_args()
 
     if args.batch_size <= 0:
         raise ValueError("--batch-size must be > 0")
+    if args.skip_first < 0:
+        raise ValueError("--skip-first must be >= 0")
 
-    benchmark_runs = args.runs
+    smiles_file = Path(args.smiles_file)
+    if not smiles_file.exists():
+        raise FileNotFoundError(f"SMILES file not found: {smiles_file}")
 
-    if args.input_source == "mysql" and args.runs != 1:
-        print("MySQL mode: forcing --runs to 1")
-        benchmark_runs = 1
-
-    local_smiles_file = ensure_local_smiles_cache(args)
-    smiles_count = count_smiles_in_file(local_smiles_file)
+    smiles_count = count_smiles_in_file(smiles_file, skip_first=args.skip_first)
     if smiles_count == 0:
-        raise ValueError(f"No SMILES found in local cache file: {local_smiles_file}")
+        raise ValueError(
+            f"No SMILES found in file after --skip-first={args.skip_first}: {smiles_file}"
+        )
 
     base = args.base_url.rstrip("/")
-    compare_base = args.compare_base_url.rstrip("/")
     predict_url = f"{base}/predict"
-    compare_predict_url = f"{compare_base}/predict"
 
-    print(f"SMILES loaded from cache: {smiles_count}")
+    print(f"SMILES loaded from file: {smiles_count}")
+    print(f"skip_first: {args.skip_first}")
     print(f"model_id: {args.model_id}")
 
-    times_primary = run_endpoint_benchmark(
-        name=f"PRIMARY ({base})",
+    elapsed_primary = run_endpoint_benchmark(
+        name=f"BENCHMARK ({base})",
         url=predict_url,
-        smiles_file=local_smiles_file,
+        smiles_file=smiles_file,
         smiles_count=smiles_count,
         model_id=args.model_id,
-        runs=benchmark_runs,
         timeout=args.timeout,
         batch_size=args.batch_size,
+        skip_first=args.skip_first,
     )
 
-    # times_compare = run_endpoint_benchmark(
-    #     name=f"COMPARE ({compare_base})",
-    #     url=compare_predict_url,
-    #     payload=payload,
-    #     runs=args.runs,
-    #     timeout=args.timeout,
-    # )
-
     print("\nSummary")
-    summary_primary = summarize("PRIMARY", times_primary)
-    # summary_compare = summarize("COMPARE", times_compare)
-    print_summary(summary_primary)
-    # print_summary(summary_compare)
-
-    # if summary_compare["avg"] > 0:
-    #     speedup = summary_compare["avg"] / summary_primary["avg"] if summary_primary["avg"] > 0 else float("inf")
-    #     print(f"Speedup (compare/primary by avg): {speedup:.2f}x")
+    print(f"BENCHMARK: total={elapsed_primary:.3f}s")
 
 
 if __name__ == "__main__":
