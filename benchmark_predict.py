@@ -1,4 +1,5 @@
 import argparse
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 import time
 from pathlib import Path
 
@@ -78,6 +79,49 @@ def append_errors(errors_file: Path, failed: list[tuple[str, str]], run_no: int,
             fh.write(f"run={run_no}\trequest={request_no}\tsmiles={smile}\terror={err}\n")
 
 
+def process_batch_request(
+    url: str,
+    model_id: int,
+    timeout: int,
+    request_idx: int,
+    total_batches: int,
+    smiles_batch: list[str],
+    errors_file: Path,
+) -> tuple[int, bool, int, float]:
+    batch_start = time.perf_counter()
+    try:
+        response = post_predict_batch(url, model_id, smiles_batch, timeout)
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        batch_elapsed = time.perf_counter() - batch_start
+        failed_smiles = find_failed_smiles(url, model_id, smiles_batch, timeout)
+        if failed_smiles:
+            append_errors(errors_file, failed_smiles, 1, request_idx)
+            print(
+                f"    request {request_idx}/{total_batches}: identified failed smiles in batch: "
+                f"{len(failed_smiles)} (saved to {errors_file})"
+            )
+        else:
+            append_errors(
+                errors_file,
+                [("<batch-level>", f"batch failed but single-smile checks passed: {exc}")],
+                1,
+                request_idx,
+            )
+        print(
+            f"  request {request_idx}/{total_batches} failed, "
+            f"batch time: {batch_elapsed:.3f}s, error: {exc}"
+        )
+        return request_idx, False, 0, batch_elapsed
+
+    batch_elapsed = time.perf_counter() - batch_start
+    print(
+        f"  request {request_idx}/{total_batches} done, "
+        f"batch time: {batch_elapsed:.3f}s"
+    )
+    return request_idx, True, len(smiles_batch), batch_elapsed
+
+
 def run_endpoint_benchmark(
     name: str,
     url: str,
@@ -87,6 +131,7 @@ def run_endpoint_benchmark(
     timeout: int,
     batch_size: int,
     skip_first: int,
+    workers: int,
 ) -> float:
     print(f"\n{name}: {url}")
     errors_file = Path("errors.txt")
@@ -94,7 +139,7 @@ def run_endpoint_benchmark(
     total_batches = (smiles_count + batch_size - 1) // batch_size
     print(
         f"Batches prepared: {total_batches} "
-        f"(batch_size={batch_size}, source=file, skip_first={skip_first})"
+        f"(batch_size={batch_size}, workers={workers}, source=file, skip_first={skip_first})"
     )
 
     start = time.perf_counter()
@@ -102,44 +147,53 @@ def run_endpoint_benchmark(
     success_batches = 0
     failed_batches = 0
 
-    for request_idx, smiles_batch in enumerate(
-        iter_smiles_batches(smiles_file, batch_size, skip_first=skip_first),
-        start=1,
-    ):
-        batch_start = time.perf_counter()
-        try:
-            response = post_predict_batch(url, model_id, smiles_batch, timeout)
-            response.raise_for_status()
-        except requests.RequestException as exc:
-            batch_elapsed = time.perf_counter() - batch_start
-            failed_batches += 1
-            failed_smiles = find_failed_smiles(url, model_id, smiles_batch, timeout)
-            if failed_smiles:
-                append_errors(errors_file, failed_smiles, 1, request_idx)
-                print(
-                    f"    identified failed smiles in batch: {len(failed_smiles)} "
-                    f"(saved to {errors_file})"
-                )
-            else:
-                append_errors(
-                    errors_file,
-                    [("<batch-level>", f"batch failed but single-smile checks passed: {exc}")],
-                    1,
-                    request_idx,
-                )
-            print(
-                f"  request {request_idx}/{total_batches} failed, "
-                f"batch time: {batch_elapsed:.3f}s, error: {exc}"
-            )
-            continue
-
-        batch_elapsed = time.perf_counter() - batch_start
-        success_batches += 1
-        total_processed += len(smiles_batch)
-        print(
-            f"  request {request_idx}/{total_batches} done, "
-            f"batch time: {batch_elapsed:.3f}s, total smiles processed: {total_processed}"
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        in_flight = {}
+        batch_iter = enumerate(
+            iter_smiles_batches(smiles_file, batch_size, skip_first=skip_first),
+            start=1,
         )
+
+        def submit_next_batch() -> bool:
+            try:
+                request_idx, smiles_batch = next(batch_iter)
+            except StopIteration:
+                return False
+
+            future = executor.submit(
+                process_batch_request,
+                url,
+                model_id,
+                timeout,
+                request_idx,
+                total_batches,
+                smiles_batch,
+                errors_file,
+            )
+            in_flight[future] = request_idx
+            return True
+
+        for _ in range(workers):
+            if not submit_next_batch():
+                break
+
+        while in_flight:
+            done, _ = wait(in_flight, return_when=FIRST_COMPLETED)
+            for future in done:
+                in_flight.pop(future, None)
+                _, is_success, processed_count, _ = future.result()
+                if is_success:
+                    success_batches += 1
+                    total_processed += processed_count
+                else:
+                    failed_batches += 1
+
+                print(
+                    f"    progress: success_batches={success_batches}, "
+                    f"failed_batches={failed_batches}, total smiles processed={total_processed}"
+                )
+
+                submit_next_batch()
 
     elapsed = time.perf_counter() - start
     print(
@@ -176,6 +230,12 @@ def main():
         "--batch-size", type=int, default=1000, help="SMILES per request"
     )
     parser.add_argument(
+        "--workers",
+        type=int,
+        default=5,
+        help="Number of parallel workers",
+    )
+    parser.add_argument(
         "--skip-first",
         type=int,
         default=230000,
@@ -185,6 +245,8 @@ def main():
 
     if args.batch_size <= 0:
         raise ValueError("--batch-size must be > 0")
+    if args.workers <= 0:
+        raise ValueError("--workers must be > 0")
     if args.skip_first < 0:
         raise ValueError("--skip-first must be >= 0")
 
@@ -204,6 +266,7 @@ def main():
     print(f"SMILES loaded from file: {smiles_count}")
     print(f"skip_first: {args.skip_first}")
     print(f"model_id: {args.model_id}")
+    print(f"workers: {args.workers}")
 
     elapsed_primary = run_endpoint_benchmark(
         name=f"BENCHMARK ({base})",
@@ -214,6 +277,7 @@ def main():
         timeout=args.timeout,
         batch_size=args.batch_size,
         skip_first=args.skip_first,
+        workers=args.workers,
     )
 
     print("\nSummary")

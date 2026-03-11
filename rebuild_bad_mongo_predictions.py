@@ -181,6 +181,11 @@ def main() -> None:
         help="Output text file with one processed smiles per line",
     )
     parser.add_argument(
+        "--enable-processing",
+        action="store_true",
+        help="If set, rebuild deleted cache entries via predict endpoint",
+    )
+    parser.add_argument(
         "--request-timeout",
         type=int,
         default=int(os.getenv("PREDICT_REQUEST_TIMEOUT_SECONDS", "30")),
@@ -231,6 +236,7 @@ def main() -> None:
     rebuilt_ok = 0
     deleted = 0
     scanned = 0
+    deleted_errors = 0
 
     client = _build_mongo_client(
         server_selection_timeout_ms=args.mongo_server_selection_timeout_ms,
@@ -298,6 +304,7 @@ def main() -> None:
                 batch_skipped_no_rebuild = 0
                 batch_skipped_bad_key = 0
                 batch_delete_failed = 0
+                batch_deleted_errors = 0
                 batch_processed = 0
                 batch_rebuilt_ok = 0
                 batch_rebuild_failed = 0
@@ -312,40 +319,44 @@ def main() -> None:
                         continue
 
                     key = doc.get("key")
-                    smiles, model_id = _extract_smiles_and_model_id_from_key(key)
-                    if smiles is None or model_id is None:
-                        batch_skipped_bad_key += 1
-                        logging.warning("Skip doc with unexpected key format: %s", key)
-                        last_id = doc["_id"]
-                        continue
-
                     try:
                         delete_result = collection.delete_one({"_id": doc["_id"]})
                         if delete_result.deleted_count:
                             deleted += 1
+                            deleted_errors += 1
+                            batch_deleted_errors += 1
                     except PyMongoError as exc:
                         batch_delete_failed += 1
                         logging.warning("Failed to delete cache entry for key=%s: %s", key, exc)
                         last_id = doc["_id"]
                         continue
 
-                    smiles_log.write(f"{smiles}\n")
-                    processed += 1
-                    batch_processed += 1
+                    if args.enable_processing:
+                        smiles, model_id = _extract_smiles_and_model_id_from_key(key)
+                        if smiles is None or model_id is None:
+                            batch_skipped_bad_key += 1
+                            logging.warning("Skip rebuild due to unexpected key format: %s", key)
+                            last_id = doc["_id"]
+                            continue
 
-                    if _call_predict_endpoint(args.api_base_url, model_id, smiles, args.request_timeout):
-                        rebuilt_ok += 1
-                        batch_rebuilt_ok += 1
-                    else:
-                        batch_rebuild_failed += 1
+                        smiles_log.write(f"{smiles}\n")
+                        processed += 1
+                        batch_processed += 1
+
+                        if _call_predict_endpoint(args.api_base_url, model_id, smiles, args.request_timeout):
+                            rebuilt_ok += 1
+                            batch_rebuilt_ok += 1
+                        else:
+                            batch_rebuild_failed += 1
 
                     last_id = doc["_id"]
 
                 logging.info(
-                    "Batch done: scanned=%d, processed=%d, rebuilt_ok=%d, rebuilt_failed=%d, "
+                    "Batch done: scanned=%d, deleted_errors=%d, processed=%d, rebuilt_ok=%d, rebuilt_failed=%d, "
                     "skipped_no_rebuild=%d, skipped_bad_key=%d, delete_failed=%d | "
-                    "Totals: scanned=%d, processed=%d, deleted=%d, rebuilt_ok=%d",
+                    "Totals: scanned=%d, deleted_errors=%d, processed=%d, deleted=%d, rebuilt_ok=%d",
                     batch_scanned,
+                    batch_deleted_errors,
                     batch_processed,
                     batch_rebuilt_ok,
                     batch_rebuild_failed,
@@ -353,6 +364,7 @@ def main() -> None:
                     batch_skipped_bad_key,
                     batch_delete_failed,
                     scanned,
+                    deleted_errors,
                     processed,
                     deleted,
                     rebuilt_ok,
@@ -365,6 +377,7 @@ def main() -> None:
         client.close()
 
     print(f"Processed records: {processed}")
+    print(f"Deleted error records: {deleted_errors}")
     print(f"Deleted from mongo: {deleted}")
     print(f"Successfully rebuilt via predictDB: {rebuilt_ok}")
     print(f"Scanned records: {scanned}")
