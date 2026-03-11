@@ -106,6 +106,11 @@ def _prediction_to_obj(prediction):
         return prediction
 
 
+def _normalize_prediction_for_storage(prediction):
+    """Convert JSON text payloads to Python objects before persisting."""
+    return _prediction_to_obj(prediction)
+
+
 def _iter_prediction_errors(prediction):
     prediction_obj = _prediction_to_obj(prediction)
 
@@ -165,7 +170,9 @@ def cache_prediction(key: str, prediction):
     if _cache_disabled():
         return
 
-    if has_failed_standardization(prediction):
+    normalized_prediction = _normalize_prediction_for_storage(prediction)
+
+    if has_failed_standardization(normalized_prediction):
         logging.info("Skipping cache for key=%s due to failed standardization", key)
         return
 
@@ -174,9 +181,9 @@ def cache_prediction(key: str, prediction):
         try:
             # Upsert avoids duplicate key errors when index is unique
             predictor_models_cache.replace_one(
-                {"key": key}, {"key": key, "prediction": prediction}, upsert=True
+                {"key": key}, {"key": key, "prediction": normalized_prediction}, upsert=True
             )
             return
         except PyMongoError as e:
             logging.warning(f"Mongo write failed; caching in memory: {e}")
-    in_memory_cache[key] = prediction
+    in_memory_cache[key] = normalized_prediction

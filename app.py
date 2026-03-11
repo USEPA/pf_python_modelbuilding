@@ -328,7 +328,7 @@ def predictDB(model_id, smiles=None, identifier=None, report_format='json'):
         modelResultsHtml = rc.create_html_report_from_json(_to_json_str(pred))
         return HTMLResponse(content=modelResultsHtml)
 
-    return JSONResponse(content=pred)
+    return JSONResponse(content=_to_obj(pred))
 
 
 if __name__ == '__main__':
