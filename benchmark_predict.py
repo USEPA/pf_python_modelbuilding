@@ -1,76 +1,185 @@
 import argparse
-import statistics
+from datetime import datetime
 import time
 from pathlib import Path
 
 import requests
 
 
-def load_smiles(path: Path) -> list[str]:
-    smiles = []
-    with path.open("r", encoding="utf-8") as file:
-        for raw_line in file:
+def count_smiles_in_file(path: Path, skip_first: int = 0) -> int:
+    count = 0
+    seen = 0
+    with path.open("r", encoding="utf-8") as fh:
+        for raw_line in fh:
             line = raw_line.strip()
             if not line or line.startswith("#"):
                 continue
-            smiles.append(line)
-    if not smiles:
-        raise ValueError(f"No SMILES found in {path}")
-    return smiles
+            seen += 1
+            if seen <= skip_first:
+                continue
+            count += 1
+    return count
 
 
-def run_endpoint_benchmark(name: str, url: str, payload: dict, runs: int, timeout: int) -> list[float]:
-    print(f"\n{name}: {url}")
+def iter_smiles_batches(path: Path, batch_size: int, skip_first: int = 0):
+    batch = []
+    seen = 0
+    with path.open("r", encoding="utf-8") as fh:
+        for raw_line in fh:
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            seen += 1
+            if seen <= skip_first:
+                continue
+            batch.append(line)
+            if len(batch) >= batch_size:
+                yield batch
+                batch = []
+    if batch:
+        yield batch
 
-    durations = []
-    for idx in range(runs):
-        start = time.perf_counter()
-        response = requests.post(url, json=payload, timeout=timeout)
-        elapsed = time.perf_counter() - start
+
+def post_predict_batch(url: str, model_id: int, smiles_batch: list[str], timeout: int) -> requests.Response:
+    payload = {"smiles": smiles_batch, "model_id": model_id}
+    response = requests.post(url, json=payload, timeout=timeout)
+    return response
+
+
+def find_failed_smiles(url: str, model_id: int, smiles_batch: list[str], timeout: int) -> list[tuple[str, str]]:
+    failed = []
+    for smile in smiles_batch:
+        try:
+            response = post_predict_batch(url, model_id, [smile], timeout)
+            response.raise_for_status()
+        except requests.RequestException as exc:
+            failed.append((smile, str(exc)))
+    return failed
+
+
+def append_errors(errors_file: Path, failed: list[tuple[str, str]], run_no: int, request_no: int) -> None:
+    if not failed:
+        return
+
+    with errors_file.open("a", encoding="utf-8") as fh:
+        for smile, err in failed:
+            fh.write(f"run={run_no}\trequest={request_no}\tsmiles={smile}\terror={err}\n")
+
+
+def process_batch_request(
+    url: str,
+    model_id: int,
+    timeout: int,
+    request_idx: int,
+    total_batches: int,
+    smiles_batch: list[str],
+    errors_file: Path,
+) -> tuple[int, bool, int, float]:
+    batch_start = time.perf_counter()
+    try:
+        response = post_predict_batch(url, model_id, smiles_batch, timeout)
         response.raise_for_status()
-        durations.append(elapsed)
-        print(f"  run {idx + 1}/{runs}: {elapsed:.3f}s")
+    except requests.RequestException as exc:
+        batch_elapsed = time.perf_counter() - batch_start
+        failed_smiles = find_failed_smiles(url, model_id, smiles_batch, timeout)
+        if failed_smiles:
+            append_errors(errors_file, failed_smiles, 1, request_idx)
+            print(
+                f"    request {request_idx}/{total_batches}: identified failed smiles in batch: "
+                f"{len(failed_smiles)} (saved to {errors_file})"
+            )
+        else:
+            append_errors(
+                errors_file,
+                [("<batch-level>", f"batch failed but single-smile checks passed: {exc}")],
+                1,
+                request_idx,
+            )
+        print(
+            f"  request {request_idx}/{total_batches} failed, "
+            f"batch time: {batch_elapsed:.3f}s, error: {exc}"
+        )
+        return request_idx, False, 0, batch_elapsed
 
-    return durations
-
-
-def summarize(name: str, durations: list[float]) -> dict:
-    return {
-        "name": name,
-        "min": min(durations),
-        "max": max(durations),
-        "avg": statistics.mean(durations),
-        "median": statistics.median(durations),
-    }
-
-
-def print_summary(summary: dict):
+    batch_elapsed = time.perf_counter() - batch_start
     print(
-        f"{summary['name']}: "
-        f"avg={summary['avg']:.3f}s, "
-        f"median={summary['median']:.3f}s, "
-        f"min={summary['min']:.3f}s, "
-        f"max={summary['max']:.3f}s"
+        f"  request {request_idx}/{total_batches} done, "
+        f"batch time: {batch_elapsed:.3f}s"
     )
+    return request_idx, True, len(smiles_batch), batch_elapsed
+
+
+def run_endpoint_benchmark(
+    name: str,
+    url: str,
+    smiles_file: Path,
+    smiles_count: int,
+    model_id: int,
+    timeout: int,
+    batch_size: int,
+    skip_first: int,
+) -> float:
+    print(f"\n{name}: {url}")
+    errors_file = Path("errors.txt")
+
+    total_batches = (smiles_count + batch_size - 1) // batch_size
+    print(
+        f"Batches prepared: {total_batches} "
+        f"(batch_size={batch_size}, source=file, skip_first={skip_first})"
+    )
+
+    start = time.perf_counter()
+    total_processed = 0
+    success_batches = 0
+    failed_batches = 0
+
+    for request_idx, smiles_batch in enumerate(
+        iter_smiles_batches(smiles_file, batch_size, skip_first=skip_first),
+        start=1,
+    ):
+        _, is_success, processed_count, _ = process_batch_request(
+            url,
+            model_id,
+            timeout,
+            request_idx,
+            total_batches,
+            smiles_batch,
+            errors_file,
+        )
+        if is_success:
+            success_batches += 1
+            total_processed += processed_count
+        else:
+            failed_batches += 1
+
+        print(
+            f"    progress: success_batches={success_batches}, "
+            f"failed_batches={failed_batches}, total smiles processed={total_processed}"
+        )
+
+    elapsed = time.perf_counter() - start
+    print(
+        f"  total: {elapsed:.3f}s "
+        f"(success_batches={success_batches}, failed_batches={failed_batches})"
+    )
+    return elapsed
 
 
 def main():
+    script_start_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"Script started at: {script_start_time}")
+
     parser = argparse.ArgumentParser(
-        description="Benchmark and compare batch prediction endpoints"
+        description="Benchmark batch prediction endpoint"
     )
     parser.add_argument(
         "--base-url",
         default="http://192.168.1.7:5004/api/predictor_models",
-        help="Primary base API URL (without trailing slash)",
-    )
-    parser.add_argument(
-        "--compare-base-url",
-        default="http://192.168.1.7:5005/api/predictor_models",
-        help="Secondary base API URL for comparison (without trailing slash)",
+        help="Base API URL (without trailing slash)",
     )
     parser.add_argument(
         "--smiles-file",
-        default="test_smiles1.smi",
+        default="smiles_cache.smi",
         help="Path to text file with one SMILES per line",
     )
     parser.add_argument(
@@ -79,50 +188,55 @@ def main():
         default=1065,
         help="model_id to use in requests",
     )
-    parser.add_argument("--runs", type=int, default=3, help="Measured runs per endpoint")
     parser.add_argument(
         "--timeout", type=int, default=600, help="Timeout (seconds) per request"
     )
+    parser.add_argument(
+        "--batch-size", type=int, default=10000, help="SMILES per request"
+    )
+    parser.add_argument(
+        "--skip-first",
+        type=int,
+        default=0,
+        help="Skip first N non-empty SMILES entries from input file",
+    )
     args = parser.parse_args()
 
-    smiles_path = Path(args.smiles_file)
-    smiles = load_smiles(smiles_path)
+    if args.batch_size <= 0:
+        raise ValueError("--batch-size must be > 0")
+    if args.skip_first < 0:
+        raise ValueError("--skip-first must be >= 0")
 
-    payload = {"smiles": smiles, "model_id": args.model_id}
+    smiles_file = Path(args.smiles_file)
+    if not smiles_file.exists():
+        raise FileNotFoundError(f"SMILES file not found: {smiles_file}")
+
+    smiles_count = count_smiles_in_file(smiles_file, skip_first=args.skip_first)
+    if smiles_count == 0:
+        raise ValueError(
+            f"No SMILES found in file after --skip-first={args.skip_first}: {smiles_file}"
+        )
 
     base = args.base_url.rstrip("/")
-    compare_base = args.compare_base_url.rstrip("/")
     predict_url = f"{base}/predict"
-    compare_predict_url = f"{compare_base}/predict"
 
-    print(f"SMILES loaded: {len(smiles)}")
+    print(f"SMILES loaded from file: {smiles_count}")
+    print(f"skip_first: {args.skip_first}")
     print(f"model_id: {args.model_id}")
 
-    times_primary = run_endpoint_benchmark(
-        name=f"PRIMARY ({base})",
+    elapsed_primary = run_endpoint_benchmark(
+        name=f"BENCHMARK ({base})",
         url=predict_url,
-        payload=payload,
-        runs=args.runs,
+        smiles_file=smiles_file,
+        smiles_count=smiles_count,
+        model_id=args.model_id,
         timeout=args.timeout,
+        batch_size=args.batch_size,
+        skip_first=args.skip_first,
     )
 
-    # times_compare = run_endpoint_benchmark(
-    #     name=f"COMPARE ({compare_base})",
-    #     url=compare_predict_url,
-    #     payload=payload,
-    #     runs=args.runs,
-    #     timeout=args.timeout,
-    # )
-
     print("\nSummary")
-    summary_primary = summarize("PRIMARY", times_primary)
-    # summary_compare = summarize("COMPARE", times_compare)
-    print_summary(summary_primary)
-    # print_summary(summary_compare)
-
-    # if summary_compare["avg"] > 0:
-    #     speedup = summary_compare["avg"] / summary_primary["avg"] if summary_primary["avg"] > 0 else float("inf")
-    #     print(f"Speedup (compare/primary by avg): {speedup:.2f}x")
+    print(f"BENCHMARK: total={elapsed_primary:.3f}s")
 
 
 if __name__ == "__main__":

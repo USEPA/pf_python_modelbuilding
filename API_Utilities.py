@@ -173,6 +173,12 @@ class DescriptorsAPI:
 
         dfs = []
         for qsar_smiles, chemical in zip(qsar_smiles_list, chemicals):
+            # Some descriptor service responses include per-chemical errors without "descriptors".
+            # In that case return None for this row so caller can mark only that SMILES as failed.
+            if not isinstance(chemical, dict) or 'descriptors' not in chemical:
+                dfs.append(None)
+                continue
+
             descriptors = [float(descriptor) if descriptor is not None else np.nan for descriptor in chemical['descriptors']]
             descriptors.insert(0, None)
             descriptors.insert(0, qsar_smiles)

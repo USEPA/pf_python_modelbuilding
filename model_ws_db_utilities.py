@@ -25,7 +25,13 @@ import model_ws_utilities as mwu
 import StatsCalculator as stats
 from API_Utilities import QsarSmilesAPI, DescriptorsAPI
 from applicability_domain import applicability_domain_utilities as adu
-from db.mongo_cache import get_cached_prediction, cache_prediction
+from db.mongo_cache import (
+    cache_prediction,
+    delete_cached_prediction,
+    get_cached_prediction,
+    has_failed_standardization,
+    log_failed_standardization_key,
+)
 from model_ws_utilities import call_do_predictions_from_df, models
 from models import df_utilities as dfu
 from models.ModelBuilder import Model
@@ -862,12 +868,23 @@ class ModelPredictor:
         if isinstance(smiles, str):
             key = f"{smiles}-{model_id}"
             prediction = get_cached_prediction(key)
-            if prediction:
+            if prediction and not has_failed_standardization(prediction):
                 return prediction
-            else:
-                prediction, code = self.predict_model_smiles(model_id, smiles)
-                cache_prediction(key, prediction)
-                return prediction
+
+            if prediction is not None:
+                logging.info("Ignoring cached failed standardization prediction for key=%s", key)
+                delete_cached_prediction(key)
+
+            prediction, _ = self.predict_model_smiles(model_id, smiles)
+            if has_failed_standardization(prediction):
+                retry_prediction, _ = self.predict_model_smiles(model_id, smiles)
+                if has_failed_standardization(retry_prediction):
+                    log_failed_standardization_key(key, retry_prediction)
+                    return retry_prediction
+                prediction = retry_prediction
+
+            cache_prediction(key, prediction)
+            return prediction
         else:
             smiles_list = list(smiles)
             if not smiles_list:
@@ -879,18 +896,46 @@ class ModelPredictor:
             for idx, smi in enumerate(smiles_list):
                 key = f"{smi}-{model_id}"
                 prediction = get_cached_prediction(key)
-                if prediction is not None:
+                if prediction is not None and not has_failed_standardization(prediction):
                     result[idx] = prediction
                 else:
+                    if prediction is not None:
+                        logging.info("Ignoring cached failed standardization prediction for key=%s", key)
+                        delete_cached_prediction(key)
                     missing.append((idx, smi))
 
             if missing:
                 missing_smiles = [smi for _, smi in missing]
                 predictions = self.predict_model_smiles_batch(model_id, missing_smiles)
 
-                for (idx, smi), prediction in zip(missing, predictions):
-                    cache_prediction(f"{smi}-{model_id}", prediction)
+                failed_standardization = []
+                for pos, (idx, smi) in enumerate(missing):
+                    if pos >= len(predictions):
+                        logging.warning("Missing prediction output for model_id=%s smiles=%s", model_id, smi)
+                        result[idx] = {}
+                        continue
+
+                    prediction = predictions[pos]
                     result[idx] = prediction
+                    if has_failed_standardization(prediction):
+                        failed_standardization.append((idx, smi, prediction))
+                        continue
+
+                    cache_prediction(f"{smi}-{model_id}", prediction)
+
+                if failed_standardization:
+                    retry_smiles = [smi for _, smi, _ in failed_standardization]
+                    retry_predictions = self.predict_model_smiles_batch(model_id, retry_smiles)
+
+                    for pos, (idx, smi, prediction) in enumerate(failed_standardization):
+                        retry_prediction = retry_predictions[pos] if pos < len(retry_predictions) else prediction
+                        result[idx] = retry_prediction
+                        if has_failed_standardization(retry_prediction):
+                            key = f"{smi}-{model_id}"
+                            log_failed_standardization_key(key, retry_prediction)
+                            continue
+
+                        cache_prediction(f"{smi}-{model_id}", retry_prediction)
 
             return result
 

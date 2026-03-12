@@ -4,6 +4,7 @@ import logging
 import os
 import threading
 from concurrent.futures import ProcessPoolExecutor
+from datetime import datetime, timezone
 from time import perf_counter
 
 import httpx
@@ -11,6 +12,13 @@ import pandas as pd
 
 from API_Utilities import DescriptorsAPI, QsarSmilesAPI
 from applicability_domain import applicability_domain_utilities as adu
+from db.mongo_cache import (
+    cache_prediction,
+    delete_cached_prediction,
+    get_cached_prediction,
+    has_failed_standardization,
+    log_failed_standardization_key,
+)
 from model_ws_db_utilities import ModelDetails, ModelInitializer, ModelPredictor
 from model_ws_utilities import call_do_predictions_from_df
 from util import predict_constants as pc
@@ -61,12 +69,73 @@ def _split_evenly(items, n_parts):
     return chunks
 
 
+def _effective_cpu_workers(total_items: int, configured_workers: int) -> int:
+    if total_items <= 0:
+        return 1
+
+    workers = max(1, min(configured_workers, total_items))
+
+    # Small batches are usually faster without process fan-out overhead.
+    if total_items <= 4:
+        return 1
+
+    return workers
+
+
 _CPU_POOL = None
 _CPU_POOL_LOCK = threading.Lock()
 _CPU_POOL_SIZE = 0
+_PIPELINE_ERROR_LOG_LOCK = threading.Lock()
 
 _WORKER_PREDICTOR = None
 _WORKER_MODEL_CACHE = {}
+
+
+def _clean_log_value(value) -> str:
+    if value is None:
+        return ""
+    return str(value).replace("\t", " ").replace("\n", " ").replace("\r", " ").strip()
+
+
+def _log_pipeline_error(model_id, smiles, stage, error):
+    log_path = os.getenv("PREDICTION_PIPELINE_ERROR_LOG_FILE", "prediction_pipeline_errors.txt")
+    timestamp = datetime.now(timezone.utc).isoformat()
+    smiles_text = _clean_log_value(smiles) or "<empty>"
+    error_text = _clean_log_value(error) or "unknown error"
+    stage_text = _clean_log_value(stage) or "unknown_stage"
+
+    line = (
+        f"{timestamp}\tmodel_id={model_id}\tsmiles={smiles_text}\t"
+        f"stage={stage_text}\terror={error_text}\n"
+    )
+
+    log_dir = os.path.dirname(log_path)
+    try:
+        if log_dir:
+            os.makedirs(log_dir, exist_ok=True)
+
+        with _PIPELINE_ERROR_LOG_LOCK:
+            with open(log_path, "a", encoding="utf-8") as log_file:
+                log_file.write(line)
+    except OSError:
+        logging.exception(
+            "Failed to write pipeline error log for model_id=%s smiles=%s stage=%s",
+            model_id,
+            smiles,
+            stage,
+        )
+
+
+def _ad_failure_result(ad_name: str, err: Exception):
+    return {
+        "AD": False,
+        "adMethod": {
+            "name": ad_name,
+            "description": "Applicability domain calculation failed",
+        },
+        "conclusion": "Outside",
+        "reasoning": f"AD calculation failed: {err}",
+    }
 
 
 def _init_cpu_worker():
@@ -86,6 +155,12 @@ def _get_cpu_pool(max_workers: int) -> ProcessPoolExecutor:
                 )
                 _CPU_POOL_SIZE = max_workers
                 logging.info("Async CPU pool created with %d workers", max_workers)
+    elif _CPU_POOL_SIZE != max_workers:
+        logging.info(
+            "Async CPU pool already initialized with %d workers; requested=%d",
+            _CPU_POOL_SIZE,
+            max_workers,
+        )
     return _CPU_POOL
 
 
@@ -119,12 +194,31 @@ def _get_worker_model_context(model_id: int):
 def _cpu_predict_chunk(args):
     model_id, chunk_items, generate_neighbors, skip_images = args
 
-    ctx = _get_worker_model_context(model_id)
+    outputs = []
+
+    try:
+        ctx = _get_worker_model_context(model_id)
+    except ValueError as exc:
+        # Avoid crashing the whole request when model_id is invalid in worker process.
+        error_text = str(exc)
+        for item in chunk_items:
+            idx = item["idx"]
+            smiles = item["smiles"]
+            _log_pipeline_error(model_id, smiles, "model_init", error_text)
+            outputs.append((
+                idx,
+                {
+                    "error": error_text,
+                    "model_id": model_id,
+                    "smiles": smiles,
+                },
+            ))
+        return outputs
+
     model = ctx["model"]
     predictor = ctx["predictor"]
     model_details = ctx["model_details"]
 
-    outputs = []
     valid_items = []
     valid_dfs = []
 
@@ -152,11 +246,28 @@ def _cpu_predict_chunk(args):
 
     if valid_items:
         all_pred_dfs = pd.concat(valid_dfs, ignore_index=True)
-
-        batch_json = call_do_predictions_from_df(all_pred_dfs, model)
-        batch_pred_results = json.loads(batch_json)
-
-        pred_values_by_pos = [row["pred"] for row in batch_pred_results]
+        try:
+            batch_json = call_do_predictions_from_df(all_pred_dfs, model)
+            batch_pred_results = json.loads(batch_json)
+            pred_values_by_pos = [row["pred"] for row in batch_pred_results]
+            if len(pred_values_by_pos) != len(valid_items):
+                raise ValueError(
+                    f"Prediction output size mismatch: got {len(pred_values_by_pos)} expected {len(valid_items)}"
+                )
+        except Exception as exc:
+            logging.exception("Batch prediction failed for model_id=%s", model_id)
+            for item in valid_items:
+                _log_pipeline_error(model_id, item["smiles"], "predictions", exc)
+                outputs.append((
+                    item["idx"],
+                    predictor._build_error_report_dict(
+                        item["smiles"],
+                        model_details,
+                        "Prediction calculation failed",
+                        chemical=item["chemical"],
+                    ),
+                ))
+            return outputs
 
         ad_results_by_pos = [[] for _ in range(len(valid_items))]
         if model.applicabilityDomainName:
@@ -167,7 +278,17 @@ def _cpu_predict_chunk(args):
             for ad_name in applicability_domains:
                 if ad_name == pc.Applicability_Domain_TEST_Fragment_Counts:
                     for i, df_pred in enumerate(valid_dfs):
-                        ad_result = predictor.determineApplicabilityDomain(model, ad_name, df_pred)
+                        try:
+                            ad_result = predictor.determineApplicabilityDomain(model, ad_name, df_pred)
+                        except Exception as exc:
+                            logging.exception("Per-row AD failed for %s", ad_name)
+                            _log_pipeline_error(
+                                model_id,
+                                valid_items[i]["smiles"],
+                                "applicability_domain",
+                                f"{ad_name}: {exc}",
+                            )
+                            ad_result = _ad_failure_result(ad_name, exc)
                         ad_results_by_pos[i].append(ad_result)
                 else:
                     try:
@@ -182,10 +303,27 @@ def _cpu_predict_chunk(args):
                         for i in range(len(valid_items)):
                             ad_result = predictor._parse_ad_result_for_row(output, i, ad_cutoff, ad_name, model)
                             ad_results_by_pos[i].append(ad_result)
-                    except Exception:
+                    except Exception as exc:
                         logging.exception("Batch AD failed for %s; fallback to per-row", ad_name)
+                        for item in valid_items:
+                            _log_pipeline_error(
+                                model_id,
+                                item["smiles"],
+                                "applicability_domain",
+                                f"{ad_name} batch: {exc}",
+                            )
                         for i, df_pred in enumerate(valid_dfs):
-                            ad_result = predictor.determineApplicabilityDomain(model, ad_name, df_pred)
+                            try:
+                                ad_result = predictor.determineApplicabilityDomain(model, ad_name, df_pred)
+                            except Exception as exc:
+                                logging.exception("Per-row AD fallback failed for %s", ad_name)
+                                _log_pipeline_error(
+                                    model_id,
+                                    valid_items[i]["smiles"],
+                                    "applicability_domain",
+                                    f"{ad_name} fallback: {exc}",
+                                )
+                                ad_result = _ad_failure_result(ad_name, exc)
                             ad_results_by_pos[i].append(ad_result)
 
         precomputed_neighbors_by_pos = [None for _ in range(len(valid_items))]
@@ -223,6 +361,8 @@ class AsyncModelPredictor:
     def __init__(self):
         self._descriptor_api = DescriptorsAPI()
         self._io_model_cache = {}
+        self._cpu_batch_concurrency = _env_int("PREDICT_CPU_BATCH_CONCURRENCY", 2)
+        self._cpu_batch_semaphore = asyncio.Semaphore(self._cpu_batch_concurrency)
 
     async def _get_io_model_config(self, model_id):
         if model_id in self._io_model_cache:
@@ -249,9 +389,79 @@ class AsyncModelPredictor:
 
     async def predict_from_db(self, model_id, smiles):
         if isinstance(smiles, str):
+            key = f"{smiles}-{model_id}"
+            prediction = get_cached_prediction(key)
+            if prediction is not None and not has_failed_standardization(prediction):
+                return prediction
+            if prediction is not None:
+                logging.info("Ignoring cached failed standardization prediction for key=%s", key)
+                delete_cached_prediction(key)
+
             results = await self.predict_model_smiles_batch(model_id, [smiles])
-            return results[0] if results else {}
-        return await self.predict_model_smiles_batch(model_id, list(smiles))
+            prediction = results[0] if results else {}
+            if has_failed_standardization(prediction):
+                retry_results = await self.predict_model_smiles_batch(model_id, [smiles])
+                retry_prediction = retry_results[0] if retry_results else prediction
+                if has_failed_standardization(retry_prediction):
+                    await asyncio.to_thread(log_failed_standardization_key, key, retry_prediction)
+                    return retry_prediction
+                prediction = retry_prediction
+
+            cache_prediction(key, prediction)
+            return prediction
+
+        smiles_list = list(smiles)
+        if not smiles_list:
+            return []
+
+        result = [None] * len(smiles_list)
+        missing = []
+
+        for idx, smi in enumerate(smiles_list):
+            key = f"{smi}-{model_id}"
+            prediction = get_cached_prediction(key)
+            if prediction is not None and not has_failed_standardization(prediction):
+                result[idx] = prediction
+            else:
+                if prediction is not None:
+                    logging.info("Ignoring cached failed standardization prediction for key=%s", key)
+                    delete_cached_prediction(key)
+                missing.append((idx, smi))
+
+        if missing:
+            missing_smiles = [smi for _, smi in missing]
+            predictions = await self.predict_model_smiles_batch(model_id, missing_smiles)
+
+            failed_standardization = []
+            for pos, (idx, smi) in enumerate(missing):
+                if pos >= len(predictions):
+                    logging.warning("Missing prediction output for model_id=%s smiles=%s", model_id, smi)
+                    result[idx] = {}
+                    continue
+
+                prediction = predictions[pos]
+                result[idx] = prediction
+                if has_failed_standardization(prediction):
+                    failed_standardization.append((idx, smi, prediction))
+                    continue
+
+                cache_prediction(f"{smi}-{model_id}", prediction)
+
+            if failed_standardization:
+                retry_smiles = [smi for _, smi, _ in failed_standardization]
+                retry_predictions = await self.predict_model_smiles_batch(model_id, retry_smiles)
+
+                for pos, (idx, smi, prediction) in enumerate(failed_standardization):
+                    retry_prediction = retry_predictions[pos] if pos < len(retry_predictions) else prediction
+                    result[idx] = retry_prediction
+                    if has_failed_standardization(retry_prediction):
+                        key = f"{smi}-{model_id}"
+                        await asyncio.to_thread(log_failed_standardization_key, key, retry_prediction)
+                        continue
+
+                    cache_prediction(f"{smi}-{model_id}", retry_prediction)
+
+        return result
 
     async def predict_model_smiles_batch(self, model_id, smiles_list):
         if not smiles_list:
@@ -301,22 +511,29 @@ class AsyncModelPredictor:
                 "descriptor_error": descriptor_errors[idx],
             })
 
-        cpu_workers = _env_int("PREDICT_CPU_WORKERS", os.cpu_count() or 1)
+        configured_cpu_workers = 1
+        cpu_workers = 1
         chunks = _split_evenly(payload_items, cpu_workers)
 
         loop = asyncio.get_running_loop()
-        pool = _get_cpu_pool(cpu_workers)
+        pool = _get_cpu_pool(configured_cpu_workers)
+        cpu_queue_start = perf_counter() if timing_on else None
+        cpu_queue_wait = 0.0
 
-        cpu_tasks = [
-            loop.run_in_executor(
-                pool,
-                _cpu_predict_chunk,
-                (model_id, chunk, generate_neighbors, skip_images),
-            )
-            for chunk in chunks
-        ]
+        async with self._cpu_batch_semaphore:
+            if cpu_queue_start is not None:
+                cpu_queue_wait = perf_counter() - cpu_queue_start
 
-        chunk_results = await asyncio.gather(*cpu_tasks)
+            cpu_tasks = [
+                loop.run_in_executor(
+                    pool,
+                    _cpu_predict_chunk,
+                    (model_id, chunk, generate_neighbors, skip_images),
+                )
+                for chunk in chunks
+            ]
+
+            chunk_results = await asyncio.gather(*cpu_tasks)
 
         ordered = [None] * len(smiles_list)
         for chunk_result in chunk_results:
@@ -326,9 +543,17 @@ class AsyncModelPredictor:
         if timing_on:
             total_elapsed = perf_counter() - total_start if total_start is not None else 0.0
             logging.info(
-                "timing.async_batch model_id=%s size=%d cpu_workers=%d chunks=%d total=%.3fs",
+                "timing.async_batch_queue model_id=%s size=%d queue_wait=%.3fs cpu_batch_concurrency=%d",
                 model_id,
                 len(smiles_list),
+                cpu_queue_wait,
+                self._cpu_batch_concurrency,
+            )
+            logging.info(
+                "timing.async_batch model_id=%s size=%d configured_cpu_workers=%d cpu_workers=%d chunks=%d total=%.3fs",
+                model_id,
+                len(smiles_list),
+                configured_cpu_workers,
                 cpu_workers,
                 len(chunks),
                 total_elapsed,
@@ -344,7 +569,9 @@ class AsyncModelPredictor:
 
         if model_cfg is None:
             for i, smi in enumerate(smiles_list):
-                errors[i] = f"Invalid model_id: {model_id}"
+                error_msg = f"Invalid model_id: {model_id}"
+                errors[i] = error_msg
+                _log_pipeline_error(model_id, smi, "standardize", error_msg)
             return standardized, errors
 
         qsar_rule_set = model_cfg["qsarReadyRuleSet"]
@@ -366,29 +593,41 @@ class AsyncModelPredictor:
             async def run_task(task):
                 async with semaphore:
                     smiles_chunk = [smi for _, smi in task]
-                    chemicals, status_code = await QsarSmilesAPI.call_qsar_ready_standardize_post_async(
-                        client=client,
-                        server_host=server_host,
-                        smiles=smiles_chunk,
-                        full=False,
-                        workflow=qsar_rule_set,
-                    )
-                    return task, chemicals, status_code
+                    try:
+                        chemicals, status_code = await QsarSmilesAPI.call_qsar_ready_standardize_post_async(
+                            client=client,
+                            server_host=server_host,
+                            smiles=smiles_chunk,
+                            full=False,
+                            workflow=qsar_rule_set,
+                        )
+                        return task, chemicals, status_code, None
+                    except Exception as exc:
+                        return task, None, None, exc
 
-            results = await asyncio.gather(*(run_task(task) for task in tasks), return_exceptions=True)
+            results = await asyncio.gather(*(run_task(task) for task in tasks))
 
         for result in results:
-            if isinstance(result, Exception):
-                logging.exception("Async standardization chunk failed", exc_info=result)
-                continue
-
-            task, chemicals, status_code = result
+            task, chemicals, status_code, task_error = result
             idxs = [idx for idx, _ in task]
             smiles_chunk = [smi for _, smi in task]
+
+            if task_error is not None:
+                logging.error("Async standardization chunk failed: %s", task_error)
+                for idx, smi in zip(idxs, smiles_chunk):
+                    errors[idx] = f"{smi} failed standardization"
+                    _log_pipeline_error(model_id, smi, "standardize", task_error)
+                continue
 
             if status_code != 200 or not isinstance(chemicals, list) or len(chemicals) != len(task):
                 for idx, smi in zip(idxs, smiles_chunk):
                     errors[idx] = f"{smi} failed standardization"
+                    _log_pipeline_error(
+                        model_id,
+                        smi,
+                        "standardize",
+                        f"Invalid standardize response: status_code={status_code}",
+                    )
                 continue
 
             for idx, smi, item in zip(idxs, smiles_chunk, chemicals):
@@ -397,6 +636,7 @@ class AsyncModelPredictor:
                     standardized[idx] = chemical
                 else:
                     errors[idx] = chemical
+                    _log_pipeline_error(model_id, smi, "standardize", chemical)
 
         return standardized, errors
 
@@ -407,9 +647,12 @@ class AsyncModelPredictor:
         errors = [None] * len(standardized)
 
         if model_cfg is None:
-            for i, smi in enumerate(standardized):
-                if smi is not None:
-                    errors[i] = f"Invalid model_id: {model_id}"
+            for i, chemical in enumerate(standardized):
+                if chemical is not None:
+                    error_msg = f"Invalid model_id: {model_id}"
+                    errors[i] = error_msg
+                    smiles = chemical.get("canonicalSmiles") if isinstance(chemical, dict) else chemical
+                    _log_pipeline_error(model_id, smiles, "descriptors", error_msg)
             return dfs_by_idx, errors
 
         valid_pairs = [(idx, item["canonicalSmiles"]) for idx, item in enumerate(standardized) if item is not None]
@@ -432,28 +675,40 @@ class AsyncModelPredictor:
             async def run_task(task):
                 async with semaphore:
                     smiles_chunk = [smi for _, smi in task]
-                    payload, status_code = await self._descriptor_api.call_descriptors_post_with_status_async(
-                        client=client,
-                        server_host=server_host,
-                        qsar_smiles=smiles_chunk,
-                        descriptor_name=descriptor_service,
-                    )
-                    return task, payload, status_code
+                    try:
+                        payload, status_code = await self._descriptor_api.call_descriptors_post_with_status_async(
+                            client=client,
+                            server_host=server_host,
+                            qsar_smiles=smiles_chunk,
+                            descriptor_name=descriptor_service,
+                        )
+                        return task, payload, status_code, None
+                    except Exception as exc:
+                        return task, None, None, exc
 
-            results = await asyncio.gather(*(run_task(task) for task in tasks), return_exceptions=True)
+            results = await asyncio.gather(*(run_task(task) for task in tasks))
 
         for result in results:
-            if isinstance(result, Exception):
-                logging.exception("Async descriptor chunk failed", exc_info=result)
-                continue
-
-            task, payload, status_code = result
+            task, payload, status_code, task_error = result
             idxs = [idx for idx, _ in task]
             smiles_chunk = [smi for _, smi in task]
 
-            if status_code != 200 or not isinstance(payload, dict):
-                for idx in idxs:
+            if task_error is not None:
+                logging.error("Async descriptor chunk failed: %s", task_error)
+                for idx, smi in zip(idxs, smiles_chunk):
                     errors[idx] = "Descriptor calculation failed"
+                    _log_pipeline_error(model_id, smi, "descriptors", task_error)
+                continue
+
+            if status_code != 200 or not isinstance(payload, dict):
+                for idx, smi in zip(idxs, smiles_chunk):
+                    errors[idx] = "Descriptor calculation failed"
+                    _log_pipeline_error(
+                        model_id,
+                        smi,
+                        "descriptors",
+                        f"Invalid descriptor response: status_code={status_code}",
+                    )
                 continue
 
             dfs = self._descriptor_api.response_json_to_dfs(
@@ -462,12 +717,17 @@ class AsyncModelPredictor:
                 descriptor_headers=descriptor_headers,
             )
             if dfs is None or len(dfs) != len(task):
-                for idx in idxs:
+                for idx, smi in zip(idxs, smiles_chunk):
                     errors[idx] = "Descriptor calculation failed"
+                    _log_pipeline_error(model_id, smi, "descriptors", "Descriptor response parsing failed")
                 continue
 
-            for idx, df in zip(idxs, dfs):
-                dfs_by_idx[idx] = df
+            for idx, smi, df in zip(idxs, smiles_chunk, dfs):
+                if df is None:
+                    errors[idx] = "Descriptor calculation failed"
+                    _log_pipeline_error(model_id, smi, "descriptors", "Descriptor dataframe is None")
+                else:
+                    dfs_by_idx[idx] = df
 
         return dfs_by_idx, errors
 

@@ -77,6 +77,7 @@ py-serializable==2.1.0
 py4j==0.10.9.9
 Pygments==2.19.2
 pymongo==4.15.5
+pymysql==1.1.2
 pypmml==0.9.17
 pyreadline3==3.5.4
 python-dateutil==2.9.0.post0
