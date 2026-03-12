@@ -105,9 +105,20 @@ class ModelInitializer:
             if model_id in models:
                 logging.debug('have model already initialized')
                 model = models[model_id]
+                if model is not None:
+                    return model
+
+                # Previous initialization failed and stored None; allow fresh retry.
+                logging.warning(f"Cached model for {model_id} is None, reloading")
+                models.pop(model_id, None)
             else:
-                model = self.initModel(model_id)
+                model = None
+
+            model = self.initModel(model_id)
+            if model is not None:
                 models[model_id] = model
+            else:
+                logging.error(f"Model initialization failed for model_id={model_id}; not caching")
 
         return model
 
@@ -129,16 +140,27 @@ class ModelInitializer:
 
             # Use BytesIO to collect the byte data
             output_stream = BytesIO()
+            chunk_count = 0
 
             # Fetch and write byte data to the output stream
             for record in result:
+                if record.bytes is None:
+                    logging.error(f"Found NULL model bytes chunk for model_id={model_id}")
+                    return None
                 output_stream.write(record.bytes)  # Assuming the column name is 'bytes'
+                chunk_count += 1
+
+            if chunk_count == 0:
+                logging.error(f"No model bytes found in DB for model_id={model_id}")
+                return None
 
             # Return the combined byte array
-            return output_stream.getvalue()
+            model_bytes = output_stream.getvalue()
+            logging.debug(f"Loaded model bytes for model_id={model_id}: chunks={chunk_count}, total_bytes={len(model_bytes)}")
+            return model_bytes
 
-        except Exception as e:
-            print(f"Exception occurred: {e}")
+        except Exception:
+            logging.exception(f"Failed to read model bytes for model_id={model_id}")
             return None
 
     def get_model_statistics(self, model: Model, session):
@@ -274,45 +296,53 @@ class ModelInitializer:
     def initModel(self, model_id):
 
         session = getSession()
+        try:
+            model_bytes = self.get_model_bytes(model_id, session)
 
-        model_bytes = self.get_model_bytes(model_id, session)
+            if not model_bytes:
+                logging.error(f"Couldnt load model_id={model_id} from model bytes")
+                return None
 
-        if not model_bytes:
-            logging.error(f"Couldnt load {model_id} from model bytes")
-            return
+            import pickle
+            try:
+                model = pickle.loads(model_bytes)
+            except Exception:
+                logging.exception(f"Failed to deserialize model bytes for model_id={model_id}")
+                return None
 
-        import pickle
-        model = pickle.loads(model_bytes)
+            if not model:
+                logging.error(f"Deserialized model is empty for model_id={model_id}")
+                return None
 
-        if not model:
-            logging.error(f"Couldnt load {model_id} from model bytes")
-            return
+            model.modelId = model_id
 
-        model.modelId = model_id
+            if not hasattr(model, "is_binary"):
+                logging.info('model.is_binary is none, setting to false')
+                model.is_binary = False
 
-        if not hasattr(model, "is_binary"):
-            logging.info('model.is_binary is none, setting to false')
-            model.is_binary = False
+            # Stores model under provided number
+            self.get_model_details(model, session)
+            self.updateUnits(model)
+            self.get_model_statistics(model, session)
+            self.get_training_prediction_instances(session, model)
+            self.get_dsstox_records_for_dataset(model, session)
 
-        # Stores model under provided number
+            # get following for pred values for neighbors:
+            model.df_preds_test = self.get_predictions(session, model=model, split_num=1, fk_splitting_id=1)
+            model.df_preds_training_cv = self.get_cv_predictions(session, model)
 
-        self.get_model_details(model, session)
-        
-        self.updateUnits(model)
-        
-        self.get_model_statistics(model, session)
-        self.get_training_prediction_instances(session, model)
-        self.get_dsstox_records_for_dataset(model, session)
+            logging.debug(f"model_description with added metadata:{model.get_model_description_pretty()}")
+            logging.info(f"Successfully initialized model_id={model_id}")
+            return model
 
-        # get following for pred values for neighbors:
-        model.df_preds_test = self.get_predictions(session, model=model, split_num=1, fk_splitting_id=1)
-        model.df_preds_training_cv = self.get_cv_predictions(session, model)
-
-        logging.debug(f"model_description with added metadata:{model.get_model_description_pretty()}")
-
-        session.close()
-
-        return model
+        except Exception:
+            logging.exception(f"Unexpected failure while initializing model_id={model_id}")
+            return None
+        finally:
+            try:
+                session.close()
+            except Exception:
+                logging.exception(f"Failed to close DB session after initModel(model_id={model_id})")
     
     def getQsarDtxcid(self, qsarSmiles, datasetName, session):
         
@@ -1219,8 +1249,7 @@ class ModelPredictor:
         serverAPIs = os.getenv("CIM_API_SERVER", "https://cim-dev.sciencedataexperts.com")
         fileAPI = os.getenv("FILE_API_SERVER", pc.URL_CTX_API)
 
-        logging.info("serverAPIS:{serverAPIs}")
-        logging.info("model.qsarReadyRuleSet:{model.qsarReadyRuleSet}")
+        logging.info("serverAPIs:%s", serverAPIs)
 
         # initialize model bytes and all details from db:
         
@@ -1228,7 +1257,10 @@ class ModelPredictor:
         model = mi.init_model(model_id)
 
         if model is None or hasattr(model, 'modelId') is False:
+            logging.error(f"Returning Invalid model_id for model_id={model_id}: model failed to initialize")
             return f"Invalid model_id: {model_id}", 400
+
+        logging.info("model.qsarReadyRuleSet:%s", getattr(model, "qsarReadyRuleSet", None))
 
         self._ensure_model_runtime_cache(model)
 
