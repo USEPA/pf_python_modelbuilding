@@ -19,7 +19,7 @@ from connexion.middleware import MiddlewarePosition
 from connexion.options import SwaggerUIOptions
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
-from starlette.responses import HTMLResponse, Response, JSONResponse, StreamingResponse
+from starlette.responses import HTMLResponse, JSONResponse, StreamingResponse
 
 import util.get_model_file as gmf
 from API_Utilities import SearchAPI
@@ -142,6 +142,16 @@ def _to_json_str(x):
     raise TypeError(f"Unsupported prediction type: {type(x)}")
 
 
+def _to_obj_safe(x):
+    try:
+        return _to_obj(x)
+    except Exception:
+        try:
+            return {"error": _to_json_str(x)}
+        except Exception:
+            return {"error": str(x)}
+
+
 def _init_process_predictor():
     global _PROCESS_PREDICTOR
     _PROCESS_PREDICTOR = ModelPredictor()
@@ -156,7 +166,7 @@ def _predict_smiles_in_process(args):
     if predictor is None:
         raise RuntimeError("Failed to initialize process predictor")
     pred = predictor.predictFromDB(model_id, current_smiles)
-    return _to_obj(pred)
+    return _to_obj_safe(pred)
 
 
 def _dedupe_smiles_preserve_order(smiles_list):
@@ -201,7 +211,7 @@ def predictDB_POST(body):
             unique_results = list(executor.map(_predict_smiles_in_process, ((model_id, s) for s in unique_smiles)))
     else:
         predictor = ModelPredictor()
-        unique_results = [_to_obj(pred) for pred in predictor.predictFromDB(model_id, unique_smiles)]
+        unique_results = [_to_obj_safe(pred) for pred in predictor.predictFromDB(model_id, unique_smiles)]
 
     model_results = [None] * len(smiles_list)
     for smiles, prediction in zip(unique_smiles, unique_results):
@@ -247,7 +257,7 @@ def predictDB(model_id, smiles=None, identifier=None, report_format='json'):
         modelResultsHtml = rc.create_html_report_from_json(_to_json_str(pred))
         return HTMLResponse(content=modelResultsHtml)
 
-    return Response(content=_to_json_str(pred), media_type="application/json")
+    return JSONResponse(content=_to_obj_safe(pred))
 
 
 if __name__ == '__main__':

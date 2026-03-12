@@ -798,6 +798,35 @@ class ModelPredictor:
 
         return lookup_df.set_index(key_col)[existing_value_cols].to_dict(orient='index')
 
+    @staticmethod
+    def _prediction_to_obj(prediction):
+        if isinstance(prediction, (dict, list)):
+            return prediction
+
+        if isinstance(prediction, (bytes, bytearray)):
+            prediction = prediction.decode("utf-8")
+
+        if isinstance(prediction, str):
+            try:
+                return json.loads(prediction)
+            except json.JSONDecodeError:
+                return {"error": prediction}
+
+        return {"error": str(prediction)}
+
+    @staticmethod
+    def _prediction_to_json_str(prediction):
+        if isinstance(prediction, (dict, list)):
+            return json.dumps(prediction)
+
+        if isinstance(prediction, (bytes, bytearray)):
+            return prediction.decode("utf-8")
+
+        if isinstance(prediction, str):
+            return prediction
+
+        return json.dumps({"error": str(prediction)})
+
     def _build_neighbor_cache(self, model, df_set):
         if df_set is None or df_set.empty or not model.embedding:
             return None
@@ -863,11 +892,12 @@ class ModelPredictor:
             key = f"{smiles}-{model_id}"
             prediction = get_cached_prediction(key)
             if prediction is not None:
-                return prediction
+                return self._prediction_to_json_str(prediction)
             else:
                 prediction, code = self.predict_model_smiles(model_id, smiles)
-                cache_prediction(key, prediction)
-                return prediction
+                prediction_obj = self._prediction_to_obj(prediction)
+                cache_prediction(key, prediction_obj)
+                return self._prediction_to_json_str(prediction_obj)
         else:
             smiles_list = list(smiles)
             if not smiles_list:
@@ -880,7 +910,7 @@ class ModelPredictor:
                 key = f"{smi}-{model_id}"
                 prediction = get_cached_prediction(key)
                 if prediction is not None:
-                    result[idx] = prediction
+                    result[idx] = self._prediction_to_json_str(prediction)
                 else:
                     if smi in missing_by_smiles:
                         missing_by_smiles[smi].append(idx)
@@ -897,8 +927,9 @@ class ModelPredictor:
                     prediction, code = self.predict_model_smiles(model_id, smi)
                     if code != 200:
                         prediction = dict(smiles=smi, error=prediction)
-                    cache_prediction(f"{smi}-{model_id}", prediction)
-                    return indices, prediction
+                    prediction_obj = self._prediction_to_obj(prediction)
+                    cache_prediction(f"{smi}-{model_id}", prediction_obj)
+                    return indices, self._prediction_to_json_str(prediction_obj)
 
                 with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
                     for indices, prediction in pool.map(_predict_one, missing):
