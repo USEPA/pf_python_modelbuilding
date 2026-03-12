@@ -7,11 +7,33 @@ from pymongo.errors import PyMongoError
 
 predictor_models_cache = None
 in_memory_cache = {}
+_mongo_init_done = False
+
+
+def _env_bool(name: str, default: bool = True) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+
+    value = raw.strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+
+    logging.warning(f"Invalid boolean value for {name}={raw!r}; using default={default}")
+    return default
 
 
 def _init_mongo():
 
-    global predictor_models_cache
+    global predictor_models_cache, _mongo_init_done
+
+    if not _env_bool("MONGO_CACHE_ENABLED", True):
+        predictor_models_cache = None
+        _mongo_init_done = True
+        logging.info("Mongo cache disabled via MONGO_CACHE_ENABLED")
+        return
     
     try:
         client = MongoClient(
@@ -42,13 +64,15 @@ def _init_mongo():
         # Any connection issue: fall back to in-memory
         predictor_models_cache = None
         logging.warning(f"Mongo unavailable; falling back to in-memory cache: {e}")
+    finally:
+        _mongo_init_done = True
 
 
 def _ensure_init():
     # Lazy initialize on first use to avoid network I/O at import, but safe if called multiple times
-    global predictor_models_cache
+    global _mongo_init_done
     
-    if predictor_models_cache is None:
+    if not _mongo_init_done:
         _init_mongo()
 
 

@@ -23,7 +23,7 @@ from db.mongo_cache import get_cached_prediction, cache_prediction
 
 from util import predict_constants as pc
 
-from model_ws_utilities import call_do_predictions_from_df, models
+from model_ws_utilities import models
 from models import df_utilities as dfu
 from models.ModelBuilder import Model
 
@@ -723,7 +723,17 @@ class NeighborGetter:
         neighbors = ids_combined_transposed[0]
         return neighbors
 
-    def find_neighbors_in_set(self, model, df_set, df_test_chemicals):
+    def find_neighbors_in_set(self, model, df_set, df_test_chemicals, precomputed=None):
+
+        if precomputed is not None:
+            test_set = df_test_chemicals[model.embedding]
+            test_x = precomputed["scaler"].transform(test_set)
+            test_distances, test_indices = precomputed["nbrs"].kneighbors(test_x)
+
+            ids = precomputed["ids"]
+            neighbors = [ids[idx] for idx in test_indices[0]]
+            distances = list(test_distances[0])
+            return neighbors, distances
 
         n_neighbors = 10
         nbrs = NearestNeighbors(n_neighbors=n_neighbors, algorithm='brute', metric='euclidean')
@@ -768,6 +778,77 @@ class NeighborGetter:
 
 class ModelPredictor:
 
+    def __init__(self):
+        self._descriptor_api = DescriptorsAPI()
+        self._units_converter = UnitsConverter()
+
+    @staticmethod
+    def _to_lookup(df, key_col, value_cols=None):
+        if df is None or df.empty or key_col not in df.columns:
+            return {}
+
+        lookup_df = df.drop_duplicates(subset=[key_col], keep='first')
+
+        if value_cols is None:
+            return lookup_df.set_index(key_col).to_dict(orient='index')
+
+        existing_value_cols = [col for col in value_cols if col in df.columns]
+        if not existing_value_cols:
+            return {}
+
+        return lookup_df.set_index(key_col)[existing_value_cols].to_dict(orient='index')
+
+    def _build_neighbor_cache(self, model, df_set):
+        if df_set is None or df_set.empty or not model.embedding:
+            return None
+
+        if not set(model.embedding).issubset(df_set.columns):
+            return None
+
+        n_neighbors = min(10, len(df_set))
+        if n_neighbors < 1:
+            return None
+
+        train_set = df_set[model.embedding]
+        scaler = StandardScaler().fit(train_set)
+        train_x = scaler.transform(train_set)
+        nbrs = NearestNeighbors(n_neighbors=n_neighbors, algorithm='brute', metric='euclidean')
+        nbrs.fit(train_x)
+
+        return {
+            "scaler": scaler,
+            "nbrs": nbrs,
+            "ids": df_set.iloc[:, 0].tolist(),
+        }
+
+    def _ensure_model_runtime_cache(self, model: Model):
+        if getattr(model, "_runtime_cache_ready", False):
+            return
+
+        with lock:
+            if getattr(model, "_runtime_cache_ready", False):
+                return
+
+            model._training_property_by_id = {}
+            model._prediction_property_by_id = {}
+
+            if model.df_training is not None and not model.df_training.empty:
+                if {'ID', 'Property'}.issubset(model.df_training.columns):
+                    model._training_property_by_id = model.df_training.set_index('ID')['Property'].to_dict()
+
+            if model.df_prediction is not None and not model.df_prediction.empty:
+                if {'ID', 'Property'}.issubset(model.df_prediction.columns):
+                    model._prediction_property_by_id = model.df_prediction.set_index('ID')['Property'].to_dict()
+
+            model._dsstox_by_smiles = self._to_lookup(model.df_dsstoxRecords, 'canonicalSmiles')
+            model._preds_test_by_id = self._to_lookup(model.df_preds_test, 'id', ['exp', 'pred'])
+            model._preds_training_cv_by_id = self._to_lookup(model.df_preds_training_cv, 'id', ['exp', 'pred'])
+
+            model._neighbors_prediction_cache = self._build_neighbor_cache(model, model.df_prediction)
+            model._neighbors_training_cache = self._build_neighbor_cache(model, model.df_training)
+
+            model._runtime_cache_ready = True
+
     @timer
     def predictFromDB(self, model_id, smiles):
         """
@@ -781,7 +862,7 @@ class ModelPredictor:
         if isinstance(smiles, str):
             key = f"{smiles}-{model_id}"
             prediction = get_cached_prediction(key)
-            if prediction:
+            if prediction is not None:
                 return prediction
             else:
                 prediction, code = self.predict_model_smiles(model_id, smiles)
@@ -793,7 +874,7 @@ class ModelPredictor:
                 return []
 
             result = [None] * len(smiles_list)
-            missing = []
+            missing_by_smiles = {}
 
             for idx, smi in enumerate(smiles_list):
                 key = f"{smi}-{model_id}"
@@ -801,23 +882,28 @@ class ModelPredictor:
                 if prediction is not None:
                     result[idx] = prediction
                 else:
-                    missing.append((idx, smi))
+                    if smi in missing_by_smiles:
+                        missing_by_smiles[smi].append(idx)
+                    else:
+                        missing_by_smiles[smi] = [idx]
 
-            if missing:
+            if missing_by_smiles:
+                missing = list(missing_by_smiles.items())
                 max_workers = int(os.getenv("PREDICT_THREAD_WORKERS", min(32, (os.cpu_count() or 1) * 5)))
                 max_workers = max(1, min(max_workers, len(missing)))
 
                 def _predict_one(item):
-                    idx, smi = item
+                    smi, indices = item
                     prediction, code = self.predict_model_smiles(model_id, smi)
                     if code != 200:
                         prediction = dict(smiles=smi, error=prediction)
                     cache_prediction(f"{smi}-{model_id}", prediction)
-                    return idx, prediction
+                    return indices, prediction
 
                 with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
-                    for idx, prediction in pool.map(_predict_one, missing):
-                        result[idx] = prediction
+                    for indices, prediction in pool.map(_predict_one, missing):
+                        for idx in indices:
+                            result[idx] = prediction
 
             return result
 
@@ -882,16 +968,25 @@ class ModelPredictor:
 
         qsarSmiles = chemical["canonicalSmiles"]
 
-        matching_row_training = model.df_training[model.df_training['ID'] == qsarSmiles]
-        matching_row_test = model.df_prediction[model.df_prediction['ID'] == qsarSmiles]
-
-        if not matching_row_training.empty:
-            modelResults.experimentalValueUnitsModel = matching_row_training['Property'].values[0]
+        training_lookup = getattr(model, "_training_property_by_id", None)
+        if training_lookup and qsarSmiles in training_lookup:
+            modelResults.experimentalValueUnitsModel = training_lookup[qsarSmiles]
             modelResults.experimentalValueSet = "Training"
+        else:
+            matching_row_training = model.df_training[model.df_training['ID'] == qsarSmiles]
+            if not matching_row_training.empty:
+                modelResults.experimentalValueUnitsModel = matching_row_training['Property'].values[0]
+                modelResults.experimentalValueSet = "Training"
 
-        if not matching_row_test.empty:
-            modelResults.experimentalValueUnitsModel = matching_row_test['Property'].values[0]
+        prediction_lookup = getattr(model, "_prediction_property_by_id", None)
+        if prediction_lookup and qsarSmiles in prediction_lookup:
+            modelResults.experimentalValueUnitsModel = prediction_lookup[qsarSmiles]
             modelResults.experimentalValueSet = "Test"
+        else:
+            matching_row_test = model.df_prediction[model.df_prediction['ID'] == qsarSmiles]
+            if not matching_row_test.empty:
+                modelResults.experimentalValueUnitsModel = matching_row_test['Property'].values[0]
+                modelResults.experimentalValueSet = "Test"
 
     def setExpPredValuesForADAnalogs(self, model, analogs):
 
@@ -961,44 +1056,55 @@ class ModelPredictor:
 
         return row_as_dict
 
-    def setExpPredValuesForNeighbors(self, model:Model, df_preds, neighbors, df_dsstoxRecords):
+    def setExpPredValuesForNeighbors(self, model:Model, pred_lookup, neighbors, dsstox_lookup):
 
         neighbors2 = []
 
         for neighbor in neighbors:  # these are just the qsarSmiles
 
-            matching_row_dsstox = df_dsstoxRecords[df_dsstoxRecords['canonicalSmiles'] == neighbor]
-
-            if not matching_row_dsstox.empty:
-                row_as_dict = matching_row_dsstox.iloc[0].to_dict()
-                neighbors2.append(row_as_dict)
+            dsstox_row = dsstox_lookup.get(neighbor) if dsstox_lookup else None
+            if dsstox_row is not None:
+                row_as_dict = dict(dsstox_row)
             else:
                 logging.debug("Finding missing dsstox info for " + neighbor)  # only happens for 8 dtxcids
                 row_as_dict = self.fixMissingNeighborDsstoxRecord(model.datasetName, neighbor)
                 logging.debug(row_as_dict)
-                
-                # print(neighbor +" not in dsstox records")
-                neighbors2.append(row_as_dict)
-                
-            # Find the matching row in model.df_preds_test
-            matching_row_pred = df_preds[df_preds['id'] == neighbor]
-            if not matching_row_pred.empty:
-                # Add exp and pred values to the record
-                row_as_dict['exp'] = matching_row_pred['exp'].values[0]
-                row_as_dict['pred'] = matching_row_pred['pred'].values[0]
+
+            prediction_row = pred_lookup.get(neighbor) if pred_lookup else None
+            if prediction_row is not None:
+                row_as_dict['exp'] = prediction_row.get('exp')
+                row_as_dict['pred'] = prediction_row.get('pred')
+
+            neighbors2.append(row_as_dict)
 
         return neighbors2
 
     @timer
     def addNeighborsFromSets(self, model:Model, modelResults: ModelResults, df_test_chemicals):
 
-        ng = NeighborGetter()
-        
-        neighborsTest, distances_test = ng.find_neighbors_in_set(model=model, df_set=model.df_prediction, df_test_chemicals=df_test_chemicals)
-        neighborsTraining, distances_training = ng.find_neighbors_in_set(model=model, df_set=model.df_training, df_test_chemicals=df_test_chemicals)
+        self._ensure_model_runtime_cache(model)
 
-        neighborsTraining = self.setExpPredValuesForNeighbors(model, model.df_preds_training_cv, neighborsTraining, model.df_dsstoxRecords)
-        neighborsTest = self.setExpPredValuesForNeighbors(model, model.df_preds_test, neighborsTest, model.df_dsstoxRecords)
+        ng = NeighborGetter()
+
+        neighborsTest, distances_test = ng.find_neighbors_in_set(
+            model=model,
+            df_set=model.df_prediction,
+            df_test_chemicals=df_test_chemicals,
+            precomputed=getattr(model, "_neighbors_prediction_cache", None),
+        )
+        neighborsTraining, distances_training = ng.find_neighbors_in_set(
+            model=model,
+            df_set=model.df_training,
+            df_test_chemicals=df_test_chemicals,
+            precomputed=getattr(model, "_neighbors_training_cache", None),
+        )
+
+        dsstox_lookup = getattr(model, "_dsstox_by_smiles", None)
+        pred_training_lookup = getattr(model, "_preds_training_cv_by_id", None)
+        pred_test_lookup = getattr(model, "_preds_test_by_id", None)
+
+        neighborsTraining = self.setExpPredValuesForNeighbors(model, pred_training_lookup, neighborsTraining, dsstox_lookup)
+        neighborsTest = self.setExpPredValuesForNeighbors(model, pred_test_lookup, neighborsTest, dsstox_lookup)
                 
         self.addDistances(neighborsTraining, distances_training)    
         self.addDistances(neighborsTest, distances_test)
@@ -1089,19 +1195,23 @@ class ModelPredictor:
         
         mi = ModelInitializer()
         model = mi.init_model(model_id)
-        
+
+        if model is None or hasattr(model, 'modelId') is False:
+            return f"Invalid model_id: {model_id}", 400
+
+        self._ensure_model_runtime_cache(model)
+
         if serverAPIs == "https://hcd.rtpnc.epa.gov/" and model.qsarReadyRuleSet == 'qsar-ready_04242025_0':
             model.qsarReadyRuleSet = 'qsar-ready_04242025'  # latest rules arent on there yet
-        
-        if hasattr(model, 'modelId') == False:
-            return f"Invalid model_id: {model_id}", 400
         
         modelDetails = ModelDetails(model)
 
         if 'reg_' in model.modelMethod or 'las_' in model.modelMethod or 'gcm_' in model.modelMethod:
-            y = model.df_training[model.df_training.columns[1]]
-            X = model.df_training[model.embedding]
-            modelDetails.modelCoefficients = json.loads(model.getOriginalRegressionCoefficients2(X, y))
+            if not hasattr(model, "_regression_coefficients"):
+                y = model.df_training[model.df_training.columns[1]]
+                X = model.df_training[model.embedding]
+                model._regression_coefficients = json.loads(model.getOriginalRegressionCoefficients2(X, y))
+            modelDetails.modelCoefficients = model._regression_coefficients
         
         self.addLinks(modelDetails, fileAPI)
         self.addPerformance(modelDetails)
@@ -1143,19 +1253,28 @@ class ModelPredictor:
     
         # print("Running descriptors")
         # Descriptor calcs:
-        descriptorAPI = DescriptorsAPI()
-        df_prediction, code = descriptorAPI.calculate_descriptors(serverAPIs, qsarSmiles,
-                                                                  model.descriptorService)
+        df_prediction, code = self._descriptor_api.calculate_descriptors(serverAPIs, qsarSmiles, model.descriptorService)
         
         if code != 200:
             report = Report(chemical, modelDetails, modelResults)
             modelResults.predictionError = df_prediction
             return report.to_json(), 200
-                
-        json_predictions = call_do_predictions_from_df(df_prediction, model)        
-        # print(json_predictions)
-        pred_results = json.loads(json_predictions)
-        pred_value = pred_results[0]['pred']
+
+        predictions = model.do_predictions(df_prediction)
+        if predictions is None:
+            report = Report(chemical, modelDetails, modelResults)
+            modelResults.predictionError = "Model could not generate predictions"
+            return report.to_json(), 200
+
+        pred_array = np.asarray(predictions).reshape(-1)
+        if pred_array.size == 0:
+            report = Report(chemical, modelDetails, modelResults)
+            modelResults.predictionError = "Model returned an empty prediction set"
+            return report.to_json(), 200
+
+        pred_value = pred_array[0]
+        if isinstance(pred_value, np.generic):
+            pred_value = pred_value.item()
         
         # applicability domain calcs:
         if model.applicabilityDomainName:
@@ -1175,7 +1294,7 @@ class ModelPredictor:
         # set exp value
         self.setExpValue(chemical, model, modelResults)
 
-        uc = UnitsConverter()
+        uc = self._units_converter
         
         if "sid" not in chemical:
             chemical["sid"] = "N/A"

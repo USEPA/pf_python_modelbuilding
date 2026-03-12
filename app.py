@@ -159,16 +159,56 @@ def _predict_smiles_in_process(args):
     return _to_obj(pred)
 
 
+def _dedupe_smiles_preserve_order(smiles_list):
+    unique_smiles = []
+    index_map = {}
+    for idx, smiles in enumerate(smiles_list):
+        if smiles not in index_map:
+            unique_smiles.append(smiles)
+            index_map[smiles] = [idx]
+        else:
+            index_map[smiles].append(idx)
+    return unique_smiles, index_map
+
+
 def predictDB_POST(body):
     """Automates prediction and AD for batch smiles using model in database"""
-    max_workers = int(os.getenv("PREDICT_BATCH_WORKERS", os.cpu_count() or 1))
-    max_workers = max(1, min(max_workers, len(body["smiles"])))
+    if not isinstance(body, dict):
+        return JSONResponse({"error": "bad request", "message": "Request body must be a JSON object"}, status_code=400)
 
-    with ProcessPoolExecutor(max_workers=max_workers, initializer=_init_process_predictor) as executor:
-        modelResultsArray = list(
-            executor.map(_predict_smiles_in_process, ((body["model_id"], s) for s in body["smiles"])))
+    smiles_list = body.get("smiles")
+    model_id = body.get("model_id")
 
-    return JSONResponse(content=modelResultsArray)
+    if not isinstance(smiles_list, list):
+        return JSONResponse({"error": "bad request", "message": "'smiles' must be an array"}, status_code=400)
+
+    if model_id is None:
+        return JSONResponse({"error": "bad request", "message": "'model_id' is required"}, status_code=400)
+
+    if any(not isinstance(s, str) for s in smiles_list):
+        return JSONResponse({"error": "bad request", "message": "All 'smiles' items must be strings"}, status_code=400)
+
+    if not smiles_list:
+        return JSONResponse(content=[])
+
+    unique_smiles, index_map = _dedupe_smiles_preserve_order(smiles_list)
+    batch_mode = os.getenv("PREDICT_BATCH_MODE", "thread").strip().lower()
+
+    if batch_mode == "process":
+        max_workers = int(os.getenv("PREDICT_BATCH_WORKERS", os.cpu_count() or 1))
+        max_workers = max(1, min(max_workers, len(unique_smiles)))
+        with ProcessPoolExecutor(max_workers=max_workers, initializer=_init_process_predictor) as executor:
+            unique_results = list(executor.map(_predict_smiles_in_process, ((model_id, s) for s in unique_smiles)))
+    else:
+        predictor = ModelPredictor()
+        unique_results = [_to_obj(pred) for pred in predictor.predictFromDB(model_id, unique_smiles)]
+
+    model_results = [None] * len(smiles_list)
+    for smiles, prediction in zip(unique_smiles, unique_results):
+        for idx in index_map[smiles]:
+            model_results[idx] = prediction
+
+    return JSONResponse(content=model_results)
 
 
 def predictDB(model_id, smiles=None, identifier=None, report_format='json'):
