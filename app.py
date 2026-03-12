@@ -105,8 +105,9 @@ def get_version():
         BUILD_TIMESTAMP = None
         BUILD_NUMBER = None
 
-    return dict(name="predictor_models",
-                title="EPA/Models",
+    return dict(id="predictor_models",
+                name="WebTEST v2",
+                description="WebTEST v2",
                 version="1.0.0",
                 compiled=BUILD_TIMESTAMP,
                 build_id=BUILD_NUMBER)

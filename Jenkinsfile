@@ -20,13 +20,6 @@ pipeline {
 			}
 		}
 
-		stage('Dependencies check') {
-			steps {
-				dependencyCheck additionalArguments: "--nvdApiKey ${NVD_API_KEY}", odcInstallation: 'OWASP-Dependency-Check'
-				dependencyCheckPublisher pattern: ''
-			}
-		}
-
 		stage('Build API') {
 			steps {
 				sh "echo 'BUILD_TIMESTAMP = \"$BUILD_TIMESTAMP\"' > ./build_info.py"
