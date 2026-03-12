@@ -10,6 +10,18 @@ in_memory_cache = {}
 _mongo_init_done = False
 
 
+def _prediction_has_error(prediction) -> bool:
+    if isinstance(prediction, dict):
+        return "error" in prediction
+
+    if isinstance(prediction, list):
+        for item in prediction:
+            if isinstance(item, dict) and "error" in item:
+                return True
+
+    return False
+
+
 def _env_bool(name: str, default: bool = True) -> bool:
     raw = os.getenv(name)
     if raw is None:
@@ -88,6 +100,10 @@ def get_cached_prediction(key: str):
 
 
 def cache_prediction(key: str, prediction):
+    if _prediction_has_error(prediction):
+        logging.info(f"Skipping cache for key={key!r}: prediction contains error")
+        return
+
     _ensure_init()
     if predictor_models_cache is not None:
         try:
