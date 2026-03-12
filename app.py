@@ -93,7 +93,7 @@ def get_version():
 
     return dict(id="predictor_models",
                 name="WebTEST v2",
-                title="WebTEST v2",
+                description="WebTEST v2",
                 version="1.0.0",
                 compiled=BUILD_TIMESTAMP,
                 build_id=BUILD_NUMBER)
