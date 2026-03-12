@@ -194,12 +194,31 @@ def _get_worker_model_context(model_id: int):
 def _cpu_predict_chunk(args):
     model_id, chunk_items, generate_neighbors, skip_images = args
 
-    ctx = _get_worker_model_context(model_id)
+    outputs = []
+
+    try:
+        ctx = _get_worker_model_context(model_id)
+    except ValueError as exc:
+        # Avoid crashing the whole request when model_id is invalid in worker process.
+        error_text = str(exc)
+        for item in chunk_items:
+            idx = item["idx"]
+            smiles = item["smiles"]
+            _log_pipeline_error(model_id, smiles, "model_init", error_text)
+            outputs.append((
+                idx,
+                {
+                    "error": error_text,
+                    "model_id": model_id,
+                    "smiles": smiles,
+                },
+            ))
+        return outputs
+
     model = ctx["model"]
     predictor = ctx["predictor"]
     model_details = ctx["model_details"]
 
-    outputs = []
     valid_items = []
     valid_dfs = []
 

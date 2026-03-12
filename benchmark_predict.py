@@ -1,4 +1,5 @@
 import argparse
+from datetime import datetime
 import time
 from pathlib import Path
 
@@ -165,6 +166,9 @@ def run_endpoint_benchmark(
 
 
 def main():
+    script_start_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"Script started at: {script_start_time}")
+
     parser = argparse.ArgumentParser(
         description="Benchmark batch prediction endpoint"
     )

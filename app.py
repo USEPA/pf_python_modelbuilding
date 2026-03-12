@@ -269,7 +269,15 @@ async def predictDB_POST(body):
 
     smiles = body["smiles"]
     predictor = _get_async_predictor()
-    modelResultsArray = await predictor.predict_from_db(body["model_id"], smiles)
+    try:
+        modelResultsArray = await predictor.predict_from_db(body["model_id"], smiles)
+    except ValueError as exc:
+        if "Invalid model_id" in str(exc):
+            return JSONResponse(
+                {"error": "bad_request", "message": str(exc)},
+                status_code=400,
+            )
+        raise
     if isinstance(modelResultsArray, list):
         modelResultsArray = [_to_obj(item) for item in modelResultsArray]
     else:
