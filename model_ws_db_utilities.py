@@ -1192,7 +1192,7 @@ class ModelPredictor:
                         )
                 else:
                     for row_pos, (idx, chemical) in enumerate(zip(prediction_indices, prediction_chemicals)):
-                        df_prediction_row = batch_prediction_df.iloc[[row_pos]].copy()
+                        df_prediction_row = batch_prediction_df.iloc[[row_pos]].reset_index(drop=True).copy()
                         results[idx] = self._finalize_prediction_report(
                             model,
                             model_details_dict,
@@ -1736,11 +1736,11 @@ class ModelPredictor:
             applicability_domain=applicabilityDomainName,
             filterColumnsInBothSets=True)
 
-        AD = output['AD'].tolist()[0]
+        AD = output['AD'].iloc[0]
         
         if 'ids' in output.columns and "distances" in output.columns:
-            analogsAD = output['ids'].tolist()[0]  # only use first one for singleton prediction
-            distances = list(output["distances"][0])
+            analogsAD = output['ids'].iloc[0]  # only use first one for singleton prediction
+            distances = list(output["distances"].iloc[0])
             results = {"AD":AD, "analogs": analogsAD, "distances": distances, "AD_Cutoff": ad_cutoff}
         else:
             results = {"AD":AD}
@@ -1773,7 +1773,7 @@ class ModelPredictor:
         elif applicabilityDomainName == pc.Applicability_Domain_TEST_Fragment_Counts:
 
             results["adMethod"]["description"] = 'Whether the TEST fragments are within the training set range'
-            results["fragment_table"] = output["fragment_table"].tolist()[0]
+            results["fragment_table"] = output["fragment_table"].iloc[0]
 
             if AD == True:
                 results["conclusion"] = "Inside"

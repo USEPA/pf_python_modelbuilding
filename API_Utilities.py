@@ -1,6 +1,9 @@
 import json
+import os
+import threading
 
 import requests
+from requests.adapters import HTTPAdapter
 from indigo import Indigo
 
 from utils import timer
@@ -10,6 +13,32 @@ import numpy as np
 This class assumes that server looks like: CIM_API_SERVER=https://hcd.rtpnc.epa.gov
 
 """
+
+_thread_local = threading.local()
+
+
+def _get_pool_size(env_var: str, default: int) -> int:
+    raw_value = os.getenv(env_var, str(default))
+    try:
+        return max(1, int(raw_value))
+    except (TypeError, ValueError):
+        return default
+
+
+def get_requests_session():
+    session = getattr(_thread_local, "requests_session", None)
+    if session is not None:
+        return session
+
+    session = requests.Session()
+    adapter = HTTPAdapter(
+        pool_connections=_get_pool_size("API_HTTP_POOL_CONNECTIONS", 32),
+        pool_maxsize=_get_pool_size("API_HTTP_POOL_MAXSIZE", 64),
+    )
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    _thread_local.requests_session = session
+    return session
 
 class DescriptorsAPI:
 
@@ -116,7 +145,7 @@ class DescriptorsAPI:
             # some descriptors dont have header option? Should be fixed so this doesnt cause issue if must be false
         }
 
-        response = requests.get(url, params=params)
+        response = get_requests_session().get(url, params=params)
 
         return response 
 
@@ -132,7 +161,7 @@ class DescriptorsAPI:
             # some descriptors dont have header option? Should be fixed so this doesnt cause issue if must be false
         }
 
-        response = requests.post(url, json=params)
+        response = get_requests_session().post(url, json=params)
 
         if response.status_code == 200:
             # Parse the response JSON and convert it to a list of Chemical objects
@@ -178,7 +207,7 @@ class SearchAPI:
     def call_resolver_get(server_host, identifier):
         url = f"{server_host}/api/resolver/lookup"
         
-        response = requests.get(url, params={"query": identifier})
+        response = get_requests_session().get(url, params={"query": identifier})
         
         if response.status_code == 200:
             # Parse the response JSON and convert it to a list of Chemical objects
@@ -209,7 +238,7 @@ class QsarSmilesAPI:
         # Make the POST request
         headers = {"Content-Type": "application/json"}
         url = f"{server_host}/api/stdizer/chemicals"
-        response = requests.post(url, headers=headers, data=json_body)
+        response = get_requests_session().post(url, headers=headers, data=json_body)
 
         # print(response.text)
 
