@@ -72,29 +72,39 @@ TODO: Add ability to export report as excel
 """
 
 lock = threading.Lock()
+_engine_lock = threading.Lock()
+_engine = None
+_session_factory = None
 
 
 def getEngine():
-    connect_url = URL.create(
-        drivername='postgresql+psycopg2',
-        username=os.getenv('DEV_QSAR_USER'),
-        password=os.getenv('DEV_QSAR_PASS'),
-        host=os.getenv('DEV_QSAR_HOST', 'localhost'),
-        port=os.getenv('DEV_QSAR_PORT', 5432),
-        database=os.getenv('DEV_QSAR_DATABASE')
-    )
-    
-    # print(connect_url)    
-    
-    engine = create_engine(connect_url, echo=False)
-    return engine
+    global _engine, _session_factory
+
+    if _engine is None:
+        with _engine_lock:
+            if _engine is None:
+                connect_url = URL.create(
+                    drivername='postgresql+psycopg2',
+                    username=os.getenv('DEV_QSAR_USER'),
+                    password=os.getenv('DEV_QSAR_PASS'),
+                    host=os.getenv('DEV_QSAR_HOST', 'localhost'),
+                    port=os.getenv('DEV_QSAR_PORT', 5432),
+                    database=os.getenv('DEV_QSAR_DATABASE')
+                )
+
+                _engine = create_engine(connect_url, echo=False, pool_pre_ping=True)
+                _session_factory = sessionmaker(bind=_engine)
+
+    return _engine
 
 
 def getSession():
-    engine = getEngine()
-    Session = sessionmaker(bind=engine)
-    session = Session()
-    return session
+    global _session_factory
+
+    if _session_factory is None:
+        getEngine()
+
+    return _session_factory()
 
 
 class ModelInitializer:
@@ -908,6 +918,296 @@ class ModelPredictor:
 
             model._runtime_cache_ready = True
 
+    def _resolve_model_context(self, model_id, serverAPIs, fileAPI):
+        mi = ModelInitializer()
+        model = mi.init_model(model_id)
+
+        if model is None or hasattr(model, 'modelId') is False:
+            logging.error("Returning Invalid model_id for model_id=%s: model failed to initialize", model_id)
+            return None, None, f"Invalid model_id: {model_id}"
+
+        self._ensure_model_runtime_cache(model)
+
+        if serverAPIs == "https://hcd.rtpnc.epa.gov/" and model.qsarReadyRuleSet == 'qsar-ready_04242025_0':
+            model.qsarReadyRuleSet = 'qsar-ready_04242025'
+
+        model_details_dict = self._get_model_details_dict(model, fileAPI)
+        return model, model_details_dict, None
+
+    def _get_model_details_dict(self, model, fileAPI):
+        cache = getattr(model, "_model_details_cache", None)
+        if isinstance(cache, dict) and cache.get("file_api") == fileAPI:
+            return cache["payload"]
+
+        modelDetails = ModelDetails(model)
+
+        if 'reg_' in model.modelMethod or 'las_' in model.modelMethod or 'gcm_' in model.modelMethod:
+            if not hasattr(model, "_regression_coefficients"):
+                y = model.df_training[model.df_training.columns[1]]
+                X = model.df_training[model.embedding]
+                model._regression_coefficients = json.loads(model.getOriginalRegressionCoefficients2(X, y))
+            modelDetails.modelCoefficients = model._regression_coefficients
+
+        self.addLinks(modelDetails, fileAPI)
+        self.addPerformance(modelDetails)
+
+        payload = dict(modelDetails.__dict__)
+        model._model_details_cache = {"file_api": fileAPI, "payload": payload}
+        return payload
+
+    @staticmethod
+    def _build_report_dict(
+        chemical,
+        model_details_dict,
+        model_results,
+        neighbor_results_training=None,
+        neighbor_results_prediction=None,
+    ):
+        return {
+            "chemicalIdentifiers": chemical,
+            "modelDetails": model_details_dict,
+            "modelResults": model_results.to_dict() if hasattr(model_results, "to_dict") else model_results,
+            "neighborResultsTraining": neighbor_results_training,
+            "neighborResultsPrediction": neighbor_results_prediction,
+        }
+
+    def _build_minimal_chemical(self, smiles):
+        chemical = {
+            "chemId": smiles,
+            "smiles": smiles,
+        }
+
+        img_base64 = self.smiles_to_base64(smiles)
+        chemical["imageSrc"] = f'data:image/png;base64,{img_base64}' if img_base64 else "N/A"
+        return chemical
+
+    def _prepare_chemical_for_report(self, chemical):
+        chemical = dict(chemical)
+
+        if "smiles" in chemical and "cid" not in chemical:
+            img_base64 = self.smiles_to_base64(chemical["smiles"])
+            chemical["imageSrc"] = f'data:image/png;base64,{img_base64}' if img_base64 else "N/A"
+        else:
+            chemical["imageSrc"] = imgURLCid + chemical["cid"]
+
+        if "sid" not in chemical:
+            chemical["sid"] = "N/A"
+            chemical["cid"] = "N/A"
+            chemical["name"] = "N/A"
+
+        return chemical
+
+    def _build_prediction_error_report(self, chemical, model_details_dict, error):
+        model_results = ModelResults()
+        model_results.predictionError = error
+        return self._build_report_dict(chemical, model_details_dict, model_results)
+
+    def _finalize_prediction_report(self, model, model_details_dict, chemical, df_prediction, pred_value, generate_report=True):
+        chemical = self._prepare_chemical_for_report(chemical)
+        model_results = ModelResults()
+
+        if model.applicabilityDomainName:
+            applicability_domains = (model.applicabilityDomainName or "").split(" and ")
+            for applicability_domain in applicability_domains:
+                if applicability_domain:
+                    ad_results = self.determineApplicabilityDomain(model, applicability_domain, df_prediction)
+                    model_results.adEstimates.append(ad_results)
+        else:
+            print('AD method for model was not set:', model.modelId)
+
+        if isinstance(pred_value, np.generic):
+            pred_value = pred_value.item()
+
+        model_results.predictionValueUnitsModel = pred_value
+        model_results.unitsModel = model.unitsModel
+
+        self.setExpValue(chemical, model, model_results)
+
+        uc = self._units_converter
+        average_mass = chemical.get("averageMass")
+
+        if model_results.experimentalValueUnitsModel:
+            model_results.experimentalValueUnitsDisplay = uc.convert_units(
+                model.propertyName,
+                model_results.experimentalValueUnitsModel,
+                model.unitsModel,
+                model.unitsDisplay,
+                chemical["sid"],
+                average_mass,
+            )
+
+        model_results.predictionValueUnitsDisplay = uc.convert_units(
+            model.propertyName,
+            pred_value,
+            model.unitsModel,
+            model.unitsDisplay,
+            chemical["sid"],
+            average_mass,
+        )
+        model_results.unitsDisplay = model.unitsDisplay
+
+        neighbor_results_training = None
+        neighbor_results_prediction = None
+        if generate_report:
+            neighbor_results_training, neighbor_results_prediction = self.addNeighborsFromSets(model, model_results, df_prediction)
+
+        return self._build_report_dict(
+            chemical,
+            model_details_dict,
+            model_results,
+            neighbor_results_training=neighbor_results_training,
+            neighbor_results_prediction=neighbor_results_prediction,
+        )
+
+    def _standardize_smiles_batch(self, serverAPIs, smiles_list, model):
+        if len(smiles_list) == 1:
+            return [self.standardizeStructure(serverAPIs, smiles_list[0], model)]
+
+        try:
+            chemicals, code = QsarSmilesAPI.call_qsar_ready_standardize_post(
+                server_host=serverAPIs,
+                smiles=smiles_list,
+                full=False,
+                workflow=model.qsarReadyRuleSet,
+            )
+            if (
+                code == 200
+                and isinstance(chemicals, list)
+                and len(chemicals) == len(smiles_list)
+                and all(isinstance(chemical, dict) and "canonicalSmiles" in chemical for chemical in chemicals)
+                and not (model.omitSalts and any("." in chemical.get("canonicalSmiles", "") for chemical in chemicals))
+            ):
+                return [(chemical, 200) for chemical in chemicals]
+        except Exception:
+            logging.exception("Batch standardization failed, falling back to single-smiles standardization")
+
+        return [self.standardizeStructure(serverAPIs, smiles, model) for smiles in smiles_list]
+
+    def _calculate_descriptors_batch(self, serverAPIs, qsar_smiles_list, descriptor_service):
+        results = [None] * len(qsar_smiles_list)
+        valid_indices = []
+        valid_smiles = []
+
+        if "test" in descriptor_service.lower():
+            for idx, qsar_smiles in enumerate(qsar_smiles_list):
+                check_results, code = self._descriptor_api.check_structure(qsar_smiles)
+                if code != 200:
+                    results[idx] = (check_results, code)
+                else:
+                    valid_indices.append(idx)
+                    valid_smiles.append(qsar_smiles)
+        else:
+            valid_indices = list(range(len(qsar_smiles_list)))
+            valid_smiles = list(qsar_smiles_list)
+
+        if valid_smiles:
+            df_batch, code = self._descriptor_api.calculate_descriptors_batch(serverAPIs, valid_smiles, descriptor_service)
+            if code == 200 and len(df_batch.index) == len(valid_smiles):
+                for row_pos, idx in enumerate(valid_indices):
+                    results[idx] = (df_batch.iloc[[row_pos]].copy(), 200)
+                return results
+
+            logging.warning("Descriptor batch call failed or returned unexpected shape, falling back to per-smiles calls")
+            for idx, qsar_smiles in zip(valid_indices, valid_smiles):
+                results[idx] = self._descriptor_api.calculate_descriptors(serverAPIs, qsar_smiles, descriptor_service)
+
+        return results
+
+    @timer
+    def predict_model_smiles_batch(self, model_id, smiles_list, generate_report=True):
+        serverAPIs = os.getenv("CIM_API_SERVER", "https://cim-dev.sciencedataexperts.com")
+        fileAPI = os.getenv("FILE_API_SERVER", pc.URL_CTX_API)
+
+        model, model_details_dict, model_error = self._resolve_model_context(model_id, serverAPIs, fileAPI)
+        if model is None:
+            return [{"smiles": smiles, "error": model_error} for smiles in smiles_list]
+
+        results = [None] * len(smiles_list)
+        standardized_results = self._standardize_smiles_batch(serverAPIs, smiles_list, model)
+
+        standardized_indices = []
+        standardized_smiles = []
+        standardized_chemicals = []
+
+        for idx, (chemical, code) in enumerate(standardized_results):
+            if code != 200:
+                error_chemical = self._build_minimal_chemical(smiles_list[idx])
+                results[idx] = self._build_prediction_error_report(error_chemical, model_details_dict, chemical)
+                continue
+
+            standardized_indices.append(idx)
+            standardized_smiles.append(chemical["canonicalSmiles"])
+            standardized_chemicals.append(dict(chemical))
+
+        descriptor_results = self._calculate_descriptors_batch(serverAPIs, standardized_smiles, model.descriptorService)
+
+        prediction_frames = []
+        prediction_indices = []
+        prediction_chemicals = []
+
+        for offset, descriptor_result in enumerate(descriptor_results):
+            original_idx = standardized_indices[offset]
+            chemical = standardized_chemicals[offset]
+
+            if descriptor_result is None:
+                results[original_idx] = self._build_prediction_error_report(
+                    self._prepare_chemical_for_report(chemical),
+                    model_details_dict,
+                    "Descriptor calculation did not return a result",
+                )
+                continue
+
+            df_prediction, code = descriptor_result
+            if code != 200:
+                results[original_idx] = self._build_prediction_error_report(
+                    self._prepare_chemical_for_report(chemical),
+                    model_details_dict,
+                    df_prediction,
+                )
+                continue
+
+            prediction_frames.append(df_prediction)
+            prediction_indices.append(original_idx)
+            prediction_chemicals.append(chemical)
+
+        if prediction_frames:
+            batch_prediction_df = pd.concat(prediction_frames, ignore_index=True)
+            predictions = model.do_predictions(batch_prediction_df)
+
+            if predictions is None:
+                for idx, chemical in zip(prediction_indices, prediction_chemicals):
+                    results[idx] = self._build_prediction_error_report(
+                        chemical,
+                        model_details_dict,
+                        "Model could not generate predictions",
+                    )
+            else:
+                pred_array = np.asarray(predictions).reshape(-1)
+                if pred_array.size != len(prediction_indices):
+                    for idx, chemical in zip(prediction_indices, prediction_chemicals):
+                        results[idx] = self._build_prediction_error_report(
+                            chemical,
+                            model_details_dict,
+                            "Model returned an unexpected number of predictions",
+                        )
+                else:
+                    for row_pos, (idx, chemical) in enumerate(zip(prediction_indices, prediction_chemicals)):
+                        df_prediction_row = batch_prediction_df.iloc[[row_pos]].copy()
+                        results[idx] = self._finalize_prediction_report(
+                            model,
+                            model_details_dict,
+                            chemical,
+                            df_prediction_row,
+                            pred_array[row_pos],
+                            generate_report=generate_report,
+                        )
+
+        for idx, prediction in enumerate(results):
+            if prediction is None:
+                results[idx] = {"smiles": smiles_list[idx], "error": "Prediction failed unexpectedly"}
+
+        return results
+
     @timer
     def predictFromDB(self, model_id, smiles):
         """
@@ -922,32 +1222,37 @@ class ModelPredictor:
             key = f"{smiles}-{model_id}"
             prediction = get_cached_prediction(key)
             if prediction is not None:
-                return self._prediction_to_json_str(prediction)
+                return self._prediction_to_obj(prediction)
+
+            prediction, code = self.predict_model_smiles(model_id, smiles)
+            prediction_obj = self._prediction_to_obj(prediction)
+            cache_prediction(key, prediction_obj)
+            return prediction_obj
+
+        smiles_list = list(smiles)
+        if not smiles_list:
+            return []
+
+        result = [None] * len(smiles_list)
+        missing_by_smiles = {}
+
+        for idx, smi in enumerate(smiles_list):
+            key = f"{smi}-{model_id}"
+            prediction = get_cached_prediction(key)
+            if prediction is not None:
+                result[idx] = self._prediction_to_obj(prediction)
             else:
-                prediction, code = self.predict_model_smiles(model_id, smiles)
-                prediction_obj = self._prediction_to_obj(prediction)
-                cache_prediction(key, prediction_obj)
-                return self._prediction_to_json_str(prediction_obj)
-        else:
-            smiles_list = list(smiles)
-            if not smiles_list:
-                return []
+                missing_by_smiles.setdefault(smi, []).append(idx)
 
-            result = [None] * len(smiles_list)
-            missing_by_smiles = {}
+        if missing_by_smiles:
+            missing_smiles = list(missing_by_smiles.keys())
+            try:
+                batch_predictions = self.predict_model_smiles_batch(model_id, missing_smiles)
+            except Exception:
+                logging.exception("Batch prediction failed, falling back to threaded single-smiles predictions")
+                batch_predictions = None
 
-            for idx, smi in enumerate(smiles_list):
-                key = f"{smi}-{model_id}"
-                prediction = get_cached_prediction(key)
-                if prediction is not None:
-                    result[idx] = self._prediction_to_json_str(prediction)
-                else:
-                    if smi in missing_by_smiles:
-                        missing_by_smiles[smi].append(idx)
-                    else:
-                        missing_by_smiles[smi] = [idx]
-
-            if missing_by_smiles:
+            if batch_predictions is None:
                 missing = list(missing_by_smiles.items())
                 max_workers = int(os.getenv("PREDICT_THREAD_WORKERS", min(32, (os.cpu_count() or 1) * 5)))
                 max_workers = max(1, min(max_workers, len(missing)))
@@ -956,17 +1261,22 @@ class ModelPredictor:
                     smi, indices = item
                     prediction, code = self.predict_model_smiles(model_id, smi)
                     if code != 200:
-                        prediction = dict(smiles=smi, error=prediction)
+                        prediction = {"smiles": smi, "error": prediction}
                     prediction_obj = self._prediction_to_obj(prediction)
                     cache_prediction(f"{smi}-{model_id}", prediction_obj)
-                    return indices, self._prediction_to_json_str(prediction_obj)
+                    return indices, prediction_obj
 
                 with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
-                    for indices, prediction in pool.map(_predict_one, missing):
+                    for indices, prediction_obj in pool.map(_predict_one, missing):
                         for idx in indices:
-                            result[idx] = prediction
+                            result[idx] = prediction_obj
+            else:
+                for smi, prediction_obj in zip(missing_smiles, batch_predictions):
+                    cache_prediction(f"{smi}-{model_id}", prediction_obj)
+                    for idx in missing_by_smiles[smi]:
+                        result[idx] = prediction_obj
 
-            return result
+        return result
 
     def addPerformance(self, md: ModelDetails):
         ms = md.modelStatistics or {}
@@ -1245,139 +1555,18 @@ class ModelPredictor:
         :param mwu:
         :return:
         """
+        batch_result = self.predict_model_smiles_batch(model_id, [smiles], generate_report=generate_report)
+        if not batch_result:
+            return f"Prediction failed for {smiles}", 500
 
-        serverAPIs = os.getenv("CIM_API_SERVER", "https://cim-dev.sciencedataexperts.com")
-        fileAPI = os.getenv("FILE_API_SERVER", pc.URL_CTX_API)
+        prediction = batch_result[0]
+        if isinstance(prediction, dict) and "error" in prediction and prediction.get("modelResults") is None:
+            error = prediction.get("error")
+            if isinstance(error, str):
+                return error, 400
+            return str(error), 400
 
-        logging.info("serverAPIs:%s", serverAPIs)
-
-        # initialize model bytes and all details from db:
-        
-        mi = ModelInitializer()
-        model = mi.init_model(model_id)
-
-        if model is None or hasattr(model, 'modelId') is False:
-            logging.error(f"Returning Invalid model_id for model_id={model_id}: model failed to initialize")
-            return f"Invalid model_id: {model_id}", 400
-
-        logging.info("model.qsarReadyRuleSet:%s", getattr(model, "qsarReadyRuleSet", None))
-
-        self._ensure_model_runtime_cache(model)
-
-        if serverAPIs == "https://hcd.rtpnc.epa.gov/" and model.qsarReadyRuleSet == 'qsar-ready_04242025_0':
-            model.qsarReadyRuleSet = 'qsar-ready_04242025'  # latest rules arent on there yet
-        
-        modelDetails = ModelDetails(model)
-
-        if 'reg_' in model.modelMethod or 'las_' in model.modelMethod or 'gcm_' in model.modelMethod:
-            if not hasattr(model, "_regression_coefficients"):
-                y = model.df_training[model.df_training.columns[1]]
-                X = model.df_training[model.embedding]
-                model._regression_coefficients = json.loads(model.getOriginalRegressionCoefficients2(X, y))
-            modelDetails.modelCoefficients = model._regression_coefficients
-        
-        self.addLinks(modelDetails, fileAPI)
-        self.addPerformance(modelDetails)
-        
-        modelResults = ModelResults()
-    
-        # Standardize smiles:
-        chemical, code = self.standardizeStructure(serverAPIs, smiles, model)
-    
-        if code != 200:
-            
-            error = chemical
-            
-            chemical = {}
-            chemical["chemId"] = smiles  # TODO add inchiKey
-            chemical["smiles"] = smiles
-            img_base64 = self.smiles_to_base64(chemical["smiles"])
-            
-            if img_base64: 
-                chemical["imageSrc"] = f'data:image/png;base64,{img_base64}'
-            else:
-                chemical["imageSrc"] = "N/A"
-            
-            modelResults.predictionError = error
-            report = Report(chemical, modelDetails, modelResults)
-            return report.to_json(), 200
-
-        if "smiles" in chemical and "cid" not in chemical:
-            img_base64 = self.smiles_to_base64(chemical["smiles"])
-            chemical["imageSrc"] = f'data:image/png;base64,{img_base64}'
-        else:
-            chemical["imageSrc"] = imgURLCid + chemical["cid"]
-
-        # TODO: right now it's letting salts through if the qsarReadySmiles isn't salt should we return error here?            
-        if model.omitSalts and "." in smiles:
-            pass
-                            
-        qsarSmiles = chemical['canonicalSmiles']
-    
-        # print("Running descriptors")
-        # Descriptor calcs:
-        df_prediction, code = self._descriptor_api.calculate_descriptors(serverAPIs, qsarSmiles, model.descriptorService)
-        
-        if code != 200:
-            report = Report(chemical, modelDetails, modelResults)
-            modelResults.predictionError = df_prediction
-            return report.to_json(), 200
-
-        predictions = model.do_predictions(df_prediction)
-        if predictions is None:
-            report = Report(chemical, modelDetails, modelResults)
-            modelResults.predictionError = "Model could not generate predictions"
-            return report.to_json(), 200
-
-        pred_array = np.asarray(predictions).reshape(-1)
-        if pred_array.size == 0:
-            report = Report(chemical, modelDetails, modelResults)
-            modelResults.predictionError = "Model returned an empty prediction set"
-            return report.to_json(), 200
-
-        pred_value = pred_array[0]
-        if isinstance(pred_value, np.generic):
-            pred_value = pred_value.item()
-        
-        # applicability domain calcs:
-        if model.applicabilityDomainName:
-            applicabilityDomains = modelDetails.applicabilityDomainName.split(" and ")
-            # if pc.Applicability_Domain_TEST_Fragment_Counts not in applicabilityDomains:
-            #     applicabilityDomains.append(pc.Applicability_Domain_TEST_Fragment_Counts)
-
-            for applicabilityDomain in applicabilityDomains:
-                ad_results = self.determineApplicabilityDomain(model, applicabilityDomain, df_prediction)
-                modelResults.adEstimates.append(ad_results)
-        else:
-            print('AD method for model was not set:', model_id)
-
-        modelResults.predictionValueUnitsModel = pred_value
-        modelResults.unitsModel = model.unitsModel  # duplicated so displayed near prediction value
-
-        # set exp value
-        self.setExpValue(chemical, model, modelResults)
-
-        uc = self._units_converter
-        
-        if "sid" not in chemical:
-            chemical["sid"] = "N/A"
-            chemical["cid"] = "N/A"
-            chemical["name"] = "N/A"
-                
-        if modelResults.experimentalValueUnitsModel:
-            modelResults.experimentalValueUnitsDisplay = uc.convert_units(model.propertyName, modelResults.experimentalValueUnitsModel, model.unitsModel, model.unitsDisplay,
-                                                                    chemical["sid"], chemical["averageMass"])
-        
-        modelResults.predictionValueUnitsDisplay = uc.convert_units(model.propertyName, pred_value, model.unitsModel, model.unitsDisplay,
-                                                                    chemical["sid"], chemical["averageMass"])
-        modelResults.unitsDisplay = model.unitsDisplay
-                
-        report = Report(chemical, modelDetails, modelResults)
-
-        if generate_report:
-            report.neighborResultsTraining, report.neighborResultsPrediction = self.addNeighborsFromSets(model, modelResults, df_prediction)
-            
-        return report.to_json(), 200
+        return prediction, 200
     
     def addLinks(self, modelDetails, file_api=pc.URL_CTX_API):
         modelId = str(modelDetails.modelId)

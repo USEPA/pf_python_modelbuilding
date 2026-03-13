@@ -74,6 +74,36 @@ class DescriptorsAPI:
                 
         return df_prediction, 200
 
+    @timer
+    def calculate_descriptors_batch(self, serverAPIs, qsarSmilesList, descriptorService):
+        qsar_smiles_list = list(qsarSmilesList)
+
+        if not qsar_smiles_list:
+            import pandas as pd
+            return pd.DataFrame(), 200
+
+        if "test" in descriptorService.lower():
+            for qsar_smiles in qsar_smiles_list:
+                check_results, code = self.check_structure(qsar_smiles)
+                if code != 200:
+                    return check_results, code
+
+        response = self.call_descriptors_post(
+            server_host=serverAPIs,
+            qsar_smiles=qsar_smiles_list,
+            descriptor_name=descriptorService,
+        )
+
+        if not isinstance(response, dict):
+            return response, 500
+
+        try:
+            df_prediction = self.response_json_to_df(response, qsar_smiles_list)
+        except Exception as exc:
+            return f"Failed to parse descriptor batch response: {exc}", 500
+
+        return df_prediction, 200
+
     def call_descriptors_get(self, server_host: str, qsar_smiles: str, descriptor_name: str):
         # Construct the URL
         url = f"{server_host}/api/descriptors"
@@ -112,36 +142,34 @@ class DescriptorsAPI:
             return response.text
 
     def response_to_df(self, response, qsarSmiles):
-        
         descriptor_dict = response.json()
-        
-        
-        headers = descriptor_dict['headers']
+        return self.response_json_to_df(descriptor_dict, [qsarSmiles])
+
+    def response_json_to_df(self, descriptor_dict, qsarSmilesList):
+        headers = list(descriptor_dict['headers'])
         headers.insert(0, "Property")
         headers.insert(0, "ID")
 
         chemicals = descriptor_dict['chemicals']
-        chemical = chemicals[0]
-        
-        # descriptors = chemical['descriptors']
-        
-        # for some reason they were getting stored as strings when I was trying to access them later- will this break null descriptors for ones like padel or mordred
-        descriptors = [float(descriptor) if descriptor is not None else np.nan for descriptor in chemical['descriptors']]
-        
-        # for descriptor in descriptors:
-        #     print(type(descriptor), descriptor)
-                
-        # print(descriptors)
-        
-        descriptors.insert(0, None)
-        descriptors.insert(0, qsarSmiles)
+        qsar_smiles_list = list(qsarSmilesList)
 
-        # print(headers)
-        # print(descriptors)
+        if len(chemicals) != len(qsar_smiles_list):
+            raise ValueError(
+                f"descriptor response size mismatch: chemicals={len(chemicals)} smiles={len(qsar_smiles_list)}"
+            )
+
+        rows = []
+        for qsar_smiles, chemical in zip(qsar_smiles_list, chemicals):
+            descriptors = [
+                float(descriptor) if descriptor is not None else np.nan
+                for descriptor in chemical['descriptors']
+            ]
+            descriptors.insert(0, None)
+            descriptors.insert(0, qsar_smiles)
+            rows.append(descriptors)
+
         import pandas as pd
-        df = pd.DataFrame([descriptors], columns=headers)
-        # print(df.shape)
-        return df
+        return pd.DataFrame(rows, columns=headers)
 
 
 class SearchAPI:
@@ -165,11 +193,16 @@ class QsarSmilesAPI:
 
     @staticmethod
     def call_qsar_ready_standardize_post(server_host, smiles, full, workflow):
+        if isinstance(smiles, str):
+            smiles_list = [smiles]
+        else:
+            smiles_list = list(smiles)
+
         # Construct the JSON body
         jo_body = {
             "full": full,
             "options": {"workflow": workflow},
-            "chemicals": [{"smiles": smiles}]
+            "chemicals": [{"smiles": current_smiles} for current_smiles in smiles_list]
         }
         json_body = json.dumps(jo_body)
 
