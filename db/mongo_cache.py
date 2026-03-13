@@ -1,5 +1,6 @@
 import logging
 import os
+import json
 
 from pymongo import MongoClient, ASCENDING
 from pymongo.errors import PyMongoError
@@ -10,13 +11,45 @@ in_memory_cache = {}
 _mongo_init_done = False
 
 
+def _has_meaningful_error_value(value) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, (list, dict, tuple, set)):
+        return len(value) > 0
+    return True
+
+
 def _prediction_has_error(prediction) -> bool:
+    if isinstance(prediction, (bytes, bytearray)):
+        try:
+            prediction = json.loads(prediction.decode("utf-8"))
+        except Exception:
+            return False
+
+    if isinstance(prediction, str):
+        try:
+            prediction = json.loads(prediction)
+        except Exception:
+            return False
+
     if isinstance(prediction, dict):
-        return "error" in prediction
+        if _has_meaningful_error_value(prediction.get("error")):
+            return True
+
+        if _has_meaningful_error_value(prediction.get("predictionError")):
+            return True
+
+        for value in prediction.values():
+            if _prediction_has_error(value):
+                return True
+
+        return False
 
     if isinstance(prediction, list):
         for item in prediction:
-            if isinstance(item, dict) and "error" in item:
+            if _prediction_has_error(item):
                 return True
 
     return False
@@ -101,7 +134,7 @@ def get_cached_prediction(key: str):
 
 def cache_prediction(key: str, prediction):
     if _prediction_has_error(prediction):
-        logging.info(f"Skipping cache for key={key!r}: prediction contains error")
+        logging.debug("Skipping cache for key=%r: prediction contains error", key)
         return
 
     _ensure_init()
