@@ -14,6 +14,13 @@ paths:
         '200':
           description: Success
 
+  /api/predictor_models/metadata:
+    get:
+      operationId: app.get_metadata
+      responses:
+        '200':
+          description: Success
+
   /api/predictor_models/model/file/:
     get:
       operationId: app.get_file
@@ -40,13 +47,6 @@ paths:
                 format: binary
         '404':
           description: Not found
-
-  /api/predictor_models/metadata:
-    get:
-      operationId: app.get_metadata
-      responses:
-        '200':
-          description: Success
 
   /api/predictor_models/predict:
     get:

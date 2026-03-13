@@ -51,6 +51,19 @@ def build_error_response(chemical_identifier, code, message, details=None):
     }
 
 
+def build_batch_error_response(code, message, details=None, model_details=None, predictions=None):
+    error = {"code": code, "message": message}
+    if details is not None:
+        error["details"] = details
+
+    payload = {
+        "modelDetails": model_details,
+        "predictions": predictions or [],
+        "error": error,
+    }
+    return payload
+
+
 def _extract_chemical_identifier(payload, fallback=""):
     if isinstance(payload, str):
         return payload
@@ -108,6 +121,52 @@ def normalize_error_payload(payload, chemical_identifier=""):
             )
 
     return obj
+
+
+def _strip_common_model_details(predictions):
+    common_model_details = None
+    common_model_details_set = False
+    stripped_predictions = []
+
+    for prediction in predictions:
+        if not isinstance(prediction, dict):
+            continue
+
+        model_details = prediction.get("modelDetails")
+        if model_details is None:
+            continue
+
+        if not common_model_details_set:
+            common_model_details = model_details
+            common_model_details_set = True
+            continue
+
+        if model_details != common_model_details:
+            logging.warning("Batch predictions returned different modelDetails values; keeping them per item")
+            return None, predictions
+
+    for prediction in predictions:
+        if isinstance(prediction, dict):
+            prediction_copy = dict(prediction)
+            prediction_copy.pop("modelDetails", None)
+            stripped_predictions.append(prediction_copy)
+        else:
+            stripped_predictions.append(prediction)
+
+    return common_model_details, stripped_predictions
+
+
+def build_predictdb_post_payload(predictions, error=None):
+    normalized_predictions = [_to_obj_safe(prediction) for prediction in predictions]
+    model_details, stripped_predictions = _strip_common_model_details(normalized_predictions)
+
+    payload = {
+        "modelDetails": model_details,
+        "predictions": stripped_predictions,
+    }
+    if error is not None:
+        payload["error"] = error
+    return payload
 
 
 def _error_status_code(payload, default=400):
@@ -169,7 +228,7 @@ def collect_model_details_for_metadata(model_ids, smiles):
 def make_predictdb_post_response(body):
     if not isinstance(body, dict):
         return JSONResponse(
-            build_error_response("", "bad_request", "Request body must be a JSON object"),
+            build_batch_error_response("bad_request", "Request body must be a JSON object"),
             status_code=400,
         )
 
@@ -178,24 +237,24 @@ def make_predictdb_post_response(body):
 
     if not isinstance(smiles_list, list):
         return JSONResponse(
-            build_error_response("", "bad_request", "'smiles' must be an array"),
+            build_batch_error_response("bad_request", "'smiles' must be an array"),
             status_code=400,
         )
 
     if model_id is None:
         return JSONResponse(
-            build_error_response("", "bad_request", "'model_id' is required"),
+            build_batch_error_response("bad_request", "'model_id' is required"),
             status_code=400,
         )
 
     if any(not isinstance(s, str) for s in smiles_list):
         return JSONResponse(
-            build_error_response("", "bad_request", "All 'smiles' items must be strings"),
+            build_batch_error_response("bad_request", "All 'smiles' items must be strings"),
             status_code=400,
         )
 
     if not smiles_list:
-        return JSONResponse(content=[])
+        return JSONResponse(content=build_predictdb_post_payload([]))
 
     unique_smiles, index_map = dedupe_smiles_preserve_order(smiles_list)
     batch_mode = os.getenv("PREDICT_BATCH_MODE", "thread").strip().lower()
@@ -208,28 +267,42 @@ def make_predictdb_post_response(body):
                 unique_results = list(executor.map(predict_smiles_in_process, ((model_id, s) for s in unique_smiles)))
         except Exception as exc:
             logging.exception("Unhandled exception in batch process pool")
-            unique_results = [
-                build_error_response(smi, "internal_error", "Unhandled prediction error", str(exc))
-                for smi in unique_smiles
-            ]
+            return JSONResponse(
+                content=build_batch_error_response(
+                    "internal_error",
+                    "Unhandled batch prediction error",
+                    str(exc),
+                ),
+                status_code=500,
+            )
     else:
         predictor = ModelPredictor()
         try:
-            raw_results = list(predictor.predictFromDB(model_id, unique_smiles))
+            raw_results = predictor.predictFromDB(model_id, unique_smiles)
+            if not isinstance(raw_results, list):
+                raise TypeError(f"Batch prediction returned {type(raw_results)} instead of list")
+            if len(raw_results) != len(unique_smiles):
+                raise ValueError(
+                    f"Batch prediction returned {len(raw_results)} results for {len(unique_smiles)} SMILES"
+                )
             unique_results = [normalize_error_payload(pred, smi) for smi, pred in zip(unique_smiles, raw_results)]
         except Exception as exc:
             logging.exception("Unhandled exception in batch prediction")
-            unique_results = [
-                build_error_response(smi, "internal_error", "Unhandled prediction error", str(exc))
-                for smi in unique_smiles
-            ]
+            return JSONResponse(
+                content=build_batch_error_response(
+                    "internal_error",
+                    "Unhandled batch prediction error",
+                    str(exc),
+                ),
+                status_code=500,
+            )
 
     model_results = [None] * len(smiles_list)
     for smiles, prediction in zip(unique_smiles, unique_results):
         for idx in index_map[smiles]:
             model_results[idx] = prediction
 
-    return JSONResponse(content=model_results)
+    return JSONResponse(content=build_predictdb_post_payload(model_results))
 
 
 def make_predictdb_response(model_id, smiles=None, identifier=None, report_format="json", cim_api_server=None):
