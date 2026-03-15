@@ -107,7 +107,7 @@ def get_version():
 
     return dict(id="predictor_models",
                 name="WebTEST v2",
-                description="WebTEST v2",
+                description="This set of models is based on the aggregation, harmonization and curation of datasets from the original WebTEST models and expanded with new data.",
                 version="1.0.0",
                 compiled=BUILD_TIMESTAMP,
                 build_id=BUILD_NUMBER)
