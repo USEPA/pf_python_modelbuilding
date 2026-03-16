@@ -171,7 +171,7 @@ class DescriptorsAPI:
         params = {
             "type": descriptor_name,
             "smiles": qsar_smiles,
-            "headers": "true"
+            "headers": True,
             # some descriptors dont have header option? Should be fixed so this doesnt cause issue if must be false
         }
 
@@ -182,23 +182,22 @@ class DescriptorsAPI:
     def call_descriptors_post(self, server_host: str, qsar_smiles: list[str], descriptor_name: str):
         # Construct the URL
         url = f"{server_host}/api/descriptors"
-
-        # Set up query parameters
-        params = {
+        payload = {
             "type": descriptor_name,
             "chemicals": qsar_smiles,
-            "headers": "true"
-            # some descriptors dont have header option? Should be fixed so this doesnt cause issue if must be false
+            "chemIdType": "SMILES",
+            "format": "JSON",
+            "options": {
+                "headers": True,
+            },
         }
 
-        response = get_requests_session().post(url, json=params)
+        response = get_requests_session().post(url, json=payload)
 
         if response.status_code == 200:
-            # Parse the response JSON and convert it to a list of Chemical objects
             return response.json(), response.status_code
-        else:
-            # Handle the error appropriately
-            return response.text, response.status_code
+
+        return response.text, response.status_code
 
     def response_to_df(self, response, qsarSmiles):
         descriptor_dict = response.json()
