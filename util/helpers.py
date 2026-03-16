@@ -2,6 +2,7 @@ import json
 import logging
 import os
 from concurrent.futures import ProcessPoolExecutor
+import threading
 
 from API_Utilities import SearchAPI
 from model_ws_db_utilities import ModelPredictor
@@ -9,6 +10,7 @@ from report_creator_dict import ReportCreator
 from starlette.responses import HTMLResponse, JSONResponse
 
 _PROCESS_PREDICTOR = None
+_THREAD_LOCAL = threading.local()
 
 
 def _coerce_json_safe(value):
@@ -228,6 +230,14 @@ def init_process_predictor():
     _PROCESS_PREDICTOR = ModelPredictor()
 
 
+def _get_request_predictor():
+    predictor = getattr(_THREAD_LOCAL, "predictor", None)
+    if predictor is None:
+        predictor = ModelPredictor()
+        _THREAD_LOCAL.predictor = predictor
+    return predictor
+
+
 def predict_smiles_in_process(args):
     model_id, current_smiles = args
     predictor = _PROCESS_PREDICTOR
@@ -313,7 +323,7 @@ def make_predictdb_post_response(body):
                 status_code=500,
             )
     else:
-        predictor = ModelPredictor()
+        predictor = _get_request_predictor()
         try:
             raw_results = predictor.predictFromDB(model_id, unique_smiles)
             if not isinstance(raw_results, list):
@@ -378,7 +388,7 @@ def make_predictdb_response(model_id, smiles=None, identifier=None, report_forma
             status_code=404,
         )
 
-    predictor = ModelPredictor()
+    predictor = _get_request_predictor()
     try:
         pred = predictor.predictFromDB(model_id, smiles)
     except Exception as exc:

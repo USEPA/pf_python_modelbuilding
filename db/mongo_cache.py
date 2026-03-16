@@ -3,7 +3,7 @@ import logging
 import os
 
 from bson.errors import InvalidDocument
-from pymongo import ASCENDING, MongoClient
+from pymongo import ASCENDING, MongoClient, ReplaceOne
 from pymongo.errors import PyMongoError
 
 
@@ -186,6 +186,30 @@ def get_cached_prediction(key: str):
     return in_memory_cache.get(key)
 
 
+def get_cached_predictions(keys):
+    key_list = list(dict.fromkeys(keys))
+    if not key_list:
+        return {}
+
+    _ensure_init()
+    cached_predictions = {}
+
+    if predictor_models_cache is not None:
+        try:
+            for doc in predictor_models_cache.find({"key": {"$in": key_list}}):
+                key = doc.get("key")
+                if key is not None:
+                    cached_predictions[key] = doc.get("prediction")
+        except PyMongoError as exc:
+            logging.warning("Mongo batch read failed; using in-memory fallback: %s", exc)
+
+    for key in key_list:
+        if key not in cached_predictions and key in in_memory_cache:
+            cached_predictions[key] = in_memory_cache[key]
+
+    return cached_predictions
+
+
 def cache_prediction(key: str, prediction):
     normalized_prediction = _normalize_prediction_for_storage(prediction)
 
@@ -203,3 +227,38 @@ def cache_prediction(key: str, prediction):
         except (PyMongoError, InvalidDocument) as exc:
             logging.warning("Mongo write failed; caching in memory: %s", exc)
     in_memory_cache[key] = normalized_prediction
+
+
+def cache_predictions(items):
+    normalized_items = []
+
+    for key, prediction in items:
+        normalized_prediction = _normalize_prediction_for_storage(prediction)
+        if _prediction_has_error(normalized_prediction):
+            logging.debug("Skipping cache for key=%r: prediction contains error", key)
+            continue
+        normalized_items.append((key, normalized_prediction))
+
+    if not normalized_items:
+        return
+
+    _ensure_init()
+    if predictor_models_cache is not None:
+        try:
+            predictor_models_cache.bulk_write(
+                [
+                    ReplaceOne(
+                        {"key": key},
+                        {"key": key, "prediction": normalized_prediction},
+                        upsert=True,
+                    )
+                    for key, normalized_prediction in normalized_items
+                ],
+                ordered=False,
+            )
+            return
+        except (PyMongoError, InvalidDocument) as exc:
+            logging.warning("Mongo batch write failed; caching in memory: %s", exc)
+
+    for key, normalized_prediction in normalized_items:
+        in_memory_cache[key] = normalized_prediction

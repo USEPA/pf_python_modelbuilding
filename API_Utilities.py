@@ -234,12 +234,10 @@ class QsarSmilesAPI:
             "options": {"workflow": workflow},
             "chemicals": [{"smiles": current_smiles} for current_smiles in smiles_list]
         }
-        json_body = json.dumps(jo_body)
 
         # Make the POST request
-        headers = {"Content-Type": "application/json"}
         url = f"{server_host}/api/stdizer/chemicals"
-        response = get_requests_session().post(url, headers=headers, data=json_body)
+        response = get_requests_session().post(url, json=jo_body)
 
         # print(response.text)
 

@@ -1,4 +1,5 @@
 import concurrent.futures
+import functools
 import json
 import os
 import threading
@@ -17,8 +18,12 @@ from sqlalchemy import text, bindparam
 
 from API_Utilities import QsarSmilesAPI, DescriptorsAPI
 
-# from db.mongo_cache import get_cached_prediction, cache_prediction
-from db.mongo_cache import get_cached_prediction, cache_prediction
+from db.mongo_cache import (
+    cache_prediction,
+    cache_predictions,
+    get_cached_prediction,
+    get_cached_predictions,
+)
 
 from util import predict_constants as pc
 
@@ -62,6 +67,8 @@ dict_missing_dsstox_records = {
 USE_TEMPORARY_MODEL_PLOTS = False
 
 imgURLCid = "https://comptox.epa.gov/dashboard-api/ccdapp1/chemical-files/image/by-dtxcid/";
+_MISSING_NEIGHBOR_DSS_TOX_CACHE = {}
+_MISSING_NEIGHBOR_DSS_TOX_LOCK = threading.Lock()
 
 """
 Not completed:
@@ -74,6 +81,22 @@ lock = threading.Lock()
 _engine_lock = threading.Lock()
 _engine = None
 _session_factory = None
+
+
+@functools.lru_cache(maxsize=4096)
+def _render_smiles_to_base64_cached(smiles_string, width=400, height=400):
+    indigo = Indigo()
+    renderer = IndigoRenderer(indigo)
+
+    try:
+        mol = indigo.loadMolecule(smiles_string)
+        indigo.setOption("render-output-format", "png")
+        indigo.setOption("render-image-width", width)
+        indigo.setOption("render-image-height", height)
+        img_bytes = renderer.renderToBuffer(mol)
+        return base64.b64encode(img_bytes).decode("utf-8")
+    except Exception:
+        return None
 
 
 def getEngine():
@@ -743,7 +766,7 @@ class Report:
 
 class NeighborGetter:
 
-    def get_neighbors(self, col_name_id, id, test_indices, n_neighbors, df_set):
+    def get_neighbors(self, col_name_id, test_indices, n_neighbors, df_set, return_all=False):
         """Get AD dataframe for k neighbors. TODO can be done in clearer way?
         """
 
@@ -759,10 +782,13 @@ class NeighborGetter:
         # Transpose ids_combined to align with test_indices rows
         ids_combined_transposed = np.array(ids_combined).T.tolist()
 
+        if return_all:
+            return ids_combined_transposed
+
         neighbors = ids_combined_transposed[0]
         return neighbors
 
-    def find_neighbors_in_set(self, model, df_set, df_test_chemicals, precomputed=None):
+    def find_neighbors_in_set(self, model, df_set, df_test_chemicals, precomputed=None, return_all=False):
 
         if precomputed is not None:
             test_set = df_test_chemicals[model.embedding]
@@ -770,8 +796,12 @@ class NeighborGetter:
             test_distances, test_indices = precomputed["nbrs"].kneighbors(test_x)
 
             ids = precomputed["ids"]
-            neighbors = [ids[idx] for idx in test_indices[0]]
-            distances = list(test_distances[0])
+            if return_all:
+                neighbors = [[ids[idx] for idx in row_indices] for row_indices in test_indices]
+                distances = [list(distance_row) for distance_row in test_distances]
+            else:
+                neighbors = [ids[idx] for idx in test_indices[0]]
+                distances = list(test_distances[0])
             return neighbors, distances
 
         n_neighbors = 10
@@ -801,14 +831,21 @@ class NeighborGetter:
         test_distances, test_indices = nbrs.kneighbors(test_x)
 
         col_name_id = df_set.columns[0]
-        id_name = df_test_chemicals[col_name_id]
-
-        neighbors = self.get_neighbors(col_name_id, id_name, test_indices, n_neighbors, df_set)
+        neighbors = self.get_neighbors(
+            col_name_id,
+            test_indices,
+            n_neighbors,
+            df_set,
+            return_all=return_all,
+        )
 
         # print(len(test_distances))
         # print(len(neighbors))
 
-        distances = list(test_distances[0])
+        if return_all:
+            distances = [list(distance_row) for distance_row in test_distances]
+        else:
+            distances = list(test_distances[0])
 
         return neighbors, distances
 
@@ -914,8 +951,50 @@ class ModelPredictor:
 
             model._neighbors_prediction_cache = self._build_neighbor_cache(model, model.df_prediction)
             model._neighbors_training_cache = self._build_neighbor_cache(model, model.df_training)
+            model._ad_runtime_cache = {}
 
             model._runtime_cache_ready = True
+
+    @staticmethod
+    def _iter_applicability_domains(model: Model):
+        return [name for name in (model.applicabilityDomainName or "").split(" and ") if name]
+
+    def _get_test_embedding_ad_runtime(self, model: Model):
+        self._ensure_model_runtime_cache(model)
+
+        runtime_cache = getattr(model, "_ad_runtime_cache", None)
+        if runtime_cache is None:
+            runtime_cache = {}
+            model._ad_runtime_cache = runtime_cache
+
+        cache_key = pc.Applicability_Domain_TEST_Embedding_Euclidean
+        if cache_key in runtime_cache:
+            return runtime_cache[cache_key]
+
+        precomputed = getattr(model, "_neighbors_training_cache", None)
+        if precomputed is None:
+            return None
+
+        train_set = model.df_training[model.embedding]
+        if train_set is None or train_set.empty:
+            return None
+
+        cutoff = None
+        if len(train_set.index) >= 4:
+            train_x = precomputed["scaler"].transform(train_set)
+            train_distances, _ = precomputed["nbrs"].kneighbors(train_x, n_neighbors=4)
+            train_mean_distances = list(np.mean(train_distances[:, 1:], axis=1))
+            cutoff = float(adu.adm.helpers.find_split_value(train_mean_distances, 0.95))
+
+        runtime = {
+            "scaler": precomputed["scaler"],
+            "nbrs": precomputed["nbrs"],
+            "ids": precomputed["ids"],
+            "cutoff": cutoff,
+            "neighbor_count": min(3, len(precomputed["ids"])),
+        }
+        runtime_cache[cache_key] = runtime
+        return runtime
 
     def _resolve_model_context(self, model_id, serverAPIs, fileAPI):
         mi = ModelInitializer()
@@ -1001,16 +1080,179 @@ class ModelPredictor:
         model_results.predictionError = error
         return self._build_report_dict(chemical, model_details_dict, model_results)
 
-    def _finalize_prediction_report(self, model, model_details_dict, chemical, df_prediction, pred_value, generate_report=True):
-        chemical = self._prepare_chemical_for_report(chemical)
+    def _fast_test_embedding_euclidean_ad_batch(self, model, applicability_domain_name, df_prediction):
+        runtime = self._get_test_embedding_ad_runtime(model)
+        if runtime is None or runtime["neighbor_count"] < 1 or runtime["cutoff"] is None:
+            return None
+
+        test_set = df_prediction[model.embedding]
+        test_x = runtime["scaler"].transform(test_set)
+        test_distances, test_indices = runtime["nbrs"].kneighbors(
+            test_x,
+            n_neighbors=runtime["neighbor_count"],
+        )
+
+        results = []
+        ids = runtime["ids"]
+        ad_cutoff = runtime["cutoff"]
+
+        for distance_row, index_row in zip(test_distances, test_indices):
+            distances = list(distance_row)
+            analog_ids = [ids[idx] for idx in index_row]
+            analogs = self.setExpPredValuesForADAnalogs(model, analog_ids)
+            self.addDistances(analogs, distances)
+
+            value = float(np.mean(distance_row)) if len(distance_row) else None
+            is_inside = bool(value is not None and value <= ad_cutoff)
+            comparison = "<" if is_inside else ">"
+
+            results.append(
+                {
+                    "AD": is_inside,
+                    "analogs": analogs,
+                    "AD_Cutoff": ad_cutoff,
+                    "adMethod": {
+                        "name": applicability_domain_name,
+                        "description": "Whether or not the average Euclidean distance of the three closest training set neighbors exceeds a cutoff defined so that 95% of the training set is within the AD",
+                    },
+                    "value": value,
+                    "conclusion": "Inside" if is_inside else "Outside",
+                    "reasoning": f"Avg. distance ({value:.2f}) {comparison} {ad_cutoff:.2f}",
+                }
+            )
+
+        return results
+
+    def _build_applicability_domain_result_from_row(self, model, applicability_domain_name, row, ad_cutoff):
+        ad_value = row.get("AD")
+        if isinstance(ad_value, np.generic):
+            ad_value = ad_value.item()
+
+        results = {
+            "AD": ad_value,
+            "adMethod": {"name": applicability_domain_name},
+        }
+
+        if 'ids' in row.index and "distances" in row.index:
+            analogs_ad = list(row["ids"])
+            distances = list(row["distances"])
+            results.update({"analogs": analogs_ad, "distances": distances, "AD_Cutoff": ad_cutoff})
+
+        if applicability_domain_name == pc.Applicability_Domain_TEST_Embedding_Euclidean \
+         or applicability_domain_name == pc.Applicability_Domain_TEST_All_Descriptors_Euclidean:
+            distances = results.get("distances", [])
+            results["adMethod"]["description"] = 'Whether or not the average Euclidean distance of the three closest training set neighbors exceeds a cutoff defined so that 95% of the training set is within the AD'
+
+            if distances and ad_cutoff is not None:
+                results["value"] = sum(distances) / len(distances)
+                if ad_value is True:
+                    results["conclusion"] = "Inside"
+                    results["reasoning"] = f"Avg. distance ({results['value']:.2f}) < {ad_cutoff:.2f}"
+                else:
+                    results["conclusion"] = "Outside"
+                    results["reasoning"] = f"Avg. distance ({results['value']:.2f}) > {ad_cutoff:.2f}"
+            else:
+                results["value"] = None
+                results["conclusion"] = "Unknown"
+                results["reasoning"] = "No neighbor distances available"
+
+            if "analogs" in results:
+                results["analogs"] = self.setExpPredValuesForADAnalogs(model, results["analogs"])
+                self.addDistances(results["analogs"], results.get("distances", []))
+                del results["distances"]
+
+        elif applicability_domain_name == pc.Applicability_Domain_TEST_Fragment_Counts:
+            results["adMethod"]["description"] = 'Whether the TEST fragments are within the training set range'
+            results["fragment_table"] = row.get("fragment_table")
+
+            if ad_value is True:
+                results["conclusion"] = "Inside"
+                results["reasoning"] = "Fragments in test chemical are within the training set ranges"
+            else:
+                results["conclusion"] = "Outside"
+                results["reasoning"] = "Fragments in test chemical are NOT within the training set ranges"
+
+            if 'gcm' in model.modelMethod:
+                have_missing_fragment_in_model = False
+                for fragment in results["fragment_table"]:
+                    if fragment["fragment"] not in model.embedding:
+                        have_missing_fragment_in_model = True
+                        fragment["fragment"] += "**"
+                if have_missing_fragment_in_model:
+                    results["conclusion"] = "Outside"
+                    results["reasoning"] = "Have fragment in test chemical that is NOT included in the model"
+
+            for fragment in results["fragment_table"]:
+                if fragment['test_value'] < fragment['training_min'] or fragment['test_value'] > fragment['training_max']:
+                    if "*" not in fragment["fragment"]:
+                        fragment["fragment"] += "*"
+
+        else:
+            print("handle " + applicability_domain_name + " in determineApplicabilityDomain()")
+
+        return results
+
+    def _determine_applicability_domain_batch(self, model, applicability_domain_name, df_prediction):
+        if df_prediction is None or df_prediction.empty:
+            return []
+
+        if applicability_domain_name == pc.Applicability_Domain_TEST_Embedding_Euclidean:
+            fast_results = self._fast_test_embedding_euclidean_ad_batch(model, applicability_domain_name, df_prediction)
+            if fast_results is not None:
+                return fast_results
+
+        output, ad_cutoff = adu.generate_applicability_domain_with_preselected_descriptors_from_dfs(
+            train_df=model.df_training,
+            test_df=df_prediction,
+            remove_log_p=model.remove_log_p_descriptors,
+            embedding=model.embedding,
+            applicability_domain=applicability_domain_name,
+            filterColumnsInBothSets=True,
+        )
+
+        return [
+            self._build_applicability_domain_result_from_row(
+                model,
+                applicability_domain_name,
+                output.iloc[row_pos],
+                ad_cutoff,
+            )
+            for row_pos in range(len(output.index))
+        ]
+
+    def _determine_applicability_domains_batch(self, model, df_prediction):
+        row_count = 0 if df_prediction is None else len(df_prediction.index)
+        results_by_row = [[] for _ in range(row_count)]
+
+        for applicability_domain in self._iter_applicability_domains(model):
+            ad_results = self._determine_applicability_domain_batch(model, applicability_domain, df_prediction)
+            for row_pos, row_result in enumerate(ad_results):
+                results_by_row[row_pos].append(row_result)
+
+        return results_by_row
+
+    def _finalize_prediction_report(
+        self,
+        model,
+        model_details_dict,
+        chemical,
+        df_prediction,
+        pred_value,
+        generate_report=True,
+        ad_results=None,
+        neighbor_results_training=None,
+        neighbor_results_prediction=None,
+        prepared_chemical=None,
+    ):
+        chemical = prepared_chemical if prepared_chemical is not None else self._prepare_chemical_for_report(chemical)
         model_results = ModelResults()
 
-        if model.applicabilityDomainName:
-            applicability_domains = (model.applicabilityDomainName or "").split(" and ")
-            for applicability_domain in applicability_domains:
-                if applicability_domain:
-                    ad_results = self.determineApplicabilityDomain(model, applicability_domain, df_prediction)
-                    model_results.adEstimates.append(ad_results)
+        if ad_results is not None:
+            model_results.adEstimates.extend(ad_results)
+        elif model.applicabilityDomainName:
+            for applicability_domain in self._iter_applicability_domains(model):
+                ad_result = self.determineApplicabilityDomain(model, applicability_domain, df_prediction)
+                model_results.adEstimates.append(ad_result)
         else:
             print('AD method for model was not set:', model.modelId)
 
@@ -1045,9 +1287,7 @@ class ModelPredictor:
         )
         model_results.unitsDisplay = model.unitsDisplay
 
-        neighbor_results_training = None
-        neighbor_results_prediction = None
-        if generate_report:
+        if generate_report and (neighbor_results_training is None or neighbor_results_prediction is None):
             neighbor_results_training, neighbor_results_prediction = self.addNeighborsFromSets(model, model_results, df_prediction)
 
         return self._build_report_dict(
@@ -1080,7 +1320,11 @@ class ModelPredictor:
         except Exception:
             logging.exception("Batch standardization failed, falling back to single-smiles standardization")
 
-        return [self.standardizeStructure(serverAPIs, smiles, model) for smiles in smiles_list]
+        max_workers = int(os.getenv("PREDICT_STD_FALLBACK_WORKERS", min(32, (os.cpu_count() or 1) * 5)))
+        max_workers = max(1, min(max_workers, len(smiles_list)))
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
+            return list(pool.map(lambda smiles: self.standardizeStructure(serverAPIs, smiles, model), smiles_list))
 
     def _calculate_descriptors_batch(self, serverAPIs, qsar_smiles_list, descriptor_service):
         results = [None] * len(qsar_smiles_list)
@@ -1100,15 +1344,29 @@ class ModelPredictor:
             valid_smiles = list(qsar_smiles_list)
 
         if valid_smiles:
+            if len(valid_smiles) == 1:
+                idx = valid_indices[0]
+                results[idx] = self._descriptor_api.calculate_descriptors(serverAPIs, valid_smiles[0], descriptor_service)
+                return results
+
             df_batch, code = self._descriptor_api.calculate_descriptors_batch(serverAPIs, valid_smiles, descriptor_service)
-            if code == 200 and len(df_batch.index) == len(valid_smiles):
+            if code == 200 and isinstance(df_batch, pd.DataFrame) and len(df_batch.index) == len(valid_smiles):
                 for row_pos, idx in enumerate(valid_indices):
                     results[idx] = (df_batch.iloc[[row_pos]].copy(), 200)
                 return results
 
             logging.warning("Descriptor batch call failed or returned unexpected shape, falling back to per-smiles calls")
-            for idx, qsar_smiles in zip(valid_indices, valid_smiles):
-                results[idx] = self._descriptor_api.calculate_descriptors(serverAPIs, qsar_smiles, descriptor_service)
+
+            max_workers = int(os.getenv("PREDICT_DESCRIPTOR_FALLBACK_WORKERS", min(32, (os.cpu_count() or 1) * 5)))
+            max_workers = max(1, min(max_workers, len(valid_smiles)))
+
+            def _calc_one(item):
+                idx, qsar_smiles = item
+                return idx, self._descriptor_api.calculate_descriptors(serverAPIs, qsar_smiles, descriptor_service)
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
+                for idx, descriptor_result in pool.map(_calc_one, zip(valid_indices, valid_smiles)):
+                    results[idx] = descriptor_result
 
         return results
 
@@ -1190,15 +1448,32 @@ class ModelPredictor:
                             "Model returned an unexpected number of predictions",
                         )
                 else:
+                    ad_results_by_row = self._determine_applicability_domains_batch(model, batch_prediction_df)
+                    neighbor_results_training = None
+                    neighbor_results_prediction = None
+                    if generate_report:
+                        neighbor_results_training, neighbor_results_prediction = self.addNeighborsFromSets_batch(
+                            model,
+                            batch_prediction_df,
+                            model.unitsModel,
+                        )
+                    prepared_chemicals = [
+                        self._prepare_chemical_for_report(chemical)
+                        for chemical in prediction_chemicals
+                    ]
+
                     for row_pos, (idx, chemical) in enumerate(zip(prediction_indices, prediction_chemicals)):
-                        df_prediction_row = batch_prediction_df.iloc[[row_pos]].reset_index(drop=True).copy()
                         results[idx] = self._finalize_prediction_report(
                             model,
                             model_details_dict,
                             chemical,
-                            df_prediction_row,
+                            None,
                             pred_array[row_pos],
                             generate_report=generate_report,
+                            ad_results=ad_results_by_row[row_pos],
+                            neighbor_results_training=None if neighbor_results_training is None else neighbor_results_training[row_pos],
+                            neighbor_results_prediction=None if neighbor_results_prediction is None else neighbor_results_prediction[row_pos],
+                            prepared_chemical=prepared_chemicals[row_pos],
                         )
 
         for idx, prediction in enumerate(results):
@@ -1235,9 +1510,11 @@ class ModelPredictor:
         result = [None] * len(smiles_list)
         missing_by_smiles = {}
 
-        for idx, smi in enumerate(smiles_list):
-            key = f"{smi}-{model_id}"
-            prediction = get_cached_prediction(key)
+        cache_keys = [f"{smi}-{model_id}" for smi in smiles_list]
+        cached_predictions = get_cached_predictions(cache_keys)
+
+        for idx, (smi, key) in enumerate(zip(smiles_list, cache_keys)):
+            prediction = cached_predictions.get(key)
             if prediction is not None:
                 result[idx] = self._prediction_to_obj(prediction)
             else:
@@ -1262,16 +1539,21 @@ class ModelPredictor:
                     if code != 200:
                         prediction = {"smiles": smi, "error": prediction}
                     prediction_obj = self._prediction_to_obj(prediction)
-                    cache_prediction(f"{smi}-{model_id}", prediction_obj)
-                    return indices, prediction_obj
+                    return smi, indices, prediction_obj
 
+                cache_entries = []
                 with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
-                    for indices, prediction_obj in pool.map(_predict_one, missing):
+                    for smi, indices, prediction_obj in pool.map(_predict_one, missing):
+                        cache_entries.append((f"{smi}-{model_id}", prediction_obj))
                         for idx in indices:
                             result[idx] = prediction_obj
+                cache_predictions(cache_entries)
             else:
+                cache_predictions(
+                    (f"{smi}-{model_id}", prediction_obj)
+                    for smi, prediction_obj in zip(missing_smiles, batch_predictions)
+                )
                 for smi, prediction_obj in zip(missing_smiles, batch_predictions):
-                    cache_prediction(f"{smi}-{model_id}", prediction_obj)
                     for idx in missing_by_smiles[smi]:
                         result[idx] = prediction_obj
 
@@ -1317,22 +1599,7 @@ class ModelPredictor:
         TODO: move to utility class
         :param smiles_string:
         '''
-        
-        indigo = Indigo()
-        renderer = IndigoRenderer(indigo)
-        
-        try:
-            mol = indigo.loadMolecule(smiles_string)
-            indigo.setOption("render-output-format", "png") 
-            indigo.setOption("render-image-width", width)
-            indigo.setOption("render-image-height", height)
-            img_bytes = renderer.renderToBuffer(mol)
-            base64_string = base64.b64encode(img_bytes).decode('utf-8')
-            return base64_string
-    
-        except Exception as e:
-            # print(f"An error occurred while loading the molecule: {e}")
-            return None
+        return _render_smiles_to_base64_cached(smiles_string, width=width, height=height)
     
     def setExpValue(self, chemical, model, modelResults:ModelResults):
 
@@ -1359,32 +1626,13 @@ class ModelPredictor:
                 modelResults.experimentalValueSet = "Test"
 
     def setExpPredValuesForADAnalogs(self, model, analogs):
-
-        analogs2 = []
-
-        df_preds = model.df_preds_training_cv
-
-        for analog in analogs:  # these are just the qsarSmiles
-
-            matching_row_dsstox = model.df_dsstoxRecords[model.df_dsstoxRecords['canonicalSmiles'] == analog]
-
-            if not matching_row_dsstox.empty:
-                row_as_dict = matching_row_dsstox.iloc[0].to_dict()
-            else:
-                row_as_dict = self.fixMissingNeighborDsstoxRecord(model.datasetName, analog)
-
-            analogs2.append(row_as_dict)
-
-            # Find the matching row in model.df_preds_test
-            matching_row_pred = df_preds[df_preds['id'] == analog]
-            if not matching_row_pred.empty:
-                # Add exp and pred values to the record
-                row_as_dict['exp'] = matching_row_pred['exp'].values[0]
-                row_as_dict['pred'] = matching_row_pred['pred'].values[0]
-        
-        # print(json.dumps(analogs2,indent=4))
-        
-        return analogs2
+        self._ensure_model_runtime_cache(model)
+        return self.setExpPredValuesForNeighbors(
+            model,
+            getattr(model, "_preds_training_cv_by_id", None),
+            analogs,
+            getattr(model, "_dsstox_by_smiles", None),
+        )
 
     def addDistances(self, analogs, distances):
         # print(len(analogs), len(distances))
@@ -1392,39 +1640,43 @@ class ModelPredictor:
             analog["distance"] = distances[index] 
 
     def fixMissingNeighborDsstoxRecord(self, datasetName, qsarSmiles):
-        row_as_dict = {
-            "canonicalSmiles":qsarSmiles}
+        cache_key = (datasetName, qsarSmiles)
+
+        with _MISSING_NEIGHBOR_DSS_TOX_LOCK:
+            cached_record = _MISSING_NEIGHBOR_DSS_TOX_CACHE.get(cache_key)
+        if cached_record is not None:
+            return dict(cached_record)
+
+        row_as_dict = {"canonicalSmiles": qsarSmiles}
         mi = ModelInitializer()
-        
+
         try:
             session = getSession()
 
             dtxcid = mi.getQsarDtxcid(qsarSmiles, datasetName, session)
-            
+
             if dtxcid:
                 row_as_dict["cid"] = dtxcid
-                
-                if dtxcid in dict_missing_dsstox_records:  # dict_missing_dsstox_records is global variable
+
+                if dtxcid in dict_missing_dsstox_records:
                     rec = dict_missing_dsstox_records[dtxcid]
                     row_as_dict["sid"] = rec["sid"]
                     row_as_dict["name"] = rec["name"]
                     row_as_dict["smiles"] = rec["smiles"]
                     row_as_dict["casrn"] = rec["casrn"]
-                    
                 else:
-                    row_as_dict["name"] = dtxcid    
-                
+                    row_as_dict["name"] = dtxcid
             else:
                 row_as_dict["name"] = qsarSmiles
 
             session.close()
-            
-            # print(dtxcid, dtxsid)
-
         except Exception as e:
             print(e)
 
-        return row_as_dict
+        with _MISSING_NEIGHBOR_DSS_TOX_LOCK:
+            _MISSING_NEIGHBOR_DSS_TOX_CACHE[cache_key] = dict(row_as_dict)
+
+        return dict(row_as_dict)
 
     def setExpPredValuesForNeighbors(self, model:Model, pred_lookup, neighbors, dsstox_lookup):
 
@@ -1449,52 +1701,92 @@ class ModelPredictor:
 
         return neighbors2
 
-    @timer
-    def addNeighborsFromSets(self, model:Model, modelResults: ModelResults, df_test_chemicals):
+    def _build_neighbor_report(self, model: Model, neighbors, distances, pred_lookup, dsstox_lookup, units_model, set_name, title):
+        enriched_neighbors = self.setExpPredValuesForNeighbors(model, pred_lookup, neighbors, dsstox_lookup)
+        self.addDistances(enriched_neighbors, distances)
 
+        mae_value = None
+        try:
+            df_neighbors = pd.DataFrame(enriched_neighbors)
+            if set_name == "Training":
+                stats_result = stats.calculate_continuous_statistics(df_neighbors, 0, pc.TAG_TRAINING)
+                mae_value = stats_result.get(pc.MAE + pc.TAG_TRAINING)
+            else:
+                stats_result = stats.calculate_continuous_statistics(df_neighbors, 0, pc.TAG_TEST)
+                mae_value = stats_result.get(pc.MAE + pc.TAG_TEST)
+        except Exception:
+            mae_value = None
+
+        return {
+            "set": set_name,
+            "neighbors": enriched_neighbors,
+            "MAE": mae_value,
+            "unitNeighbor": units_model,
+            "title": title,
+        }
+
+    def addNeighborsFromSets_batch(self, model, df_test_chemicals, units_model):
         self._ensure_model_runtime_cache(model)
 
         ng = NeighborGetter()
-
-        neighborsTest, distances_test = ng.find_neighbors_in_set(
+        neighbors_test_all, distances_test_all = ng.find_neighbors_in_set(
             model=model,
             df_set=model.df_prediction,
             df_test_chemicals=df_test_chemicals,
             precomputed=getattr(model, "_neighbors_prediction_cache", None),
+            return_all=True,
         )
-        neighborsTraining, distances_training = ng.find_neighbors_in_set(
+        neighbors_training_all, distances_training_all = ng.find_neighbors_in_set(
             model=model,
             df_set=model.df_training,
             df_test_chemicals=df_test_chemicals,
             precomputed=getattr(model, "_neighbors_training_cache", None),
+            return_all=True,
         )
 
         dsstox_lookup = getattr(model, "_dsstox_by_smiles", None)
         pred_training_lookup = getattr(model, "_preds_training_cv_by_id", None)
         pred_test_lookup = getattr(model, "_preds_test_by_id", None)
 
-        neighborsTraining = self.setExpPredValuesForNeighbors(model, pred_training_lookup, neighborsTraining, dsstox_lookup)
-        neighborsTest = self.setExpPredValuesForNeighbors(model, pred_test_lookup, neighborsTest, dsstox_lookup)
-                
-        self.addDistances(neighborsTraining, distances_training)    
-        self.addDistances(neighborsTest, distances_test)
-                
-        df_neighborsTest = pd.DataFrame(neighborsTest)
-        stats_test = stats.calculate_continuous_statistics(df_neighborsTest, 0, pc.TAG_TEST)
-        neighborsTestMAE = stats_test[pc.MAE + pc.TAG_TEST]
-                    
-        df_neighborsTraining = pd.DataFrame(neighborsTraining)
-        stats_training = stats.calculate_continuous_statistics(df_neighborsTraining, 0, pc.TAG_TRAINING)
-        neighborsTrainingMAE = stats_training[pc.MAE + pc.TAG_TRAINING]
-        
-        neighborResultsPrediction = {"set": "Test", "neighbors":neighborsTest, "MAE":neighborsTestMAE,
-                                                "unitNeighbor":modelResults.unitsModel,
-                                                "title": "Nearest Neighbors from Test Set (External Predictions)"}
-        neighborResultsTraining = {"set": "Training", "neighbors":neighborsTraining, "MAE":neighborsTrainingMAE,
-                                              "unitNeighbor":modelResults.unitsModel,
-                                              "title": "Nearest Neighbors from Training Set (Cross Validation Predictions)"}
-        
-        return neighborResultsTraining, neighborResultsPrediction
+        neighbor_results_training = []
+        neighbor_results_prediction = []
+
+        for row_pos in range(len(df_test_chemicals.index)):
+            neighbor_results_training.append(
+                self._build_neighbor_report(
+                    model,
+                    neighbors_training_all[row_pos],
+                    distances_training_all[row_pos],
+                    pred_training_lookup,
+                    dsstox_lookup,
+                    units_model,
+                    "Training",
+                    "Nearest Neighbors from Training Set (Cross Validation Predictions)",
+                )
+            )
+            neighbor_results_prediction.append(
+                self._build_neighbor_report(
+                    model,
+                    neighbors_test_all[row_pos],
+                    distances_test_all[row_pos],
+                    pred_test_lookup,
+                    dsstox_lookup,
+                    units_model,
+                    "Test",
+                    "Nearest Neighbors from Test Set (External Predictions)",
+                )
+            )
+
+        return neighbor_results_training, neighbor_results_prediction
+
+    @timer
+    def addNeighborsFromSets(self, model:Model, modelResults: ModelResults, df_test_chemicals):
+        neighbor_results_training, neighbor_results_prediction = self.addNeighborsFromSets_batch(
+            model,
+            df_test_chemicals,
+            modelResults.unitsModel,
+        )
+        return neighbor_results_training[0], neighbor_results_prediction[0]
         
     @timer
     def getFragmentAD(self, df_prediction, df_training, modelResults:ModelResults):
@@ -1724,82 +2016,10 @@ class ModelPredictor:
         :param df_prediction:
         :return:
         """
-
-        output, ad_cutoff = adu.generate_applicability_domain_with_preselected_descriptors_from_dfs(
-            train_df=model.df_training,
-            test_df=df_prediction,
-            # test_df=model.df_prediction,  #for testing running batch type ad calc
-            remove_log_p=model.remove_log_p_descriptors,
-            embedding=model.embedding,
-            # applicability_domain=model.applicabilityDomainName,
-            applicability_domain=applicabilityDomainName,
-            filterColumnsInBothSets=True)
-
-        AD = output['AD'].iloc[0]
-        
-        if 'ids' in output.columns and "distances" in output.columns:
-            analogsAD = output['ids'].iloc[0]  # only use first one for singleton prediction
-            distances = list(output["distances"].iloc[0])
-            results = {"AD":AD, "analogs": analogsAD, "distances": distances, "AD_Cutoff": ad_cutoff}
-        else:
-            results = {"AD":AD}
-                
-        # print(json.dumps(analogsAD,indent=4))
-        # dictsAnalogs = [ast.literal_eval(item) for item in analogsAD]
-        
-        results["adMethod"] = {}
-        results["adMethod"]["name"] = applicabilityDomainName
-        # results["adMethod"]["description"] = model.applicabilityDomainDescription
-
-        if applicabilityDomainName == pc.Applicability_Domain_TEST_Embedding_Euclidean\
-         or applicabilityDomainName == pc.Applicability_Domain_TEST_All_Descriptors_Euclidean:
-            
-            results["value"] = sum(distances) / len(distances)
-            
-            if AD == True: 
-                results["conclusion"] = "Inside"
-                results["reasoning"] = f"Avg. distance ({results['value']:.2f}) < {ad_cutoff:.2f}" 
-            else: 
-                results["conclusion"] = "Outside"
-                results["reasoning"] = f"Avg. distance ({results['value']:.2f}) > {ad_cutoff:.2f}"
-                
-            results["analogs"] = self.setExpPredValuesForADAnalogs(model, results["analogs"])
-            results["adMethod"]["description"] = 'Whether or not the average Euclidean distance of the three closest training set neighbors exceeds a cutoff defined so that 95% of the training set is within the AD'
-
-            self.addDistances(results["analogs"], results["distances"])        
-            del results['distances']
-                
-        elif applicabilityDomainName == pc.Applicability_Domain_TEST_Fragment_Counts:
-
-            results["adMethod"]["description"] = 'Whether the TEST fragments are within the training set range'
-            results["fragment_table"] = output["fragment_table"].iloc[0]
-
-            if AD == True:
-                results["conclusion"] = "Inside"
-                results["reasoning"] = "Fragments in test chemical are within the training set ranges"
-            else:
-                results["conclusion"] = "Outside"
-                results["reasoning"] = "Fragments in test chemical are NOT within the training set ranges"
-
-            if 'gcm' in model.modelMethod:
-                haveMissingFragmentInModel = False
-                for fragment in results["fragment_table"]:
-                    if fragment["fragment"] not in model.embedding:
-                        haveMissingFragmentInModel = True
-                        fragment["fragment"] += "**"                                    
-                if haveMissingFragmentInModel:
-                    results["conclusion"] = "Outside"
-                    results["reasoning"] = "Have fragment in test chemical that is NOT included in the model"
-
-            for fragment in results["fragment_table"]:
-                if fragment['test_value'] < fragment['training_min'] or fragment['test_value'] > fragment['training_max']:
-                    if "*" not in fragment["fragment"]:
-                        fragment["fragment"] += "*"            
-
-        else:
-            print("handle " + applicabilityDomainName + " in determineApplicabilityDomain()")
-            
-        return results  # gives an array instead of each object on separate line
+        batch_results = self._determine_applicability_domain_batch(model, applicabilityDomainName, df_prediction)
+        if batch_results:
+            return batch_results[0]
+        return {"AD": False, "adMethod": {"name": applicabilityDomainName}}
             
 
 def main():
