@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import threading
 
 from bson.errors import InvalidDocument
 from pymongo import ASCENDING, MongoClient, ReplaceOne
@@ -11,6 +12,7 @@ predictor_models_cache = None
 in_memory_cache = {}
 _mongo_init_done = False
 _mongo_unavailable_reason = None
+_errors_file_lock = threading.Lock()
 
 
 def _has_meaningful_error_value(value) -> bool:
@@ -94,10 +96,23 @@ def _find_prediction_error_reason(prediction, path="prediction"):
 
 
 def _warn_mongo_cache_skip(key: str, reason: str, fallback: str | None = None):
+    _append_mongo_cache_error(key, reason)
     if fallback:
         logging.warning("Mongo cache skipped for key=%r: %s; fallback=%s", key, reason, fallback)
     else:
         logging.warning("Mongo cache skipped for key=%r: %s", key, reason)
+
+
+def _append_mongo_cache_error(key: str, reason: str):
+    errors_path = os.getenv("MONGO_CACHE_ERRORS_FILE", "errors.txt")
+    line = f"key={key!r} {str(reason).replace(chr(10), ' ').replace(chr(13), ' ').strip()}\n"
+
+    try:
+        with _errors_file_lock:
+            with open(errors_path, "a", encoding="utf-8") as handle:
+                handle.write(line)
+    except OSError as exc:
+        logging.warning("Failed to append Mongo cache error to %s: %s", errors_path, exc)
 
 
 def _prediction_to_obj(prediction):

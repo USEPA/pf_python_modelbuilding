@@ -248,7 +248,7 @@ class DescriptorsAPI:
             "chemIdType": "SMILES",
             "format": "JSON",
             "options": {
-                "headers": "true",
+                "headers": True,
             },
         }
 
@@ -277,10 +277,65 @@ class DescriptorsAPI:
         return self.response_json_to_df(descriptor_dict, [qsarSmiles])
 
     @staticmethod
+    def _coerce_descriptor_headers(candidate):
+        if isinstance(candidate, (list, tuple)):
+            return [str(item) for item in candidate]
+
+        if isinstance(candidate, str):
+            text = candidate.strip()
+            if not text:
+                return None
+
+            try:
+                parsed = json.loads(text)
+            except Exception:
+                parsed = None
+
+            if isinstance(parsed, (list, tuple)):
+                return [str(item) for item in parsed]
+
+            for delimiter in ("\t", ",", "|", ";"):
+                if delimiter in text:
+                    parts = [part.strip() for part in text.split(delimiter) if part.strip()]
+                    if len(parts) > 1:
+                        return parts
+
+        if isinstance(candidate, dict):
+            for nested_key in (
+                "headers",
+                "descriptorHeaders",
+                "descriptor_headers",
+                "descriptorNames",
+                "descriptor_names",
+                "columns",
+                "column_names",
+            ):
+                nested_headers = DescriptorsAPI._coerce_descriptor_headers(candidate.get(nested_key))
+                if nested_headers:
+                    return nested_headers
+
+        return None
+
+    @staticmethod
+    def _summarize_descriptor_chemical(chemical):
+        if isinstance(chemical, dict):
+            summary_parts = [f"dict keys={list(chemical.keys())[:10]}"]
+            descriptors = chemical.get("descriptors")
+            if isinstance(descriptors, dict):
+                summary_parts.append(f"descriptors=dict keys={list(descriptors.keys())[:10]}")
+            elif isinstance(descriptors, list):
+                summary_parts.append(f"descriptors=list len={len(descriptors)}")
+            elif descriptors is not None:
+                summary_parts.append(f"descriptors_type={type(descriptors).__name__}")
+            return " ".join(summary_parts)
+
+        return f"type={type(chemical).__name__} preview={DescriptorsAPI._preview_value(chemical)}"
+
+    @staticmethod
     def _extract_descriptor_headers(descriptor_dict):
-        headers = descriptor_dict.get("headers")
-        if isinstance(headers, (list, tuple)):
-            return list(headers)
+        headers = DescriptorsAPI._coerce_descriptor_headers(descriptor_dict.get("headers"))
+        if headers:
+            return headers
 
         for parent_key in ("options", "info"):
             parent = descriptor_dict.get(parent_key)
@@ -296,34 +351,48 @@ class DescriptorsAPI:
                 "columns",
                 "column_names",
             ):
-                candidate = parent.get(candidate_key)
-                if isinstance(candidate, (list, tuple)):
-                    return list(candidate)
+                headers = DescriptorsAPI._coerce_descriptor_headers(parent.get(candidate_key))
+                if headers:
+                    return headers
 
         chemicals = descriptor_dict.get("chemicals")
-        if isinstance(chemicals, list) and chemicals and isinstance(chemicals[0], dict):
-            descriptors = chemicals[0].get("descriptors")
+        if isinstance(chemicals, list):
+            for chemical in chemicals[:5]:
+                if not isinstance(chemical, dict):
+                    continue
 
-            if isinstance(descriptors, dict):
-                return list(descriptors.keys())
+                descriptors = chemical.get("descriptors")
 
-            for candidate_key in (
-                "headers",
-                "descriptorHeaders",
-                "descriptor_headers",
-                "descriptorNames",
-                "descriptor_names",
-            ):
-                candidate = chemicals[0].get(candidate_key)
-                if isinstance(candidate, (list, tuple)):
-                    return list(candidate)
+                if isinstance(descriptors, dict):
+                    return list(descriptors.keys())
+
+                for candidate_key in (
+                    "headers",
+                    "descriptorHeaders",
+                    "descriptor_headers",
+                    "descriptorNames",
+                    "descriptor_names",
+                ):
+                    headers = DescriptorsAPI._coerce_descriptor_headers(chemical.get(candidate_key))
+                    if headers:
+                        return headers
+
+        first_chemical_summary = "none"
+        if isinstance(chemicals, list) and chemicals:
+            first_chemical_summary = DescriptorsAPI._summarize_descriptor_chemical(chemicals[0])
 
         top_level_keys = list(descriptor_dict.keys())
         options_keys = list(descriptor_dict.get("options", {}).keys()) if isinstance(descriptor_dict.get("options"), dict) else []
         info_keys = list(descriptor_dict.get("info", {}).keys()) if isinstance(descriptor_dict.get("info"), dict) else []
+        options_headers = None
+        if isinstance(descriptor_dict.get("options"), dict):
+            options_headers = descriptor_dict["options"].get("headers")
         raise KeyError(
             "headers"
-            f" (top_level_keys={top_level_keys}, options_keys={options_keys}, info_keys={info_keys})"
+            f" (top_level_keys={top_level_keys}, options_keys={options_keys}, info_keys={info_keys}, "
+            f"chemicals_len={len(chemicals) if isinstance(chemicals, list) else 'n/a'}, "
+            f"options_headers_type={type(options_headers).__name__ if options_headers is not None else 'missing'}, "
+            f"first_chemical={first_chemical_summary})"
         )
 
     def response_json_to_df(self, descriptor_dict, qsarSmilesList):

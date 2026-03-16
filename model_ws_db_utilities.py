@@ -917,6 +917,121 @@ class ModelPredictor:
             return text[:max_len] + "..."
         return text
 
+    @staticmethod
+    def _get_standardization_response_id(chemical):
+        if not isinstance(chemical, dict):
+            return None
+
+        for key in ("id", "recordId"):
+            value = chemical.get(key)
+            if value is not None and str(value) != "":
+                return str(value)
+
+        return None
+
+    def _normalize_standardization_batch_results(self, chemicals, smiles_list, model):
+        if not isinstance(chemicals, list):
+            return None, f"type={type(chemicals).__name__} preview={self._preview_log_value(chemicals)}"
+
+        if (
+            len(chemicals) == len(smiles_list)
+            and all(isinstance(chemical, dict) and "canonicalSmiles" in chemical for chemical in chemicals)
+            and not (model.omitSalts and any("." in chemical.get("canonicalSmiles", "") for chemical in chemicals))
+        ):
+            return [(chemical, 200) for chemical in chemicals], None
+
+        grouped = {}
+        unidentified_count = 0
+
+        for chemical in chemicals:
+            response_id = self._get_standardization_response_id(chemical)
+            if response_id is None:
+                unidentified_count += 1
+                continue
+            grouped.setdefault(response_id, []).append(chemical)
+
+        expected_ids = [str(index) for index in range(len(smiles_list))]
+        expected_id_set = set(expected_ids)
+        missing_ids = [response_id for response_id in expected_ids if response_id not in grouped]
+        extra_ids = [response_id for response_id in grouped if response_id not in expected_id_set]
+
+        if grouped and not missing_ids:
+            normalized_results = []
+            mixture_count = 0
+            missing_canonical_count = 0
+
+            for index, smiles in enumerate(smiles_list):
+                response_id = str(index)
+                grouped_chemicals = grouped.get(response_id, [])
+                canonical_chemicals = [
+                    chemical
+                    for chemical in grouped_chemicals
+                    if isinstance(chemical, dict) and chemical.get("canonicalSmiles")
+                ]
+
+                if not canonical_chemicals:
+                    missing_canonical_count += 1
+                    normalized_results.append((f"{smiles} failed standardization", 400))
+                    continue
+
+                if model.omitSalts and len(canonical_chemicals) > 1:
+                    mixture_count += 1
+                    normalized_results.append((f"{smiles}: model can't run mixtures", 400))
+                    continue
+
+                normalized_results.append((canonical_chemicals[0], 200))
+
+            diagnostic_parts = [
+                f"expanded_response_grouped_by_id result_len={len(chemicals)} expected_len={len(smiles_list)}",
+                f"grouped_ids={len(grouped)}",
+            ]
+
+            if unidentified_count:
+                diagnostic_parts.append(f"unidentified_items={unidentified_count}")
+            if extra_ids:
+                diagnostic_parts.append(f"extra_ids={extra_ids[:10]}")
+            if mixture_count:
+                diagnostic_parts.append(f"mixture_groups={mixture_count}")
+            if missing_canonical_count:
+                diagnostic_parts.append(f"missing_canonical_groups={missing_canonical_count}")
+
+            return normalized_results, " ".join(diagnostic_parts)
+
+        standardization_reason_parts = [f"result_len={len(chemicals)} expected_len={len(smiles_list)}"]
+
+        missing_canonical_count = sum(
+            1 for chemical in chemicals
+            if not isinstance(chemical, dict) or "canonicalSmiles" not in chemical
+        )
+        if missing_canonical_count:
+            standardization_reason_parts.append(
+                f"missing_canonicalSmiles={missing_canonical_count}"
+            )
+
+        if grouped:
+            standardization_reason_parts.append(f"grouped_ids={len(grouped)}")
+        if missing_ids:
+            standardization_reason_parts.append(f"missing_ids={missing_ids[:10]}")
+        if extra_ids:
+            standardization_reason_parts.append(f"extra_ids={extra_ids[:10]}")
+        if unidentified_count:
+            standardization_reason_parts.append(f"unidentified_items={unidentified_count}")
+
+        if model.omitSalts:
+            mixture_count = sum(
+                1 for chemical in chemicals
+                if isinstance(chemical, dict) and "." in chemical.get("canonicalSmiles", "")
+            )
+            if mixture_count:
+                standardization_reason_parts.append(
+                    f"mixtures_with_omitSalts={mixture_count}"
+                )
+
+        standardization_reason_parts.append(
+            f"preview={self._preview_log_value(chemicals)}"
+        )
+        return None, " ".join(standardization_reason_parts)
+
     def _build_neighbor_cache(self, model, df_set):
         if df_set is None or df_set.empty or not model.embedding:
             return None
@@ -1323,41 +1438,23 @@ class ModelPredictor:
                 full=False,
                 workflow=model.qsarReadyRuleSet,
             )
-            if (
-                code == 200
-                and isinstance(chemicals, list)
-                and len(chemicals) == len(smiles_list)
-                and all(isinstance(chemical, dict) and "canonicalSmiles" in chemical for chemical in chemicals)
-                and not (model.omitSalts and any("." in chemical.get("canonicalSmiles", "") for chemical in chemicals))
-            ):
-                return [(chemical, 200) for chemical in chemicals]
-
-            if isinstance(chemicals, list):
-                standardization_reason_parts = [f"result_len={len(chemicals)} expected_len={len(smiles_list)}"]
-
-                missing_canonical_count = sum(
-                    1 for chemical in chemicals
-                    if not isinstance(chemical, dict) or "canonicalSmiles" not in chemical
+            if code == 200:
+                normalized_results, normalization_diagnostic = self._normalize_standardization_batch_results(
+                    chemicals,
+                    smiles_list,
+                    model,
                 )
-                if missing_canonical_count:
-                    standardization_reason_parts.append(
-                        f"missing_canonicalSmiles={missing_canonical_count}"
-                    )
-
-                if model.omitSalts:
-                    mixture_count = sum(
-                        1 for chemical in chemicals
-                        if isinstance(chemical, dict) and "." in chemical.get("canonicalSmiles", "")
-                    )
-                    if mixture_count:
-                        standardization_reason_parts.append(
-                            f"mixtures_with_omitSalts={mixture_count}"
+                if normalized_results is not None:
+                    if normalization_diagnostic:
+                        logging.info(
+                            "Standardization batch response normalized; workflow=%s batch_size=%s detail=%s",
+                            model.qsarReadyRuleSet,
+                            len(smiles_list),
+                            normalization_diagnostic,
                         )
+                    return normalized_results
 
-                standardization_reason_parts.append(
-                    f"preview={self._preview_log_value(chemicals)}"
-                )
-                standardization_reason = " ".join(standardization_reason_parts)
+                standardization_reason = normalization_diagnostic
             else:
                 standardization_reason = (
                     f"type={type(chemicals).__name__} "

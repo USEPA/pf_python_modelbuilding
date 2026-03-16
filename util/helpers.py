@@ -166,6 +166,7 @@ def _strip_common_model_details(predictions):
     common_model_details = None
     common_model_details_set = False
     stripped_predictions = []
+    mismatched_model_details = False
 
     for prediction in predictions:
         if not isinstance(prediction, dict):
@@ -181,8 +182,7 @@ def _strip_common_model_details(predictions):
             continue
 
         if model_details != common_model_details:
-            logging.warning("Batch predictions returned different modelDetails values; keeping them per item")
-            return None, predictions
+            mismatched_model_details = True
 
     for prediction in predictions:
         if isinstance(prediction, dict):
@@ -191,6 +191,11 @@ def _strip_common_model_details(predictions):
             stripped_predictions.append(prediction_copy)
         else:
             stripped_predictions.append(prediction)
+
+    if mismatched_model_details:
+        logging.warning(
+            "Batch predictions returned different modelDetails values; using the first non-null modelDetails at the top level"
+        )
 
     return common_model_details, stripped_predictions
 
