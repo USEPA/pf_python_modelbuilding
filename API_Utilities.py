@@ -307,18 +307,72 @@ class SearchAPI:
 class QsarSmilesAPI:
 
     @staticmethod
-    def call_qsar_ready_standardize_post(server_host, smiles, full, workflow):
-        if isinstance(smiles, str):
-            smiles_list = [smiles]
-        else:
-            smiles_list = list(smiles)
+    def _build_standardize_chemical_payload(chemical, index):
+        if isinstance(chemical, dict):
+            payload = {
+                "id": str(chemical.get("id", index)),
+                "chemId": chemical.get("chemId") or chemical.get("sid") or chemical.get("cid") or chemical.get("name") or chemical.get("smiles") or "",
+                "cid": chemical.get("cid", ""),
+                "sid": chemical.get("sid", ""),
+                "casrn": chemical.get("casrn", ""),
+                "name": chemical.get("name", ""),
+                "smiles": chemical.get("smiles", ""),
+                "canonicalSmiles": chemical.get("canonicalSmiles", ""),
+                "inchi": chemical.get("inchi", ""),
+                "inchiKey": chemical.get("inchiKey", ""),
+                "mol": chemical.get("mol", ""),
+                "molFormula": chemical.get("molFormula", ""),
+                "image": chemical.get("image", chemical.get("imageSrc", "")),
+                "additionalProps": chemical.get("additionalProps", {}),
+            }
 
-        # Construct the JSON body
-        jo_body = {
-            "full": full,
-            "options": {"workflow": workflow},
-            "chemicals": [{"smiles": current_smiles} for current_smiles in smiles_list]
+            if chemical.get("averageMass") is not None:
+                payload["averageMass"] = chemical["averageMass"]
+            if chemical.get("monoisotopicMass") is not None:
+                payload["monoisotopicMass"] = chemical["monoisotopicMass"]
+            return payload
+
+        smiles_value = str(chemical)
+        return {
+            "id": str(index),
+            "chemId": smiles_value,
+            "cid": "",
+            "sid": "",
+            "casrn": "",
+            "name": "",
+            "smiles": smiles_value,
+            "canonicalSmiles": "",
+            "inchi": "",
+            "inchiKey": "",
+            "mol": "",
+            "molFormula": "",
+            "image": "",
+            "additionalProps": {},
         }
+
+    @staticmethod
+    def _build_standardize_payload(smiles, full, workflow):
+        if isinstance(smiles, str):
+            chemicals_input = [smiles]
+        else:
+            chemicals_input = list(smiles)
+
+        return {
+            "options": {
+                "workflow": workflow or "",
+                "run": "",
+                "recordId": "",
+            },
+            "chemicals": [
+                QsarSmilesAPI._build_standardize_chemical_payload(chemical, index)
+                for index, chemical in enumerate(chemicals_input)
+            ],
+            "full": full,
+        }
+
+    @staticmethod
+    def call_qsar_ready_standardize_post(server_host, smiles, full, workflow):
+        jo_body = QsarSmilesAPI._build_standardize_payload(smiles, full, workflow)
 
         # Make the POST request
         url = f"{server_host}/api/stdizer/chemicals"
@@ -336,16 +390,7 @@ class QsarSmilesAPI:
 
     @staticmethod
     async def call_qsar_ready_standardize_post_async(client: httpx.AsyncClient, server_host, smiles, full, workflow):
-        if isinstance(smiles, (list, tuple)):
-            chemicals_payload = [{"smiles": s} for s in smiles]
-        else:
-            chemicals_payload = [{"smiles": smiles}]
-
-        jo_body = {
-            "full": full,
-            "options": {"workflow": workflow},
-            "chemicals": chemicals_payload
-        }
+        jo_body = QsarSmilesAPI._build_standardize_payload(smiles, full, workflow)
 
         headers = {"Content-Type": "application/json"}
         url = f"{server_host}/api/stdizer/chemicals"
