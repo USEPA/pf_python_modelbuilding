@@ -190,7 +190,7 @@ class DescriptorsAPI:
                 "chemIdType": "SMILES",
                 "format": "JSON",
                 "options": {
-                    "headers": "true",
+                    "headers": True,
                 },
             }
 
@@ -204,9 +204,13 @@ class DescriptorsAPI:
 
             if len(smiles_subset) == 1 or depth >= max_depth:
                 status_code, preview = _probe(smiles_subset)
+                if len(smiles_subset) == 1:
+                    sample_preview = self._preview_value(smiles_subset[0])
+                else:
+                    sample_preview = self._preview_value(smiles_subset)
                 return (
                     f"subset_size={len(smiles_subset)} status={status_code} "
-                    f"sample={self._preview_value(smiles_subset)} body={preview}"
+                    f"sample={sample_preview} body={preview}"
                 )
 
             mid = len(smiles_subset) // 2

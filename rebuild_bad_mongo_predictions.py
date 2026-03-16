@@ -50,6 +50,32 @@ def _has_failed_standardization(prediction: Any) -> bool:
     return False
 
 
+def _contains_na_string(value: Any) -> bool:
+    if isinstance(value, str):
+        return value == "N/A"
+
+    if isinstance(value, dict):
+        return any(_contains_na_string(item) for item in value.values())
+
+    if isinstance(value, list):
+        return any(_contains_na_string(item) for item in value)
+
+    return False
+
+
+def _replace_na_with_none(value: Any) -> Any:
+    if isinstance(value, str):
+        return None if value == "N/A" else value
+
+    if isinstance(value, dict):
+        return {key: _replace_na_with_none(item) for key, item in value.items()}
+
+    if isinstance(value, list):
+        return [_replace_na_with_none(item) for item in value]
+
+    return value
+
+
 def _should_rebuild(prediction: Any) -> bool:
     if isinstance(prediction, str):
         return True
@@ -120,10 +146,11 @@ def _count_error_categories(
     batch_size: int,
     retries: int,
     retry_delay: float,
-) -> tuple[int, int, int]:
+) -> tuple[int, int, int, int]:
     scanned = 0
     prediction_string_count = 0
     failed_standardization_count = 0
+    contains_na_count = 0
     last_id = None
 
     while True:
@@ -157,11 +184,13 @@ def _count_error_categories(
             prediction = doc.get("prediction")
             if isinstance(prediction, str):
                 prediction_string_count += 1
-            elif _has_failed_standardization(prediction):
+            if _has_failed_standardization(prediction):
                 failed_standardization_count += 1
+            if _contains_na_string(prediction):
+                contains_na_count += 1
             last_id = doc["_id"]
 
-    return scanned, prediction_string_count, failed_standardization_count
+    return scanned, prediction_string_count, failed_standardization_count, contains_na_count
 
 
 def main() -> None:
@@ -237,6 +266,8 @@ def main() -> None:
     deleted = 0
     scanned = 0
     deleted_errors = 0
+    sanitized_na = 0
+    sanitize_update_failed = 0
 
     client = _build_mongo_client(
         server_selection_timeout_ms=args.mongo_server_selection_timeout_ms,
@@ -246,7 +277,7 @@ def main() -> None:
     try:
         client.admin.command("ping")
         collection = _get_collection(client)
-        pre_scanned, pre_prediction_strings, pre_failed_standardization = _count_error_categories(
+        pre_scanned, pre_prediction_strings, pre_failed_standardization, pre_contains_na = _count_error_categories(
             collection=collection,
             batch_size=args.mongo_batch_size,
             retries=args.mongo_retries,
@@ -257,6 +288,7 @@ def main() -> None:
         print(f"Scanned records: {pre_scanned}")
         print(f"prediction is string (instead of JSON): {pre_prediction_strings}")
         print(f"failed standardization: {pre_failed_standardization}")
+        print(f'contains "N/A": {pre_contains_na}')
 
         last_id = None
 
@@ -308,11 +340,36 @@ def main() -> None:
                 batch_processed = 0
                 batch_rebuilt_ok = 0
                 batch_rebuild_failed = 0
+                batch_sanitized_na = 0
+                batch_sanitize_failed = 0
 
                 for doc in batch:
                     scanned += 1
                     batch_scanned += 1
                     prediction = doc.get("prediction")
+                    has_na_values = _contains_na_string(prediction)
+
+                    if has_na_values and not _should_rebuild(prediction):
+                        sanitized_prediction = _replace_na_with_none(prediction)
+                        try:
+                            collection.update_one(
+                                {"_id": doc["_id"]},
+                                {"$set": {"prediction": sanitized_prediction}},
+                            )
+                            sanitized_na += 1
+                            batch_sanitized_na += 1
+                        except PyMongoError as exc:
+                            sanitize_update_failed += 1
+                            batch_sanitize_failed += 1
+                            logging.warning(
+                                'Failed to replace "N/A" with null for key=%s: %s',
+                                doc.get("key"),
+                                exc,
+                            )
+
+                        last_id = doc["_id"]
+                        continue
+
                     if not _should_rebuild(prediction):
                         batch_skipped_no_rebuild += 1
                         last_id = doc["_id"]
@@ -353,13 +410,15 @@ def main() -> None:
 
                 logging.info(
                     "Batch done: scanned=%d, deleted_errors=%d, processed=%d, rebuilt_ok=%d, rebuilt_failed=%d, "
-                    "skipped_no_rebuild=%d, skipped_bad_key=%d, delete_failed=%d | "
-                    "Totals: scanned=%d, deleted_errors=%d, processed=%d, deleted=%d, rebuilt_ok=%d",
+                    "sanitized_na=%d, sanitize_failed=%d, skipped_no_rebuild=%d, skipped_bad_key=%d, delete_failed=%d | "
+                    "Totals: scanned=%d, deleted_errors=%d, processed=%d, deleted=%d, rebuilt_ok=%d, sanitized_na=%d, sanitize_failed=%d",
                     batch_scanned,
                     batch_deleted_errors,
                     batch_processed,
                     batch_rebuilt_ok,
                     batch_rebuild_failed,
+                    batch_sanitized_na,
+                    batch_sanitize_failed,
                     batch_skipped_no_rebuild,
                     batch_skipped_bad_key,
                     batch_delete_failed,
@@ -368,6 +427,8 @@ def main() -> None:
                     processed,
                     deleted,
                     rebuilt_ok,
+                    sanitized_na,
+                    sanitize_update_failed,
                 )
 
     except PyMongoError as exc:
@@ -380,6 +441,8 @@ def main() -> None:
     print(f"Deleted error records: {deleted_errors}")
     print(f"Deleted from mongo: {deleted}")
     print(f"Successfully rebuilt via predictDB: {rebuilt_ok}")
+    print(f'Replaced "N/A" with null: {sanitized_na}')
+    print(f'Failed "N/A" updates: {sanitize_update_failed}')
     print(f"Scanned records: {scanned}")
 
 

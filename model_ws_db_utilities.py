@@ -739,7 +739,15 @@ class ModelResults:
             "adEstimates": self.adEstimates
         }
 
-        
+def _sanitize_api_chemical_identifiers(chemical):
+    if not isinstance(chemical, dict):
+        return chemical
+    return {
+        key: (None if value == "N/A" else value)
+        for key, value in chemical.items()
+    }
+
+
 class Report:
 
     def __init__(self, chemical, modelDetails:ModelDetails, modelResults:ModelResults):
@@ -753,7 +761,7 @@ class Report:
     def to_dict(self):
         # Convert the object to a dictionary, including nested objects
         return {
-            "chemicalIdentifiers": self.chemicalIdentifiers,
+            "chemicalIdentifiers": _sanitize_api_chemical_identifiers(self.chemicalIdentifiers),
             "modelDetails": self.modelDetails.__dict__ if self.modelDetails else None,
             "modelResults": self.modelResults.__dict__ if self.modelResults else None,
             "neighborResultsTraining": self.neighborResultsTraining,
@@ -876,15 +884,30 @@ class ModelPredictor:
 
     @staticmethod
     def _prediction_to_obj(prediction):
+        def _sanitize_prediction_payload(value):
+            if isinstance(value, list):
+                return [_sanitize_prediction_payload(item) for item in value]
+
+            if isinstance(value, dict):
+                sanitized = {}
+                for key, item in value.items():
+                    if key == "chemicalIdentifiers":
+                        sanitized[key] = _sanitize_api_chemical_identifiers(item)
+                    else:
+                        sanitized[key] = _sanitize_prediction_payload(item)
+                return sanitized
+
+            return value
+
         if isinstance(prediction, (dict, list)):
-            return prediction
+            return _sanitize_prediction_payload(prediction)
 
         if isinstance(prediction, (bytes, bytearray)):
             prediction = prediction.decode("utf-8")
 
         if isinstance(prediction, str):
             try:
-                return json.loads(prediction)
+                return _sanitize_prediction_payload(json.loads(prediction))
             except json.JSONDecodeError:
                 return {"error": prediction}
 
@@ -918,104 +941,176 @@ class ModelPredictor:
         return text
 
     @staticmethod
-    def _get_standardization_response_id(chemical):
-        if not isinstance(chemical, dict):
+    def _standardization_match_key(value):
+        if value is None:
             return None
 
-        for key in ("id", "recordId"):
-            value = chemical.get(key)
-            if value is not None and str(value) != "":
-                return str(value)
+        value_text = str(value).strip()
+        if not value_text:
+            return None
 
-        return None
+        return value_text
+
+    def _get_standardization_response_match_keys(self, chemical):
+        if not isinstance(chemical, dict):
+            return []
+
+        match_keys = []
+
+        for field_name, value in (
+            ("id", chemical.get("id")),
+            ("recordId", chemical.get("recordId")),
+        ):
+            match_key = self._standardization_match_key(value)
+            if match_key:
+                match_keys.append((field_name, match_key))
+
+        deduplicated_keys = []
+        seen_keys = set()
+        for field_name, match_key in match_keys:
+            if match_key in seen_keys:
+                continue
+            seen_keys.add(match_key)
+            deduplicated_keys.append((field_name, match_key))
+
+        return deduplicated_keys
+
+    def _build_standardization_expected_id_map(self, smiles_list):
+        expected_id_map = {}
+
+        for index, _ in enumerate(smiles_list):
+            expected_id = str(index)
+            expected_id_map.setdefault(expected_id, []).append(index)
+
+        return expected_id_map
+
+    def _build_standardization_results_by_index(self, grouped_by_id, expected_ids, smiles_list, model):
+        results_by_index = {}
+        mixture_count = 0
+        missing_canonical_count = 0
+
+        for index, smiles in enumerate(smiles_list):
+            grouped_chemicals = grouped_by_id.get(expected_ids[index], [])
+            if not grouped_chemicals:
+                continue
+
+            canonical_chemicals = [
+                chemical for chemical in grouped_chemicals
+                if isinstance(chemical, dict) and chemical.get("canonicalSmiles")
+            ]
+
+            if not canonical_chemicals:
+                missing_canonical_count += 1
+                results_by_index[index] = (f"{smiles} failed standardization", 400)
+                continue
+
+            if model.omitSalts and len(canonical_chemicals) > 1:
+                mixture_count += 1
+                results_by_index[index] = (f"{smiles}: model can't run mixtures", 400)
+                continue
+
+            results_by_index[index] = (canonical_chemicals[0], 200)
+
+        return results_by_index, mixture_count, missing_canonical_count
 
     def _normalize_standardization_batch_results(self, chemicals, smiles_list, model):
         if not isinstance(chemicals, list):
-            return None, f"type={type(chemicals).__name__} preview={self._preview_log_value(chemicals)}"
+            diagnostic = f"type={type(chemicals).__name__} preview={self._preview_log_value(chemicals)}"
+            return None, diagnostic, {}, list(range(len(smiles_list)))
 
         if (
             len(chemicals) == len(smiles_list)
             and all(isinstance(chemical, dict) and "canonicalSmiles" in chemical for chemical in chemicals)
             and not (model.omitSalts and any("." in chemical.get("canonicalSmiles", "") for chemical in chemicals))
         ):
-            return [(chemical, 200) for chemical in chemicals], None
+            return [(chemical, 200) for chemical in chemicals], None, None, []
 
-        grouped = {}
+        expected_id_map = self._build_standardization_expected_id_map(smiles_list)
+        expected_ids = [str(index) for index, _ in enumerate(smiles_list)]
+        grouped_by_id = {}
         unidentified_count = 0
+        matched_by = {}
+        response_key_presence = {}
 
         for chemical in chemicals:
-            response_id = self._get_standardization_response_id(chemical)
-            if response_id is None:
+            response_match_keys = self._get_standardization_response_match_keys(chemical)
+
+            for field_name, _ in response_match_keys:
+                response_key_presence[field_name] = response_key_presence.get(field_name, 0) + 1
+
+            matched_id = None
+            matched_key_name = None
+            for field_name, response_key in response_match_keys:
+                if response_key not in expected_id_map:
+                    continue
+                matched_id = response_key
+                matched_key_name = field_name
+                break
+
+            if matched_id is None:
                 unidentified_count += 1
                 continue
-            grouped.setdefault(response_id, []).append(chemical)
+            grouped_by_id.setdefault(matched_id, []).append(chemical)
+            if matched_key_name:
+                matched_by[matched_key_name] = matched_by.get(matched_key_name, 0) + 1
 
-        expected_ids = [str(index) for index in range(len(smiles_list))]
-        expected_id_set = set(expected_ids)
-        missing_ids = [response_id for response_id in expected_ids if response_id not in grouped]
-        extra_ids = [response_id for response_id in grouped if response_id not in expected_id_set]
+        missing_ids = [
+            expected_id
+            for expected_id in expected_ids
+            if expected_id not in grouped_by_id
+        ]
+        missing_indices = [
+            index
+            for index, expected_id in enumerate(expected_ids)
+            if expected_id not in grouped_by_id
+        ]
+        results_by_index, mixture_count, missing_canonical_count = self._build_standardization_results_by_index(
+            grouped_by_id,
+            expected_ids,
+            smiles_list,
+            model,
+        )
 
-        if grouped and not missing_ids:
-            normalized_results = []
-            mixture_count = 0
-            missing_canonical_count = 0
-
-            for index, smiles in enumerate(smiles_list):
-                response_id = str(index)
-                grouped_chemicals = grouped.get(response_id, [])
-                canonical_chemicals = [
-                    chemical
-                    for chemical in grouped_chemicals
-                    if isinstance(chemical, dict) and chemical.get("canonicalSmiles")
-                ]
-
-                if not canonical_chemicals:
-                    missing_canonical_count += 1
-                    normalized_results.append((f"{smiles} failed standardization", 400))
-                    continue
-
-                if model.omitSalts and len(canonical_chemicals) > 1:
-                    mixture_count += 1
-                    normalized_results.append((f"{smiles}: model can't run mixtures", 400))
-                    continue
-
-                normalized_results.append((canonical_chemicals[0], 200))
+        if grouped_by_id and not missing_ids:
+            normalized_results = [
+                results_by_index.get(index, (f"{smiles} failed standardization", 400))
+                for index, smiles in enumerate(smiles_list)
+            ]
 
             diagnostic_parts = [
-                f"expanded_response_grouped_by_id result_len={len(chemicals)} expected_len={len(smiles_list)}",
-                f"grouped_ids={len(grouped)}",
+                f"expanded_response_grouped result_len={len(chemicals)} expected_len={len(smiles_list)}",
+                f"grouped_ids={len(grouped_by_id)}",
             ]
 
             if unidentified_count:
                 diagnostic_parts.append(f"unidentified_items={unidentified_count}")
-            if extra_ids:
-                diagnostic_parts.append(f"extra_ids={extra_ids[:10]}")
+            if matched_by:
+                diagnostic_parts.append(f"matched_by={matched_by}")
+            if response_key_presence:
+                diagnostic_parts.append(f"response_key_presence={response_key_presence}")
             if mixture_count:
                 diagnostic_parts.append(f"mixture_groups={mixture_count}")
             if missing_canonical_count:
                 diagnostic_parts.append(f"missing_canonical_groups={missing_canonical_count}")
 
-            return normalized_results, " ".join(diagnostic_parts)
+            return normalized_results, " ".join(diagnostic_parts), None, []
 
         standardization_reason_parts = [f"result_len={len(chemicals)} expected_len={len(smiles_list)}"]
-
-        missing_canonical_count = sum(
-            1 for chemical in chemicals
-            if not isinstance(chemical, dict) or "canonicalSmiles" not in chemical
-        )
         if missing_canonical_count:
             standardization_reason_parts.append(
                 f"missing_canonicalSmiles={missing_canonical_count}"
             )
 
-        if grouped:
-            standardization_reason_parts.append(f"grouped_ids={len(grouped)}")
+        if grouped_by_id:
+            standardization_reason_parts.append(f"grouped_ids={len(grouped_by_id)}")
         if missing_ids:
             standardization_reason_parts.append(f"missing_ids={missing_ids[:10]}")
-        if extra_ids:
-            standardization_reason_parts.append(f"extra_ids={extra_ids[:10]}")
         if unidentified_count:
             standardization_reason_parts.append(f"unidentified_items={unidentified_count}")
+        if matched_by:
+            standardization_reason_parts.append(f"matched_by={matched_by}")
+        if response_key_presence:
+            standardization_reason_parts.append(f"response_key_presence={response_key_presence}")
 
         if model.omitSalts:
             mixture_count = sum(
@@ -1030,7 +1125,104 @@ class ModelPredictor:
         standardization_reason_parts.append(
             f"preview={self._preview_log_value(chemicals)}"
         )
-        return None, " ".join(standardization_reason_parts)
+        return None, " ".join(standardization_reason_parts), results_by_index, missing_indices
+
+    def _standardize_smiles_individually(self, serverAPIs, smiles_list, model):
+        results = []
+
+        for smiles in smiles_list:
+            try:
+                results.append(self.standardizeStructure(serverAPIs, smiles, model))
+            except Exception as exc:
+                logging.exception(
+                    "Single-smiles standardization failed; workflow=%s smiles=%s",
+                    model.qsarReadyRuleSet,
+                    smiles,
+                )
+                results.append((f"{smiles}: standardization request failed: {exc}", 500))
+
+        return results
+
+    def _retry_missing_standardization_subset(self, serverAPIs, smiles_list, model, split_depth=0):
+        if not smiles_list:
+            return []
+
+        try:
+            chemicals, code = QsarSmilesAPI.call_qsar_ready_standardize_post(
+                server_host=serverAPIs,
+                smiles=smiles_list,
+                full=False,
+                workflow=model.qsarReadyRuleSet,
+            )
+        except Exception as exc:
+            logging.warning(
+                "Retry batch standardization for missing items raised %s; falling back to single requests; "
+                "workflow=%s batch_size=%s split_depth=%s error=%s",
+                type(exc).__name__,
+                model.qsarReadyRuleSet,
+                len(smiles_list),
+                split_depth,
+                self._preview_log_value(exc),
+            )
+            return self._standardize_smiles_individually(serverAPIs, smiles_list, model)
+
+        if code != 200:
+            logging.warning(
+                "Retry batch standardization for missing items failed; falling back to single requests; "
+                "code=%s workflow=%s batch_size=%s split_depth=%s response=%s",
+                code,
+                model.qsarReadyRuleSet,
+                len(smiles_list),
+                split_depth,
+                self._preview_log_value(chemicals),
+            )
+            return self._standardize_smiles_individually(serverAPIs, smiles_list, model)
+
+        normalized_results, normalization_diagnostic, partial_results_by_index, missing_indices = (
+            self._normalize_standardization_batch_results(
+                chemicals,
+                smiles_list,
+                model,
+            )
+        )
+
+        if normalized_results is not None:
+            if normalization_diagnostic:
+                logging.info(
+                    "Standardization retry batch response normalized; workflow=%s batch_size=%s detail=%s",
+                    model.qsarReadyRuleSet,
+                    len(smiles_list),
+                    normalization_diagnostic,
+                )
+            return normalized_results
+
+        merged_results = [None] * len(smiles_list)
+        partial_results_by_index = partial_results_by_index or {}
+        for index, result in partial_results_by_index.items():
+            merged_results[index] = result
+
+        if missing_indices:
+            logging.warning(
+                "Retry batch standardization still missing items; falling back to single requests; "
+                "workflow=%s batch_size=%s missing_count=%s split_depth=%s reason=%s",
+                model.qsarReadyRuleSet,
+                len(smiles_list),
+                len(missing_indices),
+                split_depth,
+                normalization_diagnostic,
+            )
+            single_results = self._standardize_smiles_individually(
+                serverAPIs,
+                [smiles_list[index] for index in missing_indices],
+                model,
+            )
+            for index, result in zip(missing_indices, single_results):
+                merged_results[index] = result
+
+        return [
+            result if result is not None else (f"{smiles_list[index]} failed standardization", 400)
+            for index, result in enumerate(merged_results)
+        ]
 
     def _build_neighbor_cache(self, model, df_set):
         if df_set is None or df_set.empty or not model.embedding:
@@ -1171,7 +1363,7 @@ class ModelPredictor:
         neighbor_results_prediction=None,
     ):
         return {
-            "chemicalIdentifiers": chemical,
+            "chemicalIdentifiers": _sanitize_api_chemical_identifiers(chemical),
             "modelDetails": model_details_dict,
             "modelResults": model_results.to_dict() if hasattr(model_results, "to_dict") else model_results,
             "neighborResultsTraining": neighbor_results_training,
@@ -1427,9 +1619,9 @@ class ModelPredictor:
             neighbor_results_prediction=neighbor_results_prediction,
         )
 
-    def _standardize_smiles_batch(self, serverAPIs, smiles_list, model):
+    def _standardize_smiles_batch_subset(self, serverAPIs, smiles_list, model, split_depth=0):
         if len(smiles_list) == 1:
-            return [self.standardizeStructure(serverAPIs, smiles_list[0], model)]
+            return self._standardize_smiles_individually(serverAPIs, smiles_list, model)
 
         try:
             chemicals, code = QsarSmilesAPI.call_qsar_ready_standardize_post(
@@ -1439,10 +1631,12 @@ class ModelPredictor:
                 workflow=model.qsarReadyRuleSet,
             )
             if code == 200:
-                normalized_results, normalization_diagnostic = self._normalize_standardization_batch_results(
-                    chemicals,
-                    smiles_list,
-                    model,
+                normalized_results, normalization_diagnostic, partial_results_by_index, missing_indices = (
+                    self._normalize_standardization_batch_results(
+                        chemicals,
+                        smiles_list,
+                        model,
+                    )
                 )
                 if normalized_results is not None:
                     if normalization_diagnostic:
@@ -1454,6 +1648,36 @@ class ModelPredictor:
                         )
                     return normalized_results
 
+                merged_results = [None] * len(smiles_list)
+                partial_results_by_index = partial_results_by_index or {}
+                for index, result in partial_results_by_index.items():
+                    merged_results[index] = result
+
+                if missing_indices:
+                    missing_smiles = [smiles_list[index] for index in missing_indices]
+                    logging.warning(
+                        "Standardization batch returned partial matches, retrying only missing items; "
+                        "workflow=%s batch_size=%s missing_count=%s split_depth=%s reason=%s",
+                        model.qsarReadyRuleSet,
+                        len(smiles_list),
+                        len(missing_indices),
+                        split_depth,
+                        normalization_diagnostic,
+                    )
+                    retried_results = self._retry_missing_standardization_subset(
+                        serverAPIs,
+                        missing_smiles,
+                        model,
+                        split_depth + 1,
+                    )
+                    for index, result in zip(missing_indices, retried_results):
+                        merged_results[index] = result
+
+                    return [
+                        result if result is not None else (f"{smiles_list[index]} failed standardization", 400)
+                        for index, result in enumerate(merged_results)
+                    ]
+
                 standardization_reason = normalization_diagnostic
             else:
                 standardization_reason = (
@@ -1462,21 +1686,88 @@ class ModelPredictor:
                 )
 
             logging.warning(
-                "Standardization batch call failed or returned unexpected shape, "
-                "falling back to per-smiles standardization; code=%s workflow=%s batch_size=%s reason=%s",
+                "Standardization batch call failed or returned unexpected shape, falling back to single requests; "
+                "code=%s workflow=%s batch_size=%s split_depth=%s reason=%s",
                 code,
                 model.qsarReadyRuleSet,
                 len(smiles_list),
+                split_depth,
                 standardization_reason,
             )
-        except Exception:
-            logging.exception("Batch standardization failed, falling back to single-smiles standardization")
+            return self._standardize_smiles_individually(serverAPIs, smiles_list, model)
+        except Exception as exc:
+            logging.warning(
+                "Batch standardization request raised %s, falling back to single requests; "
+                "workflow=%s batch_size=%s split_depth=%s error=%s",
+                type(exc).__name__,
+                model.qsarReadyRuleSet,
+                len(smiles_list),
+                split_depth,
+                self._preview_log_value(exc),
+            )
+            return self._standardize_smiles_individually(serverAPIs, smiles_list, model)
 
-        max_workers = int(os.getenv("PREDICT_STD_FALLBACK_WORKERS", min(32, (os.cpu_count() or 1) * 5)))
-        max_workers = max(1, min(max_workers, len(smiles_list)))
+    def _standardize_smiles_batch(self, serverAPIs, smiles_list, model):
+        return self._standardize_smiles_batch_subset(serverAPIs, smiles_list, model)
+
+    def _calculate_descriptors_batch_subset(self, serverAPIs, qsar_smiles_subset, descriptor_service, split_depth=0):
+        if not qsar_smiles_subset:
+            return []
+
+        if len(qsar_smiles_subset) == 1:
+            return [self._descriptor_api.calculate_descriptors(serverAPIs, qsar_smiles_subset[0], descriptor_service)]
+
+        df_batch, code = self._descriptor_api.calculate_descriptors_batch(serverAPIs, qsar_smiles_subset, descriptor_service)
+        if code == 200 and isinstance(df_batch, pd.DataFrame) and len(df_batch.index) == len(qsar_smiles_subset):
+            return [(df_batch.iloc[[row_pos]].copy(), 200) for row_pos in range(len(qsar_smiles_subset))]
+
+        if code == 400 and len(qsar_smiles_subset) > 1:
+            mid = len(qsar_smiles_subset) // 2
+            left_subset = qsar_smiles_subset[:mid]
+            right_subset = qsar_smiles_subset[mid:]
+            logging.warning(
+                "Descriptor batch returned HTTP 400; splitting batch and retrying; "
+                "descriptor_service=%s batch_size=%s split_depth=%s left_size=%s right_size=%s",
+                descriptor_service,
+                len(qsar_smiles_subset),
+                split_depth,
+                len(left_subset),
+                len(right_subset),
+            )
+            return (
+                self._calculate_descriptors_batch_subset(serverAPIs, left_subset, descriptor_service, split_depth + 1)
+                + self._calculate_descriptors_batch_subset(serverAPIs, right_subset, descriptor_service, split_depth + 1)
+            )
+
+        if isinstance(df_batch, pd.DataFrame):
+            batch_reason = (
+                f"rows={len(df_batch.index)} expected_rows={len(qsar_smiles_subset)} "
+                f"columns={list(df_batch.columns[:10])}"
+            )
+        else:
+            batch_reason = (
+                f"type={type(df_batch).__name__} "
+                f"preview={self._preview_log_value(df_batch)}"
+            )
+
+        logging.warning(
+            "Descriptor batch call failed or returned unexpected shape for subset, "
+            "falling back to per-smiles calls; code=%s descriptor_service=%s batch_size=%s split_depth=%s reason=%s",
+            code,
+            descriptor_service,
+            len(qsar_smiles_subset),
+            split_depth,
+            batch_reason,
+        )
+
+        max_workers = int(os.getenv("PREDICT_DESCRIPTOR_FALLBACK_WORKERS", min(32, (os.cpu_count() or 1) * 5)))
+        max_workers = max(1, min(max_workers, len(qsar_smiles_subset)))
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
-            return list(pool.map(lambda smiles: self.standardizeStructure(serverAPIs, smiles, model), smiles_list))
+            return list(pool.map(
+                lambda smiles: self._descriptor_api.calculate_descriptors(serverAPIs, smiles, descriptor_service),
+                qsar_smiles_subset,
+            ))
 
     def _calculate_descriptors_batch(self, serverAPIs, qsar_smiles_list, descriptor_service):
         results = [None] * len(qsar_smiles_list)
@@ -1496,47 +1787,13 @@ class ModelPredictor:
             valid_smiles = list(qsar_smiles_list)
 
         if valid_smiles:
-            if len(valid_smiles) == 1:
-                idx = valid_indices[0]
-                results[idx] = self._descriptor_api.calculate_descriptors(serverAPIs, valid_smiles[0], descriptor_service)
-                return results
-
-            df_batch, code = self._descriptor_api.calculate_descriptors_batch(serverAPIs, valid_smiles, descriptor_service)
-            if code == 200 and isinstance(df_batch, pd.DataFrame) and len(df_batch.index) == len(valid_smiles):
-                for row_pos, idx in enumerate(valid_indices):
-                    results[idx] = (df_batch.iloc[[row_pos]].copy(), 200)
-                return results
-
-            if isinstance(df_batch, pd.DataFrame):
-                batch_reason = (
-                    f"rows={len(df_batch.index)} expected_rows={len(valid_smiles)} "
-                    f"columns={list(df_batch.columns[:10])}"
-                )
-            else:
-                batch_reason = (
-                    f"type={type(df_batch).__name__} "
-                    f"preview={self._preview_log_value(df_batch)}"
-                )
-
-            logging.warning(
-                "Descriptor batch call failed or returned unexpected shape, "
-                "falling back to per-smiles calls; code=%s descriptor_service=%s batch_size=%s reason=%s",
-                code,
+            descriptor_results = self._calculate_descriptors_batch_subset(
+                serverAPIs,
+                valid_smiles,
                 descriptor_service,
-                len(valid_smiles),
-                batch_reason,
             )
-
-            max_workers = int(os.getenv("PREDICT_DESCRIPTOR_FALLBACK_WORKERS", min(32, (os.cpu_count() or 1) * 5)))
-            max_workers = max(1, min(max_workers, len(valid_smiles)))
-
-            def _calc_one(item):
-                idx, qsar_smiles = item
-                return idx, self._descriptor_api.calculate_descriptors(serverAPIs, qsar_smiles, descriptor_service)
-
-            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
-                for idx, descriptor_result in pool.map(_calc_one, zip(valid_indices, valid_smiles)):
-                    results[idx] = descriptor_result
+            for row_pos, idx in enumerate(valid_indices):
+                results[idx] = descriptor_results[row_pos]
 
         return results
 
@@ -1692,13 +1949,23 @@ class ModelPredictor:
 
         if missing_by_smiles:
             missing_smiles = list(missing_by_smiles.keys())
+            batch_failure_reason = None
             try:
                 batch_predictions = self.predict_model_smiles_batch(model_id, missing_smiles)
-            except Exception:
-                logging.exception("Batch prediction failed, falling back to threaded single-smiles predictions")
+                if batch_predictions is None:
+                    batch_failure_reason = "predict_model_smiles_batch returned None"
+            except Exception as exc:
+                batch_failure_reason = f"{type(exc).__name__}: {exc}"
                 batch_predictions = None
 
             if batch_predictions is None:
+                logging.warning(
+                    "Prediction batch failed; starting threaded per-smiles fallback; "
+                    "model_id=%s batch_size=%s reason=%s",
+                    model_id,
+                    len(missing_smiles),
+                    batch_failure_reason or "unknown batch failure",
+                )
                 missing = list(missing_by_smiles.items())
                 max_workers = int(os.getenv("PREDICT_THREAD_WORKERS", min(32, (os.cpu_count() or 1) * 5)))
                 max_workers = max(1, min(max_workers, len(missing)))
@@ -2071,11 +2338,15 @@ class ModelPredictor:
     @timer
     def standardizeStructure(self, serverAPIs, smiles, model: Model):
         useFullStandardize = False
-        chemicals, code = QsarSmilesAPI.call_qsar_ready_standardize_post(server_host=serverAPIs, smiles=smiles, full=useFullStandardize,
-                                                           workflow=model.qsarReadyRuleSet)
+        try:
+            chemicals, code = QsarSmilesAPI.call_qsar_ready_standardize_post(server_host=serverAPIs, smiles=smiles, full=useFullStandardize,
+                                                               workflow=model.qsarReadyRuleSet)
+        except Exception as exc:
+            logging.exception("Standardization request failed for %s", smiles)
+            return f"{smiles}: standardization request failed: {exc}", 500
         logging.debug(chemicals)
         
-        if code == 400:
+        if code >= 400:
             return chemicals, code
                 
         if len(chemicals) == 0:
@@ -2093,12 +2364,18 @@ class ModelPredictor:
         
     def standardizeStructure2(self, serverAPIs, smiles, qsarReadyRuleSet, omitSalts):
         useFullStandardize = False
-        chemicals, code = QsarSmilesAPI.call_qsar_ready_standardize_post(server_host=serverAPIs, smiles=smiles, full=useFullStandardize,
-                                                           workflow=qsarReadyRuleSet)
+        try:
+            chemicals, code = QsarSmilesAPI.call_qsar_ready_standardize_post(server_host=serverAPIs, smiles=smiles, full=useFullStandardize,
+                                                               workflow=qsarReadyRuleSet)
+        except Exception as exc:
+            logging.exception("Standardization request failed for %s", smiles)
+            return f"{smiles}: standardization request failed: {exc}", 500
         logging.debug(chemicals)
 
-        if code == 500:
+        if code >= 500:
             return smiles + ": could not generate QSAR Ready SMILES", code 
+        if code == 400:
+            return chemicals, code
                 
         if len(chemicals) == 0:
             # logging.debug('Standardization failed')
