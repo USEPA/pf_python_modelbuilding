@@ -204,8 +204,58 @@ class DescriptorsAPI:
         descriptor_dict = response.json()
         return self.response_json_to_df(descriptor_dict, [qsarSmiles])
 
+    @staticmethod
+    def _extract_descriptor_headers(descriptor_dict):
+        headers = descriptor_dict.get("headers")
+        if isinstance(headers, (list, tuple)):
+            return list(headers)
+
+        for parent_key in ("options", "info"):
+            parent = descriptor_dict.get(parent_key)
+            if not isinstance(parent, dict):
+                continue
+
+            for candidate_key in (
+                "headers",
+                "descriptorHeaders",
+                "descriptor_headers",
+                "descriptorNames",
+                "descriptor_names",
+                "columns",
+                "column_names",
+            ):
+                candidate = parent.get(candidate_key)
+                if isinstance(candidate, (list, tuple)):
+                    return list(candidate)
+
+        chemicals = descriptor_dict.get("chemicals")
+        if isinstance(chemicals, list) and chemicals and isinstance(chemicals[0], dict):
+            descriptors = chemicals[0].get("descriptors")
+
+            if isinstance(descriptors, dict):
+                return list(descriptors.keys())
+
+            for candidate_key in (
+                "headers",
+                "descriptorHeaders",
+                "descriptor_headers",
+                "descriptorNames",
+                "descriptor_names",
+            ):
+                candidate = chemicals[0].get(candidate_key)
+                if isinstance(candidate, (list, tuple)):
+                    return list(candidate)
+
+        top_level_keys = list(descriptor_dict.keys())
+        options_keys = list(descriptor_dict.get("options", {}).keys()) if isinstance(descriptor_dict.get("options"), dict) else []
+        info_keys = list(descriptor_dict.get("info", {}).keys()) if isinstance(descriptor_dict.get("info"), dict) else []
+        raise KeyError(
+            "headers"
+            f" (top_level_keys={top_level_keys}, options_keys={options_keys}, info_keys={info_keys})"
+        )
+
     def response_json_to_df(self, descriptor_dict, qsarSmilesList):
-        headers = list(descriptor_dict['headers'])
+        headers = self._extract_descriptor_headers(descriptor_dict)
         headers.insert(0, "Property")
         headers.insert(0, "ID")
 
@@ -219,9 +269,16 @@ class DescriptorsAPI:
 
         rows = []
         for qsar_smiles, chemical in zip(qsar_smiles_list, chemicals):
+            raw_descriptors = chemical['descriptors']
+
+            if isinstance(raw_descriptors, dict):
+                descriptor_values = [raw_descriptors.get(header_name) for header_name in headers[2:]]
+            else:
+                descriptor_values = raw_descriptors
+
             descriptors = [
                 float(descriptor) if descriptor is not None else np.nan
-                for descriptor in chemical['descriptors']
+                for descriptor in descriptor_values
             ]
             descriptors.insert(0, None)
             descriptors.insert(0, qsar_smiles)
