@@ -1,7 +1,10 @@
 import json
+import os
+import threading
 
 import httpx
 import requests
+from requests.adapters import HTTPAdapter
 from indigo import Indigo
 
 from utils import timer
@@ -12,7 +15,46 @@ This class assumes that server looks like: CIM_API_SERVER=https://hcd.rtpnc.epa.
 
 """
 
+_thread_local = threading.local()
+
+
+def _get_pool_size(env_var: str, default: int) -> int:
+    raw_value = os.getenv(env_var, str(default))
+    try:
+        return max(1, int(raw_value))
+    except (TypeError, ValueError):
+        return default
+
+
+def get_requests_session():
+    session = getattr(_thread_local, "requests_session", None)
+    if session is not None:
+        return session
+
+    session = requests.Session()
+    adapter = HTTPAdapter(
+        pool_connections=_get_pool_size("API_HTTP_POOL_CONNECTIONS", 32),
+        pool_maxsize=_get_pool_size("API_HTTP_POOL_MAXSIZE", 64),
+    )
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    _thread_local.requests_session = session
+    return session
+
 class DescriptorsAPI:
+
+    @staticmethod
+    def _preview_value(value, max_len: int = 500) -> str:
+        if isinstance(value, dict):
+            keys = list(value.keys())
+            return f"dict keys={keys[:10]}"
+        if isinstance(value, list):
+            return f"list len={len(value)}"
+
+        text = str(value).replace("\n", " ").strip()
+        if len(text) > max_len:
+            return text[:max_len] + "..."
+        return text
 
     def check_structure(self, qsarSmiles):
         indigo = Indigo()
@@ -75,6 +117,52 @@ class DescriptorsAPI:
                 
         return df_prediction, 200
 
+    @timer
+    def calculate_descriptors_batch(self, serverAPIs, qsarSmilesList, descriptorService):
+        qsar_smiles_list = list(qsarSmilesList)
+
+        if not qsar_smiles_list:
+            import pandas as pd
+            return pd.DataFrame(), 200
+
+        if "test" in descriptorService.lower():
+            for qsar_smiles in qsar_smiles_list:
+                check_results, code = self.check_structure(qsar_smiles)
+                if code != 200:
+                    return check_results, code
+
+        response = self.call_descriptors_post(
+            server_host=serverAPIs,
+            qsar_smiles=qsar_smiles_list,
+            descriptor_name=descriptorService,
+        )
+
+        response_payload, status_code = response
+        if status_code != 200:
+            return (
+                f"Descriptor batch endpoint returned HTTP {status_code}: "
+                f"{self._preview_value(response_payload)}",
+                status_code,
+            )
+
+        if not isinstance(response_payload, dict):
+            return (
+                "Descriptor batch endpoint returned unexpected payload type "
+                f"{type(response_payload).__name__}: {self._preview_value(response_payload)}",
+                500,
+            )
+
+        try:
+            df_prediction = self.response_json_to_df(response_payload, qsar_smiles_list)
+        except Exception as exc:
+            return (
+                f"Failed to parse descriptor batch response: {exc}; "
+                f"payload={self._preview_value(response_payload)}",
+                500,
+            )
+
+        return df_prediction, 200
+
     def call_descriptors_get(self, server_host: str, qsar_smiles: str, descriptor_name: str):
         # Construct the URL
         url = f"{server_host}/api/descriptors"
@@ -87,7 +175,7 @@ class DescriptorsAPI:
             # some descriptors dont have header option? Should be fixed so this doesnt cause issue if must be false
         }
 
-        response = requests.get(url, params=params)
+        response = get_requests_session().get(url, params=params)
 
         return response 
 
@@ -103,129 +191,44 @@ class DescriptorsAPI:
             # some descriptors dont have header option? Should be fixed so this doesnt cause issue if must be false
         }
 
-        response = requests.post(url, json=params)
+        response = get_requests_session().post(url, json=params)
 
         if response.status_code == 200:
             # Parse the response JSON and convert it to a list of Chemical objects
-            return response.json()
+            return response.json(), response.status_code
         else:
             # Handle the error appropriately
-            return response.text
-
-    def call_descriptors_post_with_status(self, server_host: str, qsar_smiles: list[str], descriptor_name: str):
-        url = f"{server_host}/api/descriptors"
-        params = {
-            "type": descriptor_name,
-            "chemicals": qsar_smiles,
-            "headers": "true"
-        }
-
-        response = requests.post(url, json=params)
-        if response.status_code == 200:
-            return response.json(), 200
-        return response.text, response.status_code
-
-    async def call_descriptors_post_with_status_async(self, client: httpx.AsyncClient, server_host: str, qsar_smiles: list[str], descriptor_name: str):
-        url = f"{server_host}/api/descriptors"
-        params = {
-            "type": descriptor_name,
-            "chemicals": qsar_smiles,
-            "headers": "true"
-        }
-
-        response = await client.post(url, json=params)
-        if response.status_code == 200:
-            return response.json(), 200
-        return response.text, response.status_code
-
-    def response_json_to_df(self, descriptor_dict, qsarSmiles, chemical_index=0):
-        headers = descriptor_dict['headers']
-        headers.insert(0, "Property")
-        headers.insert(0, "ID")
-
-        chemicals = descriptor_dict['chemicals']
-        chemical = chemicals[chemical_index]
-
-        descriptors = [float(descriptor) if descriptor is not None else np.nan for descriptor in chemical['descriptors']]
-
-        descriptors.insert(0, None)
-        descriptors.insert(0, qsarSmiles)
-
-        import pandas as pd
-        return pd.DataFrame([descriptors], columns=headers)
-
-    def response_json_to_dfs(self, descriptor_dict, qsar_smiles_list, descriptor_headers=None):
-        headers = list(descriptor_dict.get('headers') or [])
-        chemicals = list(descriptor_dict.get('chemicals') or [])
-
-        if len(chemicals) != len(qsar_smiles_list):
-            return None
-
-        fallback_headers = list(descriptor_headers or [])
-
-        if not headers and fallback_headers:
-            headers = fallback_headers
-
-        headers.insert(0, "Property")
-        headers.insert(0, "ID")
-
-        import pandas as pd
-
-        dfs = []
-        for qsar_smiles, chemical in zip(qsar_smiles_list, chemicals):
-            # Some descriptor service responses include per-chemical errors without "descriptors".
-            # In that case return None for this row so caller can mark only that SMILES as failed.
-            if not isinstance(chemical, dict) or 'descriptors' not in chemical:
-                dfs.append(None)
-                continue
-
-            descriptors = [float(descriptor) if descriptor is not None else np.nan for descriptor in chemical['descriptors']]
-            descriptors.insert(0, None)
-            descriptors.insert(0, qsar_smiles)
-
-            if len(descriptors) != len(headers):
-                if fallback_headers and len(descriptors) == len(fallback_headers) + 2:
-                    active_headers = ["ID", "Property", *fallback_headers]
-                else:
-                    return None
-            else:
-                active_headers = headers
-
-            dfs.append(pd.DataFrame([descriptors], columns=active_headers))
-
-        return dfs
+            return response.text, response.status_code
 
     def response_to_df(self, response, qsarSmiles):
-        
         descriptor_dict = response.json()
-        
-        
-        headers = descriptor_dict['headers']
+        return self.response_json_to_df(descriptor_dict, [qsarSmiles])
+
+    def response_json_to_df(self, descriptor_dict, qsarSmilesList):
+        headers = list(descriptor_dict['headers'])
         headers.insert(0, "Property")
         headers.insert(0, "ID")
 
         chemicals = descriptor_dict['chemicals']
-        chemical = chemicals[0]
-        
-        # descriptors = chemical['descriptors']
-        
-        # for some reason they were getting stored as strings when I was trying to access them later- will this break null descriptors for ones like padel or mordred
-        descriptors = [float(descriptor) if descriptor is not None else np.nan for descriptor in chemical['descriptors']]
-        
-        # for descriptor in descriptors:
-        #     print(type(descriptor), descriptor)
-                
-        # print(descriptors)
-        
-        descriptors.insert(0, None)
-        descriptors.insert(0, qsarSmiles)
+        qsar_smiles_list = list(qsarSmilesList)
 
-        # print(headers)
-        # print(descriptors)
+        if len(chemicals) != len(qsar_smiles_list):
+            raise ValueError(
+                f"descriptor response size mismatch: chemicals={len(chemicals)} smiles={len(qsar_smiles_list)}"
+            )
+
+        rows = []
+        for qsar_smiles, chemical in zip(qsar_smiles_list, chemicals):
+            descriptors = [
+                float(descriptor) if descriptor is not None else np.nan
+                for descriptor in chemical['descriptors']
+            ]
+            descriptors.insert(0, None)
+            descriptors.insert(0, qsar_smiles)
+            rows.append(descriptors)
+
         import pandas as pd
-        df = pd.DataFrame([descriptors], columns=headers)
-        # print(df.shape)
-        return df
+        return pd.DataFrame(rows, columns=headers)
 
 
 class SearchAPI:
@@ -234,7 +237,7 @@ class SearchAPI:
     def call_resolver_get(server_host, identifier):
         url = f"{server_host}/api/resolver/lookup"
         
-        response = requests.get(url, params={"query": identifier})
+        response = get_requests_session().get(url, params={"query": identifier})
         
         if response.status_code == 200:
             # Parse the response JSON and convert it to a list of Chemical objects
@@ -249,23 +252,21 @@ class QsarSmilesAPI:
 
     @staticmethod
     def call_qsar_ready_standardize_post(server_host, smiles, full, workflow):
-        if isinstance(smiles, (list, tuple)):
-            chemicals_payload = [{"smiles": s} for s in smiles]
+        if isinstance(smiles, str):
+            smiles_list = [smiles]
         else:
-            chemicals_payload = [{"smiles": smiles}]
+            smiles_list = list(smiles)
 
         # Construct the JSON body
         jo_body = {
             "full": full,
             "options": {"workflow": workflow},
-            "chemicals": chemicals_payload
+            "chemicals": [{"smiles": current_smiles} for current_smiles in smiles_list]
         }
-        json_body = json.dumps(jo_body)
 
         # Make the POST request
-        headers = {"Content-Type": "application/json"}
         url = f"{server_host}/api/stdizer/chemicals"
-        response = requests.post(url, headers=headers, data=json_body)
+        response = get_requests_session().post(url, json=jo_body)
 
         # print(response.text)
 

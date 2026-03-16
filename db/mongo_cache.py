@@ -1,25 +1,188 @@
 import json
 import logging
 import os
-import threading
 
-from pymongo import MongoClient, ASCENDING
+from bson.errors import InvalidDocument
+from pymongo import ASCENDING, MongoClient, ReplaceOne
 from pymongo.errors import PyMongoError
 
 
 predictor_models_cache = None
 in_memory_cache = {}
-_FAILED_STANDARDIZATION_LOG_LOCK = threading.Lock()
+_mongo_init_done = False
+_mongo_unavailable_reason = None
 
 
-def _cache_disabled() -> bool:
-    return os.getenv("DISABLE_PREDICTION_CACHE", "").strip().lower() in {"1", "true", "yes", "on"}
+def _has_meaningful_error_value(value) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, (list, dict, tuple, set)):
+        return len(value) > 0
+    return True
+
+
+def _prediction_has_error(prediction) -> bool:
+    if isinstance(prediction, (bytes, bytearray)):
+        try:
+            prediction = json.loads(prediction.decode("utf-8"))
+        except Exception:
+            return False
+
+    if isinstance(prediction, str):
+        try:
+            prediction = json.loads(prediction)
+        except Exception:
+            return False
+
+    if isinstance(prediction, dict):
+        if _has_meaningful_error_value(prediction.get("error")):
+            return True
+
+        if _has_meaningful_error_value(prediction.get("predictionError")):
+            return True
+
+        for value in prediction.values():
+            if _prediction_has_error(value):
+                return True
+
+        return False
+
+    if isinstance(prediction, list):
+        for item in prediction:
+            if _prediction_has_error(item):
+                return True
+
+    return False
+
+
+def _preview_value(value, max_len: int = 300) -> str:
+    if isinstance(value, dict):
+        return f"dict keys={list(value.keys())[:10]}"
+    if isinstance(value, list):
+        return f"list len={len(value)}"
+
+    text = str(value).replace("\n", " ").strip()
+    if len(text) > max_len:
+        return text[:max_len] + "..."
+    return text
+
+
+def _find_prediction_error_reason(prediction, path="prediction"):
+    prediction = _prediction_to_obj(prediction)
+
+    if isinstance(prediction, dict):
+        for field_name in ("error", "predictionError"):
+            field_value = prediction.get(field_name)
+            if _has_meaningful_error_value(field_value):
+                return f"{path}.{field_name}={_preview_value(field_value)}"
+
+        for key, value in prediction.items():
+            nested_reason = _find_prediction_error_reason(value, f"{path}.{key}")
+            if nested_reason is not None:
+                return nested_reason
+        return None
+
+    if isinstance(prediction, list):
+        for index, item in enumerate(prediction):
+            nested_reason = _find_prediction_error_reason(item, f"{path}[{index}]")
+            if nested_reason is not None:
+                return nested_reason
+
+    return None
+
+
+def _warn_mongo_cache_skip(key: str, reason: str, fallback: str | None = None):
+    if fallback:
+        logging.warning("Mongo cache skipped for key=%r: %s; fallback=%s", key, reason, fallback)
+    else:
+        logging.warning("Mongo cache skipped for key=%r: %s", key, reason)
+
+
+def _prediction_to_obj(prediction):
+    if isinstance(prediction, (bytes, bytearray)):
+        try:
+            return json.loads(prediction.decode("utf-8"))
+        except Exception:
+            return prediction.decode("utf-8", errors="replace")
+
+    if isinstance(prediction, str):
+        try:
+            return json.loads(prediction)
+        except Exception:
+            return prediction
+
+    return prediction
+
+
+def _coerce_bson_safe(value):
+    if isinstance(value, dict):
+        return {str(key): _coerce_bson_safe(item) for key, item in value.items()}
+
+    if isinstance(value, list):
+        return [_coerce_bson_safe(item) for item in value]
+
+    if isinstance(value, tuple):
+        return [_coerce_bson_safe(item) for item in value]
+
+    if isinstance(value, set):
+        return [_coerce_bson_safe(item) for item in value]
+
+    # Handle numpy/pandas scalar-like values without importing those packages here.
+    item_method = getattr(value, "item", None)
+    if callable(item_method):
+        try:
+            scalar_value = item_method()
+        except Exception:
+            scalar_value = None
+        else:
+            if scalar_value is not value:
+                return _coerce_bson_safe(scalar_value)
+
+    tolist_method = getattr(value, "tolist", None)
+    if callable(tolist_method):
+        try:
+            list_value = tolist_method()
+        except Exception:
+            list_value = None
+        else:
+            if list_value is not value:
+                return _coerce_bson_safe(list_value)
+
+    return value
+
+
+def _normalize_prediction_for_storage(prediction):
+    prediction_obj = _prediction_to_obj(prediction)
+    return _coerce_bson_safe(prediction_obj)
+
+
+def _env_bool(name: str, default: bool = True) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+
+    value = raw.strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+
+    logging.warning("Invalid boolean value for %s=%r; using default=%s", name, raw, default)
+    return default
 
 
 def _init_mongo():
+    global predictor_models_cache, _mongo_init_done, _mongo_unavailable_reason
 
-    global predictor_models_cache
-    
+    if not _env_bool("MONGO_CACHE_ENABLED", True):
+        predictor_models_cache = None
+        _mongo_unavailable_reason = "Mongo cache disabled via MONGO_CACHE_ENABLED"
+        _mongo_init_done = True
+        logging.info(_mongo_unavailable_reason)
+        return
+
     try:
         client = MongoClient(
             host=os.getenv("MONGO_HOST", "localhost"),
@@ -27,163 +190,138 @@ def _init_mongo():
             username=os.getenv("MONGO_USER", "root"),
             password=os.getenv("MONGO_PASSWORD"),
             authSource="admin",
-            # Keep these short so app startup isn’t delayed if Mongo is down
             serverSelectionTimeoutMS=int(os.getenv("MONGO_SERVER_SELECTION_TIMEOUT_MS", "500")),
             connectTimeoutMS=int(os.getenv("MONGO_CONNECT_TIMEOUT_MS", "500")),
             socketTimeoutMS=int(os.getenv("MONGO_SOCKET_TIMEOUT_MS", "500")),
         )
 
-        # Verify connection
         client.admin.command("ping")
 
         db = client[os.getenv("MONGO_DATABASE", "predictor")]
         predictor_models_cache = db["predictor_models_cache"]
+        _mongo_unavailable_reason = None
 
         try:
-            predictor_models_cache.create_index([('key', ASCENDING)], unique=True, name='key_idx')
+            predictor_models_cache.create_index([("key", ASCENDING)], unique=True, name="key_idx")
             logging.info("Index predictor_models_cache.key_idx created or already exists.")
-        except PyMongoError as e:
-            logging.warning(f"Could not create index (continuing with Mongo anyway): {e}")
+        except PyMongoError as exc:
+            logging.warning("Could not create index (continuing with Mongo anyway): %s", exc)
 
-    except PyMongoError as e:
-        # Any connection issue: fall back to in-memory
+    except PyMongoError as exc:
         predictor_models_cache = None
-        logging.warning(f"Mongo unavailable; falling back to in-memory cache: {e}")
+        _mongo_unavailable_reason = f"Mongo unavailable: {exc}"
+        logging.warning("Mongo unavailable; falling back to in-memory cache: %s", exc)
+    finally:
+        _mongo_init_done = True
 
 
 def _ensure_init():
-    # Lazy initialize on first use to avoid network I/O at import, but safe if called multiple times
-    global predictor_models_cache
+    global _mongo_init_done
 
-    if _cache_disabled():
-        return
-    
-    if predictor_models_cache is None:
+    if not _mongo_init_done:
         _init_mongo()
 
 
 def get_cached_prediction(key: str):
-    if _cache_disabled():
-        return None
-
     _ensure_init()
     if predictor_models_cache is not None:
         try:
             doc = predictor_models_cache.find_one({"key": key})
             return doc.get("prediction", None) if doc else None
-        except PyMongoError as e:
-            logging.warning(f"Mongo read failed; using in-memory fallback: {e}")
+        except PyMongoError as exc:
+            logging.warning("Mongo read failed; using in-memory fallback: %s", exc)
     return in_memory_cache.get(key)
 
 
-def delete_cached_prediction(key: str):
-    if _cache_disabled():
-        return
+def get_cached_predictions(keys):
+    key_list = list(dict.fromkeys(keys))
+    if not key_list:
+        return {}
 
     _ensure_init()
+    cached_predictions = {}
+
     if predictor_models_cache is not None:
         try:
-            predictor_models_cache.delete_one({"key": key})
-        except PyMongoError as e:
-            logging.warning(f"Mongo delete failed for key {key}: {e}")
+            for doc in predictor_models_cache.find({"key": {"$in": key_list}}):
+                key = doc.get("key")
+                if key is not None:
+                    cached_predictions[key] = doc.get("prediction")
+        except PyMongoError as exc:
+            logging.warning("Mongo batch read failed; using in-memory fallback: %s", exc)
 
-    in_memory_cache.pop(key, None)
+    for key in key_list:
+        if key not in cached_predictions and key in in_memory_cache:
+            cached_predictions[key] = in_memory_cache[key]
 
-
-def _is_failed_standardization_error(value) -> bool:
-    if not isinstance(value, str):
-        return False
-    return value.strip().lower().endswith("failed standardization")
-
-
-def _prediction_to_obj(prediction):
-    if not isinstance(prediction, str):
-        return prediction
-
-    try:
-        return json.loads(prediction)
-    except ValueError:
-        return prediction
-
-
-def _normalize_prediction_for_storage(prediction):
-    """Convert JSON text payloads to Python objects before persisting."""
-    return _prediction_to_obj(prediction)
-
-
-def _iter_prediction_errors(prediction):
-    prediction_obj = _prediction_to_obj(prediction)
-
-    if isinstance(prediction_obj, str):
-        yield prediction_obj
-        return
-
-    if isinstance(prediction_obj, dict):
-        model_results = prediction_obj.get("modelResults")
-
-        if isinstance(model_results, dict):
-            yield model_results.get("predictionError")
-            return
-
-        if isinstance(model_results, list):
-            for item in model_results:
-                if isinstance(item, dict):
-                    yield item.get("predictionError")
-            return
-
-    if isinstance(prediction_obj, list):
-        for item in prediction_obj:
-            if isinstance(item, dict):
-                model_results = item.get("modelResults")
-                if isinstance(model_results, dict):
-                    yield model_results.get("predictionError")
-
-
-def get_failed_standardization_error(prediction):
-    for error in _iter_prediction_errors(prediction):
-        if _is_failed_standardization_error(error):
-            return error
-    return None
-
-
-def has_failed_standardization(prediction) -> bool:
-    return get_failed_standardization_error(prediction) is not None
-
-
-def log_failed_standardization_key(key: str, prediction=None):
-    log_path = os.getenv("FAILED_STANDARDIZATION_LOG_FILE", "failed_standardization_keys.txt")
-    error = get_failed_standardization_error(prediction) or "failed standardization"
-
-    log_dir = os.path.dirname(log_path)
-    try:
-        if log_dir:
-            os.makedirs(log_dir, exist_ok=True)
-
-        with _FAILED_STANDARDIZATION_LOG_LOCK:
-            with open(log_path, "a", encoding="utf-8") as log_file:
-                log_file.write(f"{key}\t{error}\n")
-    except OSError:
-        logging.exception("Failed to append key %s to failed standardization log", key)
+    return cached_predictions
 
 
 def cache_prediction(key: str, prediction):
-    if _cache_disabled():
-        return
-
     normalized_prediction = _normalize_prediction_for_storage(prediction)
 
-    if has_failed_standardization(normalized_prediction):
-        logging.info("Skipping cache for key=%s due to failed standardization", key)
+    if _prediction_has_error(normalized_prediction):
+        reason = _find_prediction_error_reason(normalized_prediction) or "prediction contains error"
+        _warn_mongo_cache_skip(key, reason, fallback="not cached")
         return
 
     _ensure_init()
     if predictor_models_cache is not None:
         try:
-            # Upsert avoids duplicate key errors when index is unique
             predictor_models_cache.replace_one(
                 {"key": key}, {"key": key, "prediction": normalized_prediction}, upsert=True
             )
             return
-        except PyMongoError as e:
-            logging.warning(f"Mongo write failed; caching in memory: {e}")
+        except (PyMongoError, InvalidDocument) as exc:
+            _warn_mongo_cache_skip(key, f"mongo write failed: {exc}", fallback="in_memory_cache")
+    else:
+        _warn_mongo_cache_skip(
+            key,
+            _mongo_unavailable_reason or "mongo cache collection is not initialized",
+            fallback="in_memory_cache",
+        )
     in_memory_cache[key] = normalized_prediction
+
+
+def cache_predictions(items):
+    normalized_items = []
+
+    for key, prediction in items:
+        normalized_prediction = _normalize_prediction_for_storage(prediction)
+        if _prediction_has_error(normalized_prediction):
+            reason = _find_prediction_error_reason(normalized_prediction) or "prediction contains error"
+            _warn_mongo_cache_skip(key, reason, fallback="not cached")
+            continue
+        normalized_items.append((key, normalized_prediction))
+
+    if not normalized_items:
+        return
+
+    _ensure_init()
+    if predictor_models_cache is not None:
+        try:
+            predictor_models_cache.bulk_write(
+                [
+                    ReplaceOne(
+                        {"key": key},
+                        {"key": key, "prediction": normalized_prediction},
+                        upsert=True,
+                    )
+                    for key, normalized_prediction in normalized_items
+                ],
+                ordered=False,
+            )
+            return
+        except (PyMongoError, InvalidDocument) as exc:
+            for key, _ in normalized_items:
+                _warn_mongo_cache_skip(key, f"mongo batch write failed: {exc}", fallback="in_memory_cache")
+    else:
+        for key, _ in normalized_items:
+            _warn_mongo_cache_skip(
+                key,
+                _mongo_unavailable_reason or "mongo cache collection is not initialized",
+                fallback="in_memory_cache",
+            )
+
+    for key, normalized_prediction in normalized_items:
+        in_memory_cache[key] = normalized_prediction
