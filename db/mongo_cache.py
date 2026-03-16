@@ -1,8 +1,9 @@
+import json
 import logging
 import os
-import json
 
-from pymongo import MongoClient, ASCENDING
+from bson.errors import InvalidDocument
+from pymongo import ASCENDING, MongoClient
 from pymongo.errors import PyMongoError
 
 
@@ -55,6 +56,64 @@ def _prediction_has_error(prediction) -> bool:
     return False
 
 
+def _prediction_to_obj(prediction):
+    if isinstance(prediction, (bytes, bytearray)):
+        try:
+            return json.loads(prediction.decode("utf-8"))
+        except Exception:
+            return prediction.decode("utf-8", errors="replace")
+
+    if isinstance(prediction, str):
+        try:
+            return json.loads(prediction)
+        except Exception:
+            return prediction
+
+    return prediction
+
+
+def _coerce_bson_safe(value):
+    if isinstance(value, dict):
+        return {str(key): _coerce_bson_safe(item) for key, item in value.items()}
+
+    if isinstance(value, list):
+        return [_coerce_bson_safe(item) for item in value]
+
+    if isinstance(value, tuple):
+        return [_coerce_bson_safe(item) for item in value]
+
+    if isinstance(value, set):
+        return [_coerce_bson_safe(item) for item in value]
+
+    # Handle numpy/pandas scalar-like values without importing those packages here.
+    item_method = getattr(value, "item", None)
+    if callable(item_method):
+        try:
+            scalar_value = item_method()
+        except Exception:
+            scalar_value = None
+        else:
+            if scalar_value is not value:
+                return _coerce_bson_safe(scalar_value)
+
+    tolist_method = getattr(value, "tolist", None)
+    if callable(tolist_method):
+        try:
+            list_value = tolist_method()
+        except Exception:
+            list_value = None
+        else:
+            if list_value is not value:
+                return _coerce_bson_safe(list_value)
+
+    return value
+
+
+def _normalize_prediction_for_storage(prediction):
+    prediction_obj = _prediction_to_obj(prediction)
+    return _coerce_bson_safe(prediction_obj)
+
+
 def _env_bool(name: str, default: bool = True) -> bool:
     raw = os.getenv(name)
     if raw is None:
@@ -66,12 +125,11 @@ def _env_bool(name: str, default: bool = True) -> bool:
     if value in {"0", "false", "no", "off"}:
         return False
 
-    logging.warning(f"Invalid boolean value for {name}={raw!r}; using default={default}")
+    logging.warning("Invalid boolean value for %s=%r; using default=%s", name, raw, default)
     return default
 
 
 def _init_mongo():
-
     global predictor_models_cache, _mongo_init_done
 
     if not _env_bool("MONGO_CACHE_ENABLED", True):
@@ -79,7 +137,7 @@ def _init_mongo():
         _mongo_init_done = True
         logging.info("Mongo cache disabled via MONGO_CACHE_ENABLED")
         return
-    
+
     try:
         client = MongoClient(
             host=os.getenv("MONGO_HOST", "localhost"),
@@ -87,36 +145,32 @@ def _init_mongo():
             username=os.getenv("MONGO_USER", "root"),
             password=os.getenv("MONGO_PASSWORD"),
             authSource="admin",
-            # Keep these short so app startup isn’t delayed if Mongo is down
             serverSelectionTimeoutMS=int(os.getenv("MONGO_SERVER_SELECTION_TIMEOUT_MS", "500")),
             connectTimeoutMS=int(os.getenv("MONGO_CONNECT_TIMEOUT_MS", "500")),
             socketTimeoutMS=int(os.getenv("MONGO_SOCKET_TIMEOUT_MS", "500")),
         )
 
-        # Verify connection
         client.admin.command("ping")
 
         db = client[os.getenv("MONGO_DATABASE", "predictor")]
         predictor_models_cache = db["predictor_models_cache"]
 
         try:
-            predictor_models_cache.create_index([('key', ASCENDING)], unique=True, name='key_idx')
+            predictor_models_cache.create_index([("key", ASCENDING)], unique=True, name="key_idx")
             logging.info("Index predictor_models_cache.key_idx created or already exists.")
-        except PyMongoError as e:
-            logging.warning(f"Could not create index (continuing with Mongo anyway): {e}")
+        except PyMongoError as exc:
+            logging.warning("Could not create index (continuing with Mongo anyway): %s", exc)
 
-    except PyMongoError as e:
-        # Any connection issue: fall back to in-memory
+    except PyMongoError as exc:
         predictor_models_cache = None
-        logging.warning(f"Mongo unavailable; falling back to in-memory cache: {e}")
+        logging.warning("Mongo unavailable; falling back to in-memory cache: %s", exc)
     finally:
         _mongo_init_done = True
 
 
 def _ensure_init():
-    # Lazy initialize on first use to avoid network I/O at import, but safe if called multiple times
     global _mongo_init_done
-    
+
     if not _mongo_init_done:
         _init_mongo()
 
@@ -127,24 +181,25 @@ def get_cached_prediction(key: str):
         try:
             doc = predictor_models_cache.find_one({"key": key})
             return doc.get("prediction", None) if doc else None
-        except PyMongoError as e:
-            logging.warning(f"Mongo read failed; using in-memory fallback: {e}")
+        except PyMongoError as exc:
+            logging.warning("Mongo read failed; using in-memory fallback: %s", exc)
     return in_memory_cache.get(key)
 
 
 def cache_prediction(key: str, prediction):
-    if _prediction_has_error(prediction):
+    normalized_prediction = _normalize_prediction_for_storage(prediction)
+
+    if _prediction_has_error(normalized_prediction):
         logging.debug("Skipping cache for key=%r: prediction contains error", key)
         return
 
     _ensure_init()
     if predictor_models_cache is not None:
         try:
-            # Upsert avoids duplicate key errors when index is unique
             predictor_models_cache.replace_one(
-                {"key": key}, {"key": key, "prediction": prediction}, upsert=True
+                {"key": key}, {"key": key, "prediction": normalized_prediction}, upsert=True
             )
             return
-        except PyMongoError as e:
-            logging.warning(f"Mongo write failed; caching in memory: {e}")
-    in_memory_cache[key] = prediction
+        except (PyMongoError, InvalidDocument) as exc:
+            logging.warning("Mongo write failed; caching in memory: %s", exc)
+    in_memory_cache[key] = normalized_prediction

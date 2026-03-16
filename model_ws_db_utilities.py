@@ -1,4 +1,3 @@
-# import concurrent
 import concurrent.futures
 import json
 import os

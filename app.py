@@ -95,8 +95,12 @@ def get_version():
         BUILD_TIMESTAMP = None
         BUILD_NUMBER = None
 
-    return dict(name="predictor_models",
-                title="EPA/Models",
+    return dict(id="predictor_models",
+                name="WebTEST v2",
+                description="""These models are based on additional curation and expansion of the WebTEST v1 data sets including
+                 aggregation from public websites (e.g., as described in the publication
+                 <a href="https://doi.org/10.1021/acs.chemrestox.2c00379" target="_blank">Transparency in Modeling through Careful Application of OECD’s QSAR/QSPR Principles via a Curated Water Solubility Data Set</a>
+                 and using a single modeling approach, distinct from the multi-model consensus modeling approach for WebTEST v1""",
                 version="1.0.0",
                 compiled=BUILD_TIMESTAMP,
                 build_id=BUILD_NUMBER)
@@ -178,6 +182,4 @@ def predictDB(model_id, smiles=None, identifier=None, report_format='json'):
 
 
 if __name__ == '__main__':
-    log = logging.getLogger('pymongo.topology')
-    log.setLevel(logging.INFO)
     app.run(host='0.0.0.0', port=5004)

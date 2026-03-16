@@ -79,7 +79,8 @@ def generate_applicability_domain_with_preselected_descriptors_from_dfs(train_df
         
     df_results_inside = output.loc[output['AD'] == True]
     # print('inside shape=', df_results_inside.shape)
-    coverage = df_results_inside.shape[0] / output.shape[0]
+    total_rows = output.shape[0]
+    coverage = (df_results_inside.shape[0] / total_rows) if total_rows > 0 else 0.0
 
     # count_inside_AD = output['AD'].value_counts()[True]
     # countTest = output.shape[0]

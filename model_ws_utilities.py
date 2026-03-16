@@ -20,7 +20,7 @@ from sklearn2pmml.pipeline import PMMLPipeline as PMMLPipeline
 # from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sqlalchemy.orm.relationships import remote
-from models.case_studies.run_model_building import run_dataset
+# from models.case_studies.run_model_building import run_dataset
 # from xgboost.testing.ranking import run_ranking_categorical
 # from models.runGA import qsar_method
 

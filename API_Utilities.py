@@ -2,6 +2,7 @@ import json
 import os
 import threading
 
+import httpx
 import requests
 from requests.adapters import HTTPAdapter
 from indigo import Indigo
@@ -249,6 +250,27 @@ class QsarSmilesAPI:
         else:
             # Handle the error appropriately
             return response.text,  response.status_code
+
+    @staticmethod
+    async def call_qsar_ready_standardize_post_async(client: httpx.AsyncClient, server_host, smiles, full, workflow):
+        if isinstance(smiles, (list, tuple)):
+            chemicals_payload = [{"smiles": s} for s in smiles]
+        else:
+            chemicals_payload = [{"smiles": smiles}]
+
+        jo_body = {
+            "full": full,
+            "options": {"workflow": workflow},
+            "chemicals": chemicals_payload
+        }
+
+        headers = {"Content-Type": "application/json"}
+        url = f"{server_host}/api/stdizer/chemicals"
+        response = await client.post(url, headers=headers, json=jo_body)
+
+        if response.status_code == 200:
+            return response.json(), 200
+        return response.text, response.status_code
 
 
 

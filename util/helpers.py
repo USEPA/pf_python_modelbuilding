@@ -11,6 +11,43 @@ from starlette.responses import HTMLResponse, JSONResponse
 _PROCESS_PREDICTOR = None
 
 
+def _coerce_json_safe(value):
+    if isinstance(value, dict):
+        return {str(key): _coerce_json_safe(item) for key, item in value.items()}
+
+    if isinstance(value, list):
+        return [_coerce_json_safe(item) for item in value]
+
+    if isinstance(value, tuple):
+        return [_coerce_json_safe(item) for item in value]
+
+    if isinstance(value, set):
+        return [_coerce_json_safe(item) for item in value]
+
+    # Convert numpy/pandas scalar-like values without importing heavy dependencies here.
+    item_method = getattr(value, "item", None)
+    if callable(item_method):
+        try:
+            scalar_value = item_method()
+        except Exception:
+            scalar_value = None
+        else:
+            if scalar_value is not value:
+                return _coerce_json_safe(scalar_value)
+
+    tolist_method = getattr(value, "tolist", None)
+    if callable(tolist_method):
+        try:
+            list_value = tolist_method()
+        except Exception:
+            list_value = None
+        else:
+            if list_value is not value:
+                return _coerce_json_safe(list_value)
+
+    return value
+
+
 def _to_obj(x):
     if isinstance(x, (dict, list)):
         return x
@@ -21,7 +58,7 @@ def _to_obj(x):
 
 def to_json_str(x):
     if isinstance(x, (dict, list)):
-        return json.dumps(x)
+        return json.dumps(_coerce_json_safe(x))
     if isinstance(x, (bytes, bytearray)):
         return x.decode("utf-8")
     if isinstance(x, str):
@@ -31,7 +68,7 @@ def to_json_str(x):
 
 def _to_obj_safe(x):
     try:
-        return _to_obj(x)
+        return _coerce_json_safe(_to_obj(x))
     except Exception:
         try:
             return {"error": to_json_str(x)}
@@ -42,26 +79,26 @@ def _to_obj_safe(x):
 def build_error_response(chemical_identifier, code, message, details=None):
     error = {"code": code, "message": message}
     if details is not None:
-        error["details"] = details
+        error["details"] = _coerce_json_safe(details)
 
-    return {
+    return _coerce_json_safe({
         "chemicalIdentifiers": chemical_identifier or "",
         "modelResults": None,
         "error": error,
-    }
+    })
 
 
 def build_batch_error_response(code, message, details=None, model_details=None, predictions=None):
     error = {"code": code, "message": message}
     if details is not None:
-        error["details"] = details
+        error["details"] = _coerce_json_safe(details)
 
     payload = {
-        "modelDetails": model_details,
-        "predictions": predictions or [],
+        "modelDetails": _coerce_json_safe(model_details),
+        "predictions": _coerce_json_safe(predictions or []),
         "error": error,
     }
-    return payload
+    return _coerce_json_safe(payload)
 
 
 def _extract_chemical_identifier(payload, fallback=""):
@@ -96,31 +133,31 @@ def normalize_error_payload(payload, chemical_identifier=""):
         if isinstance(obj.get("error"), dict) and obj.get("modelResults") is None and "chemicalIdentifiers" in obj:
             if not isinstance(obj.get("chemicalIdentifiers"), str):
                 obj["chemicalIdentifiers"] = _extract_chemical_identifier(obj, chemical_identifier)
-            return obj
+            return _coerce_json_safe(obj)
 
         if "error" in obj:
             details = obj["error"] if not isinstance(obj["error"], str) else None
             message = obj["error"] if isinstance(obj["error"], str) else "Prediction request failed"
-            return build_error_response(
+            return _coerce_json_safe(build_error_response(
                 _extract_chemical_identifier(obj, chemical_identifier),
                 "prediction_error",
                 message,
                 details,
-            )
+            ))
 
         model_results = obj.get("modelResults")
         if isinstance(model_results, dict) and model_results.get("predictionError"):
             prediction_error = model_results.get("predictionError")
             details = prediction_error if not isinstance(prediction_error, str) else None
             message = prediction_error if isinstance(prediction_error, str) else "Prediction request failed"
-            return build_error_response(
+            return _coerce_json_safe(build_error_response(
                 _extract_chemical_identifier(obj, chemical_identifier),
                 "prediction_error",
                 message,
                 details,
-            )
+            ))
 
-    return obj
+    return _coerce_json_safe(obj)
 
 
 def _strip_common_model_details(predictions):
@@ -157,7 +194,7 @@ def _strip_common_model_details(predictions):
 
 
 def build_predictdb_post_payload(predictions, error=None):
-    normalized_predictions = [_to_obj_safe(prediction) for prediction in predictions]
+    normalized_predictions = [_coerce_json_safe(_to_obj_safe(prediction)) for prediction in predictions]
     model_details, stripped_predictions = _strip_common_model_details(normalized_predictions)
 
     payload = {
@@ -165,8 +202,8 @@ def build_predictdb_post_payload(predictions, error=None):
         "predictions": stripped_predictions,
     }
     if error is not None:
-        payload["error"] = error
-    return payload
+        payload["error"] = _coerce_json_safe(error)
+    return _coerce_json_safe(payload)
 
 
 def _error_status_code(payload, default=400):
@@ -361,7 +398,7 @@ def make_predictdb_response(model_id, smiles=None, identifier=None, report_forma
         if isinstance(normalized_pred, dict) and normalized_pred.get("error") is not None and normalized_pred.get("modelResults") is None:
             return JSONResponse(content=normalized_pred, status_code=_error_status_code(normalized_pred))
         report_creator = ReportCreator()
-        model_results_html = report_creator.create_html_report_from_json(to_json_str(pred))
+        model_results_html = report_creator.create_html_report_from_json(to_json_str(normalized_pred))
         return HTMLResponse(content=model_results_html)
 
     return JSONResponse(content=normalized_pred, status_code=_error_status_code(normalized_pred))
