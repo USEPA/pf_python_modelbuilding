@@ -1331,6 +1331,47 @@ class ModelPredictor:
                 and not (model.omitSalts and any("." in chemical.get("canonicalSmiles", "") for chemical in chemicals))
             ):
                 return [(chemical, 200) for chemical in chemicals]
+
+            if isinstance(chemicals, list):
+                standardization_reason_parts = [f"result_len={len(chemicals)} expected_len={len(smiles_list)}"]
+
+                missing_canonical_count = sum(
+                    1 for chemical in chemicals
+                    if not isinstance(chemical, dict) or "canonicalSmiles" not in chemical
+                )
+                if missing_canonical_count:
+                    standardization_reason_parts.append(
+                        f"missing_canonicalSmiles={missing_canonical_count}"
+                    )
+
+                if model.omitSalts:
+                    mixture_count = sum(
+                        1 for chemical in chemicals
+                        if isinstance(chemical, dict) and "." in chemical.get("canonicalSmiles", "")
+                    )
+                    if mixture_count:
+                        standardization_reason_parts.append(
+                            f"mixtures_with_omitSalts={mixture_count}"
+                        )
+
+                standardization_reason_parts.append(
+                    f"preview={self._preview_log_value(chemicals)}"
+                )
+                standardization_reason = " ".join(standardization_reason_parts)
+            else:
+                standardization_reason = (
+                    f"type={type(chemicals).__name__} "
+                    f"preview={self._preview_log_value(chemicals)}"
+                )
+
+            logging.warning(
+                "Standardization batch call failed or returned unexpected shape, "
+                "falling back to per-smiles standardization; code=%s workflow=%s batch_size=%s reason=%s",
+                code,
+                model.qsarReadyRuleSet,
+                len(smiles_list),
+                standardization_reason,
+            )
         except Exception:
             logging.exception("Batch standardization failed, falling back to single-smiles standardization")
 

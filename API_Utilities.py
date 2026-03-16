@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import threading
 
@@ -179,6 +180,65 @@ class DescriptorsAPI:
 
         return response 
 
+    def _diagnose_descriptor_batch_400(self, url: str, descriptor_name: str, qsar_smiles: list[str], max_depth: int = 8):
+        session = get_requests_session()
+
+        def _payload(smiles_subset):
+            return {
+                "type": descriptor_name,
+                "chemicals": list(smiles_subset),
+                "chemIdType": "SMILES",
+                "format": "JSON",
+                "options": {
+                    "headers": "true",
+                },
+            }
+
+        def _probe(smiles_subset):
+            response = session.post(url, json=_payload(smiles_subset))
+            return response.status_code, self._preview_value(response.text)
+
+        def _walk(smiles_subset, depth):
+            if not smiles_subset:
+                return "empty_subset"
+
+            if len(smiles_subset) == 1 or depth >= max_depth:
+                status_code, preview = _probe(smiles_subset)
+                return (
+                    f"subset_size={len(smiles_subset)} status={status_code} "
+                    f"sample={self._preview_value(smiles_subset)} body={preview}"
+                )
+
+            mid = len(smiles_subset) // 2
+            left = smiles_subset[:mid]
+            right = smiles_subset[mid:]
+
+            left_status, left_preview = _probe(left)
+            right_status, right_preview = _probe(right)
+
+            if left_status == 400 and right_status != 400:
+                return "left_failed -> " + _walk(left, depth + 1)
+
+            if right_status == 400 and left_status != 400:
+                return "right_failed -> " + _walk(right, depth + 1)
+
+            if left_status == 400 and right_status == 400:
+                return (
+                    "both_halves_failed -> "
+                    f"left_size={len(left)} body={left_preview} | "
+                    f"right_size={len(right)} body={right_preview}"
+                )
+
+            return (
+                "whole_batch_failed_but_halves_passed -> likely batch_size_limit_or_payload_size_or_bad_combination; "
+                f"left_size={len(left)} status={left_status} | right_size={len(right)} status={right_status}"
+            )
+
+        try:
+            return _walk(list(qsar_smiles), 0)
+        except Exception as exc:
+            return f"diagnostic_failed={exc}"
+
     def call_descriptors_post(self, server_host: str, qsar_smiles: list[str], descriptor_name: str):
         # Construct the URL
         url = f"{server_host}/api/descriptors"
@@ -188,7 +248,7 @@ class DescriptorsAPI:
             "chemIdType": "SMILES",
             "format": "JSON",
             "options": {
-                "headers": True,
+                "headers": "true",
             },
         }
 
@@ -196,6 +256,19 @@ class DescriptorsAPI:
 
         if response.status_code == 200:
             return response.json(), response.status_code
+
+        if response.status_code == 400 and len(qsar_smiles) > 1:
+            diagnostic = self._diagnose_descriptor_batch_400(url, descriptor_name, qsar_smiles)
+            logging.warning(
+                "Descriptor batch endpoint returned 400; descriptor_service=%s batch_size=%s diagnostic=%s",
+                descriptor_name,
+                len(qsar_smiles),
+                diagnostic,
+            )
+            return (
+                f"{response.text}; diagnostic={diagnostic}",
+                response.status_code,
+            )
 
         return response.text, response.status_code
 
