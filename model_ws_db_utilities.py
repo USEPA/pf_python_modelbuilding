@@ -903,6 +903,20 @@ class ModelPredictor:
 
         return json.dumps({"error": str(prediction)})
 
+    @staticmethod
+    def _preview_log_value(value, max_len: int = 500) -> str:
+        if isinstance(value, pd.DataFrame):
+            return f"DataFrame rows={len(value.index)} cols={list(value.columns[:10])}"
+        if isinstance(value, dict):
+            return f"dict keys={list(value.keys())[:10]}"
+        if isinstance(value, list):
+            return f"list len={len(value)}"
+
+        text = str(value).replace("\n", " ").strip()
+        if len(text) > max_len:
+            return text[:max_len] + "..."
+        return text
+
     def _build_neighbor_cache(self, model, df_set):
         if df_set is None or df_set.empty or not model.embedding:
             return None
@@ -1355,7 +1369,25 @@ class ModelPredictor:
                     results[idx] = (df_batch.iloc[[row_pos]].copy(), 200)
                 return results
 
-            logging.warning("Descriptor batch call failed or returned unexpected shape, falling back to per-smiles calls")
+            if isinstance(df_batch, pd.DataFrame):
+                batch_reason = (
+                    f"rows={len(df_batch.index)} expected_rows={len(valid_smiles)} "
+                    f"columns={list(df_batch.columns[:10])}"
+                )
+            else:
+                batch_reason = (
+                    f"type={type(df_batch).__name__} "
+                    f"preview={self._preview_log_value(df_batch)}"
+                )
+
+            logging.warning(
+                "Descriptor batch call failed or returned unexpected shape, "
+                "falling back to per-smiles calls; code=%s descriptor_service=%s batch_size=%s reason=%s",
+                code,
+                descriptor_service,
+                len(valid_smiles),
+                batch_reason,
+            )
 
             max_workers = int(os.getenv("PREDICT_DESCRIPTOR_FALLBACK_WORKERS", min(32, (os.cpu_count() or 1) * 5)))
             max_workers = max(1, min(max_workers, len(valid_smiles)))

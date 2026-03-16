@@ -43,6 +43,19 @@ def get_requests_session():
 
 class DescriptorsAPI:
 
+    @staticmethod
+    def _preview_value(value, max_len: int = 500) -> str:
+        if isinstance(value, dict):
+            keys = list(value.keys())
+            return f"dict keys={keys[:10]}"
+        if isinstance(value, list):
+            return f"list len={len(value)}"
+
+        text = str(value).replace("\n", " ").strip()
+        if len(text) > max_len:
+            return text[:max_len] + "..."
+        return text
+
     def check_structure(self, qsarSmiles):
         indigo = Indigo()
         molecule = indigo.loadMolecule(qsarSmiles)
@@ -124,13 +137,29 @@ class DescriptorsAPI:
             descriptor_name=descriptorService,
         )
 
-        if not isinstance(response, dict):
-            return response, 500
+        response_payload, status_code = response
+        if status_code != 200:
+            return (
+                f"Descriptor batch endpoint returned HTTP {status_code}: "
+                f"{self._preview_value(response_payload)}",
+                status_code,
+            )
+
+        if not isinstance(response_payload, dict):
+            return (
+                "Descriptor batch endpoint returned unexpected payload type "
+                f"{type(response_payload).__name__}: {self._preview_value(response_payload)}",
+                500,
+            )
 
         try:
-            df_prediction = self.response_json_to_df(response, qsar_smiles_list)
+            df_prediction = self.response_json_to_df(response_payload, qsar_smiles_list)
         except Exception as exc:
-            return f"Failed to parse descriptor batch response: {exc}", 500
+            return (
+                f"Failed to parse descriptor batch response: {exc}; "
+                f"payload={self._preview_value(response_payload)}",
+                500,
+            )
 
         return df_prediction, 200
 
@@ -166,10 +195,10 @@ class DescriptorsAPI:
 
         if response.status_code == 200:
             # Parse the response JSON and convert it to a list of Chemical objects
-            return response.json()
+            return response.json(), response.status_code
         else:
             # Handle the error appropriately
-            return response.text
+            return response.text, response.status_code
 
     def response_to_df(self, response, qsarSmiles):
         descriptor_dict = response.json()

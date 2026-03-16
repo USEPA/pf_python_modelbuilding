@@ -10,6 +10,7 @@ from pymongo.errors import PyMongoError
 predictor_models_cache = None
 in_memory_cache = {}
 _mongo_init_done = False
+_mongo_unavailable_reason = None
 
 
 def _has_meaningful_error_value(value) -> bool:
@@ -54,6 +55,49 @@ def _prediction_has_error(prediction) -> bool:
                 return True
 
     return False
+
+
+def _preview_value(value, max_len: int = 300) -> str:
+    if isinstance(value, dict):
+        return f"dict keys={list(value.keys())[:10]}"
+    if isinstance(value, list):
+        return f"list len={len(value)}"
+
+    text = str(value).replace("\n", " ").strip()
+    if len(text) > max_len:
+        return text[:max_len] + "..."
+    return text
+
+
+def _find_prediction_error_reason(prediction, path="prediction"):
+    prediction = _prediction_to_obj(prediction)
+
+    if isinstance(prediction, dict):
+        for field_name in ("error", "predictionError"):
+            field_value = prediction.get(field_name)
+            if _has_meaningful_error_value(field_value):
+                return f"{path}.{field_name}={_preview_value(field_value)}"
+
+        for key, value in prediction.items():
+            nested_reason = _find_prediction_error_reason(value, f"{path}.{key}")
+            if nested_reason is not None:
+                return nested_reason
+        return None
+
+    if isinstance(prediction, list):
+        for index, item in enumerate(prediction):
+            nested_reason = _find_prediction_error_reason(item, f"{path}[{index}]")
+            if nested_reason is not None:
+                return nested_reason
+
+    return None
+
+
+def _warn_mongo_cache_skip(key: str, reason: str, fallback: str | None = None):
+    if fallback:
+        logging.warning("Mongo cache skipped for key=%r: %s; fallback=%s", key, reason, fallback)
+    else:
+        logging.warning("Mongo cache skipped for key=%r: %s", key, reason)
 
 
 def _prediction_to_obj(prediction):
@@ -130,12 +174,13 @@ def _env_bool(name: str, default: bool = True) -> bool:
 
 
 def _init_mongo():
-    global predictor_models_cache, _mongo_init_done
+    global predictor_models_cache, _mongo_init_done, _mongo_unavailable_reason
 
     if not _env_bool("MONGO_CACHE_ENABLED", True):
         predictor_models_cache = None
+        _mongo_unavailable_reason = "Mongo cache disabled via MONGO_CACHE_ENABLED"
         _mongo_init_done = True
-        logging.info("Mongo cache disabled via MONGO_CACHE_ENABLED")
+        logging.info(_mongo_unavailable_reason)
         return
 
     try:
@@ -154,6 +199,7 @@ def _init_mongo():
 
         db = client[os.getenv("MONGO_DATABASE", "predictor")]
         predictor_models_cache = db["predictor_models_cache"]
+        _mongo_unavailable_reason = None
 
         try:
             predictor_models_cache.create_index([("key", ASCENDING)], unique=True, name="key_idx")
@@ -163,6 +209,7 @@ def _init_mongo():
 
     except PyMongoError as exc:
         predictor_models_cache = None
+        _mongo_unavailable_reason = f"Mongo unavailable: {exc}"
         logging.warning("Mongo unavailable; falling back to in-memory cache: %s", exc)
     finally:
         _mongo_init_done = True
@@ -214,7 +261,8 @@ def cache_prediction(key: str, prediction):
     normalized_prediction = _normalize_prediction_for_storage(prediction)
 
     if _prediction_has_error(normalized_prediction):
-        logging.debug("Skipping cache for key=%r: prediction contains error", key)
+        reason = _find_prediction_error_reason(normalized_prediction) or "prediction contains error"
+        _warn_mongo_cache_skip(key, reason, fallback="not cached")
         return
 
     _ensure_init()
@@ -225,7 +273,13 @@ def cache_prediction(key: str, prediction):
             )
             return
         except (PyMongoError, InvalidDocument) as exc:
-            logging.warning("Mongo write failed; caching in memory: %s", exc)
+            _warn_mongo_cache_skip(key, f"mongo write failed: {exc}", fallback="in_memory_cache")
+    else:
+        _warn_mongo_cache_skip(
+            key,
+            _mongo_unavailable_reason or "mongo cache collection is not initialized",
+            fallback="in_memory_cache",
+        )
     in_memory_cache[key] = normalized_prediction
 
 
@@ -235,7 +289,8 @@ def cache_predictions(items):
     for key, prediction in items:
         normalized_prediction = _normalize_prediction_for_storage(prediction)
         if _prediction_has_error(normalized_prediction):
-            logging.debug("Skipping cache for key=%r: prediction contains error", key)
+            reason = _find_prediction_error_reason(normalized_prediction) or "prediction contains error"
+            _warn_mongo_cache_skip(key, reason, fallback="not cached")
             continue
         normalized_items.append((key, normalized_prediction))
 
@@ -258,7 +313,15 @@ def cache_predictions(items):
             )
             return
         except (PyMongoError, InvalidDocument) as exc:
-            logging.warning("Mongo batch write failed; caching in memory: %s", exc)
+            for key, _ in normalized_items:
+                _warn_mongo_cache_skip(key, f"mongo batch write failed: {exc}", fallback="in_memory_cache")
+    else:
+        for key, _ in normalized_items:
+            _warn_mongo_cache_skip(
+                key,
+                _mongo_unavailable_reason or "mongo cache collection is not initialized",
+                fallback="in_memory_cache",
+            )
 
     for key, normalized_prediction in normalized_items:
         in_memory_cache[key] = normalized_prediction
