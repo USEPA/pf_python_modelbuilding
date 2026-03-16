@@ -107,7 +107,10 @@ def get_version():
 
     return dict(id="predictor_models",
                 name="WebTEST v2",
-                description="This set of models is based on the aggregation, harmonization and curation of datasets from the original WebTEST models and expanded with new data.",
+                description="""These models are based on additional curation and expansion of the WebTEST v1 data sets including
+                 aggregation from public websites (e.g., as described in the publication
+                 <a href="https://doi.org/10.1021/acs.chemrestox.2c00379" target="_blank">Transparency in Modeling through Careful Application of OECD’s QSAR/QSPR Principles via a Curated Water Solubility Data Set</a>
+                 and using a single modeling approach, distinct from the multi-model consensus modeling approach for WebTEST v1""",
                 version="1.0.0",
                 compiled=BUILD_TIMESTAMP,
                 build_id=BUILD_NUMBER)
