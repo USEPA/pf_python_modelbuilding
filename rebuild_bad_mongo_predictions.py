@@ -1,14 +1,42 @@
 import argparse
+import json
 import logging
 import os
 import time
+from functools import lru_cache
 from typing import Any
 
 import requests
 from dotenv import load_dotenv
 from pymongo import MongoClient
 from pymongo.collection import Collection
-from pymongo.errors import PyMongoError
+from pymongo.errors import DuplicateKeyError, PyMongoError
+
+from util.indigo_utils import IndigoUtils
+
+
+_INDIGO_UTILS = None
+
+
+def _get_indigo_utils() -> IndigoUtils:
+    global _INDIGO_UTILS
+    if _INDIGO_UTILS is None:
+        _INDIGO_UTILS = IndigoUtils()
+    return _INDIGO_UTILS
+
+
+@lru_cache(maxsize=50000)
+def _inchi_key_from_smiles(smiles: str | None) -> str | None:
+    if smiles is None:
+        return None
+    smiles_text = str(smiles).strip()
+    if not smiles_text:
+        return None
+    try:
+        return _get_indigo_utils().inchi_key_from_smiles(smiles_text)
+    except Exception as exc:
+        logging.warning("Failed to generate InChIKey for SMILES=%s: %s", smiles_text, exc)
+        return None
 
 
 def _build_mongo_client(
@@ -76,6 +104,91 @@ def _replace_na_with_none(value: Any) -> Any:
     return value
 
 
+def _prediction_to_obj(prediction: Any) -> Any:
+    if isinstance(prediction, dict):
+        return prediction
+
+    if isinstance(prediction, str):
+        try:
+            return json.loads(prediction)
+        except Exception:
+            return prediction
+
+    return prediction
+
+
+def _extract_prediction_chemical_identifiers(prediction: Any) -> dict[str, Any] | None:
+    prediction_obj = _prediction_to_obj(prediction)
+    if not isinstance(prediction_obj, dict):
+        return None
+
+    chemical = prediction_obj.get("chemicalIdentifiers")
+    if isinstance(chemical, dict):
+        return chemical
+
+    return None
+
+
+def _extract_model_id_from_key(key: Any) -> int | None:
+    if not isinstance(key, str) or "-" not in key:
+        return None
+    _, model_id_text = key.rsplit("-", 1)
+    try:
+        return int(model_id_text)
+    except ValueError:
+        return None
+
+
+def _extract_smiles_from_prediction(prediction: Any) -> str | None:
+    chemical = _extract_prediction_chemical_identifiers(prediction)
+    if not chemical:
+        return None
+
+    for field_name in ("canonicalSmiles", "smiles"):
+        value = chemical.get(field_name)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+
+    return None
+
+
+def _extract_inchi_key_from_prediction(prediction: Any) -> str | None:
+    chemical = _extract_prediction_chemical_identifiers(prediction)
+    if not chemical:
+        return None
+
+    value = chemical.get("inchiKey")
+    if isinstance(value, str) and value.strip() and value != "N/A":
+        return value.strip()
+
+    return None
+
+
+def _ensure_prediction_inchi_key(prediction: Any, fallback_smiles: str | None = None) -> tuple[Any, bool]:
+    prediction_obj = _prediction_to_obj(prediction)
+    if not isinstance(prediction_obj, dict):
+        return prediction, False
+
+    chemical = prediction_obj.get("chemicalIdentifiers")
+    if not isinstance(chemical, dict):
+        return prediction_obj, False
+
+    raw_inchi_key = chemical.get("inchiKey")
+    if isinstance(raw_inchi_key, str) and raw_inchi_key.strip() and raw_inchi_key != "N/A":
+        return prediction_obj, False
+
+    smiles = _extract_smiles_from_prediction(prediction_obj) or fallback_smiles
+    inchi_key = _inchi_key_from_smiles(smiles)
+    if not inchi_key:
+        return prediction_obj, False
+
+    updated_prediction = dict(prediction_obj)
+    updated_chemical = dict(chemical)
+    updated_chemical["inchiKey"] = inchi_key
+    updated_prediction["chemicalIdentifiers"] = updated_chemical
+    return updated_prediction, True
+
+
 def _should_rebuild(prediction: Any) -> bool:
     if isinstance(prediction, str):
         return True
@@ -99,6 +212,35 @@ def _extract_smiles_and_model_id_from_key(key: Any) -> tuple[str, int] | tuple[N
         return None, None
 
     return smiles, model_id
+
+
+def _extract_smiles_and_model_id_for_rebuild(key: Any, prediction: Any) -> tuple[str | None, int | None]:
+    model_id = _extract_model_id_from_key(key)
+    smiles = _extract_smiles_from_prediction(prediction)
+
+    if smiles is not None:
+        return smiles, model_id
+
+    smiles_from_key, _ = _extract_smiles_and_model_id_from_key(key)
+    return smiles_from_key, model_id
+
+
+def _build_migrated_cache_key(key: Any, prediction: Any) -> tuple[str | None, str | None]:
+    model_id = _extract_model_id_from_key(key)
+    if model_id is None:
+        return None, "could not parse model_id from key"
+
+    inchi_key = _extract_inchi_key_from_prediction(prediction)
+    if not inchi_key:
+        smiles = _extract_smiles_from_prediction(prediction)
+        if not smiles:
+            smiles, _ = _extract_smiles_and_model_id_from_key(key)
+        inchi_key = _inchi_key_from_smiles(smiles)
+
+    if not inchi_key:
+        return None, "could not determine inchiKey from prediction or smiles"
+
+    return f"{inchi_key}-{model_id}", None
 
 
 def _call_predict_endpoint(base_url: str, model_id: int, smiles: str, timeout: int) -> bool:
@@ -146,11 +288,12 @@ def _count_error_categories(
     batch_size: int,
     retries: int,
     retry_delay: float,
-) -> tuple[int, int, int, int]:
+) -> tuple[int, int, int, int, int]:
     scanned = 0
     prediction_string_count = 0
     failed_standardization_count = 0
     contains_na_count = 0
+    keys_needing_migration_count = 0
     last_id = None
 
     while True:
@@ -188,9 +331,12 @@ def _count_error_categories(
                 failed_standardization_count += 1
             if _contains_na_string(prediction):
                 contains_na_count += 1
+            migrated_key, _ = _build_migrated_cache_key(doc.get("key"), prediction)
+            if isinstance(migrated_key, str) and migrated_key != doc.get("key"):
+                keys_needing_migration_count += 1
             last_id = doc["_id"]
 
-    return scanned, prediction_string_count, failed_standardization_count, contains_na_count
+    return scanned, prediction_string_count, failed_standardization_count, contains_na_count, keys_needing_migration_count
 
 
 def main() -> None:
@@ -268,6 +414,9 @@ def main() -> None:
     deleted_errors = 0
     sanitized_na = 0
     sanitize_update_failed = 0
+    migrated_keys = 0
+    migration_failed = 0
+    duplicate_key_collisions = 0
 
     client = _build_mongo_client(
         server_selection_timeout_ms=args.mongo_server_selection_timeout_ms,
@@ -277,7 +426,7 @@ def main() -> None:
     try:
         client.admin.command("ping")
         collection = _get_collection(client)
-        pre_scanned, pre_prediction_strings, pre_failed_standardization, pre_contains_na = _count_error_categories(
+        pre_scanned, pre_prediction_strings, pre_failed_standardization, pre_contains_na, pre_keys_needing_migration = _count_error_categories(
             collection=collection,
             batch_size=args.mongo_batch_size,
             retries=args.mongo_retries,
@@ -289,6 +438,7 @@ def main() -> None:
         print(f"prediction is string (instead of JSON): {pre_prediction_strings}")
         print(f"failed standardization: {pre_failed_standardization}")
         print(f'contains "N/A": {pre_contains_na}')
+        print(f"keys needing migration to inchiKey-model_id: {pre_keys_needing_migration}")
 
         last_id = None
 
@@ -342,40 +492,92 @@ def main() -> None:
                 batch_rebuild_failed = 0
                 batch_sanitized_na = 0
                 batch_sanitize_failed = 0
+                batch_migrated_keys = 0
+                batch_migration_failed = 0
+                batch_duplicate_key_collisions = 0
 
                 for doc in batch:
                     scanned += 1
                     batch_scanned += 1
                     prediction = doc.get("prediction")
+                    key = doc.get("key")
                     has_na_values = _contains_na_string(prediction)
 
                     if has_na_values and not _should_rebuild(prediction):
-                        sanitized_prediction = _replace_na_with_none(prediction)
-                        try:
-                            collection.update_one(
-                                {"_id": doc["_id"]},
-                                {"$set": {"prediction": sanitized_prediction}},
-                            )
-                            sanitized_na += 1
-                            batch_sanitized_na += 1
-                        except PyMongoError as exc:
-                            sanitize_update_failed += 1
-                            batch_sanitize_failed += 1
-                            logging.warning(
-                                'Failed to replace "N/A" with null for key=%s: %s',
-                                doc.get("key"),
-                                exc,
-                            )
+                        prediction = _replace_na_with_none(prediction)
+                        has_na_values = False
+                        prediction_changed = True
+                    else:
+                        prediction_changed = False
 
-                        last_id = doc["_id"]
-                        continue
+                    prediction, inchi_key_backfilled = _ensure_prediction_inchi_key(prediction)
+                    prediction_changed = prediction_changed or inchi_key_backfilled
 
                     if not _should_rebuild(prediction):
                         batch_skipped_no_rebuild += 1
+                        migrated_key, migration_reason = _build_migrated_cache_key(key, prediction)
+                        update_fields = {}
+
+                        if prediction_changed:
+                            update_fields["prediction"] = prediction
+
+                        if isinstance(migrated_key, str) and migrated_key != key:
+                            update_fields["key"] = migrated_key
+
+                        if update_fields:
+                            try:
+                                collection.update_one(
+                                    {"_id": doc["_id"]},
+                                    {"$set": update_fields},
+                                )
+                                if "prediction" in update_fields and _contains_na_string(doc.get("prediction")):
+                                    sanitized_na += 1
+                                    batch_sanitized_na += 1
+                                if "key" in update_fields:
+                                    migrated_keys += 1
+                                    batch_migrated_keys += 1
+                            except DuplicateKeyError:
+                                duplicate_key_collisions += 1
+                                batch_duplicate_key_collisions += 1
+                                try:
+                                    collection.delete_one({"_id": doc["_id"]})
+                                except PyMongoError as exc:
+                                    migration_failed += 1
+                                    batch_migration_failed += 1
+                                    logging.warning(
+                                        "Duplicate key collision while migrating key=%s to %s and failed to delete old document: %s",
+                                        key,
+                                        migrated_key,
+                                        exc,
+                                    )
+                                else:
+                                    logging.info(
+                                        "Deleted duplicate cache entry during key migration: old_key=%s new_key=%s",
+                                        key,
+                                        migrated_key,
+                                    )
+                            except PyMongoError as exc:
+                                if "prediction" in update_fields and _contains_na_string(doc.get("prediction")):
+                                    sanitize_update_failed += 1
+                                    batch_sanitize_failed += 1
+                                if "key" in update_fields:
+                                    migration_failed += 1
+                                    batch_migration_failed += 1
+                                logging.warning(
+                                    'Failed to update cache entry for key=%s (new_key=%s): %s',
+                                    key,
+                                    migrated_key,
+                                    exc,
+                                )
+
+                        elif migrated_key is None and migration_reason:
+                            migration_failed += 1
+                            batch_migration_failed += 1
+                            logging.warning("Skip key migration for key=%s: %s", key, migration_reason)
+
                         last_id = doc["_id"]
                         continue
 
-                    key = doc.get("key")
                     try:
                         delete_result = collection.delete_one({"_id": doc["_id"]})
                         if delete_result.deleted_count:
@@ -389,7 +591,7 @@ def main() -> None:
                         continue
 
                     if args.enable_processing:
-                        smiles, model_id = _extract_smiles_and_model_id_from_key(key)
+                        smiles, model_id = _extract_smiles_and_model_id_for_rebuild(key, prediction)
                         if smiles is None or model_id is None:
                             batch_skipped_bad_key += 1
                             logging.warning("Skip rebuild due to unexpected key format: %s", key)
@@ -410,8 +612,10 @@ def main() -> None:
 
                 logging.info(
                     "Batch done: scanned=%d, deleted_errors=%d, processed=%d, rebuilt_ok=%d, rebuilt_failed=%d, "
-                    "sanitized_na=%d, sanitize_failed=%d, skipped_no_rebuild=%d, skipped_bad_key=%d, delete_failed=%d | "
-                    "Totals: scanned=%d, deleted_errors=%d, processed=%d, deleted=%d, rebuilt_ok=%d, sanitized_na=%d, sanitize_failed=%d",
+                    "sanitized_na=%d, sanitize_failed=%d, migrated_keys=%d, migration_failed=%d, duplicate_key_collisions=%d, "
+                    "skipped_no_rebuild=%d, skipped_bad_key=%d, delete_failed=%d | "
+                    "Totals: scanned=%d, deleted_errors=%d, processed=%d, deleted=%d, rebuilt_ok=%d, sanitized_na=%d, "
+                    "sanitize_failed=%d, migrated_keys=%d, migration_failed=%d, duplicate_key_collisions=%d",
                     batch_scanned,
                     batch_deleted_errors,
                     batch_processed,
@@ -419,6 +623,9 @@ def main() -> None:
                     batch_rebuild_failed,
                     batch_sanitized_na,
                     batch_sanitize_failed,
+                    batch_migrated_keys,
+                    batch_migration_failed,
+                    batch_duplicate_key_collisions,
                     batch_skipped_no_rebuild,
                     batch_skipped_bad_key,
                     batch_delete_failed,
@@ -429,6 +636,9 @@ def main() -> None:
                     rebuilt_ok,
                     sanitized_na,
                     sanitize_update_failed,
+                    migrated_keys,
+                    migration_failed,
+                    duplicate_key_collisions,
                 )
 
     except PyMongoError as exc:
@@ -443,6 +653,9 @@ def main() -> None:
     print(f"Successfully rebuilt via predictDB: {rebuilt_ok}")
     print(f'Replaced "N/A" with null: {sanitized_na}')
     print(f'Failed "N/A" updates: {sanitize_update_failed}')
+    print(f"Migrated keys to inchiKey-model_id: {migrated_keys}")
+    print(f"Failed key migrations: {migration_failed}")
+    print(f"Duplicate key collisions handled: {duplicate_key_collisions}")
     print(f"Scanned records: {scanned}")
 
 
