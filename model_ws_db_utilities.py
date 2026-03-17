@@ -941,6 +941,27 @@ class ModelPredictor:
         return text
 
     @staticmethod
+    def _strip_model_details_from_prediction(prediction):
+        if isinstance(prediction, list):
+            return [ModelPredictor._strip_model_details_from_prediction(item) for item in prediction]
+
+        if isinstance(prediction, dict):
+            stripped = dict(prediction)
+            stripped.pop("modelDetails", None)
+            return stripped
+
+        return prediction
+
+    @staticmethod
+    def _attach_model_details_to_prediction(prediction, model_details_dict):
+        if not model_details_dict or not isinstance(prediction, dict):
+            return prediction
+
+        prediction_with_details = dict(prediction)
+        prediction_with_details["modelDetails"] = model_details_dict
+        return prediction_with_details
+
+    @staticmethod
     def _standardization_match_key(value):
         if value is None:
             return None
@@ -1332,6 +1353,13 @@ class ModelPredictor:
 
         model_details_dict = self._get_model_details_dict(model, fileAPI)
         return model, model_details_dict, None
+
+    def get_model_details_dict_for_model_id(self, model_id, serverAPIs=None, fileAPI=None):
+        serverAPIs = serverAPIs or os.getenv("CIM_API_SERVER", "https://cim-dev.sciencedataexperts.com")
+        fileAPI = fileAPI or os.getenv("FILE_API_SERVER", pc.URL_CTX_API)
+
+        _, model_details_dict, model_error = self._resolve_model_context(model_id, serverAPIs, fileAPI)
+        return model_details_dict, model_error
 
     def _get_model_details_dict(self, model, fileAPI):
         cache = getattr(model, "_model_details_cache", None)
@@ -1798,13 +1826,15 @@ class ModelPredictor:
         return results
 
     @timer
-    def predict_model_smiles_batch(self, model_id, smiles_list, generate_report=True):
+    def predict_model_smiles_batch(self, model_id, smiles_list, generate_report=True, include_model_details=True):
         serverAPIs = os.getenv("CIM_API_SERVER", "https://cim-dev.sciencedataexperts.com")
         fileAPI = os.getenv("FILE_API_SERVER", pc.URL_CTX_API)
 
         model, model_details_dict, model_error = self._resolve_model_context(model_id, serverAPIs, fileAPI)
         if model is None:
             return [{"smiles": smiles, "error": model_error} for smiles in smiles_list]
+
+        report_model_details = model_details_dict if include_model_details else None
 
         results = [None] * len(smiles_list)
         standardized_results = self._standardize_smiles_batch(serverAPIs, smiles_list, model)
@@ -1816,7 +1846,7 @@ class ModelPredictor:
         for idx, (chemical, code) in enumerate(standardized_results):
             if code != 200:
                 error_chemical = self._build_minimal_chemical(smiles_list[idx])
-                results[idx] = self._build_prediction_error_report(error_chemical, model_details_dict, chemical)
+                results[idx] = self._build_prediction_error_report(error_chemical, report_model_details, chemical)
                 continue
 
             standardized_indices.append(idx)
@@ -1836,7 +1866,7 @@ class ModelPredictor:
             if descriptor_result is None:
                 results[original_idx] = self._build_prediction_error_report(
                     self._prepare_chemical_for_report(chemical),
-                    model_details_dict,
+                    report_model_details,
                     "Descriptor calculation did not return a result",
                 )
                 continue
@@ -1845,7 +1875,7 @@ class ModelPredictor:
             if code != 200:
                 results[original_idx] = self._build_prediction_error_report(
                     self._prepare_chemical_for_report(chemical),
-                    model_details_dict,
+                    report_model_details,
                     df_prediction,
                 )
                 continue
@@ -1862,7 +1892,7 @@ class ModelPredictor:
                 for idx, chemical in zip(prediction_indices, prediction_chemicals):
                     results[idx] = self._build_prediction_error_report(
                         chemical,
-                        model_details_dict,
+                        report_model_details,
                         "Model could not generate predictions",
                     )
             else:
@@ -1871,7 +1901,7 @@ class ModelPredictor:
                     for idx, chemical in zip(prediction_indices, prediction_chemicals):
                         results[idx] = self._build_prediction_error_report(
                             chemical,
-                            model_details_dict,
+                            report_model_details,
                             "Model returned an unexpected number of predictions",
                         )
                 else:
@@ -1892,7 +1922,7 @@ class ModelPredictor:
                     for row_pos, (idx, chemical) in enumerate(zip(prediction_indices, prediction_chemicals)):
                         results[idx] = self._finalize_prediction_report(
                             model,
-                            model_details_dict,
+                            report_model_details,
                             chemical,
                             None,
                             pred_array[row_pos],
@@ -1910,7 +1940,7 @@ class ModelPredictor:
         return results
 
     @timer
-    def predictFromDB(self, model_id, smiles):
+    def predictFromDB(self, model_id, smiles, include_model_details=True):
         """
         Runs whole workflow: standardize, descriptors, prediction, applicability domain
         :param model_id:
@@ -1923,12 +1953,24 @@ class ModelPredictor:
             key = f"{smiles}-{model_id}"
             prediction = get_cached_prediction(key)
             if prediction is not None:
-                return self._prediction_to_obj(prediction)
+                prediction_obj = self._strip_model_details_from_prediction(self._prediction_to_obj(prediction))
+                if include_model_details:
+                    model_details_dict, _ = self.get_model_details_dict_for_model_id(model_id)
+                    return self._attach_model_details_to_prediction(prediction_obj, model_details_dict)
+                return prediction_obj
 
-            prediction, code = self.predict_model_smiles(model_id, smiles)
+            prediction, code = self.predict_model_smiles(model_id, smiles, include_model_details=False)
             prediction_obj = self._prediction_to_obj(prediction)
-            cache_prediction(key, prediction_obj)
-            return prediction_obj
+            cached_prediction_obj = self._strip_model_details_from_prediction(prediction_obj)
+            cache_prediction(key, cached_prediction_obj)
+
+            if include_model_details:
+                model_details_dict = prediction_obj.get("modelDetails") if isinstance(prediction_obj, dict) else None
+                if model_details_dict is None:
+                    model_details_dict, _ = self.get_model_details_dict_for_model_id(model_id)
+                return self._attach_model_details_to_prediction(cached_prediction_obj, model_details_dict)
+
+            return cached_prediction_obj
 
         smiles_list = list(smiles)
         if not smiles_list:
@@ -1943,7 +1985,7 @@ class ModelPredictor:
         for idx, (smi, key) in enumerate(zip(smiles_list, cache_keys)):
             prediction = cached_predictions.get(key)
             if prediction is not None:
-                result[idx] = self._prediction_to_obj(prediction)
+                result[idx] = self._strip_model_details_from_prediction(self._prediction_to_obj(prediction))
             else:
                 missing_by_smiles.setdefault(smi, []).append(idx)
 
@@ -1951,7 +1993,11 @@ class ModelPredictor:
             missing_smiles = list(missing_by_smiles.keys())
             batch_failure_reason = None
             try:
-                batch_predictions = self.predict_model_smiles_batch(model_id, missing_smiles)
+                batch_predictions = self.predict_model_smiles_batch(
+                    model_id,
+                    missing_smiles,
+                    include_model_details=False,
+                )
                 if batch_predictions is None:
                     batch_failure_reason = "predict_model_smiles_batch returned None"
             except Exception as exc:
@@ -1973,7 +2019,11 @@ class ModelPredictor:
                 def _predict_one(item):
                     smi, indices = item
                     try:
-                        prediction, code = self.predict_model_smiles(model_id, smi)
+                        prediction, code = self.predict_model_smiles(
+                            model_id,
+                            smi,
+                            include_model_details=False,
+                        )
                         if code != 200:
                             prediction = {"smiles": smi, "error": prediction}
                     except Exception as exc:
@@ -1987,7 +2037,7 @@ class ModelPredictor:
                             "smiles": smi,
                             "error": f"Unhandled per-smiles fallback exception: {type(exc).__name__}: {exc}",
                         }
-                    prediction_obj = self._prediction_to_obj(prediction)
+                    prediction_obj = self._strip_model_details_from_prediction(self._prediction_to_obj(prediction))
                     return smi, indices, prediction_obj
 
                 cache_entries = []
@@ -1998,13 +2048,25 @@ class ModelPredictor:
                             result[idx] = prediction_obj
                 cache_predictions(cache_entries)
             else:
+                stripped_batch_predictions = [
+                    self._strip_model_details_from_prediction(self._prediction_to_obj(prediction_obj))
+                    for prediction_obj in batch_predictions
+                ]
                 cache_predictions(
                     (f"{smi}-{model_id}", prediction_obj)
-                    for smi, prediction_obj in zip(missing_smiles, batch_predictions)
+                    for smi, prediction_obj in zip(missing_smiles, stripped_batch_predictions)
                 )
-                for smi, prediction_obj in zip(missing_smiles, batch_predictions):
+                for smi, prediction_obj in zip(missing_smiles, stripped_batch_predictions):
                     for idx in missing_by_smiles[smi]:
                         result[idx] = prediction_obj
+
+        if include_model_details:
+            model_details_dict, _ = self.get_model_details_dict_for_model_id(model_id)
+            if model_details_dict:
+                result = [
+                    self._attach_model_details_to_prediction(prediction, model_details_dict)
+                    for prediction in result
+                ]
 
         return result
 
@@ -2287,7 +2349,7 @@ class ModelPredictor:
         modelResults.adEstimates.append(adResultsFrag)
     
     @timer
-    def predict_model_smiles(self, model_id, smiles, generate_report=True):
+    def predict_model_smiles(self, model_id, smiles, generate_report=True, include_model_details=True):
         """
         Runs whole workflow: standardize, descriptors, prediction, applicability domain
         :param model_id:
@@ -2295,7 +2357,12 @@ class ModelPredictor:
         :param mwu:
         :return:
         """
-        batch_result = self.predict_model_smiles_batch(model_id, [smiles], generate_report=generate_report)
+        batch_result = self.predict_model_smiles_batch(
+            model_id,
+            [smiles],
+            generate_report=generate_report,
+            include_model_details=include_model_details,
+        )
         if not batch_result:
             return f"Prediction failed for {smiles}", 500
 

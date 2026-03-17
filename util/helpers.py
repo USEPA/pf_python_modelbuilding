@@ -1,3 +1,4 @@
+import copy
 import json
 import logging
 import os
@@ -224,17 +225,108 @@ def _strip_common_model_details(predictions):
     return common_model_details, stripped_predictions
 
 
-def build_predictdb_post_payload(predictions, error=None):
+def _strip_top_level_model_details(prediction):
+    if isinstance(prediction, dict):
+        prediction_copy = dict(prediction)
+        prediction_copy.pop("modelDetails", None)
+        return prediction_copy
+    return prediction
+
+
+def build_predictdb_post_payload(predictions, error=None, model_details=None):
     normalized_predictions = [_coerce_json_safe(_to_obj_safe(prediction)) for prediction in predictions]
-    model_details, stripped_predictions = _strip_common_model_details(normalized_predictions)
+    if model_details is None:
+        model_details, stripped_predictions = _strip_common_model_details(normalized_predictions)
+    else:
+        stripped_predictions = [_strip_top_level_model_details(prediction) for prediction in normalized_predictions]
 
     payload = {
-        "modelDetails": model_details,
+        "modelDetails": _coerce_json_safe(model_details),
         "predictions": stripped_predictions,
     }
     if error is not None:
         payload["error"] = _coerce_json_safe(error)
     return _coerce_json_safe(payload)
+
+
+def _parse_predictdb_post_input(body):
+    if not isinstance(body, dict):
+        return None, None, build_batch_error_response("bad_request", "Request body must be a JSON object")
+
+    model_id = body.get("model_id")
+    if model_id is None:
+        return None, None, build_batch_error_response("bad_request", "'model_id' is required")
+
+    if "chemicals" in body:
+        chemicals = body.get("chemicals")
+        if not isinstance(chemicals, list):
+            return None, None, build_batch_error_response(
+                "bad_request",
+                "'chemicals' must be an array",
+            )
+
+        smiles_list = []
+        request_ids = []
+
+        for idx, chemical in enumerate(chemicals):
+            if not isinstance(chemical, dict):
+                return None, None, build_batch_error_response(
+                    "bad_request",
+                    f"Each 'chemicals' item must be an object; invalid item at index {idx}",
+                )
+
+            if "id" not in chemical:
+                return None, None, build_batch_error_response(
+                    "bad_request",
+                    f"Each 'chemicals' item must include 'id'; missing at index {idx}",
+                )
+
+            smiles = chemical.get("smiles")
+            if not isinstance(smiles, str):
+                return None, None, build_batch_error_response(
+                    "bad_request",
+                    f"Each 'chemicals' item must include string 'smiles'; invalid item at index {idx}",
+                )
+
+            smiles_list.append(smiles)
+            request_ids.append(_coerce_json_safe(chemical.get("id")))
+
+        return (model_id, smiles_list, request_ids), None, None
+
+    smiles_list = body.get("smiles")
+    if not isinstance(smiles_list, list):
+        return None, None, build_batch_error_response(
+            "bad_request",
+            "Either 'smiles' must be an array or 'chemicals' must be an array of objects",
+        )
+
+    if any(not isinstance(s, str) for s in smiles_list):
+        return None, None, build_batch_error_response(
+            "bad_request",
+            "All 'smiles' items must be strings",
+        )
+
+    return (model_id, smiles_list, [None] * len(smiles_list)), None, None
+
+
+def _attach_request_id_to_prediction(prediction, request_id):
+    normalized_prediction = _coerce_json_safe(_to_obj_safe(prediction))
+    if request_id is None or not isinstance(normalized_prediction, dict):
+        return normalized_prediction
+
+    prediction_copy = copy.deepcopy(normalized_prediction)
+    chemical_identifiers = prediction_copy.get("chemicalIdentifiers")
+    if not isinstance(chemical_identifiers, dict):
+        chemical_identifiers = _build_chemical_identifiers(
+            chemical_identifiers,
+            _extract_chemical_identifier(prediction_copy),
+        )
+    else:
+        chemical_identifiers = copy.deepcopy(chemical_identifiers)
+
+    chemical_identifiers["id"] = request_id
+    prediction_copy["chemicalIdentifiers"] = chemical_identifiers
+    return prediction_copy
 
 
 def _error_status_code(payload, default=400):
@@ -268,7 +360,12 @@ def _get_request_predictor():
 
 
 def predict_smiles_in_process(args):
-    model_id, current_smiles = args
+    if len(args) == 3:
+        model_id, current_smiles, include_model_details = args
+    else:
+        model_id, current_smiles = args
+        include_model_details = True
+
     predictor = _PROCESS_PREDICTOR
     if predictor is None:
         init_process_predictor()
@@ -277,7 +374,7 @@ def predict_smiles_in_process(args):
         return build_error_response(current_smiles, "prediction_error", "Failed to initialize process predictor")
 
     try:
-        pred = predictor.predictFromDB(model_id, current_smiles)
+        pred = predictor.predictFromDB(model_id, current_smiles, include_model_details=include_model_details)
         return normalize_error_payload(pred, current_smiles)
     except Exception as exc:
         logging.exception("Unhandled exception in process prediction for %s", current_smiles)
@@ -302,45 +399,38 @@ def collect_model_details_for_metadata(model_ids, smiles):
 
 
 def make_predictdb_post_response(body):
-    if not isinstance(body, dict):
-        return JSONResponse(
-            build_batch_error_response("bad_request", "Request body must be a JSON object"),
-            status_code=400,
-        )
+    parsed_request, _, error_payload = _parse_predictdb_post_input(body)
+    if error_payload is not None:
+        return JSONResponse(error_payload, status_code=400)
 
-    smiles_list = body.get("smiles")
-    model_id = body.get("model_id")
-
-    if not isinstance(smiles_list, list):
-        return JSONResponse(
-            build_batch_error_response("bad_request", "'smiles' must be an array"),
-            status_code=400,
-        )
-
-    if model_id is None:
-        return JSONResponse(
-            build_batch_error_response("bad_request", "'model_id' is required"),
-            status_code=400,
-        )
-
-    if any(not isinstance(s, str) for s in smiles_list):
-        return JSONResponse(
-            build_batch_error_response("bad_request", "All 'smiles' items must be strings"),
-            status_code=400,
-        )
+    model_id, smiles_list, request_ids = parsed_request
 
     if not smiles_list:
         return JSONResponse(content=build_predictdb_post_payload([]))
 
     unique_smiles, index_map = dedupe_smiles_preserve_order(smiles_list)
     batch_mode = os.getenv("PREDICT_BATCH_MODE", "thread").strip().lower()
+    predictor = _get_request_predictor()
+    batch_model_details = None
+
+    try:
+        batch_model_details, model_details_error = predictor.get_model_details_dict_for_model_id(model_id)
+        if model_details_error:
+            logging.warning(
+                "Failed to prefetch batch modelDetails for model_id=%s: %s",
+                model_id,
+                model_details_error,
+            )
+    except Exception:
+        logging.exception("Failed to prefetch batch modelDetails for model_id=%s", model_id)
+        batch_model_details = None
 
     if batch_mode == "process":
         try:
             max_workers = int(os.getenv("PREDICT_BATCH_WORKERS", os.cpu_count() or 1))
             max_workers = max(1, min(max_workers, len(unique_smiles)))
             with ProcessPoolExecutor(max_workers=max_workers, initializer=init_process_predictor) as executor:
-                unique_results = list(executor.map(predict_smiles_in_process, ((model_id, s) for s in unique_smiles)))
+                unique_results = list(executor.map(predict_smiles_in_process, ((model_id, s, False) for s in unique_smiles)))
         except Exception as exc:
             logging.exception("Unhandled exception in batch process pool")
             return JSONResponse(
@@ -352,9 +442,8 @@ def make_predictdb_post_response(body):
                 status_code=500,
             )
     else:
-        predictor = _get_request_predictor()
         try:
-            raw_results = predictor.predictFromDB(model_id, unique_smiles)
+            raw_results = predictor.predictFromDB(model_id, unique_smiles, include_model_details=False)
             if not isinstance(raw_results, list):
                 raise TypeError(f"Batch prediction returned {type(raw_results)} instead of list")
             if len(raw_results) != len(unique_smiles):
@@ -376,9 +465,9 @@ def make_predictdb_post_response(body):
     model_results = [None] * len(smiles_list)
     for smiles, prediction in zip(unique_smiles, unique_results):
         for idx in index_map[smiles]:
-            model_results[idx] = prediction
+            model_results[idx] = _attach_request_id_to_prediction(prediction, request_ids[idx])
 
-    return JSONResponse(content=build_predictdb_post_payload(model_results))
+    return JSONResponse(content=build_predictdb_post_payload(model_results, model_details=batch_model_details))
 
 
 def make_predictdb_response(model_id, smiles=None, identifier=None, report_format="json", cim_api_server=None):
