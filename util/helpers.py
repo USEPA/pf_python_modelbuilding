@@ -128,7 +128,7 @@ def build_batch_error_response(code, message, details=None, model_details=None, 
 
     payload = {
         "modelDetails": _coerce_json_safe(model_details),
-        "result": _format_predictions_for_response(_coerce_json_safe(predictions or [])),
+        "results": _format_predictions_for_response(_coerce_json_safe(predictions or [])),
         "error": error,
     }
     return _coerce_json_safe(payload)
@@ -242,13 +242,15 @@ def _strip_top_level_model_details(prediction):
 
 
 def _format_prediction_for_response(prediction):
-    if not isinstance(prediction, dict) or "chemicalIdentifiers" not in prediction:
+    if not isinstance(prediction, dict):
         return prediction
 
     formatted_prediction = {}
     for key, value in prediction.items():
         if key == "chemicalIdentifiers":
             formatted_prediction["chemical"] = value
+        elif key == "modelResults":
+            formatted_prediction["result"] = value
         else:
             formatted_prediction[key] = value
 
@@ -268,7 +270,7 @@ def build_predictdb_post_payload(predictions, error=None, model_details=None):
 
     payload = {
         "modelDetails": _coerce_json_safe(model_details),
-        "result": _format_predictions_for_response(stripped_predictions),
+        "results": _format_predictions_for_response(stripped_predictions),
     }
     if error is not None:
         payload["error"] = _coerce_json_safe(error)
