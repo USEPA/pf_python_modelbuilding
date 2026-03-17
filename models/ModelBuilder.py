@@ -859,6 +859,21 @@ class Model:
         # Prepare prediction instances using columns from training data
         pred_ids, pred_labels, pred_features = DFU.prepare_prediction_instances(df_prediction, self.embedding)
 
+        def get_model_input(features):
+            model_input = features
+            if isinstance(self.model_obj, (Pipeline, PMMLPipeline)):
+                pipeline_steps = getattr(self.model_obj, 'steps', None) or []
+                if pipeline_steps:
+                    first_step = pipeline_steps[0][1]
+                    if isinstance(first_step, StandardScaler) and not hasattr(first_step, 'feature_names_in_'):
+                        model_input = features.to_numpy()
+            return model_input
+
+        def get_numeric_series(values):
+            return pd.to_numeric(pd.Series(values), errors='coerce')
+
+        model_input = get_model_input(pred_features)
+
         # print('pred_labels',pred_labels)
 
         # print('Enter model.do_predictions')
@@ -878,6 +893,7 @@ class Model:
             pred_features = pd.DataFrame(
                 (np.array(pred_features) - self.training_descriptor_means) / self.training_descriptor_std_devs,
                 columns=self.embedding)
+            model_input = get_model_input(pred_features)
 
         # print('pred_features after scaling')
         # print(pred_features)
@@ -892,28 +908,39 @@ class Model:
                     1]])  # probability of score=1 (continuous value) # TODO this might not work directly with kNN
                 preds = np.rint(predictions)  # convert to integer to allow BA calculation to work
                 # print(preds)
-                score = balanced_accuracy_score(pred_labels, preds)
+                label_series = get_numeric_series(pred_labels)
+                if label_series.notna().all():
+                    score = balanced_accuracy_score(label_series, preds)
+                else:
+                    score = None
             elif isinstance(self.model_obj, Pipeline) or isinstance(self.model_obj, PMMLPipeline) or 'PMML' in type(
                     self.model_obj).__name__:
-                predictions = self.model_obj.predict_proba(pred_features)[:,
+                predictions = self.model_obj.predict_proba(model_input)[:,
                               1]  # probability of score=1 (continuous value)
 
                 # preds = self.model_obj.predict(pred_features) # generate integer values to allow BA calculation to work
                 preds = np.rint(
                     predictions)  # convert to integer to allow BA calculation to work (faster than running predict)
                 # print(preds)
-                score = balanced_accuracy_score(pred_labels, preds)
+                label_series = get_numeric_series(pred_labels)
+                if label_series.notna().all():
+                    score = balanced_accuracy_score(label_series, preds)
+                else:
+                    score = None
             else:
                 print("Cant handle ", type(self.model_obj))
 
-            logging.debug(r'Balanced Accuracy for Test data = {score}'.format(score=score))
+            if score is not None:
+                logging.debug(r'Balanced Accuracy for Test data = {score}'.format(score=score))
+            else:
+                logging.debug("Skipping Balanced Accuracy for Test data because labels are missing")
 
         elif not self.is_binary:
 
             # inputFolder = 'C:/Users/TMARTI02/OneDrive - Environmental Protection Agency (EPA)/000 Papers/2024 tetko challenge/modeling/'
             # pred_features.to_csv(inputFolder+'predfeatures.csv')
 
-            predictions = self.model_obj.predict(pred_features)
+            predictions = self.model_obj.predict(model_input)
             # print([predictions])
             # print(type(self.model_obj).__name__)
 
@@ -930,9 +957,16 @@ class Model:
             # print(pred_labels)
 
             if df_prediction.shape[0] > 1:
-                score = stats.pearsonr(predictions, pred_labels)[0]
-                score = score * score
-                logging.debug(r'R2 for Test data = {score}'.format(score=score))
+                pred_series = get_numeric_series(predictions)
+                label_series = get_numeric_series(pred_labels)
+                if pred_series.notna().all() and label_series.notna().all() and pred_series.nunique(dropna=True) > 1 and label_series.nunique(dropna=True) > 1:
+                    score = stats.pearsonr(pred_series, label_series)[0]
+                    score = score * score
+                    logging.debug(r'R2 for Test data = {score}'.format(score=score))
+                else:
+                    logging.debug(
+                        "Skipping R2 for Test data because predictions/labels are missing or constant"
+                    )
 
         else:
             print("is_categorical is null")  # does this happen?
@@ -1251,5 +1285,3 @@ def runExamples():
 
 if __name__ == "__main__":
     runExamples()
-
-

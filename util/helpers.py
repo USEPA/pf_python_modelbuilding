@@ -78,13 +78,35 @@ def _to_obj_safe(x):
             return {"error": str(x)}
 
 
+def _build_chemical_identifiers(value=None, fallback=""):
+    if isinstance(value, dict):
+        return _coerce_json_safe(value)
+
+    text_value = ""
+    if isinstance(value, str) and value.strip():
+        text_value = value.strip()
+    elif isinstance(fallback, str) and fallback.strip():
+        text_value = fallback.strip()
+
+    if not text_value:
+        return {}
+
+    chemical_identifiers = {"chemId": text_value}
+    if isinstance(value, str) and value.strip():
+        chemical_identifiers["smiles"] = text_value
+    elif isinstance(fallback, str) and fallback.strip():
+        chemical_identifiers["smiles"] = fallback.strip()
+
+    return chemical_identifiers
+
+
 def build_error_response(chemical_identifier, code, message, details=None):
     error = {"code": code, "message": message}
     if details is not None:
         error["details"] = _coerce_json_safe(details)
 
     return _coerce_json_safe({
-        "chemicalIdentifiers": chemical_identifier or "",
+        "chemicalIdentifiers": _build_chemical_identifiers(chemical_identifier),
         "modelResults": None,
         "error": error,
     })
@@ -133,15 +155,17 @@ def normalize_error_payload(payload, chemical_identifier=""):
 
     if isinstance(obj, dict):
         if isinstance(obj.get("error"), dict) and obj.get("modelResults") is None and "chemicalIdentifiers" in obj:
-            if not isinstance(obj.get("chemicalIdentifiers"), str):
-                obj["chemicalIdentifiers"] = _extract_chemical_identifier(obj, chemical_identifier)
+            obj["chemicalIdentifiers"] = _build_chemical_identifiers(
+                obj.get("chemicalIdentifiers"),
+                _extract_chemical_identifier(obj, chemical_identifier),
+            )
             return _coerce_json_safe(obj)
 
         if "error" in obj:
             details = obj["error"] if not isinstance(obj["error"], str) else None
             message = obj["error"] if isinstance(obj["error"], str) else "Prediction request failed"
             return _coerce_json_safe(build_error_response(
-                _extract_chemical_identifier(obj, chemical_identifier),
+                obj.get("chemicalIdentifiers") or _extract_chemical_identifier(obj, chemical_identifier),
                 "prediction_error",
                 message,
                 details,
@@ -153,7 +177,7 @@ def normalize_error_payload(payload, chemical_identifier=""):
             details = prediction_error if not isinstance(prediction_error, str) else None
             message = prediction_error if isinstance(prediction_error, str) else "Prediction request failed"
             return _coerce_json_safe(build_error_response(
-                _extract_chemical_identifier(obj, chemical_identifier),
+                obj.get("chemicalIdentifiers") or _extract_chemical_identifier(obj, chemical_identifier),
                 "prediction_error",
                 message,
                 details,
@@ -166,6 +190,7 @@ def _strip_common_model_details(predictions):
     common_model_details = None
     common_model_details_set = False
     stripped_predictions = []
+    mismatched_model_details = False
 
     for prediction in predictions:
         if not isinstance(prediction, dict):
@@ -181,8 +206,7 @@ def _strip_common_model_details(predictions):
             continue
 
         if model_details != common_model_details:
-            logging.warning("Batch predictions returned different modelDetails values; keeping them per item")
-            return None, predictions
+            mismatched_model_details = True
 
     for prediction in predictions:
         if isinstance(prediction, dict):
@@ -191,6 +215,11 @@ def _strip_common_model_details(predictions):
             stripped_predictions.append(prediction_copy)
         else:
             stripped_predictions.append(prediction)
+
+    if mismatched_model_details:
+        logging.warning(
+            "Batch predictions returned different modelDetails values; using the first non-null modelDetails at the top level"
+        )
 
     return common_model_details, stripped_predictions
 

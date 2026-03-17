@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import threading
 
@@ -171,7 +172,7 @@ class DescriptorsAPI:
         params = {
             "type": descriptor_name,
             "smiles": qsar_smiles,
-            "headers": "true"
+            "headers": True,
             # some descriptors dont have header option? Should be fixed so this doesnt cause issue if must be false
         }
 
@@ -179,33 +180,227 @@ class DescriptorsAPI:
 
         return response 
 
+    def _diagnose_descriptor_batch_400(self, url: str, descriptor_name: str, qsar_smiles: list[str], max_depth: int = 8):
+        session = get_requests_session()
+
+        def _payload(smiles_subset):
+            return {
+                "type": descriptor_name,
+                "chemicals": list(smiles_subset),
+                "chemIdType": "SMILES",
+                "format": "JSON",
+                "options": {
+                    "headers": True,
+                },
+            }
+
+        def _probe(smiles_subset):
+            response = session.post(url, json=_payload(smiles_subset))
+            return response.status_code, self._preview_value(response.text)
+
+        def _walk(smiles_subset, depth):
+            if not smiles_subset:
+                return "empty_subset"
+
+            if len(smiles_subset) == 1 or depth >= max_depth:
+                status_code, preview = _probe(smiles_subset)
+                if len(smiles_subset) == 1:
+                    sample_preview = self._preview_value(smiles_subset[0])
+                else:
+                    sample_preview = self._preview_value(smiles_subset)
+                return (
+                    f"subset_size={len(smiles_subset)} status={status_code} "
+                    f"sample={sample_preview} body={preview}"
+                )
+
+            mid = len(smiles_subset) // 2
+            left = smiles_subset[:mid]
+            right = smiles_subset[mid:]
+
+            left_status, left_preview = _probe(left)
+            right_status, right_preview = _probe(right)
+
+            if left_status == 400 and right_status != 400:
+                return "left_failed -> " + _walk(left, depth + 1)
+
+            if right_status == 400 and left_status != 400:
+                return "right_failed -> " + _walk(right, depth + 1)
+
+            if left_status == 400 and right_status == 400:
+                return (
+                    "both_halves_failed -> "
+                    f"left_size={len(left)} body={left_preview} | "
+                    f"right_size={len(right)} body={right_preview}"
+                )
+
+            return (
+                "whole_batch_failed_but_halves_passed -> likely batch_size_limit_or_payload_size_or_bad_combination; "
+                f"left_size={len(left)} status={left_status} | right_size={len(right)} status={right_status}"
+            )
+
+        try:
+            return _walk(list(qsar_smiles), 0)
+        except Exception as exc:
+            return f"diagnostic_failed={exc}"
+
     def call_descriptors_post(self, server_host: str, qsar_smiles: list[str], descriptor_name: str):
         # Construct the URL
         url = f"{server_host}/api/descriptors"
-
-        # Set up query parameters
-        params = {
+        payload = {
             "type": descriptor_name,
             "chemicals": qsar_smiles,
-            "headers": "true"
-            # some descriptors dont have header option? Should be fixed so this doesnt cause issue if must be false
+            "chemIdType": "SMILES",
+            "format": "JSON",
+            "options": {
+                "headers": True,
+            },
         }
 
-        response = get_requests_session().post(url, json=params)
+        response = get_requests_session().post(url, json=payload)
 
         if response.status_code == 200:
-            # Parse the response JSON and convert it to a list of Chemical objects
             return response.json(), response.status_code
-        else:
-            # Handle the error appropriately
-            return response.text, response.status_code
+
+        if response.status_code == 400 and len(qsar_smiles) > 1:
+            diagnostic = self._diagnose_descriptor_batch_400(url, descriptor_name, qsar_smiles)
+            logging.warning(
+                "Descriptor batch endpoint returned 400; descriptor_service=%s batch_size=%s diagnostic=%s",
+                descriptor_name,
+                len(qsar_smiles),
+                diagnostic,
+            )
+            return (
+                f"{response.text}; diagnostic={diagnostic}",
+                response.status_code,
+            )
+
+        return response.text, response.status_code
 
     def response_to_df(self, response, qsarSmiles):
         descriptor_dict = response.json()
         return self.response_json_to_df(descriptor_dict, [qsarSmiles])
 
+    @staticmethod
+    def _coerce_descriptor_headers(candidate):
+        if isinstance(candidate, (list, tuple)):
+            return [str(item) for item in candidate]
+
+        if isinstance(candidate, str):
+            text = candidate.strip()
+            if not text:
+                return None
+
+            try:
+                parsed = json.loads(text)
+            except Exception:
+                parsed = None
+
+            if isinstance(parsed, (list, tuple)):
+                return [str(item) for item in parsed]
+
+            for delimiter in ("\t", ",", "|", ";"):
+                if delimiter in text:
+                    parts = [part.strip() for part in text.split(delimiter) if part.strip()]
+                    if len(parts) > 1:
+                        return parts
+
+        if isinstance(candidate, dict):
+            for nested_key in (
+                "headers",
+                "descriptorHeaders",
+                "descriptor_headers",
+                "descriptorNames",
+                "descriptor_names",
+                "columns",
+                "column_names",
+            ):
+                nested_headers = DescriptorsAPI._coerce_descriptor_headers(candidate.get(nested_key))
+                if nested_headers:
+                    return nested_headers
+
+        return None
+
+    @staticmethod
+    def _summarize_descriptor_chemical(chemical):
+        if isinstance(chemical, dict):
+            summary_parts = [f"dict keys={list(chemical.keys())[:10]}"]
+            descriptors = chemical.get("descriptors")
+            if isinstance(descriptors, dict):
+                summary_parts.append(f"descriptors=dict keys={list(descriptors.keys())[:10]}")
+            elif isinstance(descriptors, list):
+                summary_parts.append(f"descriptors=list len={len(descriptors)}")
+            elif descriptors is not None:
+                summary_parts.append(f"descriptors_type={type(descriptors).__name__}")
+            return " ".join(summary_parts)
+
+        return f"type={type(chemical).__name__} preview={DescriptorsAPI._preview_value(chemical)}"
+
+    @staticmethod
+    def _extract_descriptor_headers(descriptor_dict):
+        headers = DescriptorsAPI._coerce_descriptor_headers(descriptor_dict.get("headers"))
+        if headers:
+            return headers
+
+        for parent_key in ("options", "info"):
+            parent = descriptor_dict.get(parent_key)
+            if not isinstance(parent, dict):
+                continue
+
+            for candidate_key in (
+                "headers",
+                "descriptorHeaders",
+                "descriptor_headers",
+                "descriptorNames",
+                "descriptor_names",
+                "columns",
+                "column_names",
+            ):
+                headers = DescriptorsAPI._coerce_descriptor_headers(parent.get(candidate_key))
+                if headers:
+                    return headers
+
+        chemicals = descriptor_dict.get("chemicals")
+        if isinstance(chemicals, list):
+            for chemical in chemicals[:5]:
+                if not isinstance(chemical, dict):
+                    continue
+
+                descriptors = chemical.get("descriptors")
+
+                if isinstance(descriptors, dict):
+                    return list(descriptors.keys())
+
+                for candidate_key in (
+                    "headers",
+                    "descriptorHeaders",
+                    "descriptor_headers",
+                    "descriptorNames",
+                    "descriptor_names",
+                ):
+                    headers = DescriptorsAPI._coerce_descriptor_headers(chemical.get(candidate_key))
+                    if headers:
+                        return headers
+
+        first_chemical_summary = "none"
+        if isinstance(chemicals, list) and chemicals:
+            first_chemical_summary = DescriptorsAPI._summarize_descriptor_chemical(chemicals[0])
+
+        top_level_keys = list(descriptor_dict.keys())
+        options_keys = list(descriptor_dict.get("options", {}).keys()) if isinstance(descriptor_dict.get("options"), dict) else []
+        info_keys = list(descriptor_dict.get("info", {}).keys()) if isinstance(descriptor_dict.get("info"), dict) else []
+        options_headers = None
+        if isinstance(descriptor_dict.get("options"), dict):
+            options_headers = descriptor_dict["options"].get("headers")
+        raise KeyError(
+            "headers"
+            f" (top_level_keys={top_level_keys}, options_keys={options_keys}, info_keys={info_keys}, "
+            f"chemicals_len={len(chemicals) if isinstance(chemicals, list) else 'n/a'}, "
+            f"options_headers_type={type(options_headers).__name__ if options_headers is not None else 'missing'}, "
+            f"first_chemical={first_chemical_summary})"
+        )
+
     def response_json_to_df(self, descriptor_dict, qsarSmilesList):
-        headers = list(descriptor_dict['headers'])
+        headers = self._extract_descriptor_headers(descriptor_dict)
         headers.insert(0, "Property")
         headers.insert(0, "ID")
 
@@ -219,9 +414,16 @@ class DescriptorsAPI:
 
         rows = []
         for qsar_smiles, chemical in zip(qsar_smiles_list, chemicals):
+            raw_descriptors = chemical['descriptors']
+
+            if isinstance(raw_descriptors, dict):
+                descriptor_values = [raw_descriptors.get(header_name) for header_name in headers[2:]]
+            else:
+                descriptor_values = raw_descriptors
+
             descriptors = [
                 float(descriptor) if descriptor is not None else np.nan
-                for descriptor in chemical['descriptors']
+                for descriptor in descriptor_values
             ]
             descriptors.insert(0, None)
             descriptors.insert(0, qsar_smiles)
@@ -251,18 +453,72 @@ class SearchAPI:
 class QsarSmilesAPI:
 
     @staticmethod
-    def call_qsar_ready_standardize_post(server_host, smiles, full, workflow):
-        if isinstance(smiles, str):
-            smiles_list = [smiles]
-        else:
-            smiles_list = list(smiles)
+    def _build_standardize_chemical_payload(chemical, index):
+        if isinstance(chemical, dict):
+            payload = {
+                "id": str(chemical.get("id", index)),
+                "chemId": chemical.get("chemId") or chemical.get("sid") or chemical.get("cid") or chemical.get("name") or chemical.get("smiles") or "",
+                "cid": chemical.get("cid", ""),
+                "sid": chemical.get("sid", ""),
+                "casrn": chemical.get("casrn", ""),
+                "name": chemical.get("name", ""),
+                "smiles": chemical.get("smiles", ""),
+                "canonicalSmiles": chemical.get("canonicalSmiles", ""),
+                "inchi": chemical.get("inchi", ""),
+                "inchiKey": chemical.get("inchiKey", ""),
+                "mol": chemical.get("mol", ""),
+                "molFormula": chemical.get("molFormula", ""),
+                "image": chemical.get("image", chemical.get("imageSrc", "")),
+                "additionalProps": chemical.get("additionalProps", {}),
+            }
 
-        # Construct the JSON body
-        jo_body = {
-            "full": full,
-            "options": {"workflow": workflow},
-            "chemicals": [{"smiles": current_smiles} for current_smiles in smiles_list]
+            if chemical.get("averageMass") is not None:
+                payload["averageMass"] = chemical["averageMass"]
+            if chemical.get("monoisotopicMass") is not None:
+                payload["monoisotopicMass"] = chemical["monoisotopicMass"]
+            return payload
+
+        smiles_value = str(chemical)
+        return {
+            "id": str(index),
+            "chemId": smiles_value,
+            "cid": "",
+            "sid": "",
+            "casrn": "",
+            "name": "",
+            "smiles": smiles_value,
+            "canonicalSmiles": "",
+            "inchi": "",
+            "inchiKey": "",
+            "mol": "",
+            "molFormula": "",
+            "image": "",
+            "additionalProps": {},
         }
+
+    @staticmethod
+    def _build_standardize_payload(smiles, full, workflow):
+        if isinstance(smiles, str):
+            chemicals_input = [smiles]
+        else:
+            chemicals_input = list(smiles)
+
+        return {
+            "options": {
+                "workflow": workflow or "",
+                "run": "",
+                "recordId": "",
+            },
+            "chemicals": [
+                QsarSmilesAPI._build_standardize_chemical_payload(chemical, index)
+                for index, chemical in enumerate(chemicals_input)
+            ],
+            "full": full,
+        }
+
+    @staticmethod
+    def call_qsar_ready_standardize_post(server_host, smiles, full, workflow):
+        jo_body = QsarSmilesAPI._build_standardize_payload(smiles, full, workflow)
 
         # Make the POST request
         url = f"{server_host}/api/stdizer/chemicals"
@@ -280,16 +536,7 @@ class QsarSmilesAPI:
 
     @staticmethod
     async def call_qsar_ready_standardize_post_async(client: httpx.AsyncClient, server_host, smiles, full, workflow):
-        if isinstance(smiles, (list, tuple)):
-            chemicals_payload = [{"smiles": s} for s in smiles]
-        else:
-            chemicals_payload = [{"smiles": smiles}]
-
-        jo_body = {
-            "full": full,
-            "options": {"workflow": workflow},
-            "chemicals": chemicals_payload
-        }
+        jo_body = QsarSmilesAPI._build_standardize_payload(smiles, full, workflow)
 
         headers = {"Content-Type": "application/json"}
         url = f"{server_host}/api/stdizer/chemicals"

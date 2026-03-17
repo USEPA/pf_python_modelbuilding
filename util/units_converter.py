@@ -4,13 +4,29 @@ Created on Feb 10, 2026
 @author: TMARTI02
 '''
 
+import logging
 import math
 from util import predict_constants as pc
 
 class UnitsConverter:
+
+    _UNIT_ALIASES = {
+        "atm-m3/mole": pc.ATM_M3_MOL,
+        "-log10(atm-m3/mole)": pc.NEG_LOG_ATM_M3_MOL,
+        "log10(atm-m3/mole)": pc.LOG_ATM_M3_MOL,
+    }
+
+    def _normalize_unit_name(self, unit_name):
+        return self._UNIT_ALIASES.get(unit_name, unit_name)
         
     def get_error_message(self, property_name, unit_name, final_unit_name, chemical_id, ):
-        print(chemical_id+ ": undefined conversion for "+property_name+ " for "+unit_name+" to "+final_unit_name)
+        logging.warning(
+            "%s: undefined conversion for %s for %s to %s",
+            chemical_id,
+            property_name,
+            unit_name,
+            final_unit_name,
+        )
     
     def handle_surface_tension(self, property_name, value, unit_name, final_unit_name, chemical_id):
         if final_unit_name == pc.LOG_CP and unit_name == pc.CP:
@@ -44,9 +60,19 @@ class UnitsConverter:
                 if dsstox_record.mol_weight is not None:
                     return -math.log10(value / 1000.0 / dsstox_record.mol_weight)
                 elif value == 0:
-                    print(f"{chemical_id}: value=0 for {dsstox_record.dsstox_substance_id}, so can't convert to {final_unit_name}")
+                    logging.warning(
+                        "%s: value=0 for %s, so can't convert to %s",
+                        chemical_id,
+                        dsstox_record.dsstox_substance_id,
+                        final_unit_name,
+                    )
                 elif dsstox_record.mol_weight is None:
-                    print(f"{chemical_id}: missing MW for {dsstox_record.dsstox_substance_id}, so can't convert to {final_unit_name}")
+                    logging.warning(
+                        "%s: missing MW for %s, so can't convert to %s",
+                        chemical_id,
+                        dsstox_record.dsstox_substance_id,
+                        final_unit_name,
+                    )
             elif unit_name == pc.UL_KG:
                 return None
         elif final_unit_name == pc.MOL_KG and unit_name == pc.NEG_LOG_MOL_KG:
@@ -133,10 +159,20 @@ class UnitsConverter:
                 if molecular_weight is not None:
                     return -math.log10(value / molecular_weight)
                 elif value == 0:
-                    print(f"{chemical_id}: value=0 for {chemical_id}, so can't convert to {final_unit_name}")
+                    logging.warning(
+                        "%s: value=0 for %s, so can't convert to %s",
+                        chemical_id,
+                        chemical_id,
+                        final_unit_name,
+                    )
                     return NaN
                 elif molecular_weight is None:
-                    print(f"{chemical_id}: missing MW for {chemical_id}, so can't convert to {final_unit_name}")
+                    logging.warning(
+                        "%s: missing MW for %s, so can't convert to %s",
+                        chemical_id,
+                        chemical_id,
+                        final_unit_name,
+                    )
                     return NaN
         elif final_unit_name == pc.MOLAR and unit_name == pc.NEG_LOG_M:
             return math.pow(10, -value)
@@ -146,6 +182,9 @@ class UnitsConverter:
             return None
     
     def convert_units(self, property_name, value, unit_name, final_unit_name, chemical_id, molecular_weight=None):
+
+        unit_name = self._normalize_unit_name(unit_name)
+        final_unit_name = self._normalize_unit_name(final_unit_name)
     
         if unit_name == final_unit_name:
             return value

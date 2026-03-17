@@ -1,6 +1,8 @@
 import json
 import logging
 import os
+import threading
+from pathlib import Path
 
 from bson.errors import InvalidDocument
 from pymongo import ASCENDING, MongoClient, ReplaceOne
@@ -11,6 +13,8 @@ predictor_models_cache = None
 in_memory_cache = {}
 _mongo_init_done = False
 _mongo_unavailable_reason = None
+_errors_file_lock = threading.Lock()
+_errors_file_path_logged = False
 
 
 def _has_meaningful_error_value(value) -> bool:
@@ -93,11 +97,40 @@ def _find_prediction_error_reason(prediction, path="prediction"):
     return None
 
 
-def _warn_mongo_cache_skip(key: str, reason: str, fallback: str | None = None):
+def _warn_mongo_cache_skip(
+    key: str,
+    reason: str,
+    fallback: str | None = None,
+    log_warning: bool = True,
+):
+    _append_mongo_cache_error(key, reason)
+    if not log_warning:
+        return
     if fallback:
         logging.warning("Mongo cache skipped for key=%r: %s; fallback=%s", key, reason, fallback)
     else:
         logging.warning("Mongo cache skipped for key=%r: %s", key, reason)
+
+
+def _append_mongo_cache_error(key: str, reason: str):
+    global _errors_file_path_logged
+    errors_path = os.getenv("MONGO_CACHE_ERRORS_FILE", "errors.txt")
+    errors_path = Path(errors_path)
+    if not errors_path.is_absolute():
+        errors_path = Path(__file__).resolve().parent.parent / errors_path
+
+    line = f"key={key!r} {str(reason).replace(chr(10), ' ').replace(chr(13), ' ').strip()}\n"
+
+    try:
+        with _errors_file_lock:
+            errors_path.parent.mkdir(parents=True, exist_ok=True)
+            if not _errors_file_path_logged:
+                logging.info("Mongo cache errors file resolved to %s", errors_path)
+                _errors_file_path_logged = True
+            with errors_path.open("a", encoding="utf-8") as handle:
+                handle.write(line)
+    except OSError as exc:
+        logging.warning("Failed to append Mongo cache error to %s: %s", errors_path, exc)
 
 
 def _prediction_to_obj(prediction):
@@ -262,7 +295,7 @@ def cache_prediction(key: str, prediction):
 
     if _prediction_has_error(normalized_prediction):
         reason = _find_prediction_error_reason(normalized_prediction) or "prediction contains error"
-        _warn_mongo_cache_skip(key, reason, fallback="not cached")
+        _warn_mongo_cache_skip(key, reason, fallback="not cached", log_warning=False)
         return
 
     _ensure_init()
@@ -290,7 +323,7 @@ def cache_predictions(items):
         normalized_prediction = _normalize_prediction_for_storage(prediction)
         if _prediction_has_error(normalized_prediction):
             reason = _find_prediction_error_reason(normalized_prediction) or "prediction contains error"
-            _warn_mongo_cache_skip(key, reason, fallback="not cached")
+            _warn_mongo_cache_skip(key, reason, fallback="not cached", log_warning=False)
             continue
         normalized_items.append((key, normalized_prediction))
 
