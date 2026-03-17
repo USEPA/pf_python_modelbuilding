@@ -113,8 +113,15 @@ class DescriptorsAPI:
                                                                 descriptor_name=descriptorService)
         if response.status_code != 200:
             return response.text,response.status_code 
-        
-        df_prediction = self.response_to_df(response, qsarSmiles)
+
+        try:
+            df_prediction = self.response_to_df(response, qsarSmiles)
+        except Exception as exc:
+            return (
+                f"Failed to parse descriptor response for smiles={self._preview_value(qsarSmiles)}: {exc}; "
+                f"payload={self._preview_value(response.text)}",
+                500,
+            )
                 
         return df_prediction, 200
 
@@ -419,7 +426,20 @@ class DescriptorsAPI:
             if isinstance(raw_descriptors, dict):
                 descriptor_values = [raw_descriptors.get(header_name) for header_name in headers[2:]]
             else:
+                if not isinstance(raw_descriptors, (list, tuple)):
+                    raise ValueError(
+                        "descriptor response has unexpected descriptors type "
+                        f"{type(raw_descriptors).__name__} for smiles={self._preview_value(qsar_smiles)}"
+                    )
                 descriptor_values = raw_descriptors
+                expected_descriptor_count = len(headers) - 2
+                if len(descriptor_values) != expected_descriptor_count:
+                    raise ValueError(
+                        "descriptor response column mismatch "
+                        f"for smiles={self._preview_value(qsar_smiles)}: "
+                        f"expected_descriptors={expected_descriptor_count} actual_descriptors={len(descriptor_values)} "
+                        f"chemical={self._summarize_descriptor_chemical(chemical)}"
+                    )
 
             descriptors = [
                 float(descriptor) if descriptor is not None else np.nan
