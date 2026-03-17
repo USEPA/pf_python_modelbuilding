@@ -41,6 +41,7 @@ import model_ws_utilities as mwu
 import numpy as np
 
 from util.units_converter import UnitsConverter
+from util.indigo_utils import IndigoUtils
 
 from utils import timer, print_first_row
 from applicability_domain import applicability_domain_utilities as adu
@@ -69,6 +70,7 @@ USE_TEMPORARY_MODEL_PLOTS = False
 imgURLCid = "https://comptox.epa.gov/dashboard-api/ccdapp1/chemical-files/image/by-dtxcid/";
 _MISSING_NEIGHBOR_DSS_TOX_CACHE = {}
 _MISSING_NEIGHBOR_DSS_TOX_LOCK = threading.Lock()
+_INDIGO_UTILS_LOCAL = threading.local()
 
 """
 Not completed:
@@ -96,6 +98,30 @@ def _render_smiles_to_base64_cached(smiles_string, width=400, height=400):
         img_bytes = renderer.renderToBuffer(mol)
         return base64.b64encode(img_bytes).decode("utf-8")
     except Exception:
+        return None
+
+
+def _get_indigo_utils():
+    indigo_utils = getattr(_INDIGO_UTILS_LOCAL, "indigo_utils", None)
+    if indigo_utils is None:
+        indigo_utils = IndigoUtils()
+        _INDIGO_UTILS_LOCAL.indigo_utils = indigo_utils
+    return indigo_utils
+
+
+@functools.lru_cache(maxsize=50000)
+def _inchi_key_from_smiles_cached(smiles_string):
+    if smiles_string is None:
+        return None
+
+    smiles_text = str(smiles_string).strip()
+    if not smiles_text:
+        return None
+
+    try:
+        return _get_indigo_utils().inchi_key_from_smiles(smiles_text)
+    except Exception:
+        logging.exception("Failed to generate InChIKey for SMILES=%s", smiles_text)
         return None
 
 
@@ -867,6 +893,59 @@ class ModelPredictor:
         self._units_converter = UnitsConverter()
 
     @staticmethod
+    def _get_inchi_key_from_smiles(smiles):
+        return _inchi_key_from_smiles_cached(smiles)
+
+    @classmethod
+    def _ensure_chemical_inchi_key(cls, chemical, fallback_smiles=None):
+        if not isinstance(chemical, dict):
+            return chemical
+
+        chemical_with_inchi = dict(chemical)
+        raw_inchi_key = chemical_with_inchi.get("inchiKey")
+        if isinstance(raw_inchi_key, str) and raw_inchi_key.strip() and raw_inchi_key != "N/A":
+            return chemical_with_inchi
+
+        for candidate_smiles in (
+            chemical_with_inchi.get("canonicalSmiles"),
+            chemical_with_inchi.get("smiles"),
+            fallback_smiles,
+        ):
+            inchi_key = cls._get_inchi_key_from_smiles(candidate_smiles)
+            if inchi_key:
+                chemical_with_inchi["inchiKey"] = inchi_key
+                return chemical_with_inchi
+
+        chemical_with_inchi.setdefault("inchiKey", None)
+        return chemical_with_inchi
+
+    @classmethod
+    def _build_prediction_cache_key(cls, model_id, smiles=None, chemical=None):
+        inchi_key = None
+        if isinstance(chemical, dict):
+            raw_inchi_key = chemical.get("inchiKey")
+            if isinstance(raw_inchi_key, str) and raw_inchi_key.strip() and raw_inchi_key != "N/A":
+                inchi_key = raw_inchi_key.strip()
+
+            if inchi_key is None:
+                for candidate_smiles in (
+                    chemical.get("canonicalSmiles"),
+                    chemical.get("smiles"),
+                    smiles,
+                ):
+                    inchi_key = cls._get_inchi_key_from_smiles(candidate_smiles)
+                    if inchi_key:
+                        break
+        else:
+            inchi_key = cls._get_inchi_key_from_smiles(smiles)
+
+        if inchi_key:
+            return f"{inchi_key}-{model_id}"
+
+        fallback_smiles = "" if smiles is None else str(smiles).strip()
+        return f"{fallback_smiles}-{model_id}"
+
+    @staticmethod
     def _to_lookup(df, key_col, value_cols=None):
         if df is None or df.empty or key_col not in df.columns:
             return {}
@@ -892,7 +971,9 @@ class ModelPredictor:
                 sanitized = {}
                 for key, item in value.items():
                     if key == "chemicalIdentifiers":
-                        sanitized[key] = _sanitize_api_chemical_identifiers(item)
+                        sanitized[key] = _sanitize_api_chemical_identifiers(
+                            ModelPredictor._ensure_chemical_inchi_key(item)
+                        )
                     else:
                         sanitized[key] = _sanitize_prediction_payload(item)
                 return sanitized
@@ -1406,7 +1487,7 @@ class ModelPredictor:
 
         img_base64 = self.smiles_to_base64(smiles)
         chemical["imageSrc"] = f'data:image/png;base64,{img_base64}' if img_base64 else "N/A"
-        return chemical
+        return self._ensure_chemical_inchi_key(chemical, fallback_smiles=smiles)
 
     def _prepare_chemical_for_report(self, chemical):
         chemical = dict(chemical)
@@ -1422,12 +1503,16 @@ class ModelPredictor:
             chemical["cid"] = "N/A"
             chemical["name"] = "N/A"
 
-        return chemical
+        return self._ensure_chemical_inchi_key(chemical)
 
     def _build_prediction_error_report(self, chemical, model_details_dict, error):
+        if isinstance(chemical, dict):
+            prepared_chemical = self._prepare_chemical_for_report(chemical)
+        else:
+            prepared_chemical = self._build_minimal_chemical(chemical)
         model_results = ModelResults()
         model_results.predictionError = error
-        return self._build_report_dict(chemical, model_details_dict, model_results)
+        return self._build_report_dict(prepared_chemical, model_details_dict, model_results)
 
     def _fast_test_embedding_euclidean_ad_batch(self, model, applicability_domain_name, df_prediction):
         runtime = self._get_test_embedding_ad_runtime(model)
@@ -1950,7 +2035,7 @@ class ModelPredictor:
         """
     
         if isinstance(smiles, str):
-            key = f"{smiles}-{model_id}"
+            key = self._build_prediction_cache_key(model_id, smiles=smiles)
             prediction = get_cached_prediction(key)
             if prediction is not None:
                 prediction_obj = self._strip_model_details_from_prediction(self._prediction_to_obj(prediction))
@@ -1962,7 +2047,11 @@ class ModelPredictor:
             prediction, code = self.predict_model_smiles(model_id, smiles, include_model_details=False)
             prediction_obj = self._prediction_to_obj(prediction)
             cached_prediction_obj = self._strip_model_details_from_prediction(prediction_obj)
-            cache_prediction(key, cached_prediction_obj)
+            chemical_identifiers = prediction_obj.get("chemicalIdentifiers") if isinstance(prediction_obj, dict) else None
+            cache_prediction(
+                self._build_prediction_cache_key(model_id, smiles=smiles, chemical=chemical_identifiers),
+                cached_prediction_obj,
+            )
 
             if include_model_details:
                 model_details_dict = prediction_obj.get("modelDetails") if isinstance(prediction_obj, dict) else None
@@ -1979,7 +2068,7 @@ class ModelPredictor:
         result = [None] * len(smiles_list)
         missing_by_smiles = {}
 
-        cache_keys = [f"{smi}-{model_id}" for smi in smiles_list]
+        cache_keys = [self._build_prediction_cache_key(model_id, smiles=smi) for smi in smiles_list]
         cached_predictions = get_cached_predictions(cache_keys)
 
         for idx, (smi, key) in enumerate(zip(smiles_list, cache_keys)):
@@ -2043,7 +2132,13 @@ class ModelPredictor:
                 cache_entries = []
                 with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
                     for smi, indices, prediction_obj in pool.map(_predict_one, missing):
-                        cache_entries.append((f"{smi}-{model_id}", prediction_obj))
+                        chemical_identifiers = prediction_obj.get("chemicalIdentifiers") if isinstance(prediction_obj, dict) else None
+                        cache_entries.append(
+                            (
+                                self._build_prediction_cache_key(model_id, smiles=smi, chemical=chemical_identifiers),
+                                prediction_obj,
+                            )
+                        )
                         for idx in indices:
                             result[idx] = prediction_obj
                 cache_predictions(cache_entries)
@@ -2053,7 +2148,14 @@ class ModelPredictor:
                     for prediction_obj in batch_predictions
                 ]
                 cache_predictions(
-                    (f"{smi}-{model_id}", prediction_obj)
+                    (
+                        self._build_prediction_cache_key(
+                            model_id,
+                            smiles=smi,
+                            chemical=prediction_obj.get("chemicalIdentifiers") if isinstance(prediction_obj, dict) else None,
+                        ),
+                        prediction_obj,
+                    )
                     for smi, prediction_obj in zip(missing_smiles, stripped_batch_predictions)
                 )
                 for smi, prediction_obj in zip(missing_smiles, stripped_batch_predictions):
