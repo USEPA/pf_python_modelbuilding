@@ -1972,9 +1972,21 @@ class ModelPredictor:
 
                 def _predict_one(item):
                     smi, indices = item
-                    prediction, code = self.predict_model_smiles(model_id, smi)
-                    if code != 200:
-                        prediction = {"smiles": smi, "error": prediction}
+                    try:
+                        prediction, code = self.predict_model_smiles(model_id, smi)
+                        if code != 200:
+                            prediction = {"smiles": smi, "error": prediction}
+                    except Exception as exc:
+                        logging.exception(
+                            "Per-smiles threaded fallback failed; model_id=%s smiles=%s error=%s",
+                            model_id,
+                            smi,
+                            self._preview_log_value(exc),
+                        )
+                        prediction = {
+                            "smiles": smi,
+                            "error": f"Unhandled per-smiles fallback exception: {type(exc).__name__}: {exc}",
+                        }
                     prediction_obj = self._prediction_to_obj(prediction)
                     return smi, indices, prediction_obj
 
