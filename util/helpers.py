@@ -128,7 +128,7 @@ def build_batch_error_response(code, message, details=None, model_details=None, 
 
     payload = {
         "modelDetails": _coerce_json_safe(model_details),
-        "predictions": _format_predictions_for_response(_coerce_json_safe(predictions or [])),
+        "result": _format_predictions_for_response(_coerce_json_safe(predictions or [])),
         "error": error,
     }
     return _coerce_json_safe(payload)
@@ -268,7 +268,7 @@ def build_predictdb_post_payload(predictions, error=None, model_details=None):
 
     payload = {
         "modelDetails": _coerce_json_safe(model_details),
-        "predictions": _format_predictions_for_response(stripped_predictions),
+        "result": _format_predictions_for_response(stripped_predictions),
     }
     if error is not None:
         payload["error"] = _coerce_json_safe(error)
