@@ -81,7 +81,10 @@ def _to_obj_safe(x):
 
 def _build_chemical_identifiers(value=None, fallback=""):
     if isinstance(value, dict):
-        return _coerce_json_safe(value)
+        fallback_smiles = ""
+        if isinstance(fallback, str) and fallback.strip():
+            fallback_smiles = fallback.strip()
+        return _coerce_json_safe(ModelPredictor._ensure_chemical_inchi_key(value, fallback_smiles=fallback_smiles))
 
     text_value = ""
     if isinstance(value, str) and value.strip():
@@ -97,6 +100,11 @@ def _build_chemical_identifiers(value=None, fallback=""):
         chemical_identifiers["smiles"] = text_value
     elif isinstance(fallback, str) and fallback.strip():
         chemical_identifiers["smiles"] = fallback.strip()
+
+    chemical_identifiers = ModelPredictor._ensure_chemical_inchi_key(
+        chemical_identifiers,
+        fallback_smiles=chemical_identifiers.get("smiles"),
+    )
 
     return chemical_identifiers
 

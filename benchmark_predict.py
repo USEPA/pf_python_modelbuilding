@@ -57,15 +57,6 @@ def find_failed_smiles(url: str, model_id: int, smiles_batch: list[str], timeout
     return failed
 
 
-def append_errors(errors_file: Path, failed: list[tuple[str, str]], run_no: int, request_no: int) -> None:
-    if not failed:
-        return
-
-    with errors_file.open("a", encoding="utf-8") as fh:
-        for smile, err in failed:
-            fh.write(f"run={run_no}\trequest={request_no}\tsmiles={smile}\terror={err}\n")
-
-
 def process_batch_request(
     url: str,
     model_id: int,
@@ -73,7 +64,6 @@ def process_batch_request(
     request_idx: int,
     total_batches: int,
     smiles_batch: list[str],
-    errors_file: Path,
 ) -> tuple[int, bool, int, float]:
     batch_start = time.perf_counter()
     try:
@@ -83,17 +73,9 @@ def process_batch_request(
         batch_elapsed = time.perf_counter() - batch_start
         failed_smiles = find_failed_smiles(url, model_id, smiles_batch, timeout)
         if failed_smiles:
-            append_errors(errors_file, failed_smiles, 1, request_idx)
             print(
                 f"    request {request_idx}/{total_batches}: identified failed smiles in batch: "
-                f"{len(failed_smiles)} (saved to {errors_file})"
-            )
-        else:
-            append_errors(
-                errors_file,
-                [("<batch-level>", f"batch failed but single-smile checks passed: {exc}")],
-                1,
-                request_idx,
+                f"{len(failed_smiles)}"
             )
         print(
             f"  request {request_idx}/{total_batches} failed, "
@@ -120,7 +102,6 @@ def run_endpoint_benchmark(
     skip_first: int,
 ) -> float:
     print(f"\n{name}: {url}")
-    errors_file = Path("errors.txt")
 
     total_batches = (smiles_count + batch_size - 1) // batch_size
     print(
@@ -144,7 +125,6 @@ def run_endpoint_benchmark(
             request_idx,
             total_batches,
             smiles_batch,
-            errors_file,
         )
         if is_success:
             success_batches += 1
