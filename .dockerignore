@@ -10,3 +10,8 @@ Dockerfile
 Jenkinsfile
 make requirements.bat
 run docker.bat
+smiles_cache.smi
+processed_smiles.txt
+errors.txt
+test_smiles.smi
+test_smiles1.smi
