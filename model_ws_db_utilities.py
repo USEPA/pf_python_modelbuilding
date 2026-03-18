@@ -19,9 +19,7 @@ from sqlalchemy import text, bindparam
 from API_Utilities import QsarSmilesAPI, DescriptorsAPI
 
 from db.mongo_cache import (
-    cache_prediction,
     cache_predictions,
-    get_cached_prediction,
     get_cached_predictions,
 )
 
@@ -42,6 +40,11 @@ import numpy as np
 
 from util.units_converter import UnitsConverter
 from util.indigo_utils import IndigoUtils
+from util.prediction_cache_key_utils import (
+    build_prediction_cache_key,
+    ensure_chemical_inchi_key,
+    normalize_inchi_key,
+)
 
 from utils import timer, print_first_row
 from applicability_domain import applicability_domain_utilities as adu
@@ -119,7 +122,7 @@ def _inchi_key_from_smiles_cached(smiles_string):
         return None
 
     try:
-        return _get_indigo_utils().inchi_key_from_smiles(smiles_text)
+        return normalize_inchi_key(_get_indigo_utils().inchi_key_from_smiles(smiles_text))
     except Exception:
         logging.exception("Failed to generate InChIKey for SMILES=%s", smiles_text)
         return None
@@ -896,54 +899,26 @@ class ModelPredictor:
     def _get_inchi_key_from_smiles(smiles):
         return _inchi_key_from_smiles_cached(smiles)
 
+    @staticmethod
+    def _normalize_inchi_key(inchi_key):
+        return normalize_inchi_key(inchi_key)
+
     @classmethod
     def _ensure_chemical_inchi_key(cls, chemical, fallback_smiles=None):
-        if not isinstance(chemical, dict):
-            return chemical
-
-        chemical_with_inchi = dict(chemical)
-        raw_inchi_key = chemical_with_inchi.get("inchiKey")
-        if isinstance(raw_inchi_key, str) and raw_inchi_key.strip() and raw_inchi_key != "N/A":
-            return chemical_with_inchi
-
-        for candidate_smiles in (
-            chemical_with_inchi.get("canonicalSmiles"),
-            chemical_with_inchi.get("smiles"),
-            fallback_smiles,
-        ):
-            inchi_key = cls._get_inchi_key_from_smiles(candidate_smiles)
-            if inchi_key:
-                chemical_with_inchi["inchiKey"] = inchi_key
-                return chemical_with_inchi
-
-        chemical_with_inchi.setdefault("inchiKey", None)
-        return chemical_with_inchi
+        return ensure_chemical_inchi_key(
+            chemical,
+            cls._get_inchi_key_from_smiles,
+            fallback_smiles=fallback_smiles,
+        )
 
     @classmethod
     def _build_prediction_cache_key(cls, model_id, smiles=None, chemical=None):
-        inchi_key = None
-        if isinstance(chemical, dict):
-            raw_inchi_key = chemical.get("inchiKey")
-            if isinstance(raw_inchi_key, str) and raw_inchi_key.strip() and raw_inchi_key != "N/A":
-                inchi_key = raw_inchi_key.strip()
-
-            if inchi_key is None:
-                for candidate_smiles in (
-                    chemical.get("canonicalSmiles"),
-                    chemical.get("smiles"),
-                    smiles,
-                ):
-                    inchi_key = cls._get_inchi_key_from_smiles(candidate_smiles)
-                    if inchi_key:
-                        break
-        else:
-            inchi_key = cls._get_inchi_key_from_smiles(smiles)
-
-        if inchi_key:
-            return f"{inchi_key}-{model_id}"
-
-        fallback_smiles = "" if smiles is None else str(smiles).strip()
-        return f"{fallback_smiles}-{model_id}"
+        return build_prediction_cache_key(
+            model_id,
+            cls._get_inchi_key_from_smiles,
+            smiles=smiles,
+            chemical=chemical,
+        )
 
     @staticmethod
     def _to_lookup(df, key_col, value_cols=None):
@@ -1041,6 +1016,12 @@ class ModelPredictor:
         prediction_with_details = dict(prediction)
         prediction_with_details["modelDetails"] = model_details_dict
         return prediction_with_details
+
+    @staticmethod
+    def _prediction_from_cached_value(prediction):
+        return ModelPredictor._strip_model_details_from_prediction(
+            ModelPredictor._prediction_to_obj(prediction)
+        )
 
     @staticmethod
     def _standardization_match_key(value):
@@ -1910,20 +1891,16 @@ class ModelPredictor:
 
         return results
 
-    @timer
-    def predict_model_smiles_batch(self, model_id, smiles_list, generate_report=True, include_model_details=True):
-        serverAPIs = os.getenv("CIM_API_SERVER", "https://cim-dev.sciencedataexperts.com")
-        fileAPI = os.getenv("FILE_API_SERVER", pc.URL_CTX_API)
-
-        model, model_details_dict, model_error = self._resolve_model_context(model_id, serverAPIs, fileAPI)
-        if model is None:
-            return [{"smiles": smiles, "error": model_error} for smiles in smiles_list]
-
-        report_model_details = model_details_dict if include_model_details else None
-
+    def _predict_model_smiles_batch_from_standardized_results(
+        self,
+        model,
+        serverAPIs,
+        smiles_list,
+        standardized_results,
+        report_model_details=None,
+        generate_report=True,
+    ):
         results = [None] * len(smiles_list)
-        standardized_results = self._standardize_smiles_batch(serverAPIs, smiles_list, model)
-
         standardized_indices = []
         standardized_smiles = []
         standardized_chemicals = []
@@ -2025,6 +2002,95 @@ class ModelPredictor:
         return results
 
     @timer
+    def predict_model_smiles_batch(self, model_id, smiles_list, generate_report=True, include_model_details=True):
+        serverAPIs = os.getenv("CIM_API_SERVER", "https://cim-dev.sciencedataexperts.com")
+        fileAPI = os.getenv("FILE_API_SERVER", pc.URL_CTX_API)
+
+        model, model_details_dict, model_error = self._resolve_model_context(model_id, serverAPIs, fileAPI)
+        if model is None:
+            return [{"smiles": smiles, "error": model_error} for smiles in smiles_list]
+
+        report_model_details = model_details_dict if include_model_details else None
+        standardized_results = self._standardize_smiles_batch(serverAPIs, smiles_list, model)
+        return self._predict_model_smiles_batch_from_standardized_results(
+            model,
+            serverAPIs,
+            smiles_list,
+            standardized_results,
+            report_model_details=report_model_details,
+            generate_report=generate_report,
+        )
+
+    def _predict_from_db_batch(self, model_id, smiles_list, include_model_details=True):
+        if not smiles_list:
+            return []
+
+        cache_keys = [self._build_prediction_cache_key(model_id, smiles=smiles) for smiles in smiles_list]
+        cached_predictions = get_cached_predictions([key for key in cache_keys if key])
+
+        results = [None] * len(smiles_list)
+        missing_indices = []
+        missing_smiles = []
+        missing_cache_keys = []
+
+        for idx, cache_key in enumerate(cache_keys):
+            prediction = cached_predictions.get(cache_key) if cache_key is not None else None
+            if prediction is not None:
+                results[idx] = self._prediction_from_cached_value(prediction)
+                continue
+
+            missing_indices.append(idx)
+            missing_smiles.append(smiles_list[idx])
+            missing_cache_keys.append(cache_key)
+
+        model_details_dict = None
+        if missing_indices or include_model_details:
+            serverAPIs = os.getenv("CIM_API_SERVER", "https://cim-dev.sciencedataexperts.com")
+            fileAPI = os.getenv("FILE_API_SERVER", pc.URL_CTX_API)
+
+            model, model_details_dict, model_error = self._resolve_model_context(model_id, serverAPIs, fileAPI)
+            if model is None:
+                for idx, smiles in zip(missing_indices, missing_smiles):
+                    results[idx] = self._build_prediction_error_report(smiles, None, model_error)
+
+                if include_model_details and model_details_dict:
+                    results = [
+                        self._attach_model_details_to_prediction(prediction, model_details_dict)
+                        if prediction is not None else prediction
+                        for prediction in results
+                    ]
+                return results
+
+        if missing_indices:
+            standardized_results = self._standardize_smiles_batch(serverAPIs, missing_smiles, model)
+            generated_results = self._predict_model_smiles_batch_from_standardized_results(
+                model,
+                serverAPIs,
+                missing_smiles,
+                standardized_results,
+                report_model_details=None,
+                generate_report=True,
+            )
+            cache_entries = []
+
+            for idx, cache_key, prediction in zip(missing_indices, missing_cache_keys, generated_results):
+                prediction_obj = self._prediction_from_cached_value(prediction)
+                results[idx] = prediction_obj
+                if cache_key is not None:
+                    cache_entries.append((cache_key, prediction_obj))
+
+            cache_predictions(cache_entries)
+
+        if include_model_details and model_details_dict:
+            results = [
+                self._attach_model_details_to_prediction(prediction, model_details_dict)
+                if prediction is not None else prediction
+                for prediction in results
+            ]
+
+        return results
+
+    @timer
     def predictFromDB(self, model_id, smiles, include_model_details=True):
         """
         Runs whole workflow: standardize, descriptors, prediction, applicability domain
@@ -2033,144 +2099,21 @@ class ModelPredictor:
         :param mwu:
         :return:
         """
-    
+
         if isinstance(smiles, str):
-            key = self._build_prediction_cache_key(model_id, smiles=smiles)
-            prediction = get_cached_prediction(key)
-            if prediction is not None:
-                prediction_obj = self._strip_model_details_from_prediction(self._prediction_to_obj(prediction))
-                if include_model_details:
-                    model_details_dict, _ = self.get_model_details_dict_for_model_id(model_id)
-                    return self._attach_model_details_to_prediction(prediction_obj, model_details_dict)
-                return prediction_obj
-
-            prediction, code = self.predict_model_smiles(model_id, smiles, include_model_details=False)
-            prediction_obj = self._prediction_to_obj(prediction)
-            cached_prediction_obj = self._strip_model_details_from_prediction(prediction_obj)
-            chemical_identifiers = prediction_obj.get("chemicalIdentifiers") if isinstance(prediction_obj, dict) else None
-            cache_prediction(
-                self._build_prediction_cache_key(model_id, smiles=smiles, chemical=chemical_identifiers),
-                cached_prediction_obj,
+            predictions = self._predict_from_db_batch(
+                model_id,
+                [smiles],
+                include_model_details=include_model_details,
             )
-
-            if include_model_details:
-                model_details_dict = prediction_obj.get("modelDetails") if isinstance(prediction_obj, dict) else None
-                if model_details_dict is None:
-                    model_details_dict, _ = self.get_model_details_dict_for_model_id(model_id)
-                return self._attach_model_details_to_prediction(cached_prediction_obj, model_details_dict)
-
-            return cached_prediction_obj
+            return predictions[0] if predictions else {"smiles": smiles, "error": "Prediction failed unexpectedly"}
 
         smiles_list = list(smiles)
-        if not smiles_list:
-            return []
-
-        result = [None] * len(smiles_list)
-        missing_by_smiles = {}
-
-        cache_keys = [self._build_prediction_cache_key(model_id, smiles=smi) for smi in smiles_list]
-        cached_predictions = get_cached_predictions(cache_keys)
-
-        for idx, (smi, key) in enumerate(zip(smiles_list, cache_keys)):
-            prediction = cached_predictions.get(key)
-            if prediction is not None:
-                result[idx] = self._strip_model_details_from_prediction(self._prediction_to_obj(prediction))
-            else:
-                missing_by_smiles.setdefault(smi, []).append(idx)
-
-        if missing_by_smiles:
-            missing_smiles = list(missing_by_smiles.keys())
-            batch_failure_reason = None
-            try:
-                batch_predictions = self.predict_model_smiles_batch(
-                    model_id,
-                    missing_smiles,
-                    include_model_details=False,
-                )
-                if batch_predictions is None:
-                    batch_failure_reason = "predict_model_smiles_batch returned None"
-            except Exception as exc:
-                batch_failure_reason = f"{type(exc).__name__}: {exc}"
-                batch_predictions = None
-
-            if batch_predictions is None:
-                logging.warning(
-                    "Prediction batch failed; starting threaded per-smiles fallback; "
-                    "model_id=%s batch_size=%s reason=%s",
-                    model_id,
-                    len(missing_smiles),
-                    batch_failure_reason or "unknown batch failure",
-                )
-                missing = list(missing_by_smiles.items())
-                max_workers = int(os.getenv("PREDICT_THREAD_WORKERS", min(32, (os.cpu_count() or 1) * 5)))
-                max_workers = max(1, min(max_workers, len(missing)))
-
-                def _predict_one(item):
-                    smi, indices = item
-                    try:
-                        prediction, code = self.predict_model_smiles(
-                            model_id,
-                            smi,
-                            include_model_details=False,
-                        )
-                        if code != 200:
-                            prediction = {"smiles": smi, "error": prediction}
-                    except Exception as exc:
-                        logging.exception(
-                            "Per-smiles threaded fallback failed; model_id=%s smiles=%s error=%s",
-                            model_id,
-                            smi,
-                            self._preview_log_value(exc),
-                        )
-                        prediction = {
-                            "smiles": smi,
-                            "error": f"Unhandled per-smiles fallback exception: {type(exc).__name__}: {exc}",
-                        }
-                    prediction_obj = self._strip_model_details_from_prediction(self._prediction_to_obj(prediction))
-                    return smi, indices, prediction_obj
-
-                cache_entries = []
-                with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
-                    for smi, indices, prediction_obj in pool.map(_predict_one, missing):
-                        chemical_identifiers = prediction_obj.get("chemicalIdentifiers") if isinstance(prediction_obj, dict) else None
-                        cache_entries.append(
-                            (
-                                self._build_prediction_cache_key(model_id, smiles=smi, chemical=chemical_identifiers),
-                                prediction_obj,
-                            )
-                        )
-                        for idx in indices:
-                            result[idx] = prediction_obj
-                cache_predictions(cache_entries)
-            else:
-                stripped_batch_predictions = [
-                    self._strip_model_details_from_prediction(self._prediction_to_obj(prediction_obj))
-                    for prediction_obj in batch_predictions
-                ]
-                cache_predictions(
-                    (
-                        self._build_prediction_cache_key(
-                            model_id,
-                            smiles=smi,
-                            chemical=prediction_obj.get("chemicalIdentifiers") if isinstance(prediction_obj, dict) else None,
-                        ),
-                        prediction_obj,
-                    )
-                    for smi, prediction_obj in zip(missing_smiles, stripped_batch_predictions)
-                )
-                for smi, prediction_obj in zip(missing_smiles, stripped_batch_predictions):
-                    for idx in missing_by_smiles[smi]:
-                        result[idx] = prediction_obj
-
-        if include_model_details:
-            model_details_dict, _ = self.get_model_details_dict_for_model_id(model_id)
-            if model_details_dict:
-                result = [
-                    self._attach_model_details_to_prediction(prediction, model_details_dict)
-                    for prediction in result
-                ]
-
-        return result
+        return self._predict_from_db_batch(
+            model_id,
+            smiles_list,
+            include_model_details=include_model_details,
+        )
 
     def addPerformance(self, md: ModelDetails):
         ms = md.modelStatistics or {}

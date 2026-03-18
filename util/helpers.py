@@ -441,18 +441,6 @@ def make_predictdb_post_response(body):
     predictor = _get_request_predictor()
     batch_model_details = None
 
-    try:
-        batch_model_details, model_details_error = predictor.get_model_details_dict_for_model_id(model_id)
-        if model_details_error:
-            logging.warning(
-                "Failed to prefetch batch modelDetails for model_id=%s: %s",
-                model_id,
-                model_details_error,
-            )
-    except Exception:
-        logging.exception("Failed to prefetch batch modelDetails for model_id=%s", model_id)
-        batch_model_details = None
-
     if batch_mode == "process":
         try:
             max_workers = int(os.getenv("PREDICT_BATCH_WORKERS", os.cpu_count() or 1))
@@ -489,6 +477,18 @@ def make_predictdb_post_response(body):
                 ),
                 status_code=500,
             )
+
+    try:
+        batch_model_details, model_details_error = predictor.get_model_details_dict_for_model_id(model_id)
+        if model_details_error:
+            logging.warning(
+                "Failed to prefetch batch modelDetails for model_id=%s: %s",
+                model_id,
+                model_details_error,
+            )
+    except Exception:
+        logging.exception("Failed to prefetch batch modelDetails for model_id=%s", model_id)
+        batch_model_details = None
 
     model_results = [None] * len(smiles_list)
     for smiles, prediction in zip(unique_smiles, unique_results):

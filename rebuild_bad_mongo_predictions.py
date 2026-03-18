@@ -13,6 +13,7 @@ from pymongo.collection import Collection
 from pymongo.errors import DuplicateKeyError, PyMongoError
 
 from util.indigo_utils import IndigoUtils
+from util.prediction_cache_key_utils import build_prediction_cache_key, normalize_inchi_key
 
 
 _INDIGO_UTILS = None
@@ -33,7 +34,7 @@ def _inchi_key_from_smiles(smiles: str | None) -> str | None:
     if not smiles_text:
         return None
     try:
-        return _get_indigo_utils().inchi_key_from_smiles(smiles_text)
+        return normalize_inchi_key(_get_indigo_utils().inchi_key_from_smiles(smiles_text))
     except Exception as exc:
         logging.warning("Failed to generate InChIKey for SMILES=%s: %s", smiles_text, exc)
         return None
@@ -157,11 +158,7 @@ def _extract_inchi_key_from_prediction(prediction: Any) -> str | None:
     if not chemical:
         return None
 
-    value = chemical.get("inchiKey")
-    if isinstance(value, str) and value.strip() and value != "N/A":
-        return value.strip()
-
-    return None
+    return normalize_inchi_key(chemical.get("inchiKey"))
 
 
 def _ensure_prediction_inchi_key(prediction: Any, fallback_smiles: str | None = None) -> tuple[Any, bool]:
@@ -174,8 +171,16 @@ def _ensure_prediction_inchi_key(prediction: Any, fallback_smiles: str | None = 
         return prediction_obj, False
 
     raw_inchi_key = chemical.get("inchiKey")
-    if isinstance(raw_inchi_key, str) and raw_inchi_key.strip() and raw_inchi_key != "N/A":
-        return prediction_obj, False
+    normalized_inchi_key = normalize_inchi_key(raw_inchi_key)
+    if normalized_inchi_key is not None:
+        if raw_inchi_key == normalized_inchi_key:
+            return prediction_obj, False
+
+        updated_prediction = dict(prediction_obj)
+        updated_chemical = dict(chemical)
+        updated_chemical["inchiKey"] = normalized_inchi_key
+        updated_prediction["chemicalIdentifiers"] = updated_chemical
+        return updated_prediction, True
 
     smiles = _extract_smiles_from_prediction(prediction_obj) or fallback_smiles
     inchi_key = _inchi_key_from_smiles(smiles)
@@ -230,17 +235,20 @@ def _build_migrated_cache_key(key: Any, prediction: Any) -> tuple[str | None, st
     if model_id is None:
         return None, "could not parse model_id from key"
 
-    inchi_key = _extract_inchi_key_from_prediction(prediction)
-    if not inchi_key:
-        smiles = _extract_smiles_from_prediction(prediction)
-        if not smiles:
-            smiles, _ = _extract_smiles_and_model_id_from_key(key)
-        inchi_key = _inchi_key_from_smiles(smiles)
+    smiles = _extract_smiles_from_prediction(prediction)
+    if not smiles:
+        smiles, _ = _extract_smiles_and_model_id_from_key(key)
 
-    if not inchi_key:
+    migrated_key = build_prediction_cache_key(
+        model_id,
+        _inchi_key_from_smiles,
+        smiles=smiles,
+        chemical=_extract_prediction_chemical_identifiers(prediction),
+    )
+    if not migrated_key:
         return None, "could not determine inchiKey from prediction or smiles"
 
-    return f"{inchi_key}-{model_id}", None
+    return migrated_key, None
 
 
 def _call_predict_endpoint(base_url: str, model_id: int, smiles: str, timeout: int) -> bool:

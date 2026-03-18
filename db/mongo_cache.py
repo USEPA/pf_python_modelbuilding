@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import threading
+import time
 from pathlib import Path
 
 from bson.errors import InvalidDocument
@@ -13,6 +14,8 @@ predictor_models_cache = None
 in_memory_cache = {}
 _mongo_init_done = False
 _mongo_unavailable_reason = None
+_mongo_last_init_attempt_monotonic = None
+_mongo_init_lock = threading.Lock()
 _errors_file_lock = threading.Lock()
 _errors_file_path_logged = False
 
@@ -206,8 +209,21 @@ def _env_bool(name: str, default: bool = True) -> bool:
     return default
 
 
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+
+    try:
+        return float(raw)
+    except ValueError:
+        logging.warning("Invalid float value for %s=%r; using default=%s", name, raw, default)
+        return default
+
+
 def _init_mongo():
-    global predictor_models_cache, _mongo_init_done, _mongo_unavailable_reason
+    global predictor_models_cache, _mongo_init_done, _mongo_unavailable_reason, _mongo_last_init_attempt_monotonic
+    _mongo_last_init_attempt_monotonic = time.monotonic()
 
     if not _env_bool("MONGO_CACHE_ENABLED", True):
         predictor_models_cache = None
@@ -223,9 +239,9 @@ def _init_mongo():
             username=os.getenv("MONGO_USER", "root"),
             password=os.getenv("MONGO_PASSWORD"),
             authSource="admin",
-            serverSelectionTimeoutMS=int(os.getenv("MONGO_SERVER_SELECTION_TIMEOUT_MS", "500")),
-            connectTimeoutMS=int(os.getenv("MONGO_CONNECT_TIMEOUT_MS", "500")),
-            socketTimeoutMS=int(os.getenv("MONGO_SOCKET_TIMEOUT_MS", "500")),
+            serverSelectionTimeoutMS=int(os.getenv("MONGO_SERVER_SELECTION_TIMEOUT_MS", "3000")),
+            connectTimeoutMS=int(os.getenv("MONGO_CONNECT_TIMEOUT_MS", "3000")),
+            socketTimeoutMS=int(os.getenv("MONGO_SOCKET_TIMEOUT_MS", "3000")),
         )
 
         client.admin.command("ping")
@@ -248,11 +264,35 @@ def _init_mongo():
         _mongo_init_done = True
 
 
-def _ensure_init():
-    global _mongo_init_done
+def _should_retry_init() -> bool:
+    if predictor_models_cache is not None:
+        return False
 
-    if not _mongo_init_done:
-        _init_mongo()
+    if not _env_bool("MONGO_CACHE_ENABLED", True):
+        return False
+
+    retry_seconds = _env_float("MONGO_INIT_RETRY_SECONDS", 5.0)
+    if retry_seconds <= 0:
+        return True
+
+    if _mongo_last_init_attempt_monotonic is None:
+        return True
+
+    return (time.monotonic() - _mongo_last_init_attempt_monotonic) >= retry_seconds
+
+
+def _ensure_init():
+    should_init = not _mongo_init_done
+    should_retry = _mongo_init_done and _should_retry_init()
+
+    if not should_init and not should_retry:
+        return
+
+    with _mongo_init_lock:
+        should_init = not _mongo_init_done
+        should_retry = _mongo_init_done and _should_retry_init()
+        if should_init or should_retry:
+            _init_mongo()
 
 
 def get_cached_prediction(key: str):
