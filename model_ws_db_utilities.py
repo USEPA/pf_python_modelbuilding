@@ -1058,6 +1058,39 @@ class ModelPredictor:
 
         return deduplicated_keys
 
+    def _get_standardization_response_fallback_match_keys(self, chemical):
+        if not isinstance(chemical, dict):
+            return []
+
+        match_keys = []
+        chemical_with_inchi = self._ensure_chemical_inchi_key(
+            chemical,
+            fallback_smiles=chemical.get("chemId"),
+        )
+        normalized_inchi_key = self._normalize_inchi_key(chemical_with_inchi.get("inchiKey"))
+        if normalized_inchi_key:
+            match_keys.append(("inchiKey", normalized_inchi_key))
+
+        for field_name, value in (
+            ("chemId", chemical.get("chemId")),
+            ("smiles", chemical.get("smiles")),
+            ("canonicalSmiles", chemical.get("canonicalSmiles")),
+        ):
+            match_key = self._standardization_match_key(value)
+            if match_key:
+                match_keys.append((field_name, match_key))
+
+        deduplicated_keys = []
+        seen_pairs = set()
+        for field_name, match_key in match_keys:
+            pair = (field_name, match_key)
+            if pair in seen_pairs:
+                continue
+            seen_pairs.add(pair)
+            deduplicated_keys.append(pair)
+
+        return deduplicated_keys
+
     def _build_standardization_expected_id_map(self, smiles_list):
         expected_id_map = {}
 
@@ -1066,6 +1099,38 @@ class ModelPredictor:
             expected_id_map.setdefault(expected_id, []).append(index)
 
         return expected_id_map
+
+    def _build_standardization_expected_fallback_maps(self, smiles_list):
+        expected_maps = {
+            "inchiKey": {},
+            "chemId": {},
+            "smiles": {},
+            "canonicalSmiles": {},
+        }
+
+        for index, smiles in enumerate(smiles_list):
+            expected_id = str(index)
+            smiles_key = self._standardization_match_key(smiles)
+            if smiles_key:
+                for field_name in ("chemId", "smiles", "canonicalSmiles"):
+                    expected_maps[field_name].setdefault(smiles_key, []).append(expected_id)
+
+            inchi_key = self._get_inchi_key_from_smiles(smiles)
+            if inchi_key:
+                expected_maps["inchiKey"].setdefault(inchi_key, []).append(expected_id)
+
+        return expected_maps
+
+    @staticmethod
+    def _select_standardization_expected_id(expected_candidates, grouped_by_id):
+        if not expected_candidates:
+            return None
+
+        for expected_id in expected_candidates:
+            if expected_id not in grouped_by_id:
+                return expected_id
+
+        return expected_candidates[0]
 
     def _build_standardization_results_by_index(self, grouped_by_id, expected_ids, smiles_list, model):
         results_by_index = {}
@@ -1114,6 +1179,7 @@ class ModelPredictor:
         unidentified_count = 0
         matched_by = {}
         response_key_presence = {}
+        unmatched_chemicals = []
 
         for chemical in chemicals:
             response_match_keys = self._get_standardization_response_match_keys(chemical)
@@ -1131,11 +1197,53 @@ class ModelPredictor:
                 break
 
             if matched_id is None:
-                unidentified_count += 1
+                unmatched_chemicals.append(chemical)
                 continue
             grouped_by_id.setdefault(matched_id, []).append(chemical)
             if matched_key_name:
                 matched_by[matched_key_name] = matched_by.get(matched_key_name, 0) + 1
+
+        missing_ids = [
+            expected_id
+            for expected_id in expected_ids
+            if expected_id not in grouped_by_id
+        ]
+
+        if missing_ids and unmatched_chemicals:
+            expected_fallback_maps = self._build_standardization_expected_fallback_maps(smiles_list)
+            fallback_unidentified_count = 0
+
+            for chemical in unmatched_chemicals:
+                response_match_keys = self._get_standardization_response_fallback_match_keys(chemical)
+
+                for field_name, _ in response_match_keys:
+                    response_key_presence[field_name] = response_key_presence.get(field_name, 0) + 1
+
+                matched_id = None
+                matched_key_name = None
+                for field_name, response_key in response_match_keys:
+                    expected_map = expected_fallback_maps.get(field_name, {})
+                    expected_candidates = expected_map.get(response_key)
+                    if not expected_candidates:
+                        continue
+                    matched_id = self._select_standardization_expected_id(
+                        expected_candidates,
+                        grouped_by_id,
+                    )
+                    matched_key_name = field_name
+                    break
+
+                if matched_id is None:
+                    fallback_unidentified_count += 1
+                    continue
+
+                grouped_by_id.setdefault(matched_id, []).append(chemical)
+                if matched_key_name:
+                    matched_by[matched_key_name] = matched_by.get(matched_key_name, 0) + 1
+
+            unidentified_count = fallback_unidentified_count
+        else:
+            unidentified_count = len(unmatched_chemicals)
 
         missing_ids = [
             expected_id
