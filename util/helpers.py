@@ -277,6 +277,25 @@ def build_predictdb_post_payload(predictions, error=None, model_details=None):
     return _coerce_json_safe(payload)
 
 
+def build_predictdb_single_payload(prediction):
+    normalized_prediction = _coerce_json_safe(_to_obj_safe(prediction))
+
+    if not isinstance(normalized_prediction, dict):
+        return normalized_prediction
+
+    # Keep the existing error payload contract for single prediction failures.
+    if normalized_prediction.get("error") is not None and normalized_prediction.get("modelResults") is None:
+        return normalized_prediction
+
+    model_details = normalized_prediction.get("modelDetails")
+    stripped_prediction = _strip_top_level_model_details(normalized_prediction)
+
+    return _coerce_json_safe({
+        "modelDetails": _coerce_json_safe(model_details),
+        "result": _format_prediction_for_response(stripped_prediction),
+    })
+
+
 def _parse_predictdb_post_input(body):
     if not isinstance(body, dict):
         return None, None, build_batch_error_response("bad_request", "Request body must be a JSON object")
@@ -557,4 +576,5 @@ def make_predictdb_response(model_id, smiles=None, identifier=None, report_forma
         model_results_html = report_creator.create_html_report_from_json(to_json_str(normalized_pred))
         return HTMLResponse(content=model_results_html)
 
-    return JSONResponse(content=normalized_pred, status_code=_error_status_code(normalized_pred))
+    single_payload = build_predictdb_single_payload(normalized_pred)
+    return JSONResponse(content=single_payload, status_code=_error_status_code(normalized_pred))
