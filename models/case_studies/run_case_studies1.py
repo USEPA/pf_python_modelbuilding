@@ -140,7 +140,7 @@ def run_fish_tox():
 def test_model_summary():
     engine = getEngine()
     session = getSession()
-    model_id = 1065
+    model_id = 1737
     excel_path = "summary.xlsx"
     test = ModelToExcel(engine, session, model_id, excel_path)
     test.create_excel()
