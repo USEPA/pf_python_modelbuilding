@@ -9,6 +9,8 @@ import base64
 import logging
 import pandas as pd
 
+from util.prediction_cache_key_utils import normalize_inchi_key
+
 class IndigoUtils :
     
     def __init__(self):
@@ -44,7 +46,7 @@ class IndigoUtils :
         try:
             mol = self.indigo.loadMolecule(smiles_text)
             inchi_str = self.indigo_inchi.getInchi(mol)
-            ik = self.indigo_inchi.getInchiKey(inchi_str)
+            ik = normalize_inchi_key(self.indigo_inchi.getInchiKey(inchi_str))
             if ik is None:
                 return None
             # Return first block (14 chars); using split ensures robustness even if format changes.
