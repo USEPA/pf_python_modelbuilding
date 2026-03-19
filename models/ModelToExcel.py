@@ -1,10 +1,22 @@
-from model_ws_db_utilities import getEngine, getSession
+import pickle
+
 import pandas as pd
-from sqlalchemy import text
+from sqlalchemy import URL, text, create_engine
+from sqlalchemy.orm import sessionmaker
 import math
+import numpy as np
 from typing import Optional, Dict, Any, Iterable, Tuple, Union
 from xlsxwriter.utility import xl_rowcol_to_cell
 import os
+import traceback
+import json
+from sklearn2pmml.pipeline import PMMLPipeline as PMMLPipeline
+from sklearn.model_selection import KFold
+from model_ws_db_utilities import ModelInitializer
+from models.ModelBuilder import Model
+from models.db_utilities.raw_exp_data_db import ExpDataGetter
+from models.db_utilities.dataset_utilities_db import getMappedDatapoints
+import applicability_domain.applicability_domain_utilities as adu
 
 import logging
 logging.getLogger('sqlalchemy').setLevel(logging.ERROR)
@@ -28,9 +40,14 @@ class ModelToExcel:
             model_descriptor_values_df: Optional[pd.DataFrame] = None,
             engine=None,
             session=None,
-            model_id: int=1065,
+            model_id: int=1737,
             log_plot: bool=True,
-            add_subtotals: bool=False
+            add_subtotals: bool=False,
+            dataset_name: Optional[str]=None,
+            snapshot_id: Optional[int]=None,
+            duplicate_strategy: Optional[str]=None,
+            model: Optional[Any] = None,
+            df_pv: Optional[pd.DataFrame] = None
         ) -> None:
         """
         Initialize ModelToExcel instance for generating QSAR model summary reports.
@@ -58,9 +75,9 @@ class ModelToExcel:
         #       Maybe write a new method that can be ran post init to
         #       change the excel_path based on a query of the database?
         if engine is None:
-            engine = getEngine()
+            engine = ModelToExcel.getEngine()
         if session is None:
-            session = getSession()
+            session = ModelToExcel.getSession(engine)
         
         self.excel_path = excel_path
         self.cover_sheet_df = cover_sheet_df
@@ -79,6 +96,11 @@ class ModelToExcel:
         self.model_id = model_id
         self.log_plot = log_plot
         self.add_subtotals = add_subtotals
+        self.dataset_name = dataset_name
+        self.snapshot_id = snapshot_id
+        self.duplicate_strategy = duplicate_strategy
+        self.model = model
+        self.df_pv = df_pv
     
 
     @staticmethod
@@ -120,55 +142,31 @@ class ModelToExcel:
         Returns:
             pd.DataFrame: Single-row dataframe with model overview from database.
         """
-        sql = text(f"""
-        select
-            m.id as "Model ID",
-            m.name as "Model Name",
-            distinct prop.name as "Property Name",
-            prop.description as "Property Description",
-            u.abbreviation_ccd as "Property Units",
-            m.dataset_name as "Dataset Name",
-            d.description as "Dataset Description",
-            SUM(case when dpis.split_num = 0 then 1 else 0 end) as "nTraining",
-            SUM(case when dpis.split_num = 1 then 1 else 0 end) as "nTest",
-            -- replace with sql to get nTraining and nTest
-            meth.name as "Method Name",
-            meth.description as "Method Description",
-            am.name_display as "Applicability Domain"
-        from
-            qsar_models.models as m
-        join qsar_datasets.datasets as d on
-            d.name = m.dataset_name
-        join qsar_models.methods as meth on
-            meth.id = m.fk_method_id
-        join qsar_datasets.properties as prop on
-            prop.id = d.fk_property_id
-        join qsar_datasets.units as u on
-            u.id = d.fk_unit_id
-        join qsar_models.ad_methods as am on
-            am.id = m.fk_ad_method
-        join qsar_datasets.data_points as dp on
-            dp.fk_dataset_id = d.id
-        join qsar_datasets.data_points_in_splittings as dpis on
-            dpis.fk_data_point_id = dp.id
-        where
-            m.id = {self.model_id}
-            -- input model_id here
-        group by
-            m.id,
-            m.name,
-            prop.name,
-            prop.description,
-            u.abbreviation_ccd,
-            m.dataset_name,
-            d.description,
-            meth.name,
-            meth.description,
-            am.name_display;
-        """)
-        logging.info("Querying database for Cover Sheet")
-        summary = pd.read_sql(sql, self.engine)
-        logging.info("Finished querying database for Cover Sheet")
+        logging.info(f"Building Cover Sheet from Model {self.model_id}")
+
+        model = self.query_model()
+
+        summary_dict = {
+            "Model ID": [model.modelId],
+            "Model Name": [model.modelName],
+            "Property Name": [model.propertyName],
+            "Property Description": [model.propertyDescription],
+            "Property Units": [model.unitsModel],
+            "Dataset Name": [model.datasetName],
+            "Dataset Description": [model.datasetDescription],
+            "nTraining": [model.num_training],
+            "nTest": [model.num_prediction],
+            "Method Name": [model.modelMethod],
+            "Method Description": [model.modelMethodDescription],
+            "Applicability Domain": [model.applicabilityDomainName],
+        }
+        summary = pd.DataFrame(summary_dict)
+
+        self.cover_sheet_df = summary
+        self.dataset_name = model.datasetName # Set dataset_name for use in other queries
+
+        logging.info(f"Finished building Cover Sheet from Model {self.model_id}")
+
         return summary
     
 
@@ -253,47 +251,33 @@ class ModelToExcel:
         Returns:
             pd.DataFrame: Single-row dataframe with model performance metrics rounded to 2 decimal places.
         """
-        sql = text(f"""
-        select
-            SUM(case when dpis.split_num = 0 then 1 else 0 end) as "nTraining",
-            SUM(case when dpis.split_num = 1 then 1 else 0 end) as "nTest",
-            MAX(case when s.name = 'PearsonRSQ_Training' then ms.statistic_value end) as "RSQ_Training",
-            MAX(case when s.name = 'RMSE_Training' then ms.statistic_value end) as "RMSE_Training",
-            MAX(case when s.name = 'MAE_Training' then ms.statistic_value end) as "MAE_Training",
-            MAX(case when s.name = 'PearsonRSQ_CV_Training' then ms.statistic_value end) as "RSQ_CV_Training",
-            MAX(case when s.name = 'RMSE_CV_Training' then ms.statistic_value end) as "RMSE_CV_Training",
-            MAX(case when s.name = 'MAE_CV_Training' then ms.statistic_value end) as "MAE_CV_Training",
-            MAX(case when s.name = 'PearsonRSQ_Test' then ms.statistic_value end) as "RSQ_Test",
-            MAX(case when s.name = 'RMSE_Test' then ms.statistic_value end) as "RMSE_Test",
-            MAX(case when s.name = 'MAE_Test' then ms.statistic_value end) as "MAE_Test",
-            MAX(case when s.name = 'Q2_Test' then ms.statistic_value end) as "Q2_Test",
-            MAX(case when s.name = 'MAE_Test_inside_AD' then ms.statistic_value end) as "MAE_Test_Inside_AD",
-            MAX(case when s.name = 'MAE_Test_outside_AD' then ms.statistic_value end) as "MAE_Test_Outside_AD",
-            MAX(case when s.name = 'Coverage_Test' then ms.statistic_value end) as "Coverage_Test"
-        from
-            qsar_models.models as m
-        join qsar_models.methods as meth on
-            meth.id = m.fk_method_id
-        join qsar_models.model_statistics as ms on
-            ms.fk_model_id = m.id
-        join qsar_models.statistics as s on
-            ms.fk_statistic_id = s.id
-        join qsar_datasets.datasets as d on
-            d.name = m.dataset_name
-        join qsar_datasets.data_points as dp on
-            dp.fk_dataset_id = d.id
-        join qsar_datasets.data_points_in_splittings as dpis on
-            dpis.fk_data_point_id = dp.id
-        where
-            m.id = {self.model_id}
-            -- input model_id here
-        group by
-            m.id;
-        """)
+        logging.info(f"Building Statistics from Model {self.model_id}")
 
-        logging.info("Querying database for Statistics")
-        statistics = pd.read_sql(sql, self.engine).round(2)
-        logging.info("Finished querying database for Statistics")
+        model = self.query_model()
+
+        statistics_dict = {
+            "nTraining": [model.num_training],
+            "nTest": [model.num_prediction],
+            "RSQ_Training": [model.modelStatistics.get("PearsonRSQ_Training", None)],
+            "RMSE_Training": [model.modelStatistics.get("RMSE_Training", None)],
+            "MAE_Training": [model.modelStatistics.get("MAE_Training", None)],
+            "RSQ_CV_Training": [model.modelStatistics.get("PearsonRSQ_CV_Training", None)],
+            "RMSE_CV_Training": [model.modelStatistics.get("RMSE_CV_Training", None)],
+            "MAE_CV_Training": [model.modelStatistics.get("MAE_CV_Training", None)],
+            "RSQ_Test": [model.modelStatistics.get("PearsonRSQ_Test", None)],
+            "RMSE_Test": [model.modelStatistics.get("RMSE_Test", None)],
+            "MAE_Test": [model.modelStatistics.get("MAE_Test", None)],
+            "Q2_Test": [model.modelStatistics.get("Q2_Test", None)],
+            "MAE_Test_Inside_AD": [model.modelStatistics.get("MAE_Test_inside_AD", None)],
+            "MAE_Test_Outside_AD": [model.modelStatistics.get("MAE_Test_outside_AD", None)],
+            "Coverage_Test": [model.modelStatistics.get("Coverage_Test", None)]
+        }
+        statistics = pd.DataFrame(statistics_dict).apply(lambda x: round(x, 2))
+
+        self.statistics_df = statistics
+        
+        logging.info(f"Finished building Statistics from Model {self.model_id}")
+
         return statistics
     
 
@@ -458,15 +442,28 @@ class ModelToExcel:
         Returns:
             pd.DataFrame: Records dataframe from database (currently returns empty result).
         """
-        # TODO: Write query
-        sql = text(f"""
-        
-        """)
-
+        # TODO: Determine if this is the correct way to build the Records df, or if we should use the Model object
         logging.info("Querying database for Records")
-        records = pd.read_sql(sql, self.engine).round(2)
+        if self.dataset_name is None:
+            try:
+                model = self.query_model()
+                self.dataset_name = model.datasetName
+            except Exception as e:
+                logging.warning("dataset_name not set and failed to query from database. Cannot query records without dataset_name. Please set dataset_name or ensure it can be queried from the database with the provided model_id.")
+                raise e
+
+        if self.snapshot_id is None:
+            self.snapshot_id = 4  # TODO: Determine how to set snapshot_id/what it is? Is also a TODO in run_model_building_db...
+
+        if self.duplicate_strategy is None:
+            self.duplicate_strategy = "id_suffix"  # TODO: Determine how to set duplicate_strategy and what the options should be. Is a hardcoded constant in run_model_building_db...
+        
+        edg = ExpDataGetter()
+        df_pv, unique_params = edg.get_mapped_property_values(self.session, self.dataset_name, self.snapshot_id, duplicate_strategy=self.duplicate_strategy)
+        records_df = ModelToExcel.get_records_df(df_pv)
         logging.info("Finished querying database for Records")
-        return records
+        self.records_df = records_df
+        return records_df
     
 
     def records(self, writer: Any, records: Optional[pd.DataFrame]=None, add_subtotals: bool=False) -> pd.DataFrame:
@@ -630,7 +627,6 @@ class ModelToExcel:
         # Load in model descriptors
         model_descriptors_df = pd.DataFrame(results_dict["model_details"]["embedding"], columns=["Symbol"])
 
-        import os
         PROJECT_ROOT = os.getenv("PROJECT_ROOT")
         path_segments = [PROJECT_ROOT, "resources", "variable definitions-ed.txt"]
         
@@ -645,13 +641,16 @@ class ModelToExcel:
         temp = model_descriptors_df.merge(variable_definitions_df, on="Symbol", how="left")
         temp = temp.rename(columns={"Symbol": "Descriptor", "Category": "Class"})
 
-        coefficients = pd.DataFrame(results_dict["model_details"]["model_coefficients"])
-        coefficients = coefficients.rename(columns={"name": "Descriptor", "coefficient": "Coefficient", "std_error": "Standard Error"})
-        coefficients["Descriptor"] = coefficients["Descriptor"].astype(str)
+        if "model_details" in results_dict and "model_coefficients" in results_dict["model_details"]:
+            coefficients = pd.DataFrame(results_dict["model_details"]["model_coefficients"])
+            coefficients = coefficients.rename(columns={"name": "Descriptor", "coefficient": "Coefficient", "std_error": "Standard Error"})
+            coefficients["Descriptor"] = coefficients["Descriptor"].astype(str)
 
-        result = temp.merge(coefficients, on="Descriptor", how="right")
+            result = temp.merge(coefficients, on="Descriptor", how="right")
 
-        result = ModelToExcel.handle_accidental_formulas(result, how="formula")
+            result = ModelToExcel.handle_accidental_formulas(result, how="formula")
+        else:
+            result = ModelToExcel.handle_accidental_formulas(temp, how="formula")
 
         return result
     
@@ -665,14 +664,26 @@ class ModelToExcel:
         Returns:
             pd.DataFrame: Model descriptors from database (currently returns empty result).
         """
-        # TODO: Write query
-        sql = text(f"""
+        logging.info(f"Building Model Descriptors from Model {self.model_id}")
         
-        """)
+        model = self.query_model()
 
-        logging.info("Querying database for Model Descriptors")
-        model_descriptors = pd.read_sql(sql, self.engine).round(2)
-        logging.info("Finished querying database for Model Descriptors")
+        results_dict = {}
+        results_dict["model_details"] = {}
+        results_dict["model_details"]["embedding"] = model.embedding
+
+        if any(method in model.qsar_method for method in ["reg", "las", "gcm"]):
+            coefficients_df = self.query_model_coefficients()
+            results_dict["model_details"]["model_coefficients"] = coefficients_df
+        else:
+            logging.warning(f"Model type {model.qsar_method} does not support coefficient retrieval.")
+        
+        model_descriptors = ModelToExcel.get_model_descriptors_df(results_dict)
+
+        self.model_descriptors_df = model_descriptors
+
+        logging.info(f"Finished building Model Descriptors from Model {self.model_id}")
+
         return model_descriptors
     
 
@@ -778,15 +789,51 @@ class ModelToExcel:
         Returns:
             pd.DataFrame: Predictions and descriptor values from database (currently returns empty result).
         """
-        # TODO: Write query
-        sql = text(f"""
-        
-        """)
+        model = self.query_model()
+        df_pv = self.query_df_pv()
 
-        logging.info("Querying database for Model Descriptor Values")
-        model_descriptor_values = pd.read_sql(sql, self.engine).round(2)
-        logging.info("Finished querying database for Model Descriptor Values")
-        return model_descriptor_values
+        training = pd.merge(model.df_training, model.df_dsstoxRecords, left_on="ID", right_on="canonicalSmiles", how="left")
+        training = pd.merge(training, df_pv, on="casrn", how="left")
+        training = pd.merge(training, model.df_preds_training_cv, left_on="ID", right_on="id", how="left")
+
+        kfold_splitter = KFold(n_splits=5, shuffle=True, random_state=42)
+        fold_col = np.zeros(len(model.df_training), dtype=int)
+        for fold_index, (train_index, val_index) in enumerate(kfold_splitter.split(model.df_training)):
+            fold_col[val_index] = fold_index
+
+        training["Fold"] = fold_col
+        training["Set"] = training.Fold.apply(lambda x: f"Training, Fold {x}")
+
+        test = pd.merge(model.df_prediction, model.df_dsstoxRecords, left_on="ID", right_on="canonicalSmiles", how="left")
+        test = pd.merge(test, df_pv, on="casrn", how="left")
+        test = pd.merge(test, model.df_preds_test, left_on="ID", right_on="id", how="left")
+
+        test["Set"] = "Test"
+
+        temp = pd.concat([test, training], ignore_index=True)
+
+        headers = model.headersTsv.split("\t")
+        header_columns = {}
+        for header in headers:
+            header_columns[header] = temp[header]
+
+        model_descriptor_values_dict = {
+            "exp_prop_id": temp["qsar_exp_prop_property_values_id_first"],
+            "DTXCID": temp["cid"],
+            "CASRN": temp["casrn"],
+            "Preferred Name": temp["name"],
+            "Canonical QSAR Ready Smiles": temp["canonicalSmiles"],
+            f"Observed ({model.unitsModel})": temp["exp"],
+            f"Predicted ({model.unitsModel})": temp["pred"],
+            "Set": temp["Set"],
+            **header_columns
+        }
+        model_descriptor_values_df = pd.DataFrame(model_descriptor_values_dict)
+        model_descriptor_values_df = ModelToExcel.handle_accidental_formulas(model_descriptor_values_df)
+        
+        self.model_descriptor_values_df = model_descriptor_values_df
+
+        return model_descriptor_values_df
     
 
     def model_descriptor_values(self, writer: Any, model_descriptor_values: Optional[pd.DataFrame]=None, add_subtotals: bool=False) -> pd.DataFrame:
@@ -849,15 +896,39 @@ class ModelToExcel:
         Returns:
             pd.DataFrame: Training predictions from database (currently returns empty result).
         """
-        # TODO: Write query
-        sql = text(f"""
-        
-        """)
-
         logging.info("Querying database for Training CV Predictions")
-        training_cv_predictions = pd.read_sql(sql, self.engine).round(2)
+
+        model = self.query_model()
+        df_pv = self.query_df_pv()
+
+        kfold_splitter = KFold(n_splits=5, shuffle=True, random_state=42)
+        fold_col = np.zeros(len(model.df_preds_training_cv), dtype=int)
+        for fold_index, (train_index, val_index) in enumerate(kfold_splitter.split(model.df_preds_training_cv)):
+            fold_col[val_index] = fold_index
+
+        temp = pd.merge(model.df_preds_training_cv, model.df_dsstoxRecords, left_on="id", right_on="canonicalSmiles", how="left")
+        temp = pd.merge(temp, df_pv, on="casrn", how="left")
+
+        training_cv_predictions_dict = {
+            "exp_prop_id": temp["qsar_exp_prop_property_values_id_first"],
+            "canon_qsar_smiles": temp["canonicalSmiles"],
+            "exp": temp["exp"],
+            "pred": temp["pred"],
+            "cv_fold": fold_col,
+            "dtxcid": temp["cid"],
+            "dtxsid": temp["sid"],
+            "casrn": temp["casrn"],
+            "preferred_name": temp["name"],
+            "smiles": temp["smiles_x"],
+            "mol_weight": temp["mol_weight"]
+        }
+        training_cv_predictions_df = pd.DataFrame(training_cv_predictions_dict)
+
+        self.training_cv_predictions_df = training_cv_predictions_df
+
         logging.info("Finished querying database for Training CV Predictions")
-        return training_cv_predictions
+
+        return training_cv_predictions_df
     
 
     def training_cv_predictions(self, writer: Any, training_cv_predictions: Optional[pd.DataFrame]=None, add_subtotals: bool=False, x_col: str=None, y_col: str=None, chart_size_px: int=520, pad_ratio: float=0.02, integer_ticks: bool=True, yx_offset_rows: int=3, col_width_pad: int=5, min_col_width: int=7, property_name: Optional[str]=None, property_units: Optional[str]=None) -> pd.DataFrame:
@@ -940,15 +1011,45 @@ class ModelToExcel:
         Returns:
             pd.DataFrame: Test predictions from database (currently returns empty result).
         """
-        # TODO: Write query
-        sql = text(f"""
-        
-        """)
-
         logging.info("Querying database for Test Set Predictions")
-        test_set_predictions = pd.read_sql(sql, self.engine).round(2)
+
+        model = self.query_model()
+        df_pv = self.query_df_pv()
+
+        temp = pd.merge(model.df_preds_test, model.df_dsstoxRecords, left_on="id", right_on="canonicalSmiles", how="left")
+        temp = pd.merge(temp, df_pv, on="casrn", how="left")
+
+        ads = model.applicabilityDomainName.split(" and ")
+        ad_test_columns = {}
+        for ad in ads:
+            df_ad_output, _ = adu.generate_applicability_domain_with_preselected_descriptors_from_dfs(
+                    train_df=model.df_training.copy(), test_df=model.df_prediction.copy(),
+                    remove_log_p=model.remove_log_p_descriptors,
+                    embedding=model.embedding, applicability_domain=ad,
+                    filterColumnsInBothSets=False,
+                    returnTrainingAD=False)
+            ad_test_columns["AD_" + ad.replace(" ", "_")] = df_ad_output["AD"]            
+
+        test_predictions_dict = {
+            "exp_prop_id": temp["qsar_exp_prop_property_values_id_first"],
+            "canon_qsar_smiles": temp["canonicalSmiles"],
+            "exp": temp["exp"],
+            "pred": temp["pred"],
+            **ad_test_columns,
+            "dtxcid": temp["cid"],
+            "dtxsid": temp["sid"],
+            "casrn": temp["casrn"],
+            "preferred_name": temp["name"],
+            "smiles": temp["smiles_x"],
+            "mol_weight": temp["mol_weight"]
+        }
+        test_set_predictions_df = pd.DataFrame(test_predictions_dict)
+
+        self.test_set_predictions_df = test_set_predictions_df
+
         logging.info("Finished querying database for Test Set Predictions")
-        return test_set_predictions
+
+        return test_set_predictions_df
     
 
     def test_set_predictions(self, writer: Any, test_set_predictions: Optional[pd.DataFrame]=None, add_subtotals: bool=False, x_col: str=None, y_col: str=None, chart_size_px: int=520, pad_ratio: float=0.02, integer_ticks: bool=True, yx_offset_rows: int=3, col_width_pad: int=5, min_col_width: int=7, property_name: Optional[str]=None, property_units: Optional[str]=None) -> pd.DataFrame:
@@ -1023,15 +1124,7 @@ class ModelToExcel:
         Returns:
             pd.DataFrame: External predictions from database (currently returns empty result).
         """
-        # TODO: Write query
-        sql = text(f"""
-        
-        """)
-
-        logging.info("Querying database for External Predictions")
-        external_predictions = pd.read_sql(sql, self.engine).round(2)
-        logging.info("Finished querying database for External Predictions")
-        return external_predictions
+        return None
     
 
     def external_predictions(self, writer: Any, external_predictions: Optional[pd.DataFrame]=None, add_subtotals: bool=False, x_col: str=None, y_col: str=None, chart_size_px: int=520, pad_ratio: float=0.02, integer_ticks: bool=True, yx_offset_rows: int=3, col_width_pad: int=5, min_col_width: int=7, property_name: Optional[str]=None, property_units: Optional[str]=None) -> Optional[pd.DataFrame]:
@@ -1080,6 +1173,33 @@ class ModelToExcel:
         
         return external_predictions
 
+
+    @staticmethod
+    def initialize_from_model(model: Model, args, **kwargs) -> 'ModelToExcel':
+        """
+        Initialize a ModelToExcel instance from a Model object.
+        
+        Extracts necessary dataframes and parameters from the Model object to populate the ModelToExcel instance for Excel export.
+        
+        Args:
+            model (Model): The model object containing all relevant data and parameters.
+        """
+        mte = ModelToExcel(model_id=model.modelId, model=model, args=args, **kwargs)
+
+        mte.cover_sheet_df = ModelToExcel.query_cover_sheet_df(model.results_dict)
+        mte.statistics_df = ModelToExcel.query_statistics_df(model.results_dict)
+        mte.records_df = ModelToExcel.query_records_df(model.results_dict)
+
+        mte.model_descriptors_df = ModelToExcel.query_model_descriptors_df(model.results_dict)
+        mte.model_descriptor_values_df = ModelToExcel.query_model_descriptor_values_df(model.results_dict, model.df_pred_cv, model.df_pred_test, model.df_training_model, model.df_test_model)
+        mte.training_cv_predictions_df = ModelToExcel.query_training_cv_predictions_df(model.df_pred_cv)
+        mte.test_set_predictions_df = ModelToExcel.query_test_set_predictions_df(model.df_pred_test)
+        mte.external_predictions_df = ModelToExcel.query_external_predictions_df(model.df_ext) if model.df_ext is not None else None
+
+        mte.log_plot = "log" in model.unitsModel.lower()
+
+        return mte
+    
     
     @staticmethod
     def set_column_width(
@@ -1579,12 +1699,135 @@ class ModelToExcel:
             num_data_cols = len(df.columns)
             # Add some buffer columns for spacing (typically 1-2 columns)
             chart_start_col = num_data_cols + 1
-            chart_position = xl_rowcol_to_cell(data_start_row, chart_start_col)  # Convert to Excel cell reference # TODO: Handle case where there are subtotal rows
+            chart_position = xl_rowcol_to_cell(data_start_row, chart_start_col)  # Convert to Excel cell reference
             worksheet_plot.insert_chart(chart_position, chart, {"x_offset":20, "y_offset":10})
         else:
             # If chart is on a separate sheet, place it at top-left
             worksheet_plot.insert_chart(0, 0, chart, {'x_scale': 1.0, 'y_scale': 1.0})
     
+    
+    @staticmethod
+    def getEngine(connect_args: Optional[dict] = None) -> Any:
+        connect_url = URL.create(
+            drivername='postgresql+psycopg2',
+            username=os.getenv('DEV_QSAR_USER'),
+            password=os.getenv('DEV_QSAR_PASS'),
+            host=os.getenv('DEV_QSAR_HOST', 'localhost'),
+            port=os.getenv('DEV_QSAR_PORT', 5432),
+            database=os.getenv('DEV_QSAR_DATABASE')
+        )
+                
+        engine = create_engine(connect_url, echo=False)
+        return engine
+
+
+    @staticmethod
+    def getSession(engine: Any=None) -> Any:
+        if engine is None:
+            engine = ModelToExcel.getEngine()
+        Session = sessionmaker(bind=engine)
+        session = Session()
+        return session
+    
+
+    def query_model(self) -> Optional[Model]:
+        """
+        Query the database for the model.
+        """
+        try:            
+            if self.model is None:
+                logging.info(f"Loading model {self.model_id} from database")
+                initializer: ModelInitializer = ModelInitializer()
+                model: Model = initializer.initModel(self.model_id)
+                self.model = model
+                logging.info(f"Done loading model {self.model_id} from database")
+            else:
+                model = self.model
+            
+            if model is None:
+                logging.error(f"Failed to load model {self.model_id}")
+                return None
+                        
+            return model
+        
+        except Exception as e:
+            logging.error(f"Error retrieving model {self.model_id}: {e}")
+            traceback.print_exc()
+            return None
+    
+
+    def query_df_pv(self) -> Optional[pd.DataFrame]:
+        """
+        Query df_pv from the database using getMappedDatapoints
+        """
+        try:
+            if self.df_pv is None:
+                logging.info("Loading df_pv from database")
+
+                engine = ModelToExcel.getEngine() if self.engine is None else self.engine
+                session = ModelToExcel.getSession(engine) if self.session is None else self.session
+
+                if self.dataset_name is None:
+                    try:
+                        model = self.query_model()
+                        self.dataset_name = model.datasetName
+                    except Exception as e:
+                        logging.warning("dataset_name not set and failed to query from database. Cannot query records without dataset_name. Please set dataset_name or ensure it can be queried from the database with the provided model_id.")
+                        raise e
+                dataset_name = self.dataset_name
+                
+                df_pv = getMappedDatapoints(session, dataset_name)
+
+                self.df_pv = df_pv
+
+                logging.info(f"Done loading df_pv from database")
+            else:
+                df_pv = self.df_pv
+            
+            if df_pv is None:
+                logging.error(f"Failed to query df_pv")
+                return None
+
+            return df_pv
+        
+        except Exception as e:
+            logging.error(f"Error retrieving df_pv: {e}")
+            traceback.print_exc()
+            return None
+
+
+    def query_model_coefficients(self) -> Optional[pd.DataFrame]:
+        """
+        Query the database for model coefficients.
+        """
+        try:            
+            model = self.query_model()
+            
+            if model is None:
+                logging.error(f"Failed to load model {self.model_id}")
+                return None
+            elif model.qsar_method not in ["reg", "las", "gcm"]:
+                logging.warning(f"Model {self.model_id} has QSAR method that does not support coefficient retrieval: {model.qsar_method}")
+                return None
+                        
+            df_training = model.df_training
+
+            y = df_training[df_training.columns[1]]
+            X = df_training[model.embedding]
+
+            # Step 3: Call the method that computes coefficients
+            coefficients_json = model.getOriginalRegressionCoefficients2(X, y)
+            
+            # Step 4: Parse JSON and return
+            coefficients_dict = json.loads(coefficients_json)
+            
+            return coefficients_dict
+            
+        except Exception as e:
+            logging.error(f"Error retrieving coefficients: {e}")
+            traceback.print_exc()
+            return None
+
 
     def create_excel(
             self,
@@ -1637,13 +1880,13 @@ class ModelToExcel:
             df = self.model_descriptor_values(writer, self.model_descriptor_values_df, add_subtotals=self.add_subtotals)
 
             try:
-                property_name = self.cover_sheet_df["Property Name"].iloc[0] if not self.cover_sheet_df["Property Name"].empty else None
+                property_name = self.model.propertyName if self.model is not None else self.cover_sheet_df["Property Name"].iloc[0] if not self.cover_sheet_df["Property Name"].empty else None
                 if "koc" in property_name.lower():
                     property_name = "KoC"
             except Exception as e:
                 property_name = None
             try:
-                property_units = self.cover_sheet_df["Property Units"].iloc[0] if not self.cover_sheet_df["Property Units"].empty else None
+                property_units = self.model.unitsModel if self.model is not None else self.cover_sheet_df["Property Units"].iloc[0] if not self.cover_sheet_df["Property Units"].empty else None
             except Exception as e:
                 property_units = None
 
@@ -1679,14 +1922,48 @@ class ModelToExcel:
                 logging.error(f"Error adding hyperlinks: {e}")
 
 
+def custom_encoder(obj):
+    if isinstance(obj, PMMLPipeline):
+        return obj.__dict__
+    elif isinstance(obj, pd.DataFrame):
+        return obj.to_dict(orient='records')
+
+
 def main():
-    engine = getEngine()
-    session = getSession()
-    model_id = 1065
-    excel_path = "summary.xlsx"
-    test = ModelToExcel(engine, session, model_id, excel_path)
+    engine = ModelToExcel.getEngine()
+    session = ModelToExcel.getSession(engine)
+    model_id = 1737
+    excel_path = "test_summary.xlsx"
+    test = ModelToExcel(engine=engine, session=session, model_id=model_id, excel_path=excel_path)
     test.create_excel()
+
+
+def main2():
+    engine = ModelToExcel.getEngine()
+    session = ModelToExcel.getSession(engine)
+    model_id = 1737
+    excel_path = "test_summary.xlsx"
+    test = ModelToExcel(engine=engine, session=session, model_id=model_id, excel_path=excel_path)
+    model = test.query_model()
+    print(model.__dict__)
+
+    with open("test_model_details.json", "w") as f:
+        json.dump(model.__dict__, f, indent=4, default=custom_encoder)
+    with open("test_model.pkl", "wb") as f:
+        f.write(pickle.dumps(model))
+
+
+def main3():
+    engine = ModelToExcel.getEngine()
+    session = ModelToExcel.getSession(engine)
+    dataset_name = "KOC v1 modeling"
+    df_pv = getMappedDatapoints(session, dataset_name)
+
+    with open("test_df_pv.pkl", "wb") as f:
+        pickle.dump(df_pv, f)
 
 
 if __name__ == "__main__":
     main()
+    # main2()
+    # main3()
