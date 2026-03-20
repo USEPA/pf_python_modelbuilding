@@ -10,6 +10,7 @@ import requests
 
 
 MODEL_IDS = tuple(range(1065, 1071))
+UNPREDICT_SMILES_FILE = Path("unpredict_smiles.smi")
 
 
 def count_smiles_in_file(path: Path, skip_first: int = 0) -> int:
@@ -104,21 +105,15 @@ def post_predict_batch(
     return session.post(url, json=payload, timeout=timeout)
 
 
-def find_failed_smiles(
-    session: requests.Session,
-    url: str,
-    model_id: int,
+def append_unpredict_smiles(
+    output_path: Path,
     smiles_batch: list[str],
-    timeout: int,
-) -> list[tuple[str, str]]:
-    failed = []
-    for smile in smiles_batch:
-        try:
-            response = post_predict_batch(session, url, model_id, [smile], timeout)
-            response.raise_for_status()
-        except requests.RequestException as exc:
-            failed.append((smile, str(exc)))
-    return failed
+    file_lock: threading.Lock,
+) -> None:
+    with file_lock:
+        with output_path.open("a", encoding="utf-8") as fh:
+            for smile in smiles_batch:
+                fh.write(f"{smile}\n")
 
 
 def process_batch_request(
@@ -130,29 +125,49 @@ def process_batch_request(
     total_batches: int,
     smiles_batch: list[str],
     print_lock: threading.Lock,
+    unpredict_smiles_path: Path,
+    unpredict_smiles_lock: threading.Lock,
     worker_label: str,
 ) -> tuple[bool, int, float]:
     batch_start = time.perf_counter()
     try:
         response = post_predict_batch(session, url, model_id, smiles_batch, timeout)
         response.raise_for_status()
-    except requests.RequestException as exc:
-        batch_elapsed = time.perf_counter() - batch_start
-        failed_smiles = find_failed_smiles(session, url, model_id, smiles_batch, timeout)
-        if failed_smiles:
-            log(
-                f"request {request_idx}/{total_batches}: identified failed smiles in batch: "
-                f"{len(failed_smiles)}",
-                print_lock,
-                worker_label=worker_label,
-            )
+    except requests.RequestException as first_exc:
         log(
-            f"request {request_idx}/{total_batches} failed, "
-            f"batch time: {batch_elapsed:.3f}s, error: {exc}",
+            f"request {request_idx}/{total_batches} failed on first attempt, retrying once, "
+            f"error: {first_exc}",
             print_lock,
             worker_label=worker_label,
         )
-        return False, 0, batch_elapsed
+        try:
+            response = post_predict_batch(session, url, model_id, smiles_batch, timeout)
+            response.raise_for_status()
+        except requests.RequestException as second_exc:
+            batch_elapsed = time.perf_counter() - batch_start
+            append_unpredict_smiles(
+                unpredict_smiles_path,
+                smiles_batch,
+                unpredict_smiles_lock,
+            )
+            log(
+                f"request {request_idx}/{total_batches} failed after retry, "
+                f"batch time: {batch_elapsed:.3f}s, "
+                f"saved {len(smiles_batch)} SMILES to {unpredict_smiles_path}, "
+                f"first_error: {first_exc}, second_error: {second_exc}",
+                print_lock,
+                worker_label=worker_label,
+            )
+            return False, 0, batch_elapsed
+
+        batch_elapsed = time.perf_counter() - batch_start
+        log(
+            f"request {request_idx}/{total_batches} done on retry, "
+            f"batch time: {batch_elapsed:.3f}s",
+            print_lock,
+            worker_label=worker_label,
+        )
+        return True, len(smiles_batch), batch_elapsed
 
     batch_elapsed = time.perf_counter() - batch_start
     log(
@@ -174,6 +189,8 @@ def run_endpoint_benchmark(
     smiles_count: int,
     half_name: str,
     print_lock: threading.Lock,
+    unpredict_smiles_path: Path,
+    unpredict_smiles_lock: threading.Lock,
 ) -> dict:
     worker_label = f"model_id={model_id} half={half_name}"
     total_batches = (smiles_count + batch_size - 1) // batch_size
@@ -212,6 +229,8 @@ def run_endpoint_benchmark(
                 total_batches,
                 smiles_batch,
                 print_lock,
+                unpredict_smiles_path,
+                unpredict_smiles_lock,
                 worker_label,
             )
             if is_success:
@@ -255,7 +274,7 @@ def main():
     )
     parser.add_argument(
         "--base-url",
-        default="http://192.168.1.7:5004/api/predictor_models",
+        default="https://cim-dev.sciencedataexperts.com/api/predictor_models",
         help="Base API URL (without trailing slash)",
     )
     parser.add_argument(
@@ -267,7 +286,7 @@ def main():
         "--timeout", type=int, default=600, help="Timeout (seconds) per request"
     )
     parser.add_argument(
-        "--batch-size", type=int, default=1000, help="SMILES per request"
+        "--batch-size", type=int, default=500, help="SMILES per request"
     )
     parser.add_argument(
         "--skip-first",
@@ -295,12 +314,16 @@ def main():
     base = args.base_url.rstrip("/")
     predict_url = f"{base}/predict"
     print_lock = threading.Lock()
+    unpredict_smiles_lock = threading.Lock()
+    unpredict_smiles_path = UNPREDICT_SMILES_FILE
+    unpredict_smiles_path.write_text("", encoding="utf-8")
 
     print(f"SMILES loaded from file: {smiles_count}")
     print(f"skip_first: {args.skip_first}")
     print(f"batch_size: {args.batch_size}")
     print(f"model_ids: {', '.join(str(model_id) for model_id in MODEL_IDS)}")
     print("split_mode: 2 halves per model")
+    print(f"failed_smiles_file: {unpredict_smiles_path}")
 
     job_specs = build_job_specs(smiles_count)
     print(f"workers: {len(job_specs)}")
@@ -322,6 +345,8 @@ def main():
                 job_spec["smiles_count"],
                 job_spec["half_name"],
                 print_lock,
+                unpredict_smiles_path,
+                unpredict_smiles_lock,
             ): job_spec
             for job_spec in job_specs
         }

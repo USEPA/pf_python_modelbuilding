@@ -1,6 +1,7 @@
 import concurrent.futures
 import functools
 import json
+import math
 import multiprocessing as mp
 import os
 import threading
@@ -1064,25 +1065,24 @@ class ModelPredictor:
         return flattened_results
 
     @staticmethod
-    def _get_standardize_thread_config():
-        return (
-            _get_env_positive_int("PREDICT_STANDARDIZE_CHUNK_SIZE", 100),
-            _get_env_positive_int("PREDICT_STANDARDIZE_THREADS", 10),
-        )
+    def _calculate_dynamic_chunk_size(item_count, worker_count):
+        if item_count <= 0:
+            raise ValueError("item_count must be positive")
+
+        effective_workers = max(1, min(worker_count, item_count))
+        return math.ceil(item_count / effective_workers)
 
     @staticmethod
-    def _get_descriptor_thread_config():
-        return (
-            _get_env_positive_int("PREDICT_DESCRIPTOR_CHUNK_SIZE", 100),
-            _get_env_positive_int("PREDICT_DESCRIPTOR_THREADS", 10),
-        )
+    def _get_standardize_thread_count():
+        return _get_env_positive_int("PREDICT_STANDARDIZE_THREADS", 10)
 
     @staticmethod
-    def _get_postprocess_process_config():
-        return (
-            _get_env_positive_int("PREDICT_REPORT_CHUNK_SIZE", 250),
-            _get_env_positive_int("PREDICT_REPORT_PROCESSES", 4),
-        )
+    def _get_descriptor_thread_count():
+        return _get_env_positive_int("PREDICT_DESCRIPTOR_THREADS", 10)
+
+    @staticmethod
+    def _get_postprocess_process_count():
+        return _get_env_positive_int("PREDICT_REPORT_PROCESSES", 4)
 
     @staticmethod
     def _strip_model_details_from_prediction(prediction):
@@ -1927,8 +1927,8 @@ class ModelPredictor:
         if row_count == 0:
             return []
 
-        chunk_size, worker_count = self._get_postprocess_process_config()
-        if row_count <= 1 or worker_count <= 1 or row_count <= chunk_size:
+        worker_count = self._get_postprocess_process_count()
+        if row_count <= 1 or worker_count <= 1:
             return self._build_reports_for_precomputed_predictions(
                 model,
                 batch_prediction_df,
@@ -1938,6 +1938,7 @@ class ModelPredictor:
                 generate_report,
             )
 
+        chunk_size = self._calculate_dynamic_chunk_size(row_count, worker_count)
         chunk_tasks = []
         for start, chemicals_chunk in _chunk_sequence(prediction_chemicals, chunk_size):
             stop = start + len(chemicals_chunk)
@@ -2130,15 +2131,17 @@ class ModelPredictor:
         if not smiles_list:
             return []
 
-        chunk_size, worker_count = self._get_standardize_thread_config()
-        if len(smiles_list) <= 1 or worker_count <= 1 or len(smiles_list) <= chunk_size:
+        worker_count = self._get_standardize_thread_count()
+        if len(smiles_list) <= 1 or worker_count <= 1:
             return self._standardize_smiles_batch_subset(serverAPIs, smiles_list, model)
 
+        chunk_size = self._calculate_dynamic_chunk_size(len(smiles_list), worker_count)
+        active_workers = min(worker_count, math.ceil(len(smiles_list) / chunk_size))
         logging.info(
             "Running batch standardization with threads; batch_size=%s chunk_size=%s threads=%s",
             len(smiles_list),
             chunk_size,
-            min(worker_count, len(smiles_list)),
+            active_workers,
         )
         return self._run_threaded_chunked(
             list(smiles_list),
@@ -2212,15 +2215,17 @@ class ModelPredictor:
         if not qsar_smiles_list:
             return []
 
-        chunk_size, worker_count = self._get_descriptor_thread_config()
-        if len(qsar_smiles_list) <= 1 or worker_count <= 1 or len(qsar_smiles_list) <= chunk_size:
+        worker_count = self._get_descriptor_thread_count()
+        if len(qsar_smiles_list) <= 1 or worker_count <= 1:
             return self._calculate_descriptors_batch_subset(serverAPIs, list(qsar_smiles_list), descriptor_service)
 
+        chunk_size = self._calculate_dynamic_chunk_size(len(qsar_smiles_list), worker_count)
+        active_workers = min(worker_count, math.ceil(len(qsar_smiles_list) / chunk_size))
         logging.info(
             "Running descriptor batches with threads; batch_size=%s chunk_size=%s threads=%s descriptor_service=%s",
             len(qsar_smiles_list),
             chunk_size,
-            min(worker_count, len(qsar_smiles_list)),
+            active_workers,
             descriptor_service,
         )
         return self._run_threaded_chunked(
