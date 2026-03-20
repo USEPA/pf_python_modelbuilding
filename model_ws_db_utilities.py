@@ -1028,6 +1028,24 @@ class ModelPredictor:
         return text
 
     @staticmethod
+    def _preview_smiles_batch(smiles_values, max_items: int = 10, max_len: int = 160) -> str:
+        if smiles_values is None:
+            return "[]"
+
+        preview_items = []
+        smiles_list = list(smiles_values)
+        for smiles in smiles_list[:max_items]:
+            text = str(smiles).replace("\n", " ").strip()
+            if len(text) > max_len:
+                text = text[:max_len] + "..."
+            preview_items.append(text)
+
+        if len(smiles_list) > max_items:
+            preview_items.append(f"...(+{len(smiles_list) - max_items} more)")
+
+        return "[" + ", ".join(repr(item) for item in preview_items) + "]"
+
+    @staticmethod
     def _run_threaded_chunked(items, chunk_size, worker_count, chunk_handler):
         if not items:
             return []
@@ -1239,9 +1257,37 @@ class ModelPredictor:
         if (
             len(chemicals) == len(smiles_list)
             and all(isinstance(chemical, dict) and "canonicalSmiles" in chemical for chemical in chemicals)
-            and not (model.omitSalts and any("." in chemical.get("canonicalSmiles", "") for chemical in chemicals))
         ):
-            return [(chemical, 200) for chemical in chemicals], None, None, []
+            normalized_results = []
+            missing_canonical_count = 0
+            mixture_count = 0
+
+            for smiles, chemical in zip(smiles_list, chemicals):
+                canonical_smiles = chemical.get("canonicalSmiles")
+                if not canonical_smiles:
+                    missing_canonical_count += 1
+                    normalized_results.append((f"{smiles} failed standardization", 400))
+                    continue
+
+                if model.omitSalts and "." in canonical_smiles:
+                    mixture_count += 1
+                    normalized_results.append((f"{smiles}: model can't run mixtures", 400))
+                    continue
+
+                normalized_results.append((chemical, 200))
+
+            if missing_canonical_count or mixture_count:
+                diagnostic_parts = [
+                    f"direct_response_len={len(chemicals)} expected_len={len(smiles_list)}",
+                ]
+                if missing_canonical_count:
+                    diagnostic_parts.append(f"missing_canonicalSmiles={missing_canonical_count}")
+                if mixture_count:
+                    diagnostic_parts.append(f"mixture_groups={mixture_count}")
+                diagnostic_parts.append(f"preview={self._preview_log_value(chemicals)}")
+                return normalized_results, " ".join(diagnostic_parts), None, []
+
+            return normalized_results, None, None, []
 
         expected_id_map = self._build_standardization_expected_id_map(smiles_list)
         expected_ids = [str(index) for index, _ in enumerate(smiles_list)]
@@ -2118,12 +2164,13 @@ class ModelPredictor:
             right_subset = qsar_smiles_subset[mid:]
             logging.warning(
                 "Descriptor batch returned HTTP 400; splitting batch and retrying; "
-                "descriptor_service=%s batch_size=%s split_depth=%s left_size=%s right_size=%s",
+                "descriptor_service=%s batch_size=%s split_depth=%s left_size=%s right_size=%s smiles=%s",
                 descriptor_service,
                 len(qsar_smiles_subset),
                 split_depth,
                 len(left_subset),
                 len(right_subset),
+                self._preview_smiles_batch(qsar_smiles_subset),
             )
             return (
                 self._calculate_descriptors_batch_subset(serverAPIs, left_subset, descriptor_service, split_depth + 1)
@@ -2143,11 +2190,12 @@ class ModelPredictor:
 
         logging.warning(
             "Descriptor batch call failed or returned unexpected shape for subset, "
-            "falling back to per-smiles calls; code=%s descriptor_service=%s batch_size=%s split_depth=%s reason=%s",
+            "falling back to per-smiles calls; code=%s descriptor_service=%s batch_size=%s split_depth=%s smiles=%s reason=%s",
             code,
             descriptor_service,
             len(qsar_smiles_subset),
             split_depth,
+            self._preview_smiles_batch(qsar_smiles_subset),
             batch_reason,
         )
 
@@ -2202,8 +2250,18 @@ class ModelPredictor:
                 results[idx] = self._build_prediction_error_report(error_chemical, report_model_details, chemical)
                 continue
 
+            canonical_smiles = chemical.get("canonicalSmiles") if isinstance(chemical, dict) else None
+            if not canonical_smiles:
+                error_chemical = self._build_minimal_chemical(smiles_list[idx])
+                results[idx] = self._build_prediction_error_report(
+                    error_chemical,
+                    report_model_details,
+                    "Standardization returned empty canonicalSmiles",
+                )
+                continue
+
             standardized_indices.append(idx)
-            standardized_smiles.append(chemical["canonicalSmiles"])
+            standardized_smiles.append(canonical_smiles)
             standardized_chemicals.append(dict(chemical))
 
         descriptor_results = self._calculate_descriptors_batch(serverAPIs, standardized_smiles, model.descriptorService)
@@ -2758,6 +2816,9 @@ class ModelPredictor:
 
         chemical = chemicals[0]
         qsarSmiles = chemical["canonicalSmiles"]
+        if not qsarSmiles:
+            logging.warning("Standardization returned empty canonicalSmiles for %s", smiles)
+            return f"{smiles} failed standardization", 400
         logging.debug(f"qsarSmiles: {qsarSmiles}")
         return chemical, 200
         
@@ -2786,6 +2847,9 @@ class ModelPredictor:
 
         chemical = chemicals[0]
         qsarSmiles = chemical["canonicalSmiles"]
+        if not qsarSmiles:
+            logging.warning("Standardization returned empty canonicalSmiles for %s", smiles)
+            return f"{smiles} failed standardization", 400
         logging.debug(f"qsarSmiles: {qsarSmiles}")
         return chemical, 200
 
