@@ -1,6 +1,7 @@
 import concurrent.futures
 import functools
 import json
+import multiprocessing as mp
 import os
 import threading
 from io import BytesIO
@@ -74,6 +75,7 @@ imgURLCid = "https://comptox.epa.gov/dashboard-api/ccdapp1/chemical-files/image/
 _MISSING_NEIGHBOR_DSS_TOX_CACHE = {}
 _MISSING_NEIGHBOR_DSS_TOX_LOCK = threading.Lock()
 _INDIGO_UTILS_LOCAL = threading.local()
+_POSTPROCESS_PREDICTOR = None
 
 """
 Not completed:
@@ -156,6 +158,35 @@ def getSession():
         getEngine()
 
     return _session_factory()
+
+
+def _get_env_positive_int(name: str, default: int) -> int:
+    raw_value = os.getenv(name, str(default))
+    try:
+        return max(1, int(raw_value))
+    except (TypeError, ValueError):
+        logging.warning("Invalid integer value for %s=%r; using default=%s", name, raw_value, default)
+        return default
+
+
+def _chunk_sequence(items, chunk_size):
+    if chunk_size <= 0:
+        raise ValueError("chunk_size must be positive")
+
+    for start in range(0, len(items), chunk_size):
+        yield start, items[start:start + chunk_size]
+
+
+def init_postprocess_predictor():
+    global _POSTPROCESS_PREDICTOR
+    _POSTPROCESS_PREDICTOR = ModelPredictor()
+
+
+def _get_postprocess_predictor():
+    global _POSTPROCESS_PREDICTOR
+    if _POSTPROCESS_PREDICTOR is None:
+        init_postprocess_predictor()
+    return _POSTPROCESS_PREDICTOR
 
 
 class ModelInitializer:
@@ -997,6 +1028,45 @@ class ModelPredictor:
         return text
 
     @staticmethod
+    def _run_threaded_chunked(items, chunk_size, worker_count, chunk_handler):
+        if not items:
+            return []
+
+        chunks = [chunk for _, chunk in _chunk_sequence(items, chunk_size)]
+        if len(chunks) <= 1 or worker_count <= 1:
+            return chunk_handler(items)
+
+        max_workers = min(worker_count, len(chunks))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
+            chunk_results = list(pool.map(chunk_handler, chunks))
+
+        flattened_results = []
+        for chunk_result in chunk_results:
+            flattened_results.extend(chunk_result)
+        return flattened_results
+
+    @staticmethod
+    def _get_standardize_thread_config():
+        return (
+            _get_env_positive_int("PREDICT_STANDARDIZE_CHUNK_SIZE", 100),
+            _get_env_positive_int("PREDICT_STANDARDIZE_THREADS", 10),
+        )
+
+    @staticmethod
+    def _get_descriptor_thread_config():
+        return (
+            _get_env_positive_int("PREDICT_DESCRIPTOR_CHUNK_SIZE", 100),
+            _get_env_positive_int("PREDICT_DESCRIPTOR_THREADS", 10),
+        )
+
+    @staticmethod
+    def _get_postprocess_process_config():
+        return (
+            _get_env_positive_int("PREDICT_REPORT_CHUNK_SIZE", 250),
+            _get_env_positive_int("PREDICT_REPORT_PROCESSES", 4),
+        )
+
+    @staticmethod
     def _strip_model_details_from_prediction(prediction):
         if isinstance(prediction, list):
             return [ModelPredictor._strip_model_details_from_prediction(item) for item in prediction]
@@ -1754,6 +1824,107 @@ class ModelPredictor:
 
         return results_by_row
 
+    def _build_reports_for_precomputed_predictions(
+        self,
+        model,
+        batch_prediction_df,
+        prediction_chemicals,
+        pred_array,
+        report_model_details,
+        generate_report,
+    ):
+        ad_results_by_row = self._determine_applicability_domains_batch(model, batch_prediction_df)
+        neighbor_results_training = None
+        neighbor_results_prediction = None
+
+        if generate_report:
+            neighbor_results_training, neighbor_results_prediction = self.addNeighborsFromSets_batch(
+                model,
+                batch_prediction_df,
+                model.unitsModel,
+            )
+
+        prepared_chemicals = [
+            self._prepare_chemical_for_report(chemical)
+            for chemical in prediction_chemicals
+        ]
+
+        reports = []
+        for row_pos, chemical in enumerate(prediction_chemicals):
+            reports.append(
+                self._finalize_prediction_report(
+                    model,
+                    report_model_details,
+                    chemical,
+                    None,
+                    pred_array[row_pos],
+                    generate_report=generate_report,
+                    ad_results=ad_results_by_row[row_pos],
+                    neighbor_results_training=None if neighbor_results_training is None else neighbor_results_training[row_pos],
+                    neighbor_results_prediction=None if neighbor_results_prediction is None else neighbor_results_prediction[row_pos],
+                    prepared_chemical=prepared_chemicals[row_pos],
+                )
+            )
+
+        return reports
+
+    def _build_reports_for_precomputed_predictions_parallel(
+        self,
+        model,
+        batch_prediction_df,
+        prediction_chemicals,
+        pred_array,
+        report_model_details,
+        generate_report,
+    ):
+        row_count = len(prediction_chemicals)
+        if row_count == 0:
+            return []
+
+        chunk_size, worker_count = self._get_postprocess_process_config()
+        if row_count <= 1 or worker_count <= 1 or row_count <= chunk_size:
+            return self._build_reports_for_precomputed_predictions(
+                model,
+                batch_prediction_df,
+                prediction_chemicals,
+                pred_array,
+                report_model_details,
+                generate_report,
+            )
+
+        chunk_tasks = []
+        for start, chemicals_chunk in _chunk_sequence(prediction_chemicals, chunk_size):
+            stop = start + len(chemicals_chunk)
+            chunk_tasks.append(
+                (
+                    str(model.modelId),
+                    batch_prediction_df.iloc[start:stop].copy(),
+                    list(chemicals_chunk),
+                    np.asarray(pred_array[start:stop]).reshape(-1).tolist(),
+                    report_model_details,
+                    generate_report,
+                )
+            )
+
+        max_workers = min(worker_count, len(chunk_tasks))
+        logging.info(
+            "Running prediction post-processing with processes; rows=%s chunk_size=%s processes=%s",
+            row_count,
+            chunk_size,
+            max_workers,
+        )
+        with concurrent.futures.ProcessPoolExecutor(
+            max_workers=max_workers,
+            initializer=init_postprocess_predictor,
+            mp_context=mp.get_context("spawn"),
+        ) as executor:
+            chunk_results = list(executor.map(_postprocess_prediction_chunk, chunk_tasks))
+
+        finalized_reports = []
+        for chunk_result in chunk_results:
+            finalized_reports.extend(chunk_result)
+        return finalized_reports
+
     def _finalize_prediction_report(
         self,
         model,
@@ -1910,7 +2081,25 @@ class ModelPredictor:
             return self._standardize_smiles_individually(serverAPIs, smiles_list, model)
 
     def _standardize_smiles_batch(self, serverAPIs, smiles_list, model):
-        return self._standardize_smiles_batch_subset(serverAPIs, smiles_list, model)
+        if not smiles_list:
+            return []
+
+        chunk_size, worker_count = self._get_standardize_thread_config()
+        if len(smiles_list) <= 1 or worker_count <= 1 or len(smiles_list) <= chunk_size:
+            return self._standardize_smiles_batch_subset(serverAPIs, smiles_list, model)
+
+        logging.info(
+            "Running batch standardization with threads; batch_size=%s chunk_size=%s threads=%s",
+            len(smiles_list),
+            chunk_size,
+            min(worker_count, len(smiles_list)),
+        )
+        return self._run_threaded_chunked(
+            list(smiles_list),
+            chunk_size,
+            worker_count,
+            lambda chunk: self._standardize_smiles_batch_subset(serverAPIs, chunk, model),
+        )
 
     def _calculate_descriptors_batch_subset(self, serverAPIs, qsar_smiles_subset, descriptor_service, split_depth=0):
         if not qsar_smiles_subset:
@@ -1972,32 +2161,26 @@ class ModelPredictor:
             ))
 
     def _calculate_descriptors_batch(self, serverAPIs, qsar_smiles_list, descriptor_service):
-        results = [None] * len(qsar_smiles_list)
-        valid_indices = []
-        valid_smiles = []
+        if not qsar_smiles_list:
+            return []
 
-        if "test" in descriptor_service.lower():
-            for idx, qsar_smiles in enumerate(qsar_smiles_list):
-                check_results, code = self._descriptor_api.check_structure(qsar_smiles)
-                if code != 200:
-                    results[idx] = (check_results, code)
-                else:
-                    valid_indices.append(idx)
-                    valid_smiles.append(qsar_smiles)
-        else:
-            valid_indices = list(range(len(qsar_smiles_list)))
-            valid_smiles = list(qsar_smiles_list)
+        chunk_size, worker_count = self._get_descriptor_thread_config()
+        if len(qsar_smiles_list) <= 1 or worker_count <= 1 or len(qsar_smiles_list) <= chunk_size:
+            return self._calculate_descriptors_batch_subset(serverAPIs, list(qsar_smiles_list), descriptor_service)
 
-        if valid_smiles:
-            descriptor_results = self._calculate_descriptors_batch_subset(
-                serverAPIs,
-                valid_smiles,
-                descriptor_service,
-            )
-            for row_pos, idx in enumerate(valid_indices):
-                results[idx] = descriptor_results[row_pos]
-
-        return results
+        logging.info(
+            "Running descriptor batches with threads; batch_size=%s chunk_size=%s threads=%s descriptor_service=%s",
+            len(qsar_smiles_list),
+            chunk_size,
+            min(worker_count, len(qsar_smiles_list)),
+            descriptor_service,
+        )
+        return self._run_threaded_chunked(
+            list(qsar_smiles_list),
+            chunk_size,
+            worker_count,
+            lambda chunk: self._calculate_descriptors_batch_subset(serverAPIs, chunk, descriptor_service),
+        )
 
     def _predict_model_smiles_batch_from_standardized_results(
         self,
@@ -2075,33 +2258,17 @@ class ModelPredictor:
                             "Model returned an unexpected number of predictions",
                         )
                 else:
-                    ad_results_by_row = self._determine_applicability_domains_batch(model, batch_prediction_df)
-                    neighbor_results_training = None
-                    neighbor_results_prediction = None
-                    if generate_report:
-                        neighbor_results_training, neighbor_results_prediction = self.addNeighborsFromSets_batch(
-                            model,
-                            batch_prediction_df,
-                            model.unitsModel,
-                        )
-                    prepared_chemicals = [
-                        self._prepare_chemical_for_report(chemical)
-                        for chemical in prediction_chemicals
-                    ]
+                    finalized_reports = self._build_reports_for_precomputed_predictions_parallel(
+                        model,
+                        batch_prediction_df,
+                        prediction_chemicals,
+                        pred_array,
+                        report_model_details,
+                        generate_report,
+                    )
 
-                    for row_pos, (idx, chemical) in enumerate(zip(prediction_indices, prediction_chemicals)):
-                        results[idx] = self._finalize_prediction_report(
-                            model,
-                            report_model_details,
-                            chemical,
-                            None,
-                            pred_array[row_pos],
-                            generate_report=generate_report,
-                            ad_results=ad_results_by_row[row_pos],
-                            neighbor_results_training=None if neighbor_results_training is None else neighbor_results_training[row_pos],
-                            neighbor_results_prediction=None if neighbor_results_prediction is None else neighbor_results_prediction[row_pos],
-                            prepared_chemical=prepared_chemicals[row_pos],
-                        )
+                    for row_pos, idx in enumerate(prediction_indices):
+                        results[idx] = finalized_reports[row_pos]
 
         for idx, prediction in enumerate(results):
             if prediction is None:
@@ -2699,7 +2866,39 @@ class ModelPredictor:
         if batch_results:
             return batch_results[0]
         return {"AD": False, "adMethod": {"name": applicabilityDomainName}}
-            
+
+
+def _postprocess_prediction_chunk(args):
+    (
+        model_id,
+        batch_prediction_df,
+        prediction_chemicals,
+        pred_values,
+        report_model_details,
+        generate_report,
+    ) = args
+
+    predictor = _get_postprocess_predictor()
+    mi = ModelInitializer()
+    model = mi.init_model(model_id)
+    if model is None or hasattr(model, "modelId") is False:
+        model_error = f"Invalid model_id: {model_id}"
+        return [
+            predictor._build_prediction_error_report(chemical, report_model_details, model_error)
+            for chemical in prediction_chemicals
+        ]
+
+    predictor._ensure_model_runtime_cache(model)
+    pred_array = np.asarray(pred_values).reshape(-1)
+    return predictor._build_reports_for_precomputed_predictions(
+        model,
+        batch_prediction_df,
+        prediction_chemicals,
+        pred_array,
+        report_model_details,
+        generate_report,
+    )
+
 
 def main():
     

@@ -554,20 +554,6 @@ class QsarSmilesAPI:
             # Handle the error appropriately
             return response.text,  response.status_code
 
-    @staticmethod
-    async def call_qsar_ready_standardize_post_async(client: httpx.AsyncClient, server_host, smiles, full, workflow):
-        jo_body = QsarSmilesAPI._build_standardize_payload(smiles, full, workflow)
-
-        headers = {"Content-Type": "application/json"}
-        url = f"{server_host}/api/stdizer/chemicals"
-        response = await client.post(url, headers=headers, json=jo_body)
-
-        if response.status_code == 200:
-            return response.json(), 200
-        return response.text, response.status_code
-
-
-
 
 if __name__ == '__main__':
     from dotenv import load_dotenv
