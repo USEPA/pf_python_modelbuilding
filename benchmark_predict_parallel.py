@@ -267,7 +267,7 @@ def main():
         "--timeout", type=int, default=600, help="Timeout (seconds) per request"
     )
     parser.add_argument(
-        "--batch-size", type=int, default=1000, help="SMILES per request"
+        "--batch-size", type=int, default=500, help="SMILES per request"
     )
     parser.add_argument(
         "--skip-first",
