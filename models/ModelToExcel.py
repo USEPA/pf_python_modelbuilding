@@ -509,77 +509,11 @@ class ModelToExcel:
         Returns:
             pd.DataFrame: Two-column dataframe mapping field names to their descriptions.
         """
-        records_field_descriptions_df = {
-            "Field": [
-                "exp_prop_id",
-                "canon_qsar_smiles",
-                "page_url",
-                "public_source_name",
-                "public_source_url",
-                "public_source_original_name",
-                "public_source_original_url",
-                "literature_source_citation",
-                "literature_source_doi",
-                "source_dtxrid",
-                "source_dtxsid",
-                "source_casrn",
-                "source_chemical_name",
-                "source_smiles",
-                "mapped_dtxcid",
-                "mapped_dtxsid",
-                "mapped_cas",
-                "mapped_chemical_name",
-                "mapped_smiles",
-                "mapped_molweight",
-                "value_original",
-                "value_max",
-                "value_min",
-                "value_point_estimate",
-                "value_units",
-                "qsar_property_value",
-                "qsar_property_units",
-                "temperature_c",
-                "pressure_mmHg",
-                "pH",
-                "notes",
-                "qc_flag"
-            ],
-            "Description": [
-                "raw property id number in our database",
-                "qsar_ready_smiles associated with the mapped smiles",
-                "url that the property value is associated with",
-                "name of the public source",
-                "url of the public source",
-                "name of the original public source",
-                "url of the original public source",
-                "citation for the literature source",
-                "doi url for the literature source",
-                "DSSTOX record id with the source chemical",
-                "DSSTOX substance id associated with the source chemical",
-                "source chemical CASRN",
-                "source chemical name",
-                "source chemical SMILES",
-                "DSSTOX compound id for the record mapped to the source chemical",
-                "DSSTOX substance id for the record  mapped to the source chemical",
-                "DSSTOX CASRN  for the record mapped to the source chemical",
-                "DSSTOX chemical name for the record mapped to the source chemical",
-                "DSSTOX SMILES  for the record mapped to the source chemical",
-                "DSSTOX molecular weight  for the record mapped to the source chemical",
-                "Original property value from the source",
-                "Original maximum property value from the source",
-                "Original minimum property value from the source",
-                "Point estimate for the property value derived from value_original or value_max and value_min",
-                "units for the value_point_estimate",
-                "value_point_estimate converted to the qsar_property_units",
-                "units for the qsar_property_value",
-                "temperature at which the experiment was performed in C",
-                "pressure at which the experiment was performed in mmHg",
-                "pH at which the experiment was performed",
-                "notes on the record",
-                "whether or not a quality control flag has been issued"
-            ]
-        }
-        records_field_descriptions_df = pd.DataFrame.from_dict(records_field_descriptions_df)
+        PROJECT_ROOT = os.getenv("PROJECT_ROOT")
+        path_segments = [PROJECT_ROOT, "resources", "records_field_descriptions.txt"]
+        
+        # Load in variable definitions
+        records_field_descriptions_df = pd.read_csv(os.path.join(*path_segments), sep="\t")
         return records_field_descriptions_df
     
 
@@ -789,6 +723,8 @@ class ModelToExcel:
         Returns:
             pd.DataFrame: Predictions and descriptor values from database (currently returns empty result).
         """
+        logging.info(f"Building Model Descriptor Values from Model {self.model_id}")
+
         model = self.query_model()
         df_pv = self.query_df_pv()
 
@@ -830,8 +766,10 @@ class ModelToExcel:
         }
         model_descriptor_values_df = pd.DataFrame(model_descriptor_values_dict)
         model_descriptor_values_df = ModelToExcel.handle_accidental_formulas(model_descriptor_values_df)
-        
+
         self.model_descriptor_values_df = model_descriptor_values_df
+
+        logging.info(f"Finished building Model Descriptor Values from Model {self.model_id}")
 
         return model_descriptor_values_df
     
@@ -1124,6 +1062,7 @@ class ModelToExcel:
         Returns:
             pd.DataFrame: External predictions from database (currently returns empty result).
         """
+        # TODO: Implement SQL query for external predictions
         return None
     
 
@@ -1882,7 +1821,7 @@ class ModelToExcel:
             try:
                 property_name = self.model.propertyName if self.model is not None else self.cover_sheet_df["Property Name"].iloc[0] if not self.cover_sheet_df["Property Name"].empty else None
                 if "koc" in property_name.lower():
-                    property_name = "KoC"
+                    property_name = "log Koc"
             except Exception as e:
                 property_name = None
             try:

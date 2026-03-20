@@ -1,0 +1,33 @@
+Field	Description
+exp_prop_id	Raw property id number in our database
+canon_qsar_smiles	qsar_ready_smiles associated with the mapped smiles
+page_url	URL that the property value is associated with
+public_source_name	Name of the public source
+public_source_url	URL of the public source
+public_source_original_name	Name of the original public source
+public_source_original_url	URL of the original public source
+literature_source_citation	Citation for the literature source
+literature_source_doi	DOI url for the literature source
+source_dtxrid	DSSTOX record id with the source chemical
+source_dtxsid	DSSTOX substance id associated with the source chemical
+source_casrn	Source chemical CASRN
+source_chemical_name	Source chemical name
+source_smiles	Source chemical SMILES
+mapped_dtxcid	DSSTOX compound id for the record mapped to the source chemical
+mapped_dtxsid	DSSTOX substance id for the record  mapped to the source chemical
+mapped_cas	DSSTOX CASRN  for the record mapped to the source chemical
+mapped_chemical_name	DSSTOX chemical name for the record mapped to the source chemical
+mapped_smiles	DSSTOX SMILES  for the record mapped to the source chemical
+mapped_molweight	DSSTOX molecular weight  for the record mapped to the source chemical
+value_original	Original property value from the source
+value_max	Original maximum property value from the source
+value_min	Original minimum property value from the source
+value_point_estimate	Point estimate for the property value derived from value_original or value_max and value_min
+value_units	Units for the value_point_estimate
+qsar_property_value	Median of the property values for the given chemical, converted to the qsar_property_units
+qsar_property_units	Units for the qsar_property_value
+temperature_c	Temperature at which the experiment was performed in C
+pressure_mmHg	Pressure at which the experiment was performed in mmHg
+pH	pH at which the experiment was performed
+notes	Notes on the record
+qc_flag	Whether or not a quality control flag has been issued
