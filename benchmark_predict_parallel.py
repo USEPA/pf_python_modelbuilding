@@ -255,7 +255,7 @@ def main():
     )
     parser.add_argument(
         "--base-url",
-        default="http://192.168.1.7:5004/api/predictor_models",
+        default="https://cim-dev.sciencedataexperts.com/api/predictor_models",
         help="Base API URL (without trailing slash)",
     )
     parser.add_argument(
@@ -267,7 +267,7 @@ def main():
         "--timeout", type=int, default=600, help="Timeout (seconds) per request"
     )
     parser.add_argument(
-        "--batch-size", type=int, default=1000, help="SMILES per request"
+        "--batch-size", type=int, default=500, help="SMILES per request"
     )
     parser.add_argument(
         "--skip-first",
