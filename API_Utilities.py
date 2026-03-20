@@ -57,6 +57,24 @@ class DescriptorsAPI:
             return text[:max_len] + "..."
         return text
 
+    @staticmethod
+    def _preview_smiles_batch(smiles_values, max_items: int = 10, max_len: int = 160) -> str:
+        if smiles_values is None:
+            return "[]"
+
+        preview_items = []
+        smiles_list = list(smiles_values)
+        for smiles in smiles_list[:max_items]:
+            text = str(smiles).replace("\n", " ").strip()
+            if len(text) > max_len:
+                text = text[:max_len] + "..."
+            preview_items.append(text)
+
+        if len(smiles_list) > max_items:
+            preview_items.append(f"...(+{len(smiles_list) - max_items} more)")
+
+        return "[" + ", ".join(repr(item) for item in preview_items) + "]"
+
     def check_structure(self, qsarSmiles):
         indigo = Indigo()
         molecule = indigo.loadMolecule(qsarSmiles)
@@ -112,11 +130,25 @@ class DescriptorsAPI:
         response = self.call_descriptors_get(server_host=serverAPIs, qsar_smiles=qsarSmiles,
                                                                 descriptor_name=descriptorService)
         if response.status_code != 200:
+            logging.warning(
+                "Descriptor request failed for single SMILES; descriptor_service=%s status=%s smiles=%s body=%s",
+                descriptorService,
+                response.status_code,
+                self._preview_smiles_batch([qsarSmiles], max_items=1),
+                self._preview_value(response.text),
+            )
             return response.text,response.status_code 
 
         try:
             df_prediction = self.response_to_df(response, qsarSmiles)
         except Exception as exc:
+            logging.warning(
+                "Descriptor response parse failed for single SMILES; descriptor_service=%s smiles=%s error=%s payload=%s",
+                descriptorService,
+                self._preview_smiles_batch([qsarSmiles], max_items=1),
+                exc,
+                self._preview_value(response.text),
+            )
             return (
                 f"Failed to parse descriptor response for smiles={self._preview_value(qsarSmiles)}: {exc}; "
                 f"payload={self._preview_value(response.text)}",
@@ -211,13 +243,9 @@ class DescriptorsAPI:
 
             if len(smiles_subset) == 1 or depth >= max_depth:
                 status_code, preview = _probe(smiles_subset)
-                if len(smiles_subset) == 1:
-                    sample_preview = self._preview_value(smiles_subset[0])
-                else:
-                    sample_preview = self._preview_value(smiles_subset)
                 return (
                     f"subset_size={len(smiles_subset)} status={status_code} "
-                    f"sample={sample_preview} body={preview}"
+                    f"smiles={self._preview_smiles_batch(smiles_subset)} body={preview}"
                 )
 
             mid = len(smiles_subset) // 2
@@ -236,12 +264,13 @@ class DescriptorsAPI:
             if left_status == 400 and right_status == 400:
                 return (
                     "both_halves_failed -> "
-                    f"left_size={len(left)} body={left_preview} | "
-                    f"right_size={len(right)} body={right_preview}"
+                    f"left_size={len(left)} left_smiles={self._preview_smiles_batch(left)} body={left_preview} | "
+                    f"right_size={len(right)} right_smiles={self._preview_smiles_batch(right)} body={right_preview}"
                 )
 
             return (
                 "whole_batch_failed_but_halves_passed -> likely batch_size_limit_or_payload_size_or_bad_combination; "
+                f"batch_smiles={self._preview_smiles_batch(smiles_subset)} "
                 f"left_size={len(left)} status={left_status} | right_size={len(right)} status={right_status}"
             )
 
@@ -271,9 +300,10 @@ class DescriptorsAPI:
         if response.status_code == 400 and len(qsar_smiles) > 1:
             diagnostic = self._diagnose_descriptor_batch_400(url, descriptor_name, qsar_smiles)
             logging.warning(
-                "Descriptor batch endpoint returned 400; descriptor_service=%s batch_size=%s diagnostic=%s",
+                "Descriptor batch endpoint returned 400; descriptor_service=%s batch_size=%s smiles=%s diagnostic=%s",
                 descriptor_name,
                 len(qsar_smiles),
+                self._preview_smiles_batch(qsar_smiles),
                 diagnostic,
             )
             return (
@@ -553,20 +583,6 @@ class QsarSmilesAPI:
         else:
             # Handle the error appropriately
             return response.text,  response.status_code
-
-    @staticmethod
-    async def call_qsar_ready_standardize_post_async(client: httpx.AsyncClient, server_host, smiles, full, workflow):
-        jo_body = QsarSmilesAPI._build_standardize_payload(smiles, full, workflow)
-
-        headers = {"Content-Type": "application/json"}
-        url = f"{server_host}/api/stdizer/chemicals"
-        response = await client.post(url, headers=headers, json=jo_body)
-
-        if response.status_code == 200:
-            return response.json(), 200
-        return response.text, response.status_code
-
-
 
 
 if __name__ == '__main__':
