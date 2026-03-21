@@ -9,8 +9,8 @@ import requests
 
 
 MODEL_IDS = tuple(range(1065, 1071))
-DEFAULT_SMILES_FILE = Path("unpredict_smiles.smi")
-FAILED_SMILES_FILE = Path("unpredict_smiles_failed.smi")
+DEFAULT_SMILES_FILE = Path("smiles_cache.smi.smi")
+FAILED_SMILES_FILE = Path("smiles_failed.smi")
 
 
 def count_smiles_in_file(path: Path, skip_first: int = 0) -> int:
@@ -70,13 +70,14 @@ def post_predict_batch(
 
 def append_failed_smiles(
     output_path: Path,
+    model_id: int,
     smiles_batch: list[str],
     file_lock: threading.Lock,
 ) -> None:
     with file_lock:
         with output_path.open("a", encoding="utf-8") as fh:
             for smile in smiles_batch:
-                fh.write(f"{smile}\n")
+                fh.write(f"{smile}-{model_id}\n")
 
 
 def process_batch_request(
@@ -110,6 +111,7 @@ def process_batch_request(
             batch_elapsed = time.perf_counter() - batch_start
             append_failed_smiles(
                 failed_smiles_path,
+                model_id,
                 smiles_batch,
                 failed_smiles_lock,
             )
