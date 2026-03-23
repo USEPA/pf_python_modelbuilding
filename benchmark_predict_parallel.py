@@ -13,7 +13,7 @@ import requests
 MODEL_IDS = tuple(range(1065, 1071))
 DEFAULT_SMILES_FILE = Path("smiles_cache.smi")
 FAILED_SMILES_FILE = Path("smiles_failed.tsv")
-DEFAULT_ENDPOINT_PATH = "predictDB"
+DEFAULT_ENDPOINT_PATH = "predict"
 RETRYABLE_STATUS_CODES = frozenset({408, 425, 429, 500, 502, 503, 504})
 DEFAULT_RETRY_ATTEMPTS = 2
 DEFAULT_RETRY_BACKOFF_SECONDS = 1.0
@@ -212,14 +212,31 @@ def _analyze_prediction_payload(
     attempt: int,
     status_code: int,
 ) -> tuple[int, list[dict]]:
-    if not isinstance(payload, list):
-        error_message = f"Expected JSON list, got {type(payload).__name__}: {_preview_value(payload)}"
-        if isinstance(payload, dict) and len(smiles_batch) > 1:
-            if any(key in payload for key in ("modelDetails", "modelResults", "chemicalIdentifiers")):
-                error_message += (
-                    " Hint: batch JSON requests in this service should use POST /predictDB, "
-                    "not /predict."
+    batch_error_message = None
+    if isinstance(payload, dict):
+        if _has_meaningful_value(payload.get("error")):
+            batch_error_message = f"response.error={_preview_value(payload.get('error'))}"
+
+        if isinstance(payload.get("results"), list):
+            payload = payload["results"]
+        elif len(smiles_batch) == 1 and any(key in payload for key in ("modelResults", "result", "chemicalIdentifiers", "chemical")):
+            payload = [payload]
+        else:
+            error_message = f"Expected batch results list, got {type(payload).__name__}: {_preview_value(payload)}"
+            return 0, [
+                _build_failed_record(
+                    model_id,
+                    request_idx,
+                    attempt,
+                    status_code,
+                    "invalid_response_shape",
+                    error_message,
+                    smile,
                 )
+                for smile in smiles_batch
+            ]
+    elif not isinstance(payload, list):
+        error_message = f"Expected JSON list or batch response object, got {type(payload).__name__}: {_preview_value(payload)}"
         return 0, [
             _build_failed_record(
                 model_id,
@@ -236,6 +253,21 @@ def _analyze_prediction_payload(
     processed_count = 0
     failed_records = []
     shared_mismatch_message = None
+
+    if batch_error_message is not None:
+        failed_records.extend(
+            _build_failed_record(
+                model_id,
+                request_idx,
+                attempt,
+                status_code,
+                "batch_error",
+                batch_error_message,
+                smile,
+            )
+            for smile in smiles_batch
+        )
+        return 0, failed_records
 
     if len(payload) != len(smiles_batch):
         shared_mismatch_message = (
@@ -624,10 +656,6 @@ def main():
     endpoint_path = args.endpoint_path.strip().lstrip("/")
     if not endpoint_path:
         raise ValueError("--endpoint-path must not be empty")
-    if endpoint_path == "predict":
-        raise ValueError(
-            "This benchmark sends JSON batch payloads, so it must use --endpoint-path predictDB, not predict"
-        )
     predict_url = f"{base}/{endpoint_path}"
     print_lock = threading.Lock()
     failed_smiles_lock = threading.Lock()
