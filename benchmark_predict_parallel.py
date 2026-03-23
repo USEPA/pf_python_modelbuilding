@@ -9,7 +9,7 @@ import requests
 
 
 MODEL_IDS = tuple(range(1065, 1071))
-DEFAULT_SMILES_FILE = Path("smiles_cache.smi.smi")
+DEFAULT_SMILES_FILE = Path("smiles_cache.smi")
 FAILED_SMILES_FILE = Path("smiles_failed.smi")
 
 
@@ -245,12 +245,12 @@ def main():
         "--timeout", type=int, default=600, help="Timeout (seconds) per request"
     )
     parser.add_argument(
-        "--batch-size", type=int, default=100, help="SMILES per request"
+        "--batch-size", type=int, default=500, help="SMILES per request"
     )
     parser.add_argument(
         "--skip-first",
         type=int,
-        default=0,
+        default=250000,
         help="Skip first N non-empty SMILES entries from input file",
     )
     args = parser.parse_args()
