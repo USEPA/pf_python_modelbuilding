@@ -13,7 +13,7 @@ import requests
 MODEL_IDS = tuple(range(1065, 1071))
 DEFAULT_SMILES_FILE = Path("smiles_cache.smi")
 FAILED_SMILES_FILE = Path("smiles_failed.tsv")
-DEFAULT_ENDPOINT_PATH = "predict"
+DEFAULT_ENDPOINT_PATH = "predictDB"
 RETRYABLE_STATUS_CODES = frozenset({408, 425, 429, 500, 502, 503, 504})
 DEFAULT_RETRY_ATTEMPTS = 2
 DEFAULT_RETRY_BACKOFF_SECONDS = 1.0
@@ -624,6 +624,10 @@ def main():
     endpoint_path = args.endpoint_path.strip().lstrip("/")
     if not endpoint_path:
         raise ValueError("--endpoint-path must not be empty")
+    if endpoint_path == "predict":
+        raise ValueError(
+            "This benchmark sends JSON batch payloads, so it must use --endpoint-path predictDB, not predict"
+        )
     predict_url = f"{base}/{endpoint_path}"
     print_lock = threading.Lock()
     failed_smiles_lock = threading.Lock()
