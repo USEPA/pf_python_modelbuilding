@@ -35,9 +35,15 @@ def count_smiles_in_file(path: Path, skip_first: int = 0) -> int:
     return count
 
 
-def iter_smiles_batches(path: Path, batch_size: int, skip_first: int = 0):
+def iter_smiles_batches(
+    path: Path,
+    batch_size: int,
+    skip_first: int = 0,
+    max_smiles: int | None = None,
+):
     batch = []
     seen = 0
+    yielded = 0
     with path.open("r", encoding="utf-8") as fh:
         for raw_line in fh:
             line = raw_line.strip()
@@ -46,7 +52,10 @@ def iter_smiles_batches(path: Path, batch_size: int, skip_first: int = 0):
             seen += 1
             if seen <= skip_first:
                 continue
+            if max_smiles is not None and yielded >= max_smiles:
+                break
             batch.append(line)
+            yielded += 1
             if len(batch) >= batch_size:
                 yield batch
                 batch = []
@@ -54,8 +63,42 @@ def iter_smiles_batches(path: Path, batch_size: int, skip_first: int = 0):
         yield batch
 
 
-def build_job_specs() -> list[dict]:
-    return [{"model_id": model_id} for model_id in MODEL_IDS]
+def build_job_specs(total_smiles: int, base_skip_first: int) -> list[dict]:
+    midpoint = total_smiles // 2
+    shard_specs = (
+        {
+            "worker_suffix": "part=1/2,start",
+            "skip_first": base_skip_first,
+            "smiles_count": midpoint,
+            "segment_start": 0,
+            "segment_end": midpoint,
+        },
+        {
+            "worker_suffix": "part=2/2,mid",
+            "skip_first": base_skip_first + midpoint,
+            "smiles_count": total_smiles - midpoint,
+            "segment_start": midpoint,
+            "segment_end": total_smiles,
+        },
+    )
+
+    job_specs = []
+    for model_id in MODEL_IDS:
+        for shard_index, shard_spec in enumerate(shard_specs, start=1):
+            if shard_spec["smiles_count"] <= 0:
+                continue
+            job_specs.append(
+                {
+                    "model_id": model_id,
+                    "worker_index": shard_index,
+                    "worker_label": f"model_id={model_id},{shard_spec['worker_suffix']}",
+                    "skip_first": shard_spec["skip_first"],
+                    "smiles_count": shard_spec["smiles_count"],
+                    "segment_start": shard_spec["segment_start"],
+                    "segment_end": shard_spec["segment_end"],
+                }
+            )
+    return job_specs
 
 
 def _has_meaningful_value(value) -> bool:
@@ -109,6 +152,12 @@ def _tsv_field(value) -> str:
     if value is None:
         return ""
     return str(value).replace("\t", " ").replace("\n", " ").replace("\r", " ").strip()
+
+
+def build_failed_smiles_path(base_path: Path, model_id: int) -> Path:
+    suffix = base_path.suffix or ".tsv"
+    stem = base_path.stem if base_path.stem else "smiles_failed"
+    return base_path.with_name(f"{stem}_{model_id}{suffix}")
 
 
 def init_failed_smiles_file(path: Path) -> None:
@@ -362,14 +411,7 @@ def process_batch_request(
             response.raise_for_status()
         except requests.RequestException as exc:
             if attempt < retry_attempts and _should_retry_exception(exc):
-                delay = _retry_delay_seconds(retry_backoff, attempt)
-                log(
-                    f"request {request_idx}/{total_batches} failed on attempt "
-                    f"{attempt}/{retry_attempts}, retrying in {delay:.2f}s, error: {exc}",
-                    print_lock,
-                    worker_label=worker_label,
-                )
-                time.sleep(delay)
+                time.sleep(_retry_delay_seconds(retry_backoff, attempt))
                 continue
 
             batch_elapsed = time.perf_counter() - batch_start
@@ -455,30 +497,8 @@ def process_batch_request(
                     print_lock,
                     worker_label=worker_label,
                 )
-            else:
-                log(
-                    f"request {request_idx}/{total_batches} completed with item errors, "
-                    f"batch time: {batch_elapsed:.3f}s, status={response.status_code}, "
-                    f"success_smiles={processed_count}, failed_smiles={failed_smiles_count}, "
-                    f"first_error: {first_error}",
-                    print_lock,
-                    worker_label=worker_label,
-                )
             return processed_count, failed_smiles_count, batch_elapsed
 
-        if attempt > 1:
-            log(
-                f"request {request_idx}/{total_batches} done on retry "
-                f"(attempt {attempt}/{retry_attempts}), batch time: {batch_elapsed:.3f}s",
-                print_lock,
-                worker_label=worker_label,
-            )
-        else:
-            log(
-                f"request {request_idx}/{total_batches} done, batch time: {batch_elapsed:.3f}s",
-                print_lock,
-                worker_label=worker_label,
-            )
         return processed_count, 0, batch_elapsed
 
     batch_elapsed = time.perf_counter() - batch_start
@@ -498,15 +518,18 @@ def run_endpoint_benchmark(
     failed_smiles_lock: threading.Lock,
     retry_attempts: int,
     retry_backoff: float,
+    worker_label: str,
+    worker_index: int,
+    segment_start: int,
+    segment_end: int,
 ) -> dict:
-    worker_label = f"model_id={model_id}"
     total_batches = (smiles_count + batch_size - 1) // batch_size
 
     log(f"starting benchmark: {url}", print_lock, worker_label=worker_label)
     log(
         f"batches prepared: {total_batches} "
         f"(batch_size={batch_size}, source=file, skip_first={skip_first}, "
-        f"smiles_count={smiles_count})",
+        f"smiles_count={smiles_count}, segment={segment_start}:{segment_end})",
         print_lock,
         worker_label=worker_label,
     )
@@ -524,6 +547,7 @@ def run_endpoint_benchmark(
                 smiles_file,
                 batch_size,
                 skip_first=skip_first,
+                max_smiles=smiles_count,
             ),
             start=1,
         ):
@@ -552,14 +576,6 @@ def run_endpoint_benchmark(
             else:
                 failed_batches += 1
 
-            log(
-                f"progress: success_batches={success_batches}, "
-                f"partial_batches={partial_batches}, failed_batches={failed_batches}, "
-                f"total smiles processed={total_processed}, failed_smiles={failed_smiles}",
-                print_lock,
-                worker_label=worker_label,
-            )
-
     elapsed = time.perf_counter() - start
     log(
         f"total: {elapsed:.3f}s "
@@ -570,6 +586,8 @@ def run_endpoint_benchmark(
     )
     return {
         "model_id": model_id,
+        "worker_label": worker_label,
+        "worker_index": worker_index,
         "elapsed": elapsed,
         "success_batches": success_batches,
         "partial_batches": partial_batches,
@@ -577,6 +595,8 @@ def run_endpoint_benchmark(
         "total_processed": total_processed,
         "failed_smiles": failed_smiles,
         "smiles_count": smiles_count,
+        "segment_start": segment_start,
+        "segment_end": segment_end,
     }
 
 
@@ -585,7 +605,7 @@ def main():
     print(f"Script started at: {script_start_time}")
 
     parser = argparse.ArgumentParser(
-        description="Benchmark batch prediction endpoint in 6 parallel threads"
+        description="Benchmark batch prediction endpoint in 12 parallel threads"
     )
     parser.add_argument(
         "--base-url",
@@ -611,7 +631,7 @@ def main():
     parser.add_argument(
         "--skip-first",
         type=int,
-        default=1000000,
+        default=0,
         help="Skip first N non-empty SMILES entries from input file",
     )
     parser.add_argument(
@@ -658,9 +678,13 @@ def main():
         raise ValueError("--endpoint-path must not be empty")
     predict_url = f"{base}/{endpoint_path}"
     print_lock = threading.Lock()
-    failed_smiles_lock = threading.Lock()
-    failed_smiles_path = Path(args.failed_smiles_file)
-    init_failed_smiles_file(failed_smiles_path)
+    failed_smiles_base_path = Path(args.failed_smiles_file)
+    failed_smiles_paths = {
+        model_id: build_failed_smiles_path(failed_smiles_base_path, model_id) for model_id in MODEL_IDS
+    }
+    failed_smiles_locks = {model_id: threading.Lock() for model_id in MODEL_IDS}
+    for path in failed_smiles_paths.values():
+        init_failed_smiles_file(path)
 
     print(f"SMILES loaded from file: {smiles_count}")
     print(f"source_smiles_file: {smiles_file}")
@@ -670,9 +694,9 @@ def main():
     print(f"retry_attempts: {args.retry_attempts}")
     print(f"retry_backoff: {args.retry_backoff}")
     print(f"model_ids: {', '.join(str(model_id) for model_id in MODEL_IDS)}")
-    print(f"failed_smiles_file: {failed_smiles_path}")
+    print(f"failed_smiles_pattern: {build_failed_smiles_path(failed_smiles_base_path, '<model_id>')}")
 
-    job_specs = build_job_specs()
+    job_specs = build_job_specs(smiles_count, args.skip_first)
     print(f"workers: {len(job_specs)}")
 
     results = []
@@ -684,23 +708,27 @@ def main():
                 run_endpoint_benchmark,
                 predict_url,
                 smiles_file,
-                smiles_count,
+                job_spec["smiles_count"],
                 job_spec["model_id"],
                 args.timeout,
                 args.batch_size,
-                args.skip_first,
+                job_spec["skip_first"],
                 print_lock,
-                failed_smiles_path,
-                failed_smiles_lock,
+                failed_smiles_paths[job_spec["model_id"]],
+                failed_smiles_locks[job_spec["model_id"]],
                 args.retry_attempts,
                 args.retry_backoff,
+                job_spec["worker_label"],
+                job_spec["worker_index"],
+                job_spec["segment_start"],
+                job_spec["segment_end"],
             ): job_spec
             for job_spec in job_specs
         }
 
         for future in as_completed(future_to_job):
             job_spec = future_to_job[future]
-            worker_label = f"model_id={job_spec['model_id']}"
+            worker_label = job_spec["worker_label"]
             try:
                 results.append(future.result())
             except Exception as exc:
@@ -708,13 +736,17 @@ def main():
                 results.append(
                     {
                         "model_id": job_spec["model_id"],
+                        "worker_label": job_spec["worker_label"],
+                        "worker_index": job_spec["worker_index"],
                         "elapsed": None,
                         "success_batches": 0,
                         "partial_batches": 0,
                         "failed_batches": 0,
                         "total_processed": 0,
                         "failed_smiles": 0,
-                        "smiles_count": smiles_count,
+                        "smiles_count": job_spec["smiles_count"],
+                        "segment_start": job_spec["segment_start"],
+                        "segment_end": job_spec["segment_end"],
                         "error": str(exc),
                     }
                 )
@@ -722,12 +754,13 @@ def main():
     overall_elapsed = time.perf_counter() - overall_start
 
     print("\nSummary")
-    for result in sorted(results, key=lambda item: item["model_id"]):
+    for result in sorted(results, key=lambda item: (item["model_id"], item.get("segment_start", 0))):
         elapsed = result["elapsed"]
         elapsed_text = f"{elapsed:.3f}s" if elapsed is not None else "failed"
         error_text = f", error={result['error']}" if "error" in result else ""
         print(
-            f"model_id={result['model_id']}: total={elapsed_text}, "
+            f"{result['worker_label']}: total={elapsed_text}, "
+            f"segment={result['segment_start']}:{result['segment_end']}, "
             f"smiles_count={result['smiles_count']}, "
             f"success_batches={result['success_batches']}, "
             f"partial_batches={result['partial_batches']}, "

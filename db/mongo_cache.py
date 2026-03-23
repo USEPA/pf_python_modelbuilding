@@ -3,7 +3,6 @@ import logging
 import os
 import threading
 import time
-from pathlib import Path
 
 from bson.errors import InvalidDocument
 from pymongo import ASCENDING, MongoClient, ReplaceOne
@@ -17,14 +16,12 @@ _mongo_init_done = False
 _mongo_unavailable_reason = None
 _mongo_last_init_attempt_monotonic = None
 _mongo_init_lock = threading.Lock()
-_errors_file_lock = threading.Lock()
-_errors_file_path_logged = False
 
 
 def _reset_mongo_state_after_fork():
     global predictor_models_cache, _mongo_client, _mongo_init_done
     global _mongo_unavailable_reason, _mongo_last_init_attempt_monotonic
-    global _mongo_init_lock, _errors_file_lock
+    global _mongo_init_lock
 
     inherited_client = _mongo_client
     predictor_models_cache = None
@@ -33,7 +30,6 @@ def _reset_mongo_state_after_fork():
     _mongo_unavailable_reason = None
     _mongo_last_init_attempt_monotonic = None
     _mongo_init_lock = threading.Lock()
-    _errors_file_lock = threading.Lock()
 
     if inherited_client is not None:
         try:
@@ -132,34 +128,12 @@ def _warn_mongo_cache_skip(
     fallback: str | None = None,
     log_warning: bool = True,
 ):
-    _append_mongo_cache_error(key, reason)
     if not log_warning:
         return
     if fallback:
         logging.warning("Mongo cache skipped for key=%r: %s; fallback=%s", key, reason, fallback)
     else:
         logging.warning("Mongo cache skipped for key=%r: %s", key, reason)
-
-
-def _append_mongo_cache_error(key: str, reason: str):
-    global _errors_file_path_logged
-    errors_path = os.getenv("MONGO_CACHE_ERRORS_FILE", "errors.txt")
-    errors_path = Path(errors_path)
-    if not errors_path.is_absolute():
-        errors_path = Path(__file__).resolve().parent.parent / errors_path
-
-    line = f"key={key!r} {str(reason).replace(chr(10), ' ').replace(chr(13), ' ').strip()}\n"
-
-    try:
-        with _errors_file_lock:
-            errors_path.parent.mkdir(parents=True, exist_ok=True)
-            if not _errors_file_path_logged:
-                logging.info("Mongo cache errors file resolved to %s", errors_path)
-                _errors_file_path_logged = True
-            with errors_path.open("a", encoding="utf-8") as handle:
-                handle.write(line)
-    except OSError as exc:
-        logging.warning("Failed to append Mongo cache error to %s: %s", errors_path, exc)
 
 
 def _prediction_to_obj(prediction):
