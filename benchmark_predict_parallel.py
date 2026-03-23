@@ -552,7 +552,7 @@ def run_endpoint_benchmark(
             ),
             start=1,
         ):
-            processed_count, failed_smiles_count, _ = process_batch_request(
+            processed_count, failed_smiles_count, batch_elapsed = process_batch_request(
                 session,
                 url,
                 model_id,
@@ -574,6 +574,7 @@ def run_endpoint_benchmark(
                 success_batches += 1
                 log(
                     f"request {request_idx}/{total_batches} done, "
+                    f"batch time: {batch_elapsed:.3f}s, "
                     f"total_processed={total_processed}, failed_smiles={failed_smiles}, "
                     f"success_batches={success_batches}, partial_batches={partial_batches}, "
                     f"failed_batches={failed_batches}",
