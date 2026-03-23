@@ -524,14 +524,15 @@ def run_endpoint_benchmark(
     segment_end: int,
 ) -> dict:
     total_batches = (smiles_count + batch_size - 1) // batch_size
+    startup_label = f"model_id={model_id},worker={worker_index}"
 
-    log(f"starting benchmark: {url}", print_lock, worker_label=worker_label)
+    log(f"starting benchmark: {url}", print_lock, worker_label=startup_label)
     log(
         f"batches prepared: {total_batches} "
         f"(batch_size={batch_size}, source=file, skip_first={skip_first}, "
-        f"smiles_count={smiles_count}, segment={segment_start}:{segment_end})",
+        f"smiles_count={smiles_count})",
         print_lock,
-        worker_label=worker_label,
+        worker_label=startup_label,
     )
 
     start = time.perf_counter()
@@ -571,6 +572,14 @@ def run_endpoint_benchmark(
 
             if failed_smiles_count == 0:
                 success_batches += 1
+                log(
+                    f"request {request_idx}/{total_batches} done, "
+                    f"total_processed={total_processed}, failed_smiles={failed_smiles}, "
+                    f"success_batches={success_batches}, partial_batches={partial_batches}, "
+                    f"failed_batches={failed_batches}",
+                    print_lock,
+                    worker_label=worker_label,
+                )
             elif processed_count > 0:
                 partial_batches += 1
             else:
