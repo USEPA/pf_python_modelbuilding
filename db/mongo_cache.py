@@ -11,6 +11,7 @@ from pymongo.errors import PyMongoError
 
 
 predictor_models_cache = None
+_mongo_client = None
 in_memory_cache = {}
 _mongo_init_done = False
 _mongo_unavailable_reason = None
@@ -18,6 +19,31 @@ _mongo_last_init_attempt_monotonic = None
 _mongo_init_lock = threading.Lock()
 _errors_file_lock = threading.Lock()
 _errors_file_path_logged = False
+
+
+def _reset_mongo_state_after_fork():
+    global predictor_models_cache, _mongo_client, _mongo_init_done
+    global _mongo_unavailable_reason, _mongo_last_init_attempt_monotonic
+    global _mongo_init_lock, _errors_file_lock
+
+    inherited_client = _mongo_client
+    predictor_models_cache = None
+    _mongo_client = None
+    _mongo_init_done = False
+    _mongo_unavailable_reason = None
+    _mongo_last_init_attempt_monotonic = None
+    _mongo_init_lock = threading.Lock()
+    _errors_file_lock = threading.Lock()
+
+    if inherited_client is not None:
+        try:
+            inherited_client.close()
+        except Exception:
+            logging.debug("Failed to close inherited Mongo client after fork", exc_info=True)
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_reset_mongo_state_after_fork)
 
 
 def _has_meaningful_error_value(value) -> bool:
@@ -222,11 +248,12 @@ def _env_float(name: str, default: float) -> float:
 
 
 def _init_mongo():
-    global predictor_models_cache, _mongo_init_done, _mongo_unavailable_reason, _mongo_last_init_attempt_monotonic
+    global predictor_models_cache, _mongo_client, _mongo_init_done, _mongo_unavailable_reason, _mongo_last_init_attempt_monotonic
     _mongo_last_init_attempt_monotonic = time.monotonic()
 
     if not _env_bool("MONGO_CACHE_ENABLED", True):
         predictor_models_cache = None
+        _mongo_client = None
         _mongo_unavailable_reason = "Mongo cache disabled via MONGO_CACHE_ENABLED"
         _mongo_init_done = True
         logging.info(_mongo_unavailable_reason)
@@ -245,6 +272,7 @@ def _init_mongo():
         )
 
         client.admin.command("ping")
+        _mongo_client = client
 
         db = client[os.getenv("MONGO_DATABASE", "predictor")]
         predictor_models_cache = db["predictor_models_cache"]
@@ -258,6 +286,7 @@ def _init_mongo():
 
     except PyMongoError as exc:
         predictor_models_cache = None
+        _mongo_client = None
         _mongo_unavailable_reason = f"Mongo unavailable: {exc}"
         logging.warning("Mongo unavailable; falling back to in-memory cache: %s", exc)
     finally:

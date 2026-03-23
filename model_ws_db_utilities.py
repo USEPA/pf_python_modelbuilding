@@ -91,6 +91,30 @@ _engine = None
 _session_factory = None
 
 
+def _reset_runtime_state_after_fork():
+    global lock, _engine_lock, _engine, _session_factory
+    global _MISSING_NEIGHBOR_DSS_TOX_LOCK, _INDIGO_UTILS_LOCAL, _POSTPROCESS_PREDICTOR
+
+    inherited_engine = _engine
+    lock = threading.Lock()
+    _engine_lock = threading.Lock()
+    _MISSING_NEIGHBOR_DSS_TOX_LOCK = threading.Lock()
+    _INDIGO_UTILS_LOCAL = threading.local()
+    _POSTPROCESS_PREDICTOR = None
+    _engine = None
+    _session_factory = None
+
+    if inherited_engine is not None:
+        try:
+            inherited_engine.dispose()
+        except Exception:
+            logging.debug("Failed to dispose inherited SQLAlchemy engine after fork", exc_info=True)
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_reset_runtime_state_after_fork)
+
+
 @functools.lru_cache(maxsize=4096)
 def _render_smiles_to_base64_cached(smiles_string, width=400, height=400):
     indigo = Indigo()
@@ -1085,6 +1109,23 @@ class ModelPredictor:
         return _get_env_positive_int("PREDICT_REPORT_PROCESSES", 4)
 
     @staticmethod
+    def _get_postprocess_executor_kind():
+        raw_value = os.getenv("PREDICT_REPORT_EXECUTOR", "thread")
+        value = str(raw_value).strip().lower()
+
+        if value in {"thread", "threads"}:
+            return "thread"
+        if value in {"process", "processes"}:
+            return "process"
+
+        logging.warning(
+            "Invalid post-process executor %r; using default=%s",
+            raw_value,
+            "thread",
+        )
+        return "thread"
+
+    @staticmethod
     def _strip_model_details_from_prediction(prediction):
         if isinstance(prediction, list):
             return [ModelPredictor._strip_model_details_from_prediction(item) for item in prediction]
@@ -1939,6 +1980,48 @@ class ModelPredictor:
             )
 
         chunk_size = self._calculate_dynamic_chunk_size(row_count, worker_count)
+        chunk_tasks = []
+        executor_kind = self._get_postprocess_executor_kind()
+
+        if executor_kind == "thread":
+            self._ensure_model_runtime_cache(model)
+            for start, chemicals_chunk in _chunk_sequence(prediction_chemicals, chunk_size):
+                stop = start + len(chemicals_chunk)
+                chunk_tasks.append(
+                    (
+                        batch_prediction_df.iloc[start:stop].copy(),
+                        list(chemicals_chunk),
+                        np.asarray(pred_array[start:stop]).reshape(-1),
+                    )
+                )
+
+            max_workers = min(worker_count, len(chunk_tasks))
+            logging.info(
+                "Running prediction post-processing with threads; rows=%s chunk_size=%s threads=%s",
+                row_count,
+                chunk_size,
+                max_workers,
+            )
+
+            def _process_chunk_thread(task):
+                chunk_prediction_df, chunk_prediction_chemicals, chunk_pred_array = task
+                return self._build_reports_for_precomputed_predictions(
+                    model,
+                    chunk_prediction_df,
+                    chunk_prediction_chemicals,
+                    chunk_pred_array,
+                    report_model_details,
+                    generate_report,
+                )
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                chunk_results = list(executor.map(_process_chunk_thread, chunk_tasks))
+
+            finalized_reports = []
+            for chunk_result in chunk_results:
+                finalized_reports.extend(chunk_result)
+            return finalized_reports
+
         chunk_tasks = []
         for start, chemicals_chunk in _chunk_sequence(prediction_chemicals, chunk_size):
             stop = start + len(chemicals_chunk)
