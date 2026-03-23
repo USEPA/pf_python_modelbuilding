@@ -13,6 +13,7 @@ import requests
 MODEL_IDS = tuple(range(1065, 1071))
 DEFAULT_SMILES_FILE = Path("smiles_cache.smi")
 FAILED_SMILES_FILE = Path("smiles_failed.tsv")
+DEFAULT_ENDPOINT_PATH = "predict"
 RETRYABLE_STATUS_CODES = frozenset({408, 425, 429, 500, 502, 503, 504})
 DEFAULT_RETRY_ATTEMPTS = 2
 DEFAULT_RETRY_BACKOFF_SECONDS = 1.0
@@ -213,6 +214,12 @@ def _analyze_prediction_payload(
 ) -> tuple[int, list[dict]]:
     if not isinstance(payload, list):
         error_message = f"Expected JSON list, got {type(payload).__name__}: {_preview_value(payload)}"
+        if isinstance(payload, dict) and len(smiles_batch) > 1:
+            if any(key in payload for key in ("modelDetails", "modelResults", "chemicalIdentifiers")):
+                error_message += (
+                    " Hint: batch JSON requests in this service should use POST /predictDB, "
+                    "not /predict."
+                )
         return 0, [
             _build_failed_record(
                 model_id,
@@ -551,7 +558,12 @@ def main():
     parser.add_argument(
         "--base-url",
         default="https://cim-dev.sciencedataexperts.com/api/predictor_models",
-        help="Base API URL (without trailing slash)",
+        help="Base API URL prefix (without trailing slash)",
+    )
+    parser.add_argument(
+        "--endpoint-path",
+        default=DEFAULT_ENDPOINT_PATH,
+        help="Prediction endpoint path to append to --base-url, for example predictDB or predict",
     )
     parser.add_argument(
         "--smiles-file",
@@ -609,7 +621,10 @@ def main():
         )
 
     base = args.base_url.rstrip("/")
-    predict_url = f"{base}/predict"
+    endpoint_path = args.endpoint_path.strip().lstrip("/")
+    if not endpoint_path:
+        raise ValueError("--endpoint-path must not be empty")
+    predict_url = f"{base}/{endpoint_path}"
     print_lock = threading.Lock()
     failed_smiles_lock = threading.Lock()
     failed_smiles_path = Path(args.failed_smiles_file)
@@ -617,6 +632,7 @@ def main():
 
     print(f"SMILES loaded from file: {smiles_count}")
     print(f"source_smiles_file: {smiles_file}")
+    print(f"predict_url: {predict_url}")
     print(f"skip_first: {args.skip_first}")
     print(f"batch_size: {args.batch_size}")
     print(f"retry_attempts: {args.retry_attempts}")
