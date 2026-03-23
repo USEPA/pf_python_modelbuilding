@@ -42,12 +42,13 @@ class ModelToExcel:
             session=None,
             model_id: int=1737,
             log_plot: bool=True,
-            add_subtotals: bool=False,
+            add_subtotals: bool=True,
             dataset_name: Optional[str]=None,
             snapshot_id: Optional[int]=None,
             duplicate_strategy: Optional[str]=None,
             model: Optional[Any] = None,
-            df_pv: Optional[pd.DataFrame] = None
+            df_pv: Optional[pd.DataFrame] = None,
+            exclude_blank_columns: bool = False
         ) -> None:
         """
         Initialize ModelToExcel instance for generating QSAR model summary reports.
@@ -101,6 +102,7 @@ class ModelToExcel:
         self.duplicate_strategy = duplicate_strategy
         self.model = model
         self.df_pv = df_pv
+        self.exclude_blank_columns = exclude_blank_columns
     
 
     @staticmethod
@@ -147,7 +149,7 @@ class ModelToExcel:
         model = self.query_model()
 
         summary_dict = {
-            "Model ID": [model.modelId],
+            "Model ID": [int(model.modelId)],
             "Model Name": [model.modelName],
             "Property Name": [model.propertyName],
             "Property Description": [model.propertyDescription],
@@ -466,7 +468,7 @@ class ModelToExcel:
         return records_df
     
 
-    def records(self, writer: Any, records: Optional[pd.DataFrame]=None, add_subtotals: bool=False) -> pd.DataFrame:
+    def records(self, writer: Any, records: Optional[pd.DataFrame]=None, add_subtotals: bool=False, exclude_blank_columns: bool=False) -> pd.DataFrame:
         """
         Create the records sheet in the Excel workbook with detailed experimental data.
         
@@ -481,6 +483,9 @@ class ModelToExcel:
         """
         if records is None:
             records = self.query_records_df() if self.records_df is None else self.records_df
+        
+        if exclude_blank_columns:
+            records = records.dropna(axis=1, how="all")
         
         start_row = ModelToExcel.get_header_row(has_subtotals=add_subtotals)
         records.to_excel(writer, sheet_name="Records", index=False, startrow=start_row)
@@ -533,6 +538,13 @@ class ModelToExcel:
         if records_field_descriptions is None:
             records_field_descriptions = self.get_records_field_descriptions_df() if self.records_field_descriptions_df is None else self.records_field_descriptions_df
         
+        if self.exclude_blank_columns:
+            records = self.query_records_df() if self.records_df is None else self.records_df
+            temp = records.dropna(axis=1, how="all")
+            dropped_columns = set(records.columns) - set(temp.columns)
+            records_field_descriptions = records_field_descriptions[~records_field_descriptions["Field"].isin(dropped_columns)]
+            records_field_descriptions = pd.concat([records_field_descriptions, pd.DataFrame({"Field": ["Dropped Columns"], "Description": [", ".join(list(dropped_columns))]})])
+
         records_field_descriptions.to_excel(writer, sheet_name="Records Field Descriptions", index=False)
 
         workbook = writer.book
@@ -748,7 +760,8 @@ class ModelToExcel:
 
         temp = pd.concat([test, training], ignore_index=True)
 
-        headers = model.headersTsv.split("\t")
+        # headers = model.headersTsv.split("\t")
+        headers = model.embedding
         header_columns = {}
         for header in headers:
             header_columns[header] = temp[header]
@@ -1198,7 +1211,7 @@ class ModelToExcel:
         Returns:
             int: The 0-based row index of the header row.
         """
-        return 1 if has_subtotals else 0
+        return 2 if has_subtotals else 0
     
 
     @staticmethod
@@ -1212,7 +1225,7 @@ class ModelToExcel:
         Returns:
             int: The 0-based row index of the first data row.
         """
-        return 2 if has_subtotals else 1
+        return 3 if has_subtotals else 1
 
 
     @staticmethod
@@ -1234,12 +1247,12 @@ class ModelToExcel:
         
         # Add SUBTOTAL formulas to each column
         # SUBTOTAL(3, range) uses COUNTA function to count non-empty cells
-        # The data now starts at row 3 (0-indexed row 2) after insertion
+        # The data now starts at row 4 (0-indexed row 3) after insertion
         for col_idx in range(ncols):
-            start_cell = xl_rowcol_to_cell(2, col_idx)  # Ensure we are using the correct row index for the formula range
-            end_cell = xl_rowcol_to_cell(nrows + 1, col_idx)  # Data ends at row nrows + 2 (accounting for header and subtotal row)
-            # Range: from row 3 to row (nrows + 3) since we inserted 1 row
-            # (original row 2 is now row 3 due to the insertion)
+            start_cell = xl_rowcol_to_cell(3, col_idx)  # Ensure we are using the correct row index for the formula range
+            end_cell = xl_rowcol_to_cell(nrows + 2, col_idx)  # Data ends at row nrows + 3 (accounting for header and subtotal row)
+            # Range: from row 4 to row (nrows + 4) since we inserted 1 row
+            # (original row 3 is now row 4 due to the insertion)
             range_str = f"{start_cell}:{end_cell}"
             formula = f"=SUBTOTAL(3,{range_str})"
             ws.write_formula(0, col_idx, formula)
@@ -1635,9 +1648,8 @@ class ModelToExcel:
         if sheet_name == sheet_name_plot:
             # Position chart to the right of the data
             # Estimate: each column is ~20 characters wide, chart starts after all data columns
-            num_data_cols = len(df.columns)
             # Add some buffer columns for spacing (typically 1-2 columns)
-            chart_start_col = num_data_cols + 1
+            chart_start_col = len(df.columns)  # + 1?
             chart_position = xl_rowcol_to_cell(data_start_row, chart_start_col)  # Convert to Excel cell reference
             worksheet_plot.insert_chart(chart_position, chart, {"x_offset":20, "y_offset":10})
         else:
@@ -1807,7 +1819,7 @@ class ModelToExcel:
             self.statistics(writer, self.statistics_df)
 
             logging.info("Creating Records...")
-            df = self.records(writer, self.records_df, add_subtotals=self.add_subtotals)
+            df = self.records(writer, self.records_df, add_subtotals=self.add_subtotals, exclude_blank_columns=self.exclude_blank_columns)
 
             logging.info("Creating Records Field Descriptions...")
             df = self.records_field_descriptions(writer, self.records_field_descriptions_df)
@@ -1873,7 +1885,9 @@ def main():
     session = ModelToExcel.getSession(engine)
     model_id = 1737
     excel_path = "test_summary.xlsx"
-    test = ModelToExcel(engine=engine, session=session, model_id=model_id, excel_path=excel_path)
+    add_subtotals = True
+    exclude_blank_columns = True
+    test = ModelToExcel(engine=engine, session=session, model_id=model_id, excel_path=excel_path, add_subtotals=add_subtotals, exclude_blank_columns=exclude_blank_columns)
     test.create_excel()
 
 
