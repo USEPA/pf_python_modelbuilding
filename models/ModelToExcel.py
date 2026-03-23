@@ -604,7 +604,7 @@ class ModelToExcel:
 
         results_dict = {}
         results_dict["model_details"] = {}
-        results_dict["model_details"]["embedding"] = model.embedding
+        results_dict["model_details"]["embedding"] = ["Intercept", *model.embedding]
 
         if any(method in model.qsar_method for method in ["reg", "las", "gcm"]):
             coefficients_df = self.query_model_coefficients()
