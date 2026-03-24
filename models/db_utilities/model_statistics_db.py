@@ -18,6 +18,7 @@ from util.database_utilities import getSession
 from applicability_domain import applicability_domain_utilities as adu
 
 import traceback
+from _tkinter import create
     
 def redo_cv_stats(session, model: Model):
 
@@ -95,6 +96,8 @@ def updateStatsPredictModuleModels():
         # import os
         # print(os.getenv('DEV_QSAR_PASS'))
 
+        create_statistics(session)
+
         mi = ModelInitializer()
 
         # Use left joins so can still get a result if something is missing (like fk_ad_method was not set for model)
@@ -156,6 +159,50 @@ def calculate_AD_stats(df_ad, df_preds, tag, model, session):
     # print(dict_stats)
 
     return MAE_inside_AD, MAE_outside_AD, coverage
+
+
+def create_statistics(session):
+    """
+    Insert two rows into qsar_models.statistics and do nothing if they already exist.
+    - Assumes a UNIQUE constraint on (name) so ON CONFLICT (name) DO NOTHING works.
+    - id is auto-increment, so it is omitted.
+    - created_at uses datetime.now().
+    """
+    now = datetime.now()
+    rows = [
+        {
+            "created_at": now,
+            "created_by": "tmarti02",
+            "description": "Mean absolute error for test set inside the applicability domain",
+            "is_binary": False,
+            "name": "MAE_Test_inside_AD",
+            "updated_at": None,
+            "updated_by": None,
+        },
+        {
+            "created_at": now,
+            "created_by": "tmarti02",
+            "description": "Mean absolute error for test set outside the applicability domain",
+            "is_binary": False,
+            "name": "MAE_Test_outside_AD",
+            "updated_at": None,
+            "updated_by": None,
+        },
+    ]
+
+    insert_sql = text("""
+        INSERT INTO qsar_models.statistics
+            (created_at, created_by, description, is_binary, name, updated_at, updated_by)
+        VALUES
+            (:created_at, :created_by, :description, :is_binary, :name, :updated_at, :updated_by)
+        ON CONFLICT (name) DO NOTHING
+    """)
+
+    session.execute(insert_sql, rows)
+    session.commit()
+    
+    
+
 
 def update_statistic_value(session, model_id: int, statistic_name: str, new_statistic_value: float, user_id: str):
     try:
