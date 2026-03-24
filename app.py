@@ -14,7 +14,6 @@ import coloredlogs
 import connexion
 from connexion.middleware import MiddlewarePosition
 from connexion.options import SwaggerUIOptions
-from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse, StreamingResponse
 
@@ -24,8 +23,6 @@ from util.helpers import (
     make_predictdb_post_response,
     make_predictdb_response,
 )
-
-load_dotenv()
 
 CIM_API_SERVER = os.getenv("CIM_API_SERVER", "https://cim-dev.sciencedataexperts.com")
 
