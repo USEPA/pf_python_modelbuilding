@@ -619,7 +619,7 @@ def main():
     )
     parser.add_argument(
         "--base-url",
-        default="https://cim-dev.sciencedataexperts.com/api/predictor_models",
+        default="https://cim.sciencedataexperts.com/api/predictor_models",
         help="Base API URL prefix (without trailing slash)",
     )
     parser.add_argument(
