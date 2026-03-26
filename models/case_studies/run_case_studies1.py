@@ -140,7 +140,7 @@ def run_fish_tox():
 def test_model_summary():
     engine = getEngine()
     session = getSession()
-    model_id = 1737
+    model_id = 1746
     excel_path = "summary.xlsx"
     test = ModelToExcel(engine, session, model_id, excel_path)
     test.create_excel()
@@ -150,8 +150,34 @@ def test_model_summary_local():
     dataset_name = "KOC v1 modeling"
     run_dataset(dataset_name=dataset_name, qsar_method='rf', feature_selection=False, create_detailed_excel=True)  # OK
 
-# split_num
-# fk_data_point_id
+
+def test_load_model_with_external_set():
+    create_unique_excel = False
+    write_to_db = False
+    # write_to_db = True
+    dataset_name = "KOC v1 modeling"
+    user = "murdock.weston"
+
+    # ad_measure_model = [pc.Applicability_Domain_TEST_Embedding_Euclidean, pc.Applicability_Domain_TEST_Fragment_Counts]
+    ad_measure_model = [pc.Applicability_Domain_TEST_Embedding_Euclidean, pc.Applicability_Domain_TEST_Fragment_Counts]
+
+    # run_dataset(dataset_name=dataset_name, qsar_method='gcm', feature_selection=False, ad_measure_model=ad_measure_model,
+    #             write_to_db=write_to_db, create_unique_excel=create_unique_excel, create_detailed_excel=False)  # OK
+    
+    run_dataset(dataset_name=dataset_name, qsar_method='gcm', feature_selection=False, ad_measure_model=ad_measure_model,
+                write_to_db=write_to_db, create_unique_excel=create_unique_excel, create_detailed_excel=True, user=user)  # OK
+
+    # Models to upload:
+    # for method in ['rf','xgb', 'reg','knn']:
+    #     run_dataset(dataset_name=dataset_name, qsar_method=method, feature_selection=True, 
+    #                 ad_measure_model=ad_measure_model,write_to_db=write_to_db, create_unique_excel=create_unique_excel)  # OK
+    
+    # embedding = ["ALOGP2","nBnz","MATS6v","ATS1p","nDB","Lop","MATS1p"]
+    # results_dict = run_dataset(dataset_name=dataset_name, qsar_method='rf', feature_selection=False, 
+    #                            embedding=embedding, write_to_db=write_to_db, create_unique_excel=create_unique_excel)
+
+    r = Results()
+    r.summarize_model_stats(dataset_name)
 
 
 if __name__ == '__main__':
@@ -159,7 +185,7 @@ if __name__ == '__main__':
     # run_example()
     # run_Koc_knn_ga()
         
-    run_Koc()
+    # run_Koc()
     # run_fish_tox()
     # test_create_model()
     # test_model_summary()
@@ -169,4 +195,5 @@ if __name__ == '__main__':
     # test_create_model()
     # test_model_summary()
     # test_model_summary_local()
+    test_load_model_with_external_set()
 
