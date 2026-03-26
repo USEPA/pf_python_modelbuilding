@@ -203,8 +203,13 @@ class Model:
         self.num_training = None
         self.num_prediction = None
                 
-        self.df_preds_test = None # external predictions for test set
-        self.df_preds_training_cv = None #cross validation predictions for training set
+        self.df_preds_test = None  # external predictions for test set
+        self.df_preds_training_cv = None  # cross validation predictions for training set
+
+        self.external_dataset_name = None
+        self.num_external = None
+        self.df_dsstoxRecords_external = None  # dsstoxRecords for external set
+        self.df_preds_external = None  # external predictions for external set
         
         self.detailsFile = None
 
@@ -1188,6 +1193,10 @@ class ModelDescription:
         self.hyperparameters = model.hyperparameters  # final hyperparameters
         self.training_stats = model.training_stats
         self.use_pmml = model.use_pmml
+
+        # New Attributes
+        self.externalDatasetName = model.external_dataset_name
+        self.numExternal = model.num_external
 
         if hasattr(model, "training_descriptor_std_devs"):
             self.include_standardization_in_pmml = False

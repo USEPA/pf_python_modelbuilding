@@ -213,6 +213,100 @@ class ModelInitializer:
         finally:
             session.close()
 
+    def get_external_dataset_name(self, session, model: Model):
+        if hasattr(model, "external_dataset_name") and model.external_dataset_name:
+            return model.external_dataset_name
+
+        logging.debug("Getting external dataset name")
+
+        sql = text("""
+            select external_dataset_name
+            from qsar_models.models
+            where id = :model_id
+            """)
+        
+        try:
+            results = session.execute(sql, {"model_id": model.modelId})
+            row = results.fetchone()
+            if row:
+                return row[0]
+            else:
+                return None
+        except SQLAlchemyError as ex:
+            print(f"An error occurred: {ex}")
+            return None
+        finally:
+            session.close()
+
+    def get_external_predictions(self, session, model: Model, external_dataset_name: str=None):
+
+        logging.debug("Getting model external set TSVs")
+
+        sql = text("""
+            select dp.canon_qsar_smiles, dp.qsar_property_value, p.qsar_predicted_value
+            from qsar_models.predictions p
+            join qsar_datasets.data_points dp
+                on dp.canon_qsar_smiles = p.canon_qsar_smiles
+            join qsar_datasets.datasets d
+                on d.id = dp.fk_dataset_id
+            where
+                p.fk_model_id = :model_id and
+                p.fk_splitting_id = :fk_splitting_id and
+                d.name = :dataset_name;
+            """)
+        # print(sql)
+        try:
+            results = session.execute(sql, {'model_id': model.modelId,
+                                            'fk_splitting_id': 43,
+                                            'dataset_name': external_dataset_name})
+            df = pd.DataFrame(results, columns=["id", "exp", "pred"])
+            return df
+
+        except SQLAlchemyError as ex:
+            print(f"An error occurred: {ex}")
+        finally:
+            session.close()
+        
+    def get_dsstox_records_for_dataset_external(self, session, model: Model, external_dataset_name: str=None):
+        try:
+            # Get a connection from the session
+            connection = session.connection()
+
+            # SQL query to retrieve bytes
+            
+            # TODO: need to fix because the dtxcid may have changed so that the dsstox record will be retrieved
+
+            # Note: in the data_points table, sometimes the qsar_dtxcid is pipe delimited pair of cids
+            sql = """
+                SELECT dp.canon_qsar_smiles as "canonicalSmiles", dr.dtxsid as sid, dr.dtxcid as cid, dr.casrn, dr.preferred_name as "name" , dr.smiles, dr.indigo_inchi_key as "inchiKey"
+                    FROM qsar_datasets.datasets d
+                    JOIN qsar_datasets.data_points dp ON dp.fk_dataset_id = d.id
+                    LEFT JOIN qsar_models.dsstox_records dr ON dr.dtxcid = split_part(dp.qsar_dtxcid, '|', 1)
+                """                
+
+            sql = text(sql + "\nWHERE d.name = :datasetName and dr.fk_dsstox_snapshot_id = :fk_dsstox_snapshot_id;")
+
+            # print(sql)
+
+            # Execute the query with the parameter
+            result = connection.execute(sql, {"datasetName": external_dataset_name, "fk_dsstox_snapshot_id": fk_dsstox_snapshot_id})
+
+            # Convert result to DataFrame
+            df = pd.DataFrame(result.fetchall(), columns=result.keys())
+
+            model.df_dsstoxRecords_external = df;
+            
+            none_sid_smiles = df[df['sid'].isnull()]['canonicalSmiles']
+
+            if len(none_sid_smiles) > 0:
+                print(model.modelId, "Have canonicalSmiles in dataset that isn't in dsstox records:", none_sid_smiles)
+
+            return df
+
+        except Exception as e:
+            print(f"Exception occurred: {e}")
+            return None
+
     def get_model_details(self, m: Model, session):
         """
         Gets m meta data (except training and test set tsvs).
@@ -307,6 +401,12 @@ class ModelInitializer:
         # get following for pred values for neighbors:
         model.df_preds_test = self.get_predictions(session, model=model, split_num=1, fk_splitting_id=1)
         model.df_preds_training_cv = self.get_cv_predictions(session, model)
+
+        model.external_dataset_name = self.get_external_dataset_name(session, model)
+        if model.external_dataset_name:
+            self.get_dsstox_records_for_dataset_external(session, model=model, external_dataset_name=model.external_dataset_name)
+            model.df_preds_external = self.get_external_predictions(session, model=model, external_dataset_name=model.external_dataset_name)  # Get external set predictions
+            model.num_external = model.df_preds_external.shape[0]
 
         logging.debug(f"model_description with added metadata:{model.get_model_description_pretty()}")
 
