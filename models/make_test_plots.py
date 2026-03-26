@@ -8,7 +8,7 @@ import json
 from math import floor, ceil
 import numpy as np
 import matplotlib.pyplot as plt
-
+import io
 
 
 def getBin(exps, property_name,unit_name):
@@ -149,7 +149,8 @@ def generateHistogram(file_path_json, property_name, unit_name, mpsTraining, mps
     plt.savefig(fileOutHistogram, dpi=300)
     plt.close()
     
-def generateHistogram2(fileOutHistogram, property_name, unit_name, mpsTraining, mpsTest, seriesNameTrain, seriesNameTest):
+def generateHistogram2(fileOutHistogram, property_name, unit_name, mpsTraining, mpsTest, seriesNameTrain, seriesNameTest, displayPlots=False):
+    
     expsTraining = getExpArray(mpsTraining)
 
     expsTest = getExpArray(mpsTest)
@@ -177,7 +178,7 @@ def generateHistogram2(fileOutHistogram, property_name, unit_name, mpsTraining, 
 
     plt.xlabel('Experimental ' + unit_name)
     plt.ylabel('Count')
-    plt.title("Histogram of " + property_name + " datasets")
+    plt.title("Histogram of " + property_name + " Datasets")
 
     # plt.legend(loc='upper left')
 
@@ -190,11 +191,22 @@ def generateHistogram2(fileOutHistogram, property_name, unit_name, mpsTraining, 
     else:
         plt.legend(loc="upper right")
 
+    if displayPlots:    
+        plt.show()
 
-    # plt.show()
+    # Save figure to bytes
+    buf = io.BytesIO()
+    fig.savefig(buf, format='png')  # uses fig's dpi=200
+    img_bytes = buf.getvalue()
+    buf.close()
 
-    plt.savefig(fileOutHistogram, dpi=200)
-    plt.close()
+    # Optionally also save to a file path if provided
+    if fileOutHistogram:
+        with open(fileOutHistogram, 'wb') as f:
+            f.write(img_bytes)
+
+    plt.close(fig)
+    return img_bytes
 
 
 def getMinMax2(exp1, exp2):
@@ -349,13 +361,13 @@ def generateScatterPlot3(filePathOut, title, unitName, mps, seriesName, limits=N
     return limits
 
 def generateScatterPlot2(filePathOut, title, unitName, mpsTraining, mpsTest, seriesNameTrain,
-                    seriesNameTest):
+                    seriesNameTest, displayPlots=False):
     
         
     expsTraining, predsTraining = getArraysOmitNullPreds(mpsTraining)
     expsTest, predsTest = getArraysOmitNullPreds(mpsTest)
 
-    fig, ax = plt.subplots(figsize=(5, 5), layout='constrained', dpi=150)
+    fig, ax = plt.subplots(figsize=(5, 5), layout='constrained', dpi=200)
 
     plt.xlabel('Experimental ' + unitName)
     plt.ylabel('Predicted  '+ unitName)
@@ -378,6 +390,9 @@ def generateScatterPlot2(filePathOut, title, unitName, mpsTraining, mpsTest, ser
     # ax.plot(exp, yreg, label='Regression ('+strR2+')',color='red')
 
     plt.legend(loc="lower right")
+    
+    if displayPlots:
+        plt.show()
 
     # plt.savefig(fileOutPNG)
     # figure = plt.gcf()  # get current figure
@@ -385,8 +400,18 @@ def generateScatterPlot2(filePathOut, title, unitName, mpsTraining, mpsTest, ser
     # when saving, specify the DPI
 
     # print(fileOut)
-    plt.savefig(filePathOut, dpi=200)
-    plt.close()
+    buf = io.BytesIO()
+    fig.savefig(buf, format='png')  # uses fig's dpi=200
+    img_bytes = buf.getvalue()
+    buf.close()
+
+    # Optionally also save to a file path if provided
+    if filePathOut is not None:
+        with open(filePathOut, 'wb') as f:
+            f.write(img_bytes)
+
+    plt.close(fig)
+    return img_bytes
 
 def generateScatterPlot(file_path_json, property_name, unit_name, mpsTraining, mpsTest, seriesNameTrain,
                         seriesNameTest):
