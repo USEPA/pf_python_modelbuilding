@@ -108,7 +108,12 @@ class ExpDataGetter:
                 pv.value_original AS prop_value_original,
                 pv.value_text AS prop_value_text,
                 pv.page_url AS direct_url,
-                pv.document_name AS brief_citation
+                pv.document_name AS brief_citation,
+                pv.notes AS notes,
+                pv.qc_flag AS qc_flag,
+                pv.keep_reason AS flag_reason,
+                pv.value_max AS value_max,
+                pv.value_min AS value_min
             FROM qsar_datasets.data_points AS dp
             JOIN qsar_datasets.data_point_contributors AS dpc
                 ON dpc.fk_data_point_id = dp.id

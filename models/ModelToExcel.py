@@ -26,7 +26,7 @@ logging.basicConfig(level=logging.INFO, force=True)
 class ModelToExcel:
     def __init__(
             self,
-            excel_path: str="summary.xlsx",
+            excel_path: str = "summary.xlsx",
             cover_sheet_df: Optional[pd.DataFrame] = None,
             statistics_df: Optional[pd.DataFrame] = None,
             training_set_df: Optional[pd.DataFrame] = None,
@@ -38,17 +38,18 @@ class ModelToExcel:
             external_predictions_df: Optional[pd.DataFrame] = None,
             model_descriptors_df: Optional[pd.DataFrame] = None,
             model_descriptor_values_df: Optional[pd.DataFrame] = None,
-            engine=None,
-            session=None,
-            model_id: int=1737,
-            log_plot: bool=True,
-            add_subtotals: bool=True,
-            dataset_name: Optional[str]=None,
-            snapshot_id: Optional[int]=None,
-            duplicate_strategy: Optional[str]=None,
+            engine = None,
+            session = None,
+            model_id: int = 1746,
+            log_plot: bool = True,
+            add_subtotals: bool = True,
+            dataset_name: Optional[str] = None,
+            snapshot_id: Optional[int] = None,
+            duplicate_strategy: Optional[str] = None,
             model: Optional[Any] = None,
             df_pv: Optional[pd.DataFrame] = None,
-            exclude_blank_columns: bool = False
+            exclude_blank_columns: bool = True,
+            display_dropped_columns: bool = False
         ) -> None:
         """
         Initialize ModelToExcel instance for generating QSAR model summary reports.
@@ -103,6 +104,7 @@ class ModelToExcel:
         self.model = model
         self.df_pv = df_pv
         self.exclude_blank_columns = exclude_blank_columns
+        self.display_dropped_columns = display_dropped_columns
     
 
     @staticmethod
@@ -128,9 +130,11 @@ class ModelToExcel:
             "nTest": [results_dict["model_details"].get("numPrediction", None)],
             "Method Name": [results_dict["model_details"].get("qsar_method", None)],
             "Method Description": [results_dict["model_details"].get("qsar_method_description", None)],
-            "Applicability Domain": [results_dict["model_details"].get("applicabilityDomainName", None)],
-            # "Applicability Domain Cutoff": [results_dict["model_details"].get("applicabilityDomainCutoff", None)] # TODO
+            "Applicability Domain": [results_dict["model_details"].get("applicabilityDomainName", None)]
         }
+        if results_dict["model_details"].get("externalDatasetName", None):
+            cover_sheet_df["External Dataset Name"] = [results_dict["model_details"].get("externalDatasetName", None)]
+            cover_sheet_df["nExternal"] = [results_dict["model_details"].get("numExternal", None)]
         cover_sheet_df = pd.DataFrame.from_dict(cover_sheet_df)
         return cover_sheet_df
     
@@ -160,8 +164,11 @@ class ModelToExcel:
             "nTest": [model.num_prediction],
             "Method Name": [model.modelMethod],
             "Method Description": [model.modelMethodDescription],
-            "Applicability Domain": [model.applicabilityDomainName],
+            "Applicability Domain": [model.applicabilityDomainName]
         }
+        if hasattr(model, "external_dataset_name") and model.external_dataset_name:
+            summary_dict["External Dataset Name"] = [model.external_dataset_name]
+            summary_dict["nExternal"] = [model.num_external]
         summary = pd.DataFrame(summary_dict)
 
         self.cover_sheet_df = summary
@@ -400,14 +407,14 @@ class ModelToExcel:
         records_df = {
             "exp_prop_id": df_pv["prop_value_id"],
             "canon_qsar_smiles": df_pv["canon_qsar_smiles"],
-            "page_url": None, # df_pv["direct_url"]
+            "page_url": df_pv["direct_url"], # df_pv["direct_url"]
             "public_source_name": df_pv["public_source_name"],
             "public_source_url": df_pv["public_source_url"],
-            "public_source_original_name": None,
-            "public_source_original_url": None,
+            # "public_source_original_name": None,  # Doesn't seem to be used/useful
+            # "public_source_original_url": None,  # Doesn't seem to be used/useful
             "literature_source_citation": df_pv["literature_source_citation"],
             "literature_source_doi": df_pv["literature_source_doi"],
-            "source_dtxrid": None,
+            # "source_dtxrid": None,  # Can't find in db yet
             "source_dtxsid": df_pv["source_dtxsid"],
             "source_casrn": df_pv["source_casrn"],
             "source_chemical_name": df_pv["source_chemical_name"],
@@ -419,17 +426,18 @@ class ModelToExcel:
             "mapped_smiles": df_pv["mapped_smiles"],
             "mapped_molweight": df_pv["mapped_mol_weight"],
             "value_original": df_pv["prop_value_original"],
-            "value_max": None, # Might need to add to models.dataset_utilities_db.getSqlPropertyValuesForDataset
-            "value_min": None, # Might need to add to models.dataset_utilities_db.getSqlPropertyValuesForDataset
+            "value_max": df_pv["value_max"],  # Edited
+            "value_min": df_pv["value_min"],  # Edited
             "value_point_estimate": df_pv["prop_value"],
             "value_units": df_pv["prop_unit"],
             "qsar_property_value": df_pv["qsar_property_value"],
             "qsar_property_units": df_pv["qsar_property_unit"],
             "temperature_c": df_pv["exp_details_temperature_value_point_estimate"],
-            "pressure_mmHg": None,
+            # "pressure_mmHg": None,  # Not currently stored in exp_prop.property_values
             "pH": df_pv["exp_details_ph_value_point_estimate"],
-            "notes": None,
-            "qc_flag": None,
+            "notes": df_pv["notes"],  # Added
+            "qc_flag": df_pv["qc_flag"],  # Added
+            "flag_reason": df_pv["flag_reason"]  # Added
         }
         records_df = pd.DataFrame.from_dict(records_df)
         return records_df
@@ -445,7 +453,7 @@ class ModelToExcel:
             pd.DataFrame: Records dataframe from database (currently returns empty result).
         """
         # TODO: Determine if this is the correct way to build the Records df, or if we should use the Model object
-        logging.info("Querying database for Records")
+        logging.info(f"Building Records from Model {self.model_id}")
         if self.dataset_name is None:
             try:
                 model = self.query_model()
@@ -463,12 +471,12 @@ class ModelToExcel:
         edg = ExpDataGetter()
         df_pv, unique_params = edg.get_mapped_property_values(self.session, self.dataset_name, self.snapshot_id, duplicate_strategy=self.duplicate_strategy)
         records_df = ModelToExcel.get_records_df(df_pv)
-        logging.info("Finished querying database for Records")
+        logging.info(f"Finished building Records from Model {self.model_id}")
         self.records_df = records_df
         return records_df
     
 
-    def records(self, writer: Any, records: Optional[pd.DataFrame]=None, add_subtotals: bool=False, exclude_blank_columns: bool=False) -> pd.DataFrame:
+    def records(self, writer: Any, records: Optional[pd.DataFrame]=None, add_subtotals: bool=True, exclude_blank_columns: bool=True) -> pd.DataFrame:
         """
         Create the records sheet in the Excel workbook with detailed experimental data.
         
@@ -543,7 +551,8 @@ class ModelToExcel:
             temp = records.dropna(axis=1, how="all")
             dropped_columns = set(records.columns) - set(temp.columns)
             records_field_descriptions = records_field_descriptions[~records_field_descriptions["Field"].isin(dropped_columns)]
-            records_field_descriptions = pd.concat([records_field_descriptions, pd.DataFrame({"Field": ["Dropped Columns"], "Description": [", ".join(list(dropped_columns))]})])
+            if self.display_dropped_columns and dropped_columns:
+                records_field_descriptions = pd.concat([records_field_descriptions, pd.DataFrame({"Field": ["Dropped Columns"], "Description": [", ".join(list(dropped_columns))]})])
 
         records_field_descriptions.to_excel(writer, sheet_name="Records Field Descriptions", index=False)
 
@@ -633,7 +642,7 @@ class ModelToExcel:
         return model_descriptors
     
 
-    def model_descriptors(self, writer: Any, model_descriptors: Optional[pd.DataFrame]=None, add_subtotals: bool=False) -> pd.DataFrame:
+    def model_descriptors(self, writer: Any, model_descriptors: Optional[pd.DataFrame]=None, add_subtotals: bool=True) -> pd.DataFrame:
         """
         Create the model descriptors sheet in the Excel workbook.
         
@@ -787,7 +796,7 @@ class ModelToExcel:
         return model_descriptor_values_df
     
 
-    def model_descriptor_values(self, writer: Any, model_descriptor_values: Optional[pd.DataFrame]=None, add_subtotals: bool=False) -> pd.DataFrame:
+    def model_descriptor_values(self, writer: Any, model_descriptor_values: Optional[pd.DataFrame]=None, add_subtotals: bool=True) -> pd.DataFrame:
         """
         Create the model descriptor values sheet in the Excel workbook.
         
@@ -847,7 +856,7 @@ class ModelToExcel:
         Returns:
             pd.DataFrame: Training predictions from database (currently returns empty result).
         """
-        logging.info("Querying database for Training CV Predictions")
+        logging.info(f"Building Training CV Predictions from Model {self.model_id}")
 
         model = self.query_model()
         df_pv = self.query_df_pv()
@@ -877,12 +886,12 @@ class ModelToExcel:
 
         self.training_cv_predictions_df = training_cv_predictions_df
 
-        logging.info("Finished querying database for Training CV Predictions")
+        logging.info(f"Finished building Training CV Predictions from Model {self.model_id}")
 
         return training_cv_predictions_df
     
 
-    def training_cv_predictions(self, writer: Any, training_cv_predictions: Optional[pd.DataFrame]=None, add_subtotals: bool=False, x_col: str=None, y_col: str=None, chart_size_px: int=520, pad_ratio: float=0.02, integer_ticks: bool=True, yx_offset_rows: int=3, col_width_pad: int=5, min_col_width: int=7, property_name: Optional[str]=None, property_units: Optional[str]=None) -> pd.DataFrame:
+    def training_cv_predictions(self, writer: Any, training_cv_predictions: Optional[pd.DataFrame]=None, add_subtotals: bool=True, x_col: str=None, y_col: str=None, chart_size_px: int=520, pad_ratio: float=0.02, integer_ticks: bool=True, yx_offset_rows: int=3, col_width_pad: int=5, min_col_width: int=7, property_name: Optional[str]=None, property_units: Optional[str]=None) -> pd.DataFrame:
         """
         Create the training CV predictions sheet in the Excel workbook with scatter plot.
         
@@ -962,7 +971,7 @@ class ModelToExcel:
         Returns:
             pd.DataFrame: Test predictions from database (currently returns empty result).
         """
-        logging.info("Querying database for Test Set Predictions")
+        logging.info(f"Building Test Set Predictions from Model {self.model_id}")
 
         model = self.query_model()
         df_pv = self.query_df_pv()
@@ -998,12 +1007,12 @@ class ModelToExcel:
 
         self.test_set_predictions_df = test_set_predictions_df
 
-        logging.info("Finished querying database for Test Set Predictions")
+        logging.info(f"Finished building Test Set Predictions from Model {self.model_id}")
 
         return test_set_predictions_df
     
 
-    def test_set_predictions(self, writer: Any, test_set_predictions: Optional[pd.DataFrame]=None, add_subtotals: bool=False, x_col: str=None, y_col: str=None, chart_size_px: int=520, pad_ratio: float=0.02, integer_ticks: bool=True, yx_offset_rows: int=3, col_width_pad: int=5, min_col_width: int=7, property_name: Optional[str]=None, property_units: Optional[str]=None) -> pd.DataFrame:
+    def test_set_predictions(self, writer: Any, test_set_predictions: Optional[pd.DataFrame]=None, add_subtotals: bool=True, x_col: str=None, y_col: str=None, chart_size_px: int=520, pad_ratio: float=0.02, integer_ticks: bool=True, yx_offset_rows: int=3, col_width_pad: int=5, min_col_width: int=7, property_name: Optional[str]=None, property_units: Optional[str]=None) -> pd.DataFrame:
         """
         Create the test set predictions sheet in the Excel workbook with scatter plot.
         
@@ -1075,11 +1084,36 @@ class ModelToExcel:
         Returns:
             pd.DataFrame: External predictions from database (currently returns empty result).
         """
-        # TODO: Implement SQL query for external predictions
-        return None
+        logging.info(f"Building External Predictions from Model {self.model_id}")
+
+        model = self.query_model()
+        df_pv = self.query_df_pv()
+
+        temp = pd.merge(model.df_preds_external, model.df_dsstoxRecords_external, left_on="id", right_on="canonicalSmiles", how="left")
+        temp = pd.merge(temp, df_pv, on="casrn", how="left")
+
+        external_predictions_dict = {
+            "exp_prop_id": temp["qsar_exp_prop_property_values_id_first"],
+            "canon_qsar_smiles": temp["canonicalSmiles"],
+            "exp": temp["exp"],
+            "pred": temp["pred"],
+            "dtxcid": temp["cid"],
+            "dtxsid": temp["sid"],
+            "casrn": temp["casrn"],
+            "preferred_name": temp["name"],
+            "smiles": temp["smiles_x"],
+            "mol_weight": temp["mol_weight"]
+        }
+        external_predictions_df = pd.DataFrame(external_predictions_dict)
+
+        self.external_predictions_df = external_predictions_df
+
+        logging.info(f"Finished building External Predictions from Model {self.model_id}")
+
+        return external_predictions_df
     
 
-    def external_predictions(self, writer: Any, external_predictions: Optional[pd.DataFrame]=None, add_subtotals: bool=False, x_col: str=None, y_col: str=None, chart_size_px: int=520, pad_ratio: float=0.02, integer_ticks: bool=True, yx_offset_rows: int=3, col_width_pad: int=5, min_col_width: int=7, property_name: Optional[str]=None, property_units: Optional[str]=None) -> Optional[pd.DataFrame]:
+    def external_predictions(self, writer: Any, external_predictions: Optional[pd.DataFrame]=None, add_subtotals: bool=True, x_col: str=None, y_col: str=None, chart_size_px: int=520, pad_ratio: float=0.02, integer_ticks: bool=True, yx_offset_rows: int=3, col_width_pad: int=5, min_col_width: int=7, property_name: Optional[str]=None, property_units: Optional[str]=None) -> Optional[pd.DataFrame]:
         """
         Create the external predictions sheet in the Excel workbook with scatter plot.
         
@@ -1257,7 +1291,7 @@ class ModelToExcel:
             formula = f"=SUBTOTAL(3,{range_str})"
             ws.write_formula(0, col_idx, formula)
         
-        logging.info(f"Added SUBTOTAL formulas to {sheet_name} with {ncols} columns")
+        logging.debug(f"Added SUBTOTAL formulas to {sheet_name} with {ncols} columns")
 
 
     @staticmethod
@@ -1358,7 +1392,7 @@ class ModelToExcel:
         df_source: pd.DataFrame,
         df_target: pd.DataFrame,
         link_column: str = "exp_prop_id",
-        has_subtotals: bool=False) -> None:
+        has_subtotals: bool=True) -> None:
         """
         Add hyperlinks from source sheet to target sheet based on a matching column.
         Uses xlsxwriter to add hyperlinks. Avoids needing to close and reopen the file,
@@ -1377,15 +1411,15 @@ class ModelToExcel:
         
         
         if df_source is None or df_source.empty:
-            logging.warning(f"Source dataframe {source_sheet} is empty or None. Skipping hyperlinks.")
+            logging.error(f"Source dataframe {source_sheet} is empty or None. Skipping hyperlinks.")
             return
         
         if link_column not in df_source.columns:
-            logging.warning(f"Column '{link_column}' not found in source dataframe {source_sheet}.")
+            logging.error(f"Column '{link_column}' not found in source dataframe {source_sheet}.")
             return
         
         if link_column not in df_target.columns:
-            logging.warning(f"Column '{link_column}' not found in target dataframe {target_sheet}.")
+            logging.error(f"Column '{link_column}' not found in target dataframe {target_sheet}.")
             return
         
         # Get the worksheets
@@ -1404,8 +1438,8 @@ class ModelToExcel:
             key = str(val).strip() if pd.notna(val) else None
             target_row_map[key] = excel_row
         
-        logging.info(f"Created target mapping with {len(target_row_map)} entries for {target_sheet}")
-        logging.info(f"Target link column: '{link_column}' at Excel column {target_link_col_letter}")
+        logging.debug(f"Created target mapping with {len(target_row_map)} entries for {target_sheet}")
+        logging.debug(f"Target link column: '{link_column}' at Excel column {target_link_col_letter}")
         
         # Find the source column letter for the link column (where we'll add hyperlinks)
         source_link_col_index = df_source.columns.get_loc(link_column) + 1
@@ -1851,7 +1885,7 @@ class ModelToExcel:
             df = self.external_predictions(writer, self.external_predictions_df, add_subtotals=self.add_subtotals, x_col=x_col, y_col=y_col, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, yx_offset_rows=yx_offset_rows, col_width_pad=col_width_pad, min_col_width=min_col_width, property_name=property_name, property_units=property_units)
 
             # logging.info("Done creating detailed Excel!")
-            logging.info("Done with initial passthrough of all sheets!")
+            # logging.info("Done with initial passthrough of all sheets!")
 
             # Add Hyperlinks
             logging.info("Adding hyperlinks...")
@@ -1871,6 +1905,8 @@ class ModelToExcel:
                 ModelToExcel.add_hyperlinks_to_sheet(writer, "Test Set Predictions", "Records", self.test_set_predictions_df, self.records_df, has_subtotals=self.add_subtotals)
             except Exception as e:
                 logging.error(f"Error adding hyperlinks: {e}")
+            
+            logging.info("Done creating detailed Excel!")
 
 
 def custom_encoder(obj):
@@ -1883,7 +1919,7 @@ def custom_encoder(obj):
 def main():
     engine = ModelToExcel.getEngine()
     session = ModelToExcel.getSession(engine)
-    model_id = 1737
+    model_id = 1746
     excel_path = "test_summary.xlsx"
     add_subtotals = True
     exclude_blank_columns = True
@@ -1894,7 +1930,7 @@ def main():
 def main2():
     engine = ModelToExcel.getEngine()
     session = ModelToExcel.getSession(engine)
-    model_id = 1737
+    model_id = 1746
     excel_path = "test_summary.xlsx"
     test = ModelToExcel(engine=engine, session=session, model_id=model_id, excel_path=excel_path)
     model = test.query_model()
