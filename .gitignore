@@ -2,7 +2,6 @@
 *.pyc
 *.p
 *.zip
-data/
 src old/
 __pycache__/
 bash.exe.stackdump
@@ -22,7 +21,6 @@ datasets_benchmark/
 datasets_benchmark_TEST/
 *.pmml
 *.tsv
-*.png
 *.json
 *.pdf
 models/old/__init__.py
