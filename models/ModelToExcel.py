@@ -48,8 +48,13 @@ class ModelToExcel:
             duplicate_strategy: Optional[str] = None,
             model: Optional[Any] = None,
             df_pv: Optional[pd.DataFrame] = None,
+            df_gmd: Optional[pd.DataFrame] = None,
             exclude_blank_columns: bool = True,
-            display_dropped_columns: bool = False
+            include_qc_columns: bool = False,
+            include_value_original: bool = False,
+            display_dropped_columns: bool = False,
+            dataset_name_external: Optional[str] = None,
+            df_gmd_external: Optional[pd.DataFrame] = None
         ) -> None:
         """
         Initialize ModelToExcel instance for generating QSAR model summary reports.
@@ -103,8 +108,13 @@ class ModelToExcel:
         self.duplicate_strategy = duplicate_strategy
         self.model = model
         self.df_pv = df_pv
+        self.df_gmd = df_gmd
         self.exclude_blank_columns = exclude_blank_columns
+        self.include_qc_columns = include_qc_columns
+        self.include_value_original = include_value_original
         self.display_dropped_columns = display_dropped_columns
+        self.dataset_name_external = dataset_name_external
+        self.df_gmd_external = df_gmd_external
     
 
     @staticmethod
@@ -132,7 +142,7 @@ class ModelToExcel:
             "Method Description": [results_dict["model_details"].get("qsar_method_description", None)],
             "Applicability Domain": [results_dict["model_details"].get("applicabilityDomainName", None)]
         }
-        if results_dict["model_details"].get("externalDatasetName", None):
+        if results_dict["model_details"].get("externalDatasetName", False):
             cover_sheet_df["External Dataset Name"] = [results_dict["model_details"].get("externalDatasetName", None)]
             cover_sheet_df["nExternal"] = [results_dict["model_details"].get("numExternal", None)]
         cover_sheet_df = pd.DataFrame.from_dict(cover_sheet_df)
@@ -405,39 +415,39 @@ class ModelToExcel:
             pd.DataFrame: Records dataframe with standardized columns for chemical, source, and experimental information.
         """
         records_df = {
-            "exp_prop_id": df_pv["prop_value_id"],
-            "canon_qsar_smiles": df_pv["canon_qsar_smiles"],
-            "page_url": df_pv["direct_url"], # df_pv["direct_url"]
-            "public_source_name": df_pv["public_source_name"],
-            "public_source_url": df_pv["public_source_url"],
+            "exp_prop_id": df_pv.get("prop_value_id", None),
+            "canon_qsar_smiles": df_pv.get("canon_qsar_smiles", None),
+            "page_url": df_pv.get("direct_url", None),
+            "public_source_name": df_pv.get("public_source_name", None),
+            "public_source_url": df_pv.get("public_source_url", None),
             # "public_source_original_name": None,  # Doesn't seem to be used/useful
             # "public_source_original_url": None,  # Doesn't seem to be used/useful
-            "literature_source_citation": df_pv["literature_source_citation"],
-            "literature_source_doi": df_pv["literature_source_doi"],
-            # "source_dtxrid": None,  # Can't find in db yet
-            "source_dtxsid": df_pv["source_dtxsid"],
-            "source_casrn": df_pv["source_casrn"],
-            "source_chemical_name": df_pv["source_chemical_name"],
-            "source_smiles": df_pv["source_smiles"],
-            "mapped_dtxcid": df_pv["mapped_dtxcid"],
-            "mapped_dtxsid": df_pv["mapped_dtxsid"],
-            "mapped_cas": df_pv["mapped_casrn"],
-            "mapped_chemical_name": df_pv["mapped_chemical_name"],
-            "mapped_smiles": df_pv["mapped_smiles"],
-            "mapped_molweight": df_pv["mapped_mol_weight"],
-            "value_original": df_pv["prop_value_original"],
-            "value_max": df_pv["value_max"],  # Edited
-            "value_min": df_pv["value_min"],  # Edited
-            "value_point_estimate": df_pv["prop_value"],
-            "value_units": df_pv["prop_unit"],
-            "qsar_property_value": df_pv["qsar_property_value"],
-            "qsar_property_units": df_pv["qsar_property_unit"],
-            "temperature_c": df_pv["exp_details_temperature_value_point_estimate"],
+            "literature_source_citation": df_pv.get("literature_source_citation", None),
+            "literature_source_doi": df_pv.get("literature_source_doi", None),
+            "source_dtxrid": df_pv.get("source_dtxrid", None),
+            "source_dtxsid": df_pv.get("source_dtxsid", None),
+            "source_casrn": df_pv.get("source_casrn", None),
+            "source_chemical_name": df_pv.get("source_chemical_name", None),
+            "source_smiles": df_pv.get("source_smiles", None),
+            "mapped_dtxcid": df_pv.get("mapped_dtxcid", None),
+            "mapped_dtxsid": df_pv.get("mapped_dtxsid", None),
+            "mapped_cas": df_pv.get("mapped_casrn", None),
+            "mapped_chemical_name": df_pv.get("mapped_chemical_name", None),
+            "mapped_smiles": df_pv.get("mapped_smiles", None),
+            "mapped_molweight": df_pv.get("mapped_mol_weight", None),
+            "value_original": df_pv.get("prop_value_original", None),
+            "value_max": df_pv.get("value_max", None),  # Edited
+            "value_min": df_pv.get("value_min", None),  # Edited
+            "value_point_estimate": df_pv.get("prop_value", None),
+            "value_units": df_pv.get("prop_unit", None),
+            "qsar_property_value": df_pv.get("qsar_property_value", None),
+            "qsar_property_units": df_pv.get("qsar_property_unit", None),
+            "temperature_c": df_pv.get("exp_details_temperature_value_point_estimate", None),
             # "pressure_mmHg": None,  # Not currently stored in exp_prop.property_values
-            "pH": df_pv["exp_details_ph_value_point_estimate"],
-            "notes": df_pv["notes"],  # Added
-            "qc_flag": df_pv["qc_flag"],  # Added
-            "flag_reason": df_pv["flag_reason"]  # Added
+            "pH": df_pv.get("exp_details_ph_value_point_estimate", None),
+            "notes": df_pv.get("notes", None),  # Added
+            "qc_flag": df_pv.get("qc_flag", None),  # Added
+            "flag_reason": df_pv.get("flag_reason", None)  # Added
         }
         records_df = pd.DataFrame.from_dict(records_df)
         return records_df
@@ -461,22 +471,15 @@ class ModelToExcel:
             except Exception as e:
                 logging.warning("dataset_name not set and failed to query from database. Cannot query records without dataset_name. Please set dataset_name or ensure it can be queried from the database with the provided model_id.")
                 raise e
-
-        if self.snapshot_id is None:
-            self.snapshot_id = 4  # TODO: Determine how to set snapshot_id/what it is? Is also a TODO in run_model_building_db...
-
-        if self.duplicate_strategy is None:
-            self.duplicate_strategy = "id_suffix"  # TODO: Determine how to set duplicate_strategy and what the options should be. Is a hardcoded constant in run_model_building_db...
         
-        edg = ExpDataGetter()
-        df_pv, unique_params = edg.get_mapped_property_values(self.session, self.dataset_name, self.snapshot_id, duplicate_strategy=self.duplicate_strategy)
+        df_pv = self.query_df_pv()
         records_df = ModelToExcel.get_records_df(df_pv)
         logging.info(f"Finished building Records from Model {self.model_id}")
         self.records_df = records_df
         return records_df
     
 
-    def records(self, writer: Any, records: Optional[pd.DataFrame]=None, add_subtotals: bool=True, exclude_blank_columns: bool=True) -> pd.DataFrame:
+    def records(self, writer: Any, records: Optional[pd.DataFrame]=None, add_subtotals: bool=True, exclude_blank_columns: bool=True, include_qc_columns: bool=False, include_value_original: bool=False) -> pd.DataFrame:
         """
         Create the records sheet in the Excel workbook with detailed experimental data.
         
@@ -494,6 +497,10 @@ class ModelToExcel:
         
         if exclude_blank_columns:
             records = records.dropna(axis=1, how="all")
+        if not include_qc_columns:
+            records = records.drop(columns=["qc_flag", "flag_reason"], errors="ignore")
+        if not include_value_original:
+            records = records.drop(columns=["value_original"], errors="ignore")
         
         start_row = ModelToExcel.get_header_row(has_subtotals=add_subtotals)
         records.to_excel(writer, sheet_name="Records", index=False, startrow=start_row)
@@ -544,12 +551,19 @@ class ModelToExcel:
             pd.DataFrame: The field descriptions dataframe that was written.
         """
         if records_field_descriptions is None:
-            records_field_descriptions = self.get_records_field_descriptions_df() if self.records_field_descriptions_df is None else self.records_field_descriptions_df
+            records_field_descriptions = ModelToExcel.get_records_field_descriptions_df() if self.records_field_descriptions_df is None else self.records_field_descriptions_df
         
         if self.exclude_blank_columns:
             records = self.query_records_df() if self.records_df is None else self.records_df
             temp = records.dropna(axis=1, how="all")
             dropped_columns = set(records.columns) - set(temp.columns)
+            records_field_descriptions = records_field_descriptions[records_field_descriptions["Field"].isin(temp.columns)]
+
+            if not self.include_qc_columns:
+                dropped_columns.update({"qc_flag", "flag_reason"})
+            if not self.include_value_original:
+                dropped_columns.update({"value_original"})
+
             records_field_descriptions = records_field_descriptions[~records_field_descriptions["Field"].isin(dropped_columns)]
             if self.display_dropped_columns and dropped_columns:
                 records_field_descriptions = pd.concat([records_field_descriptions, pd.DataFrame({"Field": ["Dropped Columns"], "Description": [", ".join(list(dropped_columns))]})])
@@ -747,10 +761,9 @@ class ModelToExcel:
         logging.info(f"Building Model Descriptor Values from Model {self.model_id}")
 
         model = self.query_model()
-        df_pv = self.query_df_pv()
+        df_gmd = self.query_df_gmd()
 
-        training = pd.merge(model.df_training, model.df_dsstoxRecords, left_on="ID", right_on="canonicalSmiles", how="left")
-        training = pd.merge(training, df_pv, on="casrn", how="left")
+        training = pd.merge(model.df_training, df_gmd, left_on="ID", right_on="canon_qsar_smiles", how="left")
         training = pd.merge(training, model.df_preds_training_cv, left_on="ID", right_on="id", how="left")
 
         kfold_splitter = KFold(n_splits=5, shuffle=True, random_state=42)
@@ -761,15 +774,13 @@ class ModelToExcel:
         training["Fold"] = fold_col
         training["Set"] = training.Fold.apply(lambda x: f"Training, Fold {x}")
 
-        test = pd.merge(model.df_prediction, model.df_dsstoxRecords, left_on="ID", right_on="canonicalSmiles", how="left")
-        test = pd.merge(test, df_pv, on="casrn", how="left")
+        test = pd.merge(model.df_prediction, df_gmd, left_on="ID", right_on="canon_qsar_smiles", how="left")
         test = pd.merge(test, model.df_preds_test, left_on="ID", right_on="id", how="left")
 
         test["Set"] = "Test"
 
         temp = pd.concat([test, training], ignore_index=True)
 
-        # headers = model.headersTsv.split("\t")
         headers = model.embedding
         header_columns = {}
         for header in headers:
@@ -777,10 +788,10 @@ class ModelToExcel:
 
         model_descriptor_values_dict = {
             "exp_prop_id": temp["qsar_exp_prop_property_values_id_first"],
-            "DTXCID": temp["cid"],
+            "DTXCID": temp["dtxcid"],
             "CASRN": temp["casrn"],
-            "Preferred Name": temp["name"],
-            "Canonical QSAR Ready Smiles": temp["canonicalSmiles"],
+            "Preferred Name": temp["preferred_name"],
+            "Canonical QSAR Ready Smiles": temp["canon_qsar_smiles"],
             f"Observed ({model.unitsModel})": temp["exp"],
             f"Predicted ({model.unitsModel})": temp["pred"],
             "Set": temp["Set"],
@@ -859,27 +870,26 @@ class ModelToExcel:
         logging.info(f"Building Training CV Predictions from Model {self.model_id}")
 
         model = self.query_model()
-        df_pv = self.query_df_pv()
+        df_gmd = self.query_df_gmd()
 
         kfold_splitter = KFold(n_splits=5, shuffle=True, random_state=42)
         fold_col = np.zeros(len(model.df_preds_training_cv), dtype=int)
         for fold_index, (train_index, val_index) in enumerate(kfold_splitter.split(model.df_preds_training_cv)):
             fold_col[val_index] = fold_index
 
-        temp = pd.merge(model.df_preds_training_cv, model.df_dsstoxRecords, left_on="id", right_on="canonicalSmiles", how="left")
-        temp = pd.merge(temp, df_pv, on="casrn", how="left")
+        temp = pd.merge(model.df_preds_training_cv, df_gmd, left_on="id", right_on="canon_qsar_smiles", how="left")
 
         training_cv_predictions_dict = {
             "exp_prop_id": temp["qsar_exp_prop_property_values_id_first"],
-            "canon_qsar_smiles": temp["canonicalSmiles"],
+            "canon_qsar_smiles": temp["canon_qsar_smiles"],
             "exp": temp["exp"],
             "pred": temp["pred"],
             "cv_fold": fold_col,
-            "dtxcid": temp["cid"],
-            "dtxsid": temp["sid"],
+            "dtxcid": temp["dtxcid"],
+            "dtxsid": temp["dtxsid"],
             "casrn": temp["casrn"],
-            "preferred_name": temp["name"],
-            "smiles": temp["smiles_x"],
+            "preferred_name": temp["preferred_name"],
+            "smiles": temp["smiles"],
             "mol_weight": temp["mol_weight"]
         }
         training_cv_predictions_df = pd.DataFrame(training_cv_predictions_dict)
@@ -974,10 +984,9 @@ class ModelToExcel:
         logging.info(f"Building Test Set Predictions from Model {self.model_id}")
 
         model = self.query_model()
-        df_pv = self.query_df_pv()
+        df_gmd = self.query_df_gmd()
 
-        temp = pd.merge(model.df_preds_test, model.df_dsstoxRecords, left_on="id", right_on="canonicalSmiles", how="left")
-        temp = pd.merge(temp, df_pv, on="casrn", how="left")
+        temp = pd.merge(model.df_preds_test, df_gmd, left_on="id", right_on="canon_qsar_smiles", how="left")
 
         ads = model.applicabilityDomainName.split(" and ")
         ad_test_columns = {}
@@ -988,19 +997,19 @@ class ModelToExcel:
                     embedding=model.embedding, applicability_domain=ad,
                     filterColumnsInBothSets=False,
                     returnTrainingAD=False)
-            ad_test_columns["AD_" + ad.replace(" ", "_")] = df_ad_output["AD"]            
+            ad_test_columns["AD_" + ad.replace(" ", "_")] = df_ad_output["AD"]
 
         test_predictions_dict = {
             "exp_prop_id": temp["qsar_exp_prop_property_values_id_first"],
-            "canon_qsar_smiles": temp["canonicalSmiles"],
+            "canon_qsar_smiles": temp["canon_qsar_smiles"],
             "exp": temp["exp"],
             "pred": temp["pred"],
             **ad_test_columns,
-            "dtxcid": temp["cid"],
-            "dtxsid": temp["sid"],
+            "dtxcid": temp["dtxcid"],
+            "dtxsid": temp["dtxsid"],
             "casrn": temp["casrn"],
-            "preferred_name": temp["name"],
-            "smiles": temp["smiles_x"],
+            "preferred_name": temp["preferred_name"],
+            "smiles": temp["smiles"],
             "mol_weight": temp["mol_weight"]
         }
         test_set_predictions_df = pd.DataFrame(test_predictions_dict)
@@ -1087,21 +1096,20 @@ class ModelToExcel:
         logging.info(f"Building External Predictions from Model {self.model_id}")
 
         model = self.query_model()
-        df_pv = self.query_df_pv()
+        df_gmd_external = self.query_df_gmd_external()
 
-        temp = pd.merge(model.df_preds_external, model.df_dsstoxRecords_external, left_on="id", right_on="canonicalSmiles", how="left")
-        temp = pd.merge(temp, df_pv, on="casrn", how="left")
+        temp = pd.merge(model.df_preds_external, df_gmd_external, left_on="id", right_on="canon_qsar_smiles", how="left")
 
         external_predictions_dict = {
             "exp_prop_id": temp["qsar_exp_prop_property_values_id_first"],
-            "canon_qsar_smiles": temp["canonicalSmiles"],
+            "canon_qsar_smiles": temp["canon_qsar_smiles"],
             "exp": temp["exp"],
             "pred": temp["pred"],
-            "dtxcid": temp["cid"],
-            "dtxsid": temp["sid"],
+            "dtxcid": temp["dtxcid"],
+            "dtxsid": temp["dtxsid"],
             "casrn": temp["casrn"],
-            "preferred_name": temp["name"],
-            "smiles": temp["smiles_x"],
+            "preferred_name": temp["preferred_name"],
+            "smiles": temp["smiles"],
             "mol_weight": temp["mol_weight"]
         }
         external_predictions_df = pd.DataFrame(external_predictions_dict)
@@ -1748,10 +1756,7 @@ class ModelToExcel:
         try:
             if self.df_pv is None:
                 logging.info("Loading df_pv from database")
-
-                engine = ModelToExcel.getEngine() if self.engine is None else self.engine
-                session = ModelToExcel.getSession(engine) if self.session is None else self.session
-
+                
                 if self.dataset_name is None:
                     try:
                         model = self.query_model()
@@ -1759,9 +1764,15 @@ class ModelToExcel:
                     except Exception as e:
                         logging.warning("dataset_name not set and failed to query from database. Cannot query records without dataset_name. Please set dataset_name or ensure it can be queried from the database with the provided model_id.")
                         raise e
-                dataset_name = self.dataset_name
                 
-                df_pv = getMappedDatapoints(session, dataset_name)
+                if self.snapshot_id is None:
+                    self.snapshot_id = 4  # TODO: Determine how to set snapshot_id/what it is? Is also a TODO in run_model_building_db...
+
+                if self.duplicate_strategy is None:
+                    self.duplicate_strategy = "id_suffix"  # TODO: Determine how to set duplicate_strategy and what the options should be. Is a hardcoded constant in run_model_building_db...
+                
+                edg = ExpDataGetter()
+                df_pv, _ = edg.get_mapped_property_values(self.session, self.dataset_name, self.snapshot_id, duplicate_strategy=self.duplicate_strategy)
 
                 self.df_pv = df_pv
 
@@ -1780,6 +1791,86 @@ class ModelToExcel:
             traceback.print_exc()
             return None
 
+
+    def query_df_gmd(self) -> Optional[pd.DataFrame]:
+        """
+        Query df_gmd from the database using getMappedDatapoints
+        """
+        try:
+            if self.df_gmd is None:
+                logging.info("Loading df_gmd from database")
+
+                engine = ModelToExcel.getEngine() if self.engine is None else self.engine
+                session = ModelToExcel.getSession(engine) if self.session is None else self.session
+
+                if self.dataset_name is None:
+                    try:
+                        model = self.query_model()
+                        self.dataset_name = model.datasetName
+                    except Exception as e:
+                        logging.warning("dataset_name not set and failed to query from database. Cannot query records without dataset_name. Please set dataset_name or ensure it can be queried from the database with the provided model_id.")
+                        raise e
+                dataset_name = self.dataset_name
+                
+                df_gmd = getMappedDatapoints(session, dataset_name)
+
+                self.df_gmd = df_gmd
+
+                logging.info(f"Done loading df_gmd from database")
+            else:
+                df_gmd = self.df_gmd
+            
+            if df_gmd is None:
+                logging.error(f"Failed to query df_gmd")
+                return None
+
+            return df_gmd
+        
+        except Exception as e:
+            logging.error(f"Error retrieving df_gmd: {e}")
+            traceback.print_exc()
+            return None
+    
+
+    def query_df_gmd_external(self) -> Optional[pd.DataFrame]:
+        """
+        Query df_gmd_external from the database using getMappedDatapoints
+        """
+        try:
+            if self.df_gmd_external is None:
+                logging.info("Loading df_gmd_external from database")
+
+                engine = ModelToExcel.getEngine() if self.engine is None else self.engine
+                session = ModelToExcel.getSession(engine) if self.session is None else self.session
+
+                if self.dataset_name_external is None:
+                    try:
+                        model = self.query_model()
+                        self.dataset_name_external = model.external_dataset_name
+                    except Exception as e:
+                        logging.warning("dataset_name_external not set and failed to query from database. Cannot query records without dataset_name_external. Please set dataset_name_external or ensure it can be queried from the database with the provided model_id.")
+                        raise e
+                dataset_name_external = self.dataset_name_external
+                
+                df_gmd_external = getMappedDatapoints(session, dataset_name_external)
+
+                self.df_gmd_external = df_gmd_external
+
+                logging.info(f"Done loading df_gmd_external from database")
+            else:
+                df_gmd_external = self.df_gmd_external
+            
+            if df_gmd_external is None:
+                logging.error(f"Failed to query df_gmd_external")
+                return None
+
+            return df_gmd_external
+        
+        except Exception as e:
+            logging.error(f"Error retrieving df_gmd_external: {e}")
+            traceback.print_exc()
+            return None
+    
 
     def query_model_coefficients(self) -> Optional[pd.DataFrame]:
         """
@@ -1853,7 +1944,7 @@ class ModelToExcel:
             self.statistics(writer, self.statistics_df)
 
             logging.info("Creating Records...")
-            df = self.records(writer, self.records_df, add_subtotals=self.add_subtotals, exclude_blank_columns=self.exclude_blank_columns)
+            df = self.records(writer, self.records_df, add_subtotals=self.add_subtotals, exclude_blank_columns=self.exclude_blank_columns, include_qc_columns=self.include_qc_columns, include_value_original=self.include_value_original)
 
             logging.info("Creating Records Field Descriptions...")
             df = self.records_field_descriptions(writer, self.records_field_descriptions_df)
@@ -1940,16 +2031,26 @@ def main2():
         json.dump(model.__dict__, f, indent=4, default=custom_encoder)
     with open("test_model.pkl", "wb") as f:
         f.write(pickle.dumps(model))
+    
+    df_pv = test.query_df_pv()
+    with open("test_df_pv.pkl", "wb") as f:
+        pickle.dump(df_pv, f)
 
 
 def main3():
     engine = ModelToExcel.getEngine()
     session = ModelToExcel.getSession(engine)
     dataset_name = "KOC v1 modeling"
-    df_pv = getMappedDatapoints(session, dataset_name)
+    df_gmd = getMappedDatapoints(session, dataset_name)
 
-    with open("test_df_pv.pkl", "wb") as f:
-        pickle.dump(df_pv, f)
+    with open("test_df_gmd.pkl", "wb") as f:
+        pickle.dump(df_gmd, f)
+    
+    dataset_name_external = "KOC v1 external"
+    df_gmd_external = getMappedDatapoints(session, dataset_name_external)
+
+    with open("test_df_gmd_external.pkl", "wb") as f:
+        pickle.dump(df_gmd_external, f)
 
 
 if __name__ == "__main__":

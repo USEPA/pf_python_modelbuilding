@@ -113,7 +113,8 @@ class ExpDataGetter:
                 pv.qc_flag AS qc_flag,
                 pv.keep_reason AS flag_reason,
                 pv.value_max AS value_max,
-                pv.value_min AS value_min
+                pv.value_min AS value_min,
+                sc.source_dtxrid AS source_dtxrid
             FROM qsar_datasets.data_points AS dp
             JOIN qsar_datasets.data_point_contributors AS dpc
                 ON dpc.fk_data_point_id = dp.id

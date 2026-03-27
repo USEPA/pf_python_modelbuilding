@@ -31,3 +31,4 @@ pressure_mmHg	Pressure at which the experiment was performed in mmHg
 pH	pH at which the experiment was performed
 notes	Notes on the record
 qc_flag	Whether or not a quality control flag has been issued
+flag_reason	The reason the quality control flag was issued
