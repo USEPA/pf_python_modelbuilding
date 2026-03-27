@@ -135,7 +135,7 @@ def createTrainingTestPlotsForReports(session):
 if __name__ == '__main__':
 
     from dotenv import load_dotenv
-    load_dotenv('../../personal.env')
+    load_dotenv(".env")
 
     session=getSession()    
     createTrainingTestPlotsForReports(session)
