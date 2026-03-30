@@ -1683,7 +1683,7 @@ class ModelPredictor:
 
     def get_model_details_dict_for_model_id(self, model_id, serverAPIs=None, fileAPI=None):
         serverAPIs = serverAPIs or os.getenv("CIM_API_SERVER", "https://cim-dev.sciencedataexperts.com")
-        fileAPI = fileAPI or os.getenv("FILE_API_SERVER", pc.URL_CTX_API)
+        fileAPI = fileAPI or os.getenv("FILE_API_SERVER", pc.URL_LOCAL_FILE_API)
 
         _, model_details_dict, model_error = self._resolve_model_context(model_id, serverAPIs, fileAPI)
         return model_details_dict, model_error
@@ -2425,7 +2425,7 @@ class ModelPredictor:
     @timer
     def predict_model_smiles_batch(self, model_id, smiles_list, generate_report=True, include_model_details=True):
         serverAPIs = os.getenv("CIM_API_SERVER", "https://cim-dev.sciencedataexperts.com")
-        fileAPI = os.getenv("FILE_API_SERVER", pc.URL_CTX_API)
+        fileAPI = os.getenv("FILE_API_SERVER", pc.URL_LOCAL_FILE_API)
 
         model, model_details_dict, model_error = self._resolve_model_context(model_id, serverAPIs, fileAPI)
         if model is None:
@@ -2467,7 +2467,7 @@ class ModelPredictor:
         model_details_dict = None
         if missing_indices or include_model_details:
             serverAPIs = os.getenv("CIM_API_SERVER", "https://cim-dev.sciencedataexperts.com")
-            fileAPI = os.getenv("FILE_API_SERVER", pc.URL_CTX_API)
+            fileAPI = os.getenv("FILE_API_SERVER", pc.URL_LOCAL_FILE_API)
 
             model, model_details_dict, model_error = self._resolve_model_context(model_id, serverAPIs, fileAPI)
             if model is None:
