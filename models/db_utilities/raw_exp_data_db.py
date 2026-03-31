@@ -216,6 +216,7 @@ class ExpDataGetter:
             "value_qualifier",
             "value_min",
             "value_max",
+            "value_units",
             # "parameter_id",
             # "unit_id",
         )
@@ -444,9 +445,9 @@ class ExpDataGetter:
         df = pd.DataFrame.from_records(results)
         df = df.convert_dtypes()       # uses pandas nullable dtypes; missing -> pd.NA
         # df = df.replace({pd.NA: None}) # easier JSON export
-        
+
         df = self._drop_all_null_columns(df)
-        
+
     
         # Sort for consistency
         sort_cols = [c for c in ["canon_qsar_smiles", "prop_value"] if c in df.columns]

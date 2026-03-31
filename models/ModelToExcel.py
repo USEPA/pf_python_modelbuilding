@@ -1,4 +1,5 @@
 import pickle
+import re
 
 import pandas as pd
 from sqlalchemy import URL, text, create_engine
@@ -414,6 +415,11 @@ class ModelToExcel:
         Returns:
             pd.DataFrame: Records dataframe with standardized columns for chemical, source, and experimental information.
         """
+        df_pv = ModelToExcel.convert_exp_details_to_strings(df_pv)
+        str_columns = [col for col in df_pv.columns if col.startswith("exp_details_") and col.endswith("_str")]
+        exp_details_columns = {}
+        for col in str_columns:
+            exp_details_columns[col] = df_pv[col]
         records_df = {
             "exp_prop_id": df_pv.get("prop_value_id", None),
             "canon_qsar_smiles": df_pv.get("canon_qsar_smiles", None),
@@ -447,7 +453,8 @@ class ModelToExcel:
             "pH": df_pv.get("exp_details_ph_value_point_estimate", None),
             "notes": df_pv.get("notes", None),  # Added
             "qc_flag": df_pv.get("qc_flag", None),  # Added
-            "flag_reason": df_pv.get("flag_reason", None)  # Added
+            "flag_reason": df_pv.get("flag_reason", None),  # Added
+            **exp_details_columns
         }
         records_df = pd.DataFrame.from_dict(records_df)
         return records_df
@@ -1774,6 +1781,8 @@ class ModelToExcel:
                 edg = ExpDataGetter()
                 df_pv, _ = edg.get_mapped_property_values(self.session, self.dataset_name, self.snapshot_id, duplicate_strategy=self.duplicate_strategy)
 
+                df_pv = ModelToExcel.convert_exp_details_to_strings(df_pv)
+
                 self.df_pv = df_pv
 
                 logging.info(f"Done loading df_pv from database")
@@ -1903,6 +1912,117 @@ class ModelToExcel:
             logging.error(f"Error retrieving coefficients: {e}")
             traceback.print_exc()
             return None
+    
+
+    @staticmethod
+    def set_significant_digits(value: float, significant_digits: int) -> str:
+        if significant_digits < 0:
+            raise ValueError("significant_digits must be >= 0")
+        
+        return f"{value:.{significant_digits}g}"
+
+
+    @staticmethod
+    def get_formatted_value(dvalue: float, nsig: int=3, exp_nsig: int=2) -> str:
+        if dvalue is None:
+            return None
+        try:
+            if dvalue != 0 and (abs(dvalue) < 0.01 or abs(dvalue) > 1e3):
+                return f"{dvalue:.{exp_nsig}e}"
+            
+            return ModelToExcel.set_significant_digits(dvalue, nsig)
+        except:
+            return None
+
+
+    @staticmethod
+    def parameter_cols_to_str(parameter_dict, sig_figs: int=3):
+            point_estimate: str = ModelToExcel.get_formatted_value(parameter_dict.get('value_point_estimate'), sig_figs)
+            str_val_min: str = ModelToExcel.get_formatted_value(parameter_dict.get('value_min'), sig_figs)
+            str_val_max: str = ModelToExcel.get_formatted_value(parameter_dict.get('value_max'), sig_figs)
+            str_text: str = parameter_dict.get("value_text")
+            value_units: str = parameter_dict.get("value_units")
+            value_units = value_units if value_units is not None and value_units != "Text" else ""
+            if not str_val_min is None and not str_val_max is None:
+                return f"{str_val_min} {value_units} < value < {str_val_max} {value_units}"
+            elif not str_val_min is None:
+                return f" > {str_val_min} {value_units}"
+            elif not str_val_max is None:
+                return f" < {str_val_max} {value_units}"
+            elif not point_estimate is None:
+                return f"{point_estimate} {value_units}"
+            elif not str_text is None:
+                return str_text
+            else:
+                return None
+    
+
+    @staticmethod
+    def create_parameter_dict(row, param_name):
+            """Create an object-like structure for the parameter_cols_to_str function"""
+            parameter_dict = {}
+
+            # Extract values from the row for this parameter
+            point_est_col = f"exp_details_{param_name}_value_point_estimate"
+            min_col = f"exp_details_{param_name}_value_min"
+            max_col = f"exp_details_{param_name}_value_max"
+            text_col = f"exp_details_{param_name}_value_text"
+            units_col = f"exp_details_{param_name}_value_units"
+            
+            if point_est_col in row.index:
+                parameter_dict['value_point_estimate'] = None if pd.isna(row[point_est_col]) else row[point_est_col]
+            if min_col in row.index:
+                parameter_dict['value_min'] = None if pd.isna(row[min_col]) else row[min_col]
+            if max_col in row.index:
+                parameter_dict['value_max'] = None if pd.isna(row[max_col]) else row[max_col]
+            if text_col in row.index:
+                parameter_dict['value_text'] = None if pd.isna(row[text_col]) else row[text_col]
+            if units_col in row.index:
+                # Create a unit object with abbreviation attribute
+                parameter_dict["value_units"] = None if pd.isna(row[units_col]) else row[units_col]
+            else:
+                # Default unit if none specified
+                parameter_dict["value_units"] = ""
+                        
+            return parameter_dict
+
+
+    @staticmethod
+    def convert_exp_details_to_strings(df):
+        """
+        Convert exp_details columns in a dataframe to formatted strings using the __str__ method logic.
+        
+        For each unique parameter type (media, measurement_method, etc.), creates a new column
+        containing the formatted string representation.
+        
+        Args:
+            df: DataFrame with exp_details_* columns
+        
+        Returns:
+            DataFrame with added columns like 'exp_details_<parameter>_str'
+        """
+        df_result = df.copy()
+        
+        # Get all exp_details columns
+        parameter_cols = [col for col in df.columns if col.startswith("exp_details_")]
+        
+        # Extract unique parameter types
+        unique_parameters = set()
+        for col in parameter_cols:
+            match_obj = re.match(r"exp_details_(.*?)_(value.*)", col)
+            if match_obj:
+                unique_parameters.add(match_obj.group(1))
+        
+        # For each parameter, create a formatted string column
+        for parameter in sorted(unique_parameters):
+            # Apply parameter_cols_to_str to each row for this parameter
+            col_name = f"exp_details_{parameter}_str"
+            df_result[col_name] = df.apply(
+                lambda row: ModelToExcel.parameter_cols_to_str(ModelToExcel.create_parameter_dict(row, parameter)),
+                axis=1
+            )
+        
+        return df_result
 
 
     def create_excel(
