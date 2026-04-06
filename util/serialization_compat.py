@@ -4,6 +4,8 @@ Helpers for migrating legacy pickled model objects to the current runtime.
 
 from __future__ import annotations
 
+import copy
+import inspect
 import logging
 import os
 import pickle
@@ -122,16 +124,19 @@ def _refresh_object_graph(
 def _refresh_xgb_estimator(estimator: XGBModel, *, logger: logging.Logger) -> XGBModel:
     temp_path = None
     try:
-        params = estimator.get_params(deep=False)
-        refreshed = estimator.__class__(**params)
+        _ensure_init_attributes(estimator)
         temp_path = _make_temp_model_path()
         estimator.save_model(temp_path)
+        refreshed = estimator.__class__()
+        _ensure_init_attributes(refreshed)
         refreshed.load_model(temp_path)
+        _copy_init_attributes(estimator, refreshed)
 
         for attr_name in (
             "classes_",
             "feature_names_in_",
             "n_features_in_",
+            "n_classes_",
             "best_iteration",
             "best_score",
             "feature_types",
@@ -171,3 +176,29 @@ def _refresh_booster(booster: Booster, *, logger: logging.Logger) -> Booster:
 def _make_temp_model_path() -> str:
     with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as handle:
         return handle.name
+
+
+def _ensure_init_attributes(estimator: XGBModel) -> None:
+    for attr_name, default_value in _iter_init_defaults(estimator.__class__):
+        if not hasattr(estimator, attr_name):
+            setattr(estimator, attr_name, copy.deepcopy(default_value))
+
+
+def _copy_init_attributes(source: XGBModel, target: XGBModel) -> None:
+    for attr_name, default_value in _iter_init_defaults(source.__class__):
+        if hasattr(source, attr_name):
+            setattr(target, attr_name, copy.deepcopy(getattr(source, attr_name)))
+        elif not hasattr(target, attr_name):
+            setattr(target, attr_name, copy.deepcopy(default_value))
+
+
+def _iter_init_defaults(cls):
+    signature = inspect.signature(cls.__init__)
+    for parameter in signature.parameters.values():
+        if parameter.name == "self":
+            continue
+        if parameter.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD):
+            continue
+        if parameter.default is inspect.Parameter.empty:
+            continue
+        yield parameter.name, parameter.default
