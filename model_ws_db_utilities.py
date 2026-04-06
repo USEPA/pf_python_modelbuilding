@@ -48,6 +48,7 @@ from util.prediction_cache_key_utils import (
     ensure_chemical_inchi_key,
     normalize_inchi_key,
 )
+from util.chemical_image_utils import build_render_image_url, get_render_smiles
 
 from utils import timer, print_first_row
 from applicability_domain import applicability_domain_utilities as adu
@@ -73,7 +74,6 @@ dict_missing_dsstox_records = {
 
 USE_TEMPORARY_MODEL_PLOTS = False
 
-imgURLCid = "https://comptox.epa.gov/dashboard-api/ccdapp1/chemical-files/image/by-dtxcid/";
 _MISSING_NEIGHBOR_DSS_TOX_CACHE = {}
 _MISSING_NEIGHBOR_DSS_TOX_LOCK = threading.Lock()
 _INDIGO_UTILS_LOCAL = threading.local()
@@ -1756,7 +1756,14 @@ class ModelPredictor:
             img_base64 = self.smiles_to_base64(chemical["smiles"])
             chemical["imageSrc"] = f'data:image/png;base64,{img_base64}' if img_base64 else "N/A"
         else:
-            chemical["imageSrc"] = imgURLCid + chemical["cid"]
+            chemical["imageSrc"] = (
+                build_render_image_url(
+                    get_render_smiles(chemical),
+                    width=400,
+                    height=400,
+                )
+                or "N/A"
+            )
 
         if "sid" not in chemical:
             chemical["sid"] = "N/A"

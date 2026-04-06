@@ -23,11 +23,11 @@ from decimal import Decimal, getcontext, ROUND_HALF_UP, InvalidOperation
 
 # from indigo import Indigo
 # from indigo.renderer import IndigoRenderer
+from util.chemical_image_utils import resolve_report_image_src
 from util import predict_constants as pc
 # import tempfile
 
 urlChemicalDetails = "https://comptox.epa.gov/dashboard/chemical/details/"
-imgURLCid = "https://comptox.epa.gov/dashboard-api/ccdapp1/chemical-files/image/by-dtxcid/";
 
 import numpy as np           
 import base64, io
@@ -58,9 +58,10 @@ def createAnalogTile(analog, i, md, align):
         pred = get_formatted_value(False, analog["pred"], 3)
         analog_td += b("Predicted: "), pred, br()
 
-    if "cid" in analog:
+    image_src = resolve_report_image_src(analog, width=150, height=150)
+    if image_src:
         imgTitle = "Analog Image for " + analog["name"]
-        analog_td += img(src=imgURLCid + analog["cid"], border="1", alt=imgTitle, title=imgTitle, width="150", height="150"), br()
+        analog_td += img(src=image_src, border="1", alt=imgTitle, title=imgTitle, width="150", height="150"), br()
 
     if "sid" in analog:
         analog_td += a(analog["sid"], href=urlChemicalDetails + analog["sid"], title=analog["sid"] + ' on the Chemicals Dashboard', target="_blank")
@@ -997,11 +998,13 @@ table.compact td {
                 with tr():  # first row of main table
                     with td(valign="top", width="150px"):
                         
-                        if chemical["imageSrc"] == "N/A":
+                        image_src = resolve_report_image_src(chemical, width=150, height=150)
+
+                        if not image_src or image_src == "N/A":
                                 div("No structure image", style="border: 2px solid black; padding: 10px;")                        
                         else:
                             title = "Structural image of " + chemical["chemId"]
-                            img(src=chemical["imageSrc"], alt=title, title=title,
+                            img(src=image_src, alt=title, title=title,
                                 height=150, width=150, border="2")
                     
                     cis = self.ChemicalIdentifiersSection()
@@ -1123,4 +1126,3 @@ def create_report_from_json_file():
 if __name__ == '__main__':
     create_report_from_json_file()
     
-
