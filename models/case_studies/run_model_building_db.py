@@ -34,6 +34,7 @@ import traceback
 
 from sqlalchemy.orm import Session
 from util.database_utilities import DatabaseUtilities
+from util.serialization_compat import serialize_model
 
 from models import make_test_plots as mtp 
 
@@ -410,7 +411,7 @@ class ModelLoader():
             raise        
 
     def load_model_bytes(self, user, model, fk_model_id):
-        model_bytes = pickle.dumps(model)
+        model_bytes = serialize_model(model)
         bytes_list = self.divide_array(model_bytes)
 
         created_at = datetime.now()

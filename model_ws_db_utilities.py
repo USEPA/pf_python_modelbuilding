@@ -42,6 +42,7 @@ import numpy as np
 
 from util.units_converter import UnitsConverter
 from util.indigo_utils import IndigoUtils
+from util.serialization_compat import refresh_legacy_serialized_model
 from util.prediction_cache_key_utils import (
     build_prediction_cache_key,
     ensure_chemical_inchi_key,
@@ -426,6 +427,19 @@ class ModelInitializer:
             except Exception:
                 logging.exception(f"Failed to deserialize model bytes for model_id={model_id}")
                 return None
+
+            try:
+                model, compat_stats = refresh_legacy_serialized_model(model, logger=logging.getLogger(__name__))
+                if compat_stats["xgboost_objects"]:
+                    logging.info(
+                        "Refreshed %s legacy XGBoost object(s) after loading model_id=%s",
+                        compat_stats["xgboost_objects"],
+                        model_id,
+                    )
+            except Exception:
+                logging.exception(
+                    f"Failed to refresh legacy serialized components for model_id={model_id}"
+                )
 
             if not model:
                 logging.error(f"Deserialized model is empty for model_id={model_id}")
