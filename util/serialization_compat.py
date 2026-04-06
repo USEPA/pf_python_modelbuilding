@@ -125,12 +125,15 @@ def _refresh_xgb_estimator(estimator: XGBModel, *, logger: logging.Logger) -> XG
     temp_path = None
     try:
         _ensure_init_attributes(estimator)
+        _ensure_estimator_type(estimator)
         temp_path = _make_temp_model_path()
         estimator.save_model(temp_path)
         refreshed = estimator.__class__()
         _ensure_init_attributes(refreshed)
+        _ensure_estimator_type(refreshed)
         refreshed.load_model(temp_path)
         _copy_init_attributes(estimator, refreshed)
+        _ensure_estimator_type(refreshed)
 
         for attr_name in (
             "classes_",
@@ -190,6 +193,17 @@ def _copy_init_attributes(source: XGBModel, target: XGBModel) -> None:
             setattr(target, attr_name, copy.deepcopy(getattr(source, attr_name)))
         elif not hasattr(target, attr_name):
             setattr(target, attr_name, copy.deepcopy(default_value))
+
+
+def _ensure_estimator_type(estimator: XGBModel) -> None:
+    if hasattr(estimator, "_estimator_type"):
+        return
+
+    class_name = estimator.__class__.__name__.lower()
+    if "classifier" in class_name:
+        estimator._estimator_type = "classifier"
+    elif "regressor" in class_name or class_name.endswith("ranker"):
+        estimator._estimator_type = "regressor"
 
 
 def _iter_init_defaults(cls):
