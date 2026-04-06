@@ -837,13 +837,17 @@ table.compact td {
                     pred = get_formatted_value(False, pred_float, 3)
                     td_tc += b("Predicted: "), pred, br()
                 
+                image_src = resolve_report_image_src(chemical, width=150, height=150)
+
                 if chemical.get("sid", "N/A") != "N/A": 
                     title = "Image for " + chemical["name"]
-                    td_tc += img(src=chemical["imageSrc"], border="1", alt=title, title=title, width="150", height="150"), br()
+                    if image_src:
+                        td_tc += img(src=image_src, border="1", alt=title, title=title, width="150", height="150"), br()
                     td_tc += a(chemical["chemId"], href=urlChemicalDetails + chemical["sid"], title=chemical["sid"] + ' on the Chemicals Dashboard', target="_blank")
                 else:
                     title = "Image for " + chemical["smiles"]
-                    td_tc += img(src=chemical["imageSrc"], border="1", alt=title, title=title, width="150", height="150"), br()
+                    if image_src:
+                        td_tc += img(src=image_src, border="1", alt=title, title=title, width="150", height="150"), br()
                     td_tc += chemical["chemId"]        
     
         def addMaeTable(self, td_tc, md, neighborsInSet):

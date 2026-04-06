@@ -47,6 +47,21 @@ class TestChemicalImageUtils(TestCase):
             "N/A",
         )
 
+    def test_resolve_report_image_src_replaces_legacy_comptox_url(self):
+        image_url = resolve_report_image_src(
+            {
+                "imageSrc": "https://comptox.epa.gov/dashboard-api/ccdapp1/chemical-files/image/by-dtxcid/",
+                "smiles": "C1CCCCC1",
+            },
+            width=150,
+            height=150,
+        )
+
+        self.assertEqual(
+            image_url,
+            build_render_image_url("C1CCCCC1", width=150, height=150),
+        )
+
     @skipIf(ModelPredictor is None, f"ModelPredictor unavailable: {MODEL_PREDICTOR_IMPORT_ERROR}")
     def test_prepare_chemical_for_report_keeps_indigo_branch(self):
         predictor = ModelPredictor()

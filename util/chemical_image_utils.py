@@ -4,6 +4,9 @@ from urllib.parse import urlencode
 
 DEFAULT_CIM_RENDER_URL = "https://cim-dev.sciencedataexperts.com/api/resolver/render"
 DEFAULT_CIM_RENDER_FORMAT = "PNG"
+LEGACY_IMAGE_URL_PREFIXES = (
+    "https://comptox.epa.gov/dashboard-api/ccdapp1/chemical-files/image/by-dtxcid/",
+)
 
 
 def get_render_service_url() -> str:
@@ -62,11 +65,27 @@ def resolve_report_image_src(
         return None
 
     existing_image_src = chemical.get("imageSrc")
-    if existing_image_src is not None:
+    if isinstance(existing_image_src, str):
+        normalized_existing = existing_image_src.strip()
+        if normalized_existing == "N/A":
+            return "N/A"
+
+        if normalized_existing and not normalized_existing.startswith(LEGACY_IMAGE_URL_PREFIXES):
+            return normalized_existing
+
+    elif existing_image_src is not None:
         return existing_image_src
 
-    return build_render_image_url(
+    render_image_src = build_render_image_url(
         get_render_smiles(chemical),
         width=width,
         height=height,
     )
+    if render_image_src is not None:
+        return render_image_src
+
+    if isinstance(existing_image_src, str):
+        normalized_existing = existing_image_src.strip()
+        return normalized_existing or None
+
+    return existing_image_src
