@@ -240,6 +240,7 @@ def _init_mongo():
             username=os.getenv("MONGO_USER", "root"),
             password=os.getenv("MONGO_PASSWORD"),
             authSource="admin",
+            appname=os.getenv("PREDICTOR_MODELS_MONGO_APP_NAME", os.getenv("MONGO_APP_NAME", "predictor_models")),
             serverSelectionTimeoutMS=int(os.getenv("MONGO_SERVER_SELECTION_TIMEOUT_MS", "3000")),
             connectTimeoutMS=int(os.getenv("MONGO_CONNECT_TIMEOUT_MS", "3000")),
             socketTimeoutMS=int(os.getenv("MONGO_SOCKET_TIMEOUT_MS", "3000")),
