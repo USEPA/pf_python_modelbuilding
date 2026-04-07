@@ -1196,7 +1196,9 @@ class ModelDescription:
 
         # New Attributes
         self.externalDatasetName = model.external_dataset_name
-        self.numExternal = model.num_external
+
+        if hasattr(model, "num_external"):
+            self.numExternal = model.num_external
 
         if hasattr(model, "training_descriptor_std_devs"):
             self.include_standardization_in_pmml = False

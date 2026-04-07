@@ -1,34 +1,85 @@
 Field	Description
-exp_prop_id	Raw property id number in our database
-canon_qsar_smiles	qsar_ready_smiles associated with the mapped smiles
-page_url	URL that the property value is associated with
-public_source_name	Name of the public source
-public_source_url	URL of the public source
-public_source_original_name	Name of the original public source
-public_source_original_url	URL of the original public source
-literature_source_citation	Citation for the literature source
-literature_source_doi	DOI url for the literature source
-source_dtxrid	DSSTOX record id with the source chemical
-source_dtxsid	DSSTOX substance id associated with the source chemical
-source_casrn	Source chemical CASRN
-source_chemical_name	Source chemical name
-source_smiles	Source chemical SMILES
-mapped_dtxcid	DSSTOX compound id for the record mapped to the source chemical
-mapped_dtxsid	DSSTOX substance id for the record  mapped to the source chemical
-mapped_cas	DSSTOX CASRN  for the record mapped to the source chemical
-mapped_chemical_name	DSSTOX chemical name for the record mapped to the source chemical
-mapped_smiles	DSSTOX SMILES  for the record mapped to the source chemical
-mapped_molweight	DSSTOX molecular weight  for the record mapped to the source chemical
-value_original	Original property value from the source
-value_max	Original maximum property value from the source
-value_min	Original minimum property value from the source
-value_point_estimate	Point estimate for the property value derived from value_original or value_max and value_min
-value_units	Units for the value_point_estimate
-qsar_property_value	Median of the property values for the given chemical, converted to the qsar_property_units
-qsar_property_units	Units for the qsar_property_value
-temperature_c	Temperature at which the experiment was performed in C
-pressure_mmHg	Pressure at which the experiment was performed in mmHg
+Exp Prop ID	Raw property id number in our database
+Canon QSAR SMILES	qsar_ready_smiles associated with the mapped smiles
+Page URL	URL that the property value is associated with
+Public Source Name	Name of the public source
+Public Source URL	URL of the public source
+Public Source Original Name	Name of the original public source
+Public Source Original URL	URL of the original public source
+Literature Source Citation	Citation for the literature source
+Literature Source DOI	DOI url for the literature source
+Source DTXRID	DSSTOX record id with the source chemical
+Source DTXSID	DSSTOX substance id associated with the source chemical
+Source CASRN	Source chemical CASRN
+Source Chemical Name	Source chemical name
+Source SMILES	Source chemical SMILES
+Mapped DTXCID	DSSTOX compound id for the record mapped to the source chemical
+Mapped DTXSID	DSSTOX substance id for the record  mapped to the source chemical
+Mapped CAS	DSSTOX CASRN  for the record mapped to the source chemical
+Mapped Chemical Name	DSSTOX chemical name for the record mapped to the source chemical
+Mapped SMILES	DSSTOX SMILES  for the record mapped to the source chemical
+Mapped Molweight	DSSTOX molecular weight  for the record mapped to the source chemical
+Value Original	Original property value from the source
+Value Max	Original maximum property value from the source
+Value Min	Original minimum property value from the source
+Value Point Estimate	Point estimate for the property value derived from value_original or value_max and value_min
+Value Units	Units for the value_point_estimate
+QSAR Property Value	Median of the property values for the given chemical, converted to the qsar_property_units
+QSAR Property Units	Units for the qsar_property_value
+Pressure mmHg	Pressure at which the experiment was performed in mmHg
+Notes	Notes on the record
+QC Flag	Whether or not a quality control flag has been issued
+Flag Reason	The reason the quality control flag was issued
+
+Pressure	Pressure at which the experiment was performed
+Temperature	Temperature at which the experiment was performed
 pH	pH at which the experiment was performed
-notes	Notes on the record
-qc_flag	Whether or not a quality control flag has been issued
-flag_reason	The reason the quality control flag was issued
+Measurement Method	Measurement method
+Reliability	Reliability
+Toxval ID	toxval_id field in toxval table in ToxVal database
+Lifestage	lifestage field in toxval table in ToxVal database
+Exposure Route	exposure route field in toxval table in ToxVal database
+Test ID	test_id field in tests table in Ecotox database
+Exposure Type	Type of exposure (S=static, F=flowthrough, R=renewal, etc)
+Chem Analysis Method	Analysis method for water concentration (M=measured, U=unmeasured etc)
+Concentration Type	How concentration is reported
+Set	Training (T) or Validation (V) set
+Species Common	Common name for animal tested
+Media Type	Media type where exposure occurs (e.g. fresh water)
+Species Latin	Latin name of tested organism (e.g. Pimephales promelas)
+Response Site	Part of organism tested for the chemical
+Test Location	Where the test was performed (e.g. laboratory)
+Exposure Concentration	Water concentration
+Maximum Concentration	Maximum concentration tested
+Library	Experimental data library used
+Tested In Concentration Response	Whether or not tested for concentration response
+Dataset	Which dataset the chemical appears in
+QSAR Ready SMILES	QSAR ready SMILES
+PubChem CID	CID used to identify chemical in PubChem
+Criterion 1- Water Concentration	Whether or not water concentration has been measured on a scale from 1 to 3
+Criterion 2- Radiolabel	Whether or not radiolabel based concentrations have been corrected for metabolites on a scale from 1 to 3
+Criterion 3- Aqueous Solubility	Whether or not the water concentration exceeds the water solubility on a scale from 1 to 3
+Criterion 4- Exposure Duration	Whether or not the exposure duration is long enough to achieve steady state on a scale from 1 to 3
+Criterion 6- Other Major Source	Whether or not another criterion has not been met on a scale from 1 to 3
+Criterion 5- Tissue Analyzed	Whether or not the response_site is whole body on a scale from 1 to 3
+Overall Score	Whether or not a data record is acceptable on a scale from 1 to 3
+Species Supercategory	Type of organism (e.g. fish)
+Organism Classification	Organism classification (e.g. vertebrate)
+Media	Media type where exposure occurs (e.g. fresh water)
+Percentage Organic Carbon	Percent of organic carbon found in the experimental media
+Percentage Organic Matter	Percent of organic matter found in the experimental media
+Soil Type	Type of soil in the experimental media
+Testing Conditions	Conditions of the experimental tests
+
+Exposure Duration (In Days Or Lifetime)	Exposure Duration (in days or Lifetime)
+Water Concentration	Concentration in water
+Exposure Duration	Time exposed to chemical
+Test Guideline	Test guideline used
+Species Type	Type of species (e.g. standard, invasive, etc.)
+Test Type	Type of test (e.g. LC50, EC50)
+Effect	Toxicity effect (e.g. mortality)
+Result ID	result_id field in results table in Ecotox database
+Observation Duration	Duration for the given toxicity value
+Chemical Number	Chemical Number in ECHA Reach dossier
+Principles Of Method If Other Than Guideline	Details of method used if other than a known guideline (REACH)
+Type Of Method Other	Special method used (REACH)

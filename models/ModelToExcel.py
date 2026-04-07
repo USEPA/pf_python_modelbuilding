@@ -53,9 +53,11 @@ class ModelToExcel:
             exclude_blank_columns: bool = True,
             include_qc_columns: bool = False,
             include_value_original: bool = False,
+            create_records_superheaders: bool = False,
             display_dropped_columns: bool = False,
             dataset_name_external: Optional[str] = None,
-            df_gmd_external: Optional[pd.DataFrame] = None
+            df_gmd_external: Optional[pd.DataFrame] = None,
+            superheaders: Optional[dict[str, list[str]]] = None
         ) -> None:
         """
         Initialize ModelToExcel instance for generating QSAR model summary reports.
@@ -113,9 +115,11 @@ class ModelToExcel:
         self.exclude_blank_columns = exclude_blank_columns
         self.include_qc_columns = include_qc_columns
         self.include_value_original = include_value_original
+        self.create_records_superheaders = create_records_superheaders
         self.display_dropped_columns = display_dropped_columns
         self.dataset_name_external = dataset_name_external
         self.df_gmd_external = df_gmd_external
+        self.superheaders = superheaders
     
 
     @staticmethod
@@ -417,44 +421,40 @@ class ModelToExcel:
         """
         df_pv = ModelToExcel.convert_exp_details_to_strings(df_pv)
         str_columns = [col for col in df_pv.columns if col.startswith("exp_details_") and col.endswith("_str")]
-        exp_details_columns = {}
-        for col in str_columns:
-            exp_details_columns[col] = df_pv[col]
+        exp_details_columns = {ModelToExcel.clean_col_titles(col): df_pv[col] for col in str_columns}
         records_df = {
-            "exp_prop_id": df_pv.get("prop_value_id", None),
-            "canon_qsar_smiles": df_pv.get("canon_qsar_smiles", None),
-            "page_url": df_pv.get("direct_url", None),
-            "public_source_name": df_pv.get("public_source_name", None),
-            "public_source_url": df_pv.get("public_source_url", None),
+            "Exp Prop ID": df_pv.get("prop_value_id", None),
+            "Canon QSAR SMILES": df_pv.get("canon_qsar_smiles", None),
+            "Page URL": df_pv.get("direct_url", None),
+            "Public Source Name": df_pv.get("public_source_name", None),
+            "Public Source URL": df_pv.get("public_source_url", None),
             # "public_source_original_name": None,  # Doesn't seem to be used/useful
             # "public_source_original_url": None,  # Doesn't seem to be used/useful
-            "literature_source_citation": df_pv.get("literature_source_citation", None),
-            "literature_source_doi": df_pv.get("literature_source_doi", None),
-            "source_dtxrid": df_pv.get("source_dtxrid", None),
-            "source_dtxsid": df_pv.get("source_dtxsid", None),
-            "source_casrn": df_pv.get("source_casrn", None),
-            "source_chemical_name": df_pv.get("source_chemical_name", None),
-            "source_smiles": df_pv.get("source_smiles", None),
-            "mapped_dtxcid": df_pv.get("mapped_dtxcid", None),
-            "mapped_dtxsid": df_pv.get("mapped_dtxsid", None),
-            "mapped_cas": df_pv.get("mapped_casrn", None),
-            "mapped_chemical_name": df_pv.get("mapped_chemical_name", None),
-            "mapped_smiles": df_pv.get("mapped_smiles", None),
-            "mapped_molweight": df_pv.get("mapped_mol_weight", None),
-            "value_original": df_pv.get("prop_value_original", None),
-            "value_max": df_pv.get("value_max", None),  # Edited
-            "value_min": df_pv.get("value_min", None),  # Edited
-            "value_point_estimate": df_pv.get("prop_value", None),
-            "value_units": df_pv.get("prop_unit", None),
-            "qsar_property_value": df_pv.get("qsar_property_value", None),
-            "qsar_property_units": df_pv.get("qsar_property_unit", None),
-            "temperature_c": df_pv.get("exp_details_temperature_value_point_estimate", None),
+            "Literature Source Citation": df_pv.get("literature_source_citation", None),
+            "Literature Source DOI": df_pv.get("literature_source_doi", None),
+            "Source DTXRID": df_pv.get("source_dtxrid", None),
+            "Source DTXSID": df_pv.get("source_dtxsid", None),
+            "Source CASRN": df_pv.get("source_casrn", None),
+            "Source Chemical Name": df_pv.get("source_chemical_name", None),
+            "Source SMILES": df_pv.get("source_smiles", None),
+            "Mapped DTXCID": df_pv.get("mapped_dtxcid", None),
+            "Mapped DTXSID": df_pv.get("mapped_dtxsid", None),
+            "Mapped CAS": df_pv.get("mapped_casrn", None),
+            "Mapped Chemical Name": df_pv.get("mapped_chemical_name", None),
+            "Mapped SMILES": df_pv.get("mapped_smiles", None),
+            "Mapped Molweight": df_pv.get("mapped_mol_weight", None),
+            "Value Original": df_pv.get("prop_value_original", None),
+            "Value Max": df_pv.get("value_max", None),  # Edited
+            "Value Min": df_pv.get("value_min", None),  # Edited
+            "Value Point Estimate": df_pv.get("prop_value", None),
+            "Value Units": df_pv.get("prop_unit", None),
+            "QSAR Property Value": df_pv.get("qsar_property_value", None),
+            "QSAR Property Units": df_pv.get("qsar_property_unit", None),
             # "pressure_mmHg": None,  # Not currently stored in exp_prop.property_values
-            "pH": df_pv.get("exp_details_ph_value_point_estimate", None),
-            "notes": df_pv.get("notes", None),  # Added
-            "qc_flag": df_pv.get("qc_flag", None),  # Added
-            "flag_reason": df_pv.get("flag_reason", None),  # Added
-            **exp_details_columns
+            **exp_details_columns,
+            "Notes": df_pv.get("notes", None),  # Added
+            "QC Flag": df_pv.get("qc_flag", None),  # Added
+            "Flag Reason": df_pv.get("flag_reason", None),  # Added
         }
         records_df = pd.DataFrame.from_dict(records_df)
         return records_df
@@ -469,7 +469,6 @@ class ModelToExcel:
         Returns:
             pd.DataFrame: Records dataframe from database (currently returns empty result).
         """
-        # TODO: Determine if this is the correct way to build the Records df, or if we should use the Model object
         logging.info(f"Building Records from Model {self.model_id}")
         if self.dataset_name is None:
             try:
@@ -483,10 +482,43 @@ class ModelToExcel:
         records_df = ModelToExcel.get_records_df(df_pv)
         logging.info(f"Finished building Records from Model {self.model_id}")
         self.records_df = records_df
+
+        ModelToExcel.get_superheaders(records_df)
+
         return records_df
     
+    @staticmethod
+    def get_superheaders(records_df: pd.DataFrame) -> dict:
+        """
+        Generate superheaders for the records dataframe.
 
-    def records(self, writer: Any, records: Optional[pd.DataFrame]=None, add_subtotals: bool=True, exclude_blank_columns: bool=True, include_qc_columns: bool=False, include_value_original: bool=False) -> pd.DataFrame:
+        Args:
+            records_df (pd.DataFrame): The records dataframe.
+
+        Returns:
+            dict: A dictionary of superheaders and their corresponding columns.
+        """
+        superheaders = {
+            "Identifiers": ["Exp Prop ID", "Canon QSAR SMILES"],
+            "Literature Source Metadata": ["Page URL", "Public Source Name", "Public Source URL", "Literature Source Citation", "Literature Source DOI"],
+            "Source Chemical Metadata": ["Source DTXRID", "Source DTXSID", "Source CASRN", "Source Chemical Name", "Source SMILES"],
+            "Mapped DSSTox Record Metadata": ["Mapped DTXCID", "Mapped DTXSID", "Mapped CAS", "Mapped Chemical Name", "Mapped SMILES", "Mapped Molweight"],
+            "Property Value Data": ["Value Original", "Value Max", "Value Min", "Value Point Estimate", "Value Units", "QSAR Property Value", "QSAR Property Units"],
+            "Experimental Details": ["Measurement Method", "Media", "Percentage Organic Carbon", "Percentage Organic Matter", "pH", "Soil Type", "Temperature", "Testing Conditions", "Notes"],
+            "Quality Control": ["QC Flag", "Flag Reason"]
+        }
+
+        superheaders["Other"] = [col for col in records_df.columns if col not in [val for sublist in superheaders.values() for val in sublist]]
+
+        for superheader in superheaders.keys():
+                    if superheaders[superheader]:
+                        superheaders[superheader] = [col for col in records_df.columns if col in superheaders[superheader]]
+                    else:
+                        superheaders.pop(superheader)
+
+        return superheaders
+
+    def records(self, writer: Any, records: Optional[pd.DataFrame]=None, add_subtotals: bool=True, exclude_blank_columns: bool=True, include_qc_columns: bool=False, include_value_original: bool=False, superheaders: dict=None) -> pd.DataFrame:
         """
         Create the records sheet in the Excel workbook with detailed experimental data.
         
@@ -509,19 +541,40 @@ class ModelToExcel:
         if not include_value_original:
             records = records.drop(columns=["value_original"], errors="ignore")
         
-        start_row = ModelToExcel.get_header_row(has_subtotals=add_subtotals)
+        workbook = writer.book
+        worksheet = workbook.add_worksheet("Records")
+
+        if self.create_records_superheaders:
+            superheaders = ModelToExcel.get_superheaders(records) if superheaders is None else superheaders
+
+            if superheaders:
+                colors = ["CCFFCC", "CCCCFF", "FFCCCC", "086084", "BF6900"]
+                merge_formats = [workbook.add_format({"bold": True, "align": "center", "fg_color": f"#{color}"}) for color in colors]
+
+                i = 0
+                for superheader in superheaders.keys():
+                        col_idxs = [records.columns.get_loc(col) for col in superheaders[superheader]]
+
+                        start_col = xl_rowcol_to_cell(0, min(col_idxs))[0]  # Get the column letter using xlsxwriter utility
+                        end_col = xl_rowcol_to_cell(0, max(col_idxs))[0]  # Get the column letter using xlsxwriter utility
+                        superheader_row = ModelToExcel.get_header_row(has_subtotals=add_subtotals, has_superheaders=self.create_records_superheaders) - 1
+
+                        worksheet.merge_range(f"{start_col}{superheader_row}:{end_col}{superheader_row}", superheader, merge_formats[i%len(merge_formats)])
+                        i += 1
+        
+        start_row = ModelToExcel.get_header_row(has_subtotals=add_subtotals, has_superheaders=self.create_records_superheaders)
         records.to_excel(writer, sheet_name="Records", index=False, startrow=start_row)
 
         workbook = writer.book
         worksheet = writer.sheets["Records"]
         if add_subtotals:
             ModelToExcel.add_subtotals(writer, "Records", records)
-            worksheet.freeze_panes(2, 0)
+            worksheet.freeze_panes(2 + [0, 1][self.create_records_superheaders], 0)
         else:
-            worksheet.freeze_panes(1, 0)
+            worksheet.freeze_panes(1 + [0, 1][self.create_records_superheaders], 0)
 
-        ModelToExcel.set_column_width(writer, "Records", records, col_width_pad=5, how="header", has_subtotals=add_subtotals)
-        ModelToExcel.add_filter(writer, "Records", records, has_subtotals=add_subtotals)
+        ModelToExcel.set_column_width(writer, "Records", records, col_width_pad=5, how="header", has_subtotals=add_subtotals, has_superheaders=self.create_records_superheaders)
+        ModelToExcel.add_filter(writer, "Records", records, has_subtotals=add_subtotals, has_superheaders=self.create_records_superheaders)
 
         return records
 
@@ -572,10 +625,35 @@ class ModelToExcel:
                 dropped_columns.update({"value_original"})
 
             records_field_descriptions = records_field_descriptions[~records_field_descriptions["Field"].isin(dropped_columns)]
+            records_field_descriptions["Field"] = pd.Categorical(records_field_descriptions["Field"], categories=temp.columns, ordered=True)
+            records_field_descriptions = records_field_descriptions.sort_values("Field")
             if self.display_dropped_columns and dropped_columns:
                 records_field_descriptions = pd.concat([records_field_descriptions, pd.DataFrame({"Field": ["Dropped Columns"], "Description": [", ".join(list(dropped_columns))]})])
+        
+        workbook = writer.book
+        worksheet = workbook.add_worksheet("Records Field Descriptions")
 
-        records_field_descriptions.to_excel(writer, sheet_name="Records Field Descriptions", index=False)
+        startcol=0
+        if self.create_records_superheaders and self.records_df is not None:
+            superheaders = ModelToExcel.get_superheaders(self.records_df)
+            colors = ["CCFFCC", "CCCCFF", "FFCCCC", "086084", "BF6900"]
+            merge_formats = [workbook.add_format({"bold": True, "align": "center", "fg_color": f"#{color}"}) for color in colors]
+            bold_format = workbook.add_format({
+                "bold": True
+            })
+            worksheet.write_string("A1", "Field Group", bold_format)
+
+            i = 0
+            for superheader in superheaders.keys():
+                    col_idxs = [records.columns.get_loc(col) for col in superheaders[superheader]]
+                    for col_idx in col_idxs:
+                        worksheet.write_string(f"A{col_idx+1}", superheader, merge_formats[i%len(merge_formats)])
+
+                    i += 1
+
+            startcol=1
+        
+        records_field_descriptions.to_excel(writer, sheet_name="Records Field Descriptions", index=False, startcol=startcol)
 
         workbook = writer.book
         worksheet = writer.sheets["Records Field Descriptions"]
@@ -1211,7 +1289,9 @@ class ModelToExcel:
         min_col_width: int=7,
         how: str="header",
         first_col_format: Optional[Any] = None,
-        has_subtotals: bool = False) -> None:
+        has_subtotals: bool = False,
+        has_superheaders: bool = False
+        ) -> None:
         """
         Set column widths in Excel sheet based on content or header width.
         
@@ -1226,8 +1306,7 @@ class ModelToExcel:
             has_subtotals (bool): Whether subtotals are present above headers. Defaults to False.
         """
         worksheet = writer.sheets[sheet_name]
-        data_start_row = ModelToExcel.get_data_start_row(has_subtotals)
-        
+                
         for col_idx in range(len(df.columns)):
             if how == "header":
                 header_entry = df.columns[col_idx]
@@ -1250,30 +1329,36 @@ class ModelToExcel:
 
 
     @staticmethod
-    def get_header_row(has_subtotals: bool = False) -> int:
+    def get_header_row(has_subtotals: bool = False, has_superheaders: bool = False) -> int:
         """
         Get the row number where headers are located.
         
         Args:
             has_subtotals (bool): Whether subtotals are present above headers. Defaults to False.
+            has_superheaders (bool): Whether superheaders are present above the main headers. Defaults to False.
         
         Returns:
             int: The 0-based row index of the header row.
         """
+        if has_superheaders:
+            return 3 if has_subtotals else 1
         return 2 if has_subtotals else 0
     
 
     @staticmethod
-    def get_data_start_row(has_subtotals: bool = False) -> int:
+    def get_data_start_row(has_subtotals: bool = False, has_superheaders: bool = False) -> int:
         """
         Get the row number where data starts (first row after headers).
         
         Args:
             has_subtotals (bool): Whether subtotals are present above headers. Defaults to False.
+            has_superheaders (bool): Whether superheaders are present above the main headers. Defaults to False.
         
         Returns:
             int: The 0-based row index of the first data row.
         """
+        if has_superheaders:
+            return 4 if has_subtotals else 1
         return 3 if has_subtotals else 1
 
 
@@ -1310,7 +1395,7 @@ class ModelToExcel:
 
 
     @staticmethod
-    def add_filter(writer: Any, sheet_name: str, df: pd.DataFrame, has_subtotals: bool = False) -> None:
+    def add_filter(writer: Any, sheet_name: str, df: pd.DataFrame, has_subtotals: bool = False, has_superheaders: bool = False) -> None:
         """
         Add autofilter to a sheet for easy data filtering.
         
@@ -1329,12 +1414,34 @@ class ModelToExcel:
         nrows, ncols = df.shape
         
         # Get the header row based on whether subtotals exist
-        header_row = ModelToExcel.get_header_row(has_subtotals)
+        header_row = ModelToExcel.get_header_row(has_subtotals=has_subtotals, has_superheaders=has_superheaders)
 
         # Add an auto-filter to the full range (header row position; data ends at row nrows + offset for subtotals)
-        data_end_row = nrows + (1 if has_subtotals else 0)
+        data_end_row = nrows + (1 if has_subtotals else 0) + (1 if has_superheaders else 0)
         ws.autofilter(header_row, 0, data_end_row, ncols - 1)
     
+
+    @staticmethod
+    def clean_col_titles(s):
+        val = re.sub(r"exp_details_", "", s)
+        val = re.sub(r"_str", "", val)
+        val = " ".join(val.split("_")).title()
+        val = re.sub(r"(\W*)Ph(\W*)", r"\1pH\2", val)
+        val = re.sub(r"\sId\s?$", " ID", val)
+        val = re.sub(r"\sCid\s?$", " CID", val)
+        val = re.sub(r"Qc", "QC", val)
+        val = re.sub(r"Url", "URL", val)
+        val = re.sub(r"Doi", "DOI", val)
+        val = re.sub(r"Dtxsid", "DTXSID", val)
+        val = re.sub(r"Dtxrid", "DTXRID", val)
+        val = re.sub(r"Dtxcid", "DTXCID", val)
+        val = re.sub(r"Casrn", "CASRN", val)
+        val = re.sub(r"(\W*)Cas(\W*)", r"\1CAS\2", val)
+        val = re.sub(r"Qsar", "QSAR", val)
+        val = re.sub(r"Smiles", "SMILES", val)
+        val = re.sub(r"Pubchem", "PubChem", val)
+        return val
+
 
     @staticmethod
     def handle_accidental_formulas(df: pd.DataFrame, how: str="formula") -> pd.DataFrame:
@@ -1407,7 +1514,10 @@ class ModelToExcel:
         df_source: pd.DataFrame,
         df_target: pd.DataFrame,
         link_column: str = "exp_prop_id",
-        has_subtotals: bool=True) -> None:
+        has_subtotals: bool=True,
+        source_has_superheaders: bool=False,
+        target_has_superheaders: bool=False
+        ) -> None:
         """
         Add hyperlinks from source sheet to target sheet based on a matching column.
         Uses xlsxwriter to add hyperlinks. Avoids needing to close and reopen the file,
@@ -1449,7 +1559,7 @@ class ModelToExcel:
         # df_target is 0-indexed, but Excel rows are 1-indexed (with row 1 being header)
         target_row_map = {}
         for idx, val in enumerate(df_target[link_column]):
-            excel_row = idx + ModelToExcel.get_data_start_row(has_subtotals=has_subtotals) + 1  # Accounts for header and optional subtotal row
+            excel_row = idx + ModelToExcel.get_data_start_row(has_subtotals=has_subtotals, has_superheaders=target_has_superheaders) + 1  # Accounts for header and optional subtotal row
             key = str(val).strip() if pd.notna(val) else None
             target_row_map[key] = excel_row
         
@@ -1467,7 +1577,7 @@ class ModelToExcel:
         try:
             for src_idx, src_val in enumerate(df_source[link_column]):
                 src_val_str = str(src_val).strip() if pd.notna(src_val) else None
-                excel_row = src_idx + ModelToExcel.get_data_start_row(has_subtotals=has_subtotals) + 1  # Accounts for header and optional subtotal row
+                excel_row = src_idx + ModelToExcel.get_data_start_row(has_subtotals=has_subtotals, has_superheaders=source_has_superheaders) + 1  # Accounts for header and optional subtotal row and superheader row in Records
                 
                 if src_val_str and src_val_str in target_row_map:
                     target_row = target_row_map[src_val_str]
@@ -1575,7 +1685,8 @@ class ModelToExcel:
         yx_offset_rows: int=3,
         property_name: Optional[str] = None,
         property_units: Optional[str] = None,
-        has_subtotals: bool = False) -> None:
+        has_subtotals: bool = False,
+        has_superheaders: bool = False) -> None:
         """
         Add a prediction vs experimental scatter plot to the worksheet.
         
@@ -1606,7 +1717,7 @@ class ModelToExcel:
         nrows = len(df)
         
         # Calculate the actual data row position based on subtotals and headers
-        data_start_row = ModelToExcel.get_data_start_row(has_subtotals)
+        data_start_row = ModelToExcel.get_data_start_row(has_subtotals=has_subtotals, has_superheaders=has_superheaders)
         
         # Get column indices for x and y columns (0-based)
         if x_col is None:
@@ -2101,19 +2212,19 @@ class ModelToExcel:
             # Add Hyperlinks
             logging.info("Adding hyperlinks...")
             try:
-                ModelToExcel.add_hyperlinks_to_sheet(writer, "Records", "Training CV Predictions", self.records_df, self.training_cv_predictions_df, has_subtotals=self.add_subtotals)
+                ModelToExcel.add_hyperlinks_to_sheet(writer, "Records", "Training CV Predictions", self.records_df, self.training_cv_predictions_df, has_subtotals=self.add_subtotals, source_has_superheaders=self.create_records_superheaders)
             except Exception as e:
                 logging.error(f"Error adding hyperlinks: {e}")
             try:
-                ModelToExcel.add_hyperlinks_to_sheet(writer, "Records", "Test Set Predictions", self.records_df, self.test_set_predictions_df, has_subtotals=self.add_subtotals)
+                ModelToExcel.add_hyperlinks_to_sheet(writer, "Records", "Test Set Predictions", self.records_df, self.test_set_predictions_df, has_subtotals=self.add_subtotals, source_has_superheaders=self.create_records_superheaders)
             except Exception as e:
                 logging.error(f"Error adding hyperlinks: {e}")
             try:
-                ModelToExcel.add_hyperlinks_to_sheet(writer, "Training CV Predictions", "Records", self.training_cv_predictions_df, self.records_df, has_subtotals=self.add_subtotals)
+                ModelToExcel.add_hyperlinks_to_sheet(writer, "Training CV Predictions", "Records", self.training_cv_predictions_df, self.records_df, has_subtotals=self.add_subtotals, target_has_superheaders=self.create_records_superheaders)
             except Exception as e:
                 logging.error(f"Error adding hyperlinks: {e}")
             try:
-                ModelToExcel.add_hyperlinks_to_sheet(writer, "Test Set Predictions", "Records", self.test_set_predictions_df, self.records_df, has_subtotals=self.add_subtotals)
+                ModelToExcel.add_hyperlinks_to_sheet(writer, "Test Set Predictions", "Records", self.test_set_predictions_df, self.records_df, has_subtotals=self.add_subtotals, target_has_superheaders=self.create_records_superheaders)
             except Exception as e:
                 logging.error(f"Error adding hyperlinks: {e}")
             
@@ -2134,7 +2245,8 @@ def main():
     excel_path = "test_summary.xlsx"
     add_subtotals = True
     exclude_blank_columns = True
-    test = ModelToExcel(engine=engine, session=session, model_id=model_id, excel_path=excel_path, add_subtotals=add_subtotals, exclude_blank_columns=exclude_blank_columns)
+    add_superheaders = False
+    test = ModelToExcel(engine=engine, session=session, model_id=model_id, excel_path=excel_path, add_subtotals=add_subtotals, exclude_blank_columns=exclude_blank_columns, create_records_superheaders=add_superheaders)
     test.create_excel()
 
 
