@@ -7,7 +7,7 @@ from sqlalchemy.orm import sessionmaker
 import math
 import numpy as np
 from typing import Optional, Dict, Any, Iterable, Tuple, Union
-from xlsxwriter.utility import xl_rowcol_to_cell
+from xlsxwriter.utility import xl_rowcol_to_cell, xl_col_to_name
 import os
 import traceback
 import json
@@ -53,11 +53,12 @@ class ModelToExcel:
             exclude_blank_columns: bool = True,
             include_qc_columns: bool = False,
             include_value_original: bool = False,
-            create_records_superheaders: bool = False,
+            create_records_superheaders: bool = True,
             display_dropped_columns: bool = False,
             dataset_name_external: Optional[str] = None,
             df_gmd_external: Optional[pd.DataFrame] = None,
-            superheaders: Optional[dict[str, list[str]]] = None
+            superheaders: Optional[dict[str, list[str]]] = None,
+            colors: list[str] = ["CCFFCC", "CCCCFF", "FFCCCC", "FFFFCC", "CCFFFF"]
         ) -> None:
         """
         Initialize ModelToExcel instance for generating QSAR model summary reports.
@@ -120,6 +121,7 @@ class ModelToExcel:
         self.dataset_name_external = dataset_name_external
         self.df_gmd_external = df_gmd_external
         self.superheaders = superheaders
+        self.colors = colors
     
 
     @staticmethod
@@ -551,16 +553,18 @@ class ModelToExcel:
             superheaders = ModelToExcel.get_superheaders(records) if superheaders is None else superheaders
 
             if superheaders:
-                colors = ["CCFFCC", "CCCCFF", "FFCCCC", "086084", "BF6900"]
+                colors = self.colors
                 merge_formats = [workbook.add_format({"bold": True, "align": "center", "fg_color": f"#{color}"}) for color in colors]
 
                 i = 0
                 for superheader in superheaders.keys():
                         col_idxs = [records.columns.get_loc(col) for col in superheaders[superheader]]
 
-                        start_col = xl_rowcol_to_cell(0, min(col_idxs))[0]  # Get the column letter using xlsxwriter utility
-                        end_col = xl_rowcol_to_cell(0, max(col_idxs))[0]  # Get the column letter using xlsxwriter utility
-                        superheader_row = ModelToExcel.get_header_row(has_subtotals=add_subtotals, has_superheaders=self.create_records_superheaders) - 1
+                        start_col = xl_col_to_name(min(col_idxs))  # Get the column letter using xlsxwriter utility
+                        end_col = xl_col_to_name(max(col_idxs))  # Get the column letter using xlsxwriter utility
+                        superheader_row = ModelToExcel.get_header_row(has_subtotals=add_subtotals, has_superheaders=self.create_records_superheaders)
+
+                        logging.debug(f"Processing superheader: {superheader}\n\t{superheaders[superheader]}\n\tMerging Range: {start_col}{superheader_row}:{end_col}{superheader_row}")
 
                         worksheet.merge_range(f"{start_col}{superheader_row}:{end_col}{superheader_row}", superheader, merge_formats[i%len(merge_formats)])
                         i += 1
@@ -639,24 +643,22 @@ class ModelToExcel:
         startcol=0
         if self.create_records_superheaders and self.records_df is not None:
             superheaders = ModelToExcel.get_superheaders(self.records_df)
-            colors = ["CCFFCC", "CCCCFF", "FFCCCC", "086084", "BF6900"]
+            colors = self.colors
             merge_formats = [workbook.add_format({"bold": True, "align": "center", "fg_color": f"#{color}"}) for color in colors]
-            bold_format = workbook.add_format({
-                "bold": True
-            })
+            bold_format = workbook.add_format({"bold": True, "align": "center"})
+
             worksheet.write_string("A1", "Field Group", bold_format)
 
-            i = 0
-            for superheader in superheaders.keys():
-                    col_idxs = [records.columns.get_loc(col) for col in superheaders[superheader]]
-                    for col_idx in col_idxs:
-                        worksheet.write_string(f"A{col_idx+1}", superheader, merge_formats[i%len(merge_formats)])
+            records_field_descriptions["Field Group"] = records_field_descriptions["Field"].map(lambda x: next((k for k, v in superheaders.items() if x in v), "Other"))
 
-                    i += 1
+            for row in range(len(records_field_descriptions)):
+                group = records_field_descriptions.iloc[row]["Field Group"]
+                worksheet.write_string(row + 1, 0, group, merge_formats[list(superheaders.keys()).index(group)%len(merge_formats)])
 
             startcol=1
         
-        records_field_descriptions.to_excel(writer, sheet_name="Records Field Descriptions", index=False, startcol=startcol)
+        records_field_descriptions[["Field", "Description"]].to_excel(writer, sheet_name="Records Field Descriptions", index=False, startcol=startcol)
+        records_field_descriptions = records_field_descriptions[["Field Group", "Field", "Description"]]
 
         workbook = writer.book
         worksheet = writer.sheets["Records Field Descriptions"]
@@ -2262,7 +2264,7 @@ def main():
     excel_path = "test_summary.xlsx"
     add_subtotals = True
     exclude_blank_columns = True
-    add_superheaders = False
+    add_superheaders = True
     test = ModelToExcel(engine=engine, session=session, model_id=model_id, excel_path=excel_path, add_subtotals=add_subtotals, exclude_blank_columns=exclude_blank_columns, create_records_superheaders=add_superheaders)
     test.create_excel()
 
