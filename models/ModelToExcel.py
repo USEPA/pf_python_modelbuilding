@@ -510,11 +510,14 @@ class ModelToExcel:
 
         superheaders["Other"] = [col for col in records_df.columns if col not in [val for sublist in superheaders.values() for val in sublist]]
 
+        empty_superheaders = []
         for superheader in superheaders.keys():
                     if superheaders[superheader]:
                         superheaders[superheader] = [col for col in records_df.columns if col in superheaders[superheader]]
                     else:
-                        superheaders.pop(superheader)
+                        empty_superheaders.append(superheader)
+        for superheader in empty_superheaders:
+            superheaders.pop(superheader)
 
         return superheaders
 
@@ -569,7 +572,7 @@ class ModelToExcel:
         worksheet = writer.sheets["Records"]
         if add_subtotals:
             ModelToExcel.add_subtotals(writer, "Records", records)
-            worksheet.freeze_panes(2 + [0, 1][self.create_records_superheaders], 0)
+            worksheet.freeze_panes(3 + [0, 1][self.create_records_superheaders], 0)
         else:
             worksheet.freeze_panes(1 + [0, 1][self.create_records_superheaders], 0)
 
@@ -764,7 +767,7 @@ class ModelToExcel:
         worksheet = writer.sheets["Model Descriptors"]
         if add_subtotals:
             ModelToExcel.add_subtotals(writer, "Model Descriptors", model_descriptors)
-            worksheet.freeze_panes(2, 0)
+            worksheet.freeze_panes(3, 0)
         else:
             worksheet.freeze_panes(1, 0)
 
@@ -828,6 +831,9 @@ class ModelToExcel:
 
         # Merge the full set of experimental and predicted values with the model descriptor values
         final = full.merge(full_descriptors, on="Canonical QSAR Ready Smiles", how="left")
+        final = final.rename(columns={
+            "exp_prop_id": "Exp Prop ID"
+        })
 
         final = ModelToExcel.handle_accidental_formulas(final)
 
@@ -872,7 +878,7 @@ class ModelToExcel:
             header_columns[header] = temp[header]
 
         model_descriptor_values_dict = {
-            "exp_prop_id": temp["qsar_exp_prop_property_values_id_first"],
+            "Exp Prop ID": temp["qsar_exp_prop_property_values_id_first"],
             "DTXCID": temp["dtxcid"],
             "CASRN": temp["casrn"],
             "Preferred Name": temp["preferred_name"],
@@ -915,7 +921,7 @@ class ModelToExcel:
         worksheet = writer.sheets["Model Descriptor Values"]
         if add_subtotals:
             ModelToExcel.add_subtotals(writer, "Model Descriptor Values", model_descriptor_values)
-            worksheet.freeze_panes(2, 0)
+            worksheet.freeze_panes(3, 0)
         else:
             worksheet.freeze_panes(1, 0)
 
@@ -939,7 +945,8 @@ class ModelToExcel:
             pd.DataFrame: Formatted predictions dataframe with exp_prop_id in first column.
         """
         exp_prop_id = df_training_cv.pop("exp_prop_id")
-        df_training_cv.insert(0, "exp_prop_id", exp_prop_id)
+        df_training_cv.insert(0, "Exp Prop ID", exp_prop_id)
+        df_training_cv.rename(columns={col: ModelToExcel.clean_col_titles(col) for col in df_training_cv.columns}, inplace=True)
         return df_training_cv
     
 
@@ -965,17 +972,17 @@ class ModelToExcel:
         temp = pd.merge(model.df_preds_training_cv, df_gmd, left_on="id", right_on="canon_qsar_smiles", how="left")
 
         training_cv_predictions_dict = {
-            "exp_prop_id": temp["qsar_exp_prop_property_values_id_first"],
-            "canon_qsar_smiles": temp["canon_qsar_smiles"],
-            "exp": temp["exp"],
-            "pred": temp["pred"],
-            "cv_fold": fold_col,
-            "dtxcid": temp["dtxcid"],
-            "dtxsid": temp["dtxsid"],
-            "casrn": temp["casrn"],
-            "preferred_name": temp["preferred_name"],
-            "smiles": temp["smiles"],
-            "mol_weight": temp["mol_weight"]
+            "Exp Prop ID": temp["qsar_exp_prop_property_values_id_first"],
+            "Canon QSAR SMILES": temp["canon_qsar_smiles"],
+            "Exp": temp["exp"],
+            "Pred": temp["pred"],
+            "CV Fold": fold_col,
+            "DTXCID": temp["dtxcid"],
+            "DTXSID": temp["dtxsid"],
+            "CASRN": temp["casrn"],
+            "Preferred Name": temp["preferred_name"],
+            "SMILES": temp["smiles"],
+            "Mol Weight": temp["mol_weight"]
         }
         training_cv_predictions_df = pd.DataFrame(training_cv_predictions_dict)
 
@@ -1019,7 +1026,7 @@ class ModelToExcel:
         worksheet = writer.sheets["Training CV Predictions"]
         if add_subtotals:
             ModelToExcel.add_subtotals(writer, "Training CV Predictions", training_cv_predictions)
-            worksheet.freeze_panes(2, 0)
+            worksheet.freeze_panes(3, 0)
         else:
             worksheet.freeze_panes(1, 0)
 
@@ -1045,7 +1052,7 @@ class ModelToExcel:
             pd.DataFrame: Formatted predictions dataframe with exp_prop_id in first column.
         """
         exp_prop_id = df_test.pop("exp_prop_id")
-        df_test.insert(0, "exp_prop_id", exp_prop_id)
+        df_test.insert(0, "Exp Prop ID", exp_prop_id)
 
         if actual_ads is not None:
             applicability_domain_cols = [col for col in df_test.columns if "AD" in col]
@@ -1054,6 +1061,10 @@ class ModelToExcel:
                 temp_name = temp_name.replace("_", " ")
                 if temp_name not in actual_ads:
                     df_test.pop(col)
+                # else:
+                #     df_test.rename(columns={col: col.replace("_", " ")}, inplace=True)
+        
+        df_test.rename(columns={col: ModelToExcel.clean_col_titles(col) for col in df_test.columns}, inplace=True)
         return df_test
     
 
@@ -1082,20 +1093,20 @@ class ModelToExcel:
                     embedding=model.embedding, applicability_domain=ad,
                     filterColumnsInBothSets=False,
                     returnTrainingAD=False)
-            ad_test_columns["AD_" + ad.replace(" ", "_")] = df_ad_output["AD"]
+            ad_test_columns[f"AD {ad}"] = df_ad_output["AD"]
 
         test_predictions_dict = {
-            "exp_prop_id": temp["qsar_exp_prop_property_values_id_first"],
-            "canon_qsar_smiles": temp["canon_qsar_smiles"],
-            "exp": temp["exp"],
-            "pred": temp["pred"],
+            "Exp Prop ID": temp["qsar_exp_prop_property_values_id_first"],
+            "Canon QSAR SMILES": temp["canon_qsar_smiles"],
+            "Exp": temp["exp"],
+            "Pred": temp["pred"],
             **ad_test_columns,
-            "dtxcid": temp["dtxcid"],
-            "dtxsid": temp["dtxsid"],
-            "casrn": temp["casrn"],
-            "preferred_name": temp["preferred_name"],
-            "smiles": temp["smiles"],
-            "mol_weight": temp["mol_weight"]
+            "DTXCID": temp["dtxcid"],
+            "DTXSID": temp["dtxsid"],
+            "CASRN": temp["casrn"],
+            "Preferred Name": temp["preferred_name"],
+            "SMILES": temp["smiles"],
+            "Mol Weight": temp["mol_weight"]
         }
         test_set_predictions_df = pd.DataFrame(test_predictions_dict)
 
@@ -1139,7 +1150,7 @@ class ModelToExcel:
         worksheet = writer.sheets["Test Set Predictions"]
         if add_subtotals:
             ModelToExcel.add_subtotals(writer, "Test Set Predictions", test_set_predictions)
-            worksheet.freeze_panes(2, 0)
+            worksheet.freeze_panes(3, 0)
         else:
             worksheet.freeze_panes(1, 0)
 
@@ -1165,7 +1176,8 @@ class ModelToExcel:
             pd.DataFrame: Formatted predictions dataframe with exp_prop_id in first column.
         """
         exp_prop_id = df_ext.pop("exp_prop_id")
-        df_ext.insert(0, "exp_prop_id", exp_prop_id)
+        df_ext.insert(0, "Exp Prop ID", exp_prop_id)
+        df_ext.rename(columns={col: ModelToExcel.clean_col_titles(col) for col in df_ext.columns}, inplace=True)
         return df_ext
     
 
@@ -1186,16 +1198,16 @@ class ModelToExcel:
         temp = pd.merge(model.df_preds_external, df_gmd_external, left_on="id", right_on="canon_qsar_smiles", how="left")
 
         external_predictions_dict = {
-            "exp_prop_id": temp["qsar_exp_prop_property_values_id_first"],
-            "canon_qsar_smiles": temp["canon_qsar_smiles"],
-            "exp": temp["exp"],
-            "pred": temp["pred"],
-            "dtxcid": temp["dtxcid"],
-            "dtxsid": temp["dtxsid"],
-            "casrn": temp["casrn"],
-            "preferred_name": temp["preferred_name"],
-            "smiles": temp["smiles"],
-            "mol_weight": temp["mol_weight"]
+            "Exp Prop ID": temp["qsar_exp_prop_property_values_id_first"],
+            "Canon QSAR SMILES": temp["canon_qsar_smiles"],
+            "Exp": temp["exp"],
+            "Pred": temp["pred"],
+            "DTXCID": temp["dtxcid"],
+            "DTXSID": temp["dtxsid"],
+            "CASRN": temp["casrn"],
+            "Preferred Name": temp["preferred_name"],
+            "SMILES": temp["smiles"],
+            "Mol Weight": temp["mol_weight"]
         }
         external_predictions_df = pd.DataFrame(external_predictions_dict)
 
@@ -1241,7 +1253,7 @@ class ModelToExcel:
         worksheet = writer.sheets["External Predictions"]
         if add_subtotals:
             ModelToExcel.add_subtotals(writer, "External Predictions", external_predictions)
-            worksheet.freeze_panes(2, 0)
+            worksheet.freeze_panes(3, 0)
         else:
             worksheet.freeze_panes(1, 0)
 
@@ -1440,6 +1452,7 @@ class ModelToExcel:
         val = re.sub(r"Qsar", "QSAR", val)
         val = re.sub(r"Smiles", "SMILES", val)
         val = re.sub(r"Pubchem", "PubChem", val)
+        val = re.sub(r"Ad(\W*)", "AD\1", val)
         return val
 
 
@@ -1513,7 +1526,7 @@ class ModelToExcel:
         target_sheet: str,
         df_source: pd.DataFrame,
         df_target: pd.DataFrame,
-        link_column: str = "exp_prop_id",
+        link_column: str = "Exp Prop ID",
         has_subtotals: bool=True,
         source_has_superheaders: bool=False,
         target_has_superheaders: bool=False
@@ -1721,18 +1734,22 @@ class ModelToExcel:
         
         # Get column indices for x and y columns (0-based)
         if x_col is None:
-            x_col = "exp"
+            x_col = "Exp"
             x_col_name = "Experimental"
         else:
             x_col_name = x_col
         if y_col is None:
-            y_col = "pred"
+            y_col = "Pred"
             y_col_name = "Predicted"
         else:
             y_col_name = y_col
-        x_col_idx = df.columns.get_loc(x_col)
-        y_col_idx = df.columns.get_loc(y_col)
-        
+        try:
+            x_col_idx = df.columns.get_loc(x_col)
+            y_col_idx = df.columns.get_loc(y_col)
+        except KeyError as e:
+            logging.error(f"Dataframe columns:\n\t{list(df.columns)}")
+            raise ValueError(f"Column not found: {e}")
+
         # Compute unified bounds (also used for y=x line)
         mn, mx, major_unit = ModelToExcel.compute_equal_axis_bounds(
             df[x_col], df[y_col], pad_ratio=pad_ratio, integer_ticks=integer_ticks, log_plot=log_plot, target_ticks=5)
