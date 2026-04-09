@@ -655,7 +655,7 @@ class DataQuerier:
     
     def __init__(
             self,
-            model_id: int = 1746,
+            model_id: Optional[int] = None,
             engine: Optional[Any] = None,
             session: Optional[Any] = None,
             query_args: Optional[dict[str, dict[str, Any]]] = None,
@@ -665,9 +665,11 @@ class DataQuerier:
             df_gmd_external: Optional[Any] = None
         ):
         """Initialize DataQuerier for database access and data retrieval.
+
+        Either a model_id or a model object should be passed at initialization.
         
         Args:
-            model_id: Database ID of the model. Defaults to 1746.
+            model_id: Database ID of the model. Defaults to None.
             engine: SQLAlchemy engine for database connection. If None, creates new engine from environment variables.
             session: SQLAlchemy session for queries. If None, creates new session from engine.
             query_args: Dictionary of query argument sets for different query methods. Defaults to empty dict.

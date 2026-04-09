@@ -1754,22 +1754,6 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         if create_detailed_excel:
             logging.info("Creating DataFrames for detailed Excel report...")
 
-            # actual_ads = params.ad_measure
-
-            # cover_sheet_df = ModelToExcel.get_cover_sheet_df(results_dict)
-            # statistics_df = ModelToExcel.get_statistics_df(results_dict)
-            # records_df = ModelToExcel.get_records_df(df_pv)
-            # model_descriptors_df = ModelToExcel.get_model_descriptors_df(results_dict)
-            # model_descriptor_values_df = ModelToExcel.get_model_descriptor_values_df(results_dict, df_pred_cv, df_pred_test, df_training_model, df_test_model)
-            # training_cv_predictions_df = ModelToExcel.get_training_cv_predictions_df(df_pred_cv)
-            # test_set_predictions_df = ModelToExcel.get_test_set_predictions_df(df_pred_test, actual_ads)
-            # external_predictions_df = ModelToExcel.get_external_predictions_df(df_pred_ext)
-            # log_plot = "log" in results_dict["model_details"].get("unitsModel", "").lower()
-
-            # add_subtotals = True  # Set to True to add subtotals in the Excel report
-            # exclude_blank_columns = True  # Set to True to remove blank columns from Records sheet
-            # display_dropped_columns = False  # Set to True to insert a row at the bottom of Records Field Descriptions listing the dropped columns from Records
-
             # with open("local_model_data.pkl", "wb") as f:
             #     pickle.dump({"model": model, "df_pv": df_pv, "df_gmd": df_dps, "df_gmd_external": df_dps_ext}, f)
 
@@ -1778,23 +1762,6 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
             mdo = ModelDataObjects(model=model, df_pv=df_pv, df_gmd=df_dps, df_gmd_external=df_dps_ext)
             mte = ModelToExcel(mdo, detailed_summary_path)
             mte.create_excel()
-
-            # mte = ModelToExcel(
-            #     excel_path=os.path.join(folder_path, f"detailed_summary.xlsx"),
-            #     cover_sheet_df=cover_sheet_df,
-            #     statistics_df=statistics_df,
-            #     training_cv_predictions_df=training_cv_predictions_df,
-            #     test_set_predictions_df=test_set_predictions_df,
-            #     external_predictions_df=external_predictions_df,
-            #     records_df=records_df,
-            #     model_descriptors_df=model_descriptors_df,
-            #     model_descriptor_values_df=model_descriptor_values_df,
-            #     log_plot=log_plot,
-            #     add_subtotals=add_subtotals,
-            #     exclude_blank_columns=exclude_blank_columns,
-            #     display_dropped_columns=display_dropped_columns
-            # )
-            # mte.create_excel()
     
     except Exception:
         # Print the exception traceback to standard error
