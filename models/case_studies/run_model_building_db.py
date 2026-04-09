@@ -1770,11 +1770,13 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
             # exclude_blank_columns = True  # Set to True to remove blank columns from Records sheet
             # display_dropped_columns = False  # Set to True to insert a row at the bottom of Records Field Descriptions listing the dropped columns from Records
 
-            with open("local_model_data.pkl", "wb") as f:
-                pickle.dump({"model": model, "df_pv": df_pv, "df_gmd": df_dps, "df_gmd_external": df_dps_ext}, f)
+            # with open("local_model_data.pkl", "wb") as f:
+            #     pickle.dump({"model": model, "df_pv": df_pv, "df_gmd": df_dps, "df_gmd_external": df_dps_ext}, f)
+
+            detailed_summary_path = os.path.join(folder_path, f"detailed_summary.xlsx")
 
             mdo = ModelDataObjects(model=model, df_pv=df_pv, df_gmd=df_dps, df_gmd_external=df_dps_ext)
-            mte = ModelToExcel(mdo, "detailed_summary.xlsx")
+            mte = ModelToExcel(mdo, detailed_summary_path)
             mte.create_excel()
 
             # mte = ModelToExcel(

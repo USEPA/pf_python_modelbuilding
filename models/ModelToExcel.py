@@ -1616,8 +1616,9 @@ class DataTransformer:
             if model is None:
                 logging.error(f"Failed to load model")
                 return None
-            elif model.qsar_method not in ["reg", "las", "gcm"]:
-                logging.warning(f"Model has QSAR method that does not support coefficient retrieval: {model.qsar_method}")
+            method_name = getattr(model, "qsar_method", False) or getattr(model, "regressor_name", False) or ""
+            if not any(method in method_name for method in ["reg", "las", "gcm"]):
+                logging.warning(f"Model has QSAR method that does not support coefficient retrieval: {method_name}")
                 return None
                         
             df_training = model.df_training
