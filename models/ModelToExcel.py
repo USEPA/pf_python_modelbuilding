@@ -923,9 +923,7 @@ class DataQuerier:
     def query_records_df(self) -> pd.DataFrame:
         """
         Query database for detailed experimental records.
-        
-        Note: This method is a placeholder and requires SQL implementation.
-        
+                
         Returns:
             pd.DataFrame: Records dataframe from database (currently returns empty result).
         """
@@ -944,9 +942,7 @@ class DataQuerier:
     def query_model_descriptors_df(self) -> pd.DataFrame:
         """
         Query database for model descriptors and their definitions.
-        
-        Note: This method is a placeholder and requires SQL implementation.
-        
+                
         Returns:
             pd.DataFrame: Model descriptors from database (currently returns empty result).
         """
@@ -977,9 +973,7 @@ class DataQuerier:
     def query_model_descriptor_values_df(self) -> pd.DataFrame:
         """
         Query database for predictions and descriptor values.
-        
-        Note: This method is a placeholder and requires SQL implementation.
-        
+                
         Returns:
             pd.DataFrame: Predictions and descriptor values from database (currently returns empty result).
         """
@@ -1038,9 +1032,7 @@ class DataQuerier:
     def query_training_cv_predictions_df(self) -> pd.DataFrame:
         """
         Query database for training set cross-validation predictions.
-        
-        Note: This method is a placeholder and requires SQL implementation.
-        
+                
         Returns:
             pd.DataFrame: Training predictions from database (currently returns empty result).
         """
@@ -1082,9 +1074,7 @@ class DataQuerier:
     def query_test_set_predictions_df(self) -> pd.DataFrame:
         """
         Query database for test set predictions.
-        
-        Note: This method is a placeholder and requires SQL implementation.
-        
+                
         Returns:
             pd.DataFrame: Test predictions from database (currently returns empty result).
         """
@@ -1132,9 +1122,7 @@ class DataQuerier:
     def query_external_predictions_df(self) -> pd.DataFrame:
         """
         Query database for external validation set predictions.
-        
-        Note: This method is a placeholder and requires SQL implementation.
-        
+                
         Returns:
             pd.DataFrame: External predictions from database (currently returns empty result).
         """
