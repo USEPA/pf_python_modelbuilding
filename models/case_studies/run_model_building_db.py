@@ -43,7 +43,7 @@ from model_ws_utilities import call_build_embedding_ga_db, call_build_model_with
 from models.EmbeddingFromImportance import perform_iterative_recursive_feature_elimination as run_rfe
 from models.EmbeddingFromImportance import perform_sequential_feature_selection as run_sfs
 
-from models.ModelToExcel import ModelToExcel
+from models.ModelToExcel import ModelToExcel, ModelDataObjects
 
 import StatsCalculator as sc
 
@@ -1742,47 +1742,57 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
             ml.load_model(user, model, results_dict, df_pred_training, df_pred_test, df_pred_cv, folder_path, df_pred_external=df_pred_ext)
         
         logging.info("run_data_set completed\n")
+
+        model.modelStatistics = {**training_stats, **cv_stats, **test_stats, **results_dict['model_statistics']['test_stats_AD'], **ext_stats}
+        model.df_training = df_training  # df_training_model?
+        model.df_prediction = df_prediction  # df_test_model?
+        model.modelMethod = results_dict["model_details"].get("qsar_method", None)
+        model.modelMethodDescription = results_dict["model_details"].get("qsar_method_description", None)
         
         # logging.info(f"model description={json.dumps(json.loads(model.get_model_description()), indent=4)}")
 
         if create_detailed_excel:
             logging.info("Creating DataFrames for detailed Excel report...")
 
-            actual_ads = params.ad_measure
+            # actual_ads = params.ad_measure
 
-            cover_sheet_df = ModelToExcel.get_cover_sheet_df(results_dict)
-            statistics_df = ModelToExcel.get_statistics_df(results_dict)
-            records_df = ModelToExcel.get_records_df(df_pv)
-            model_descriptors_df = ModelToExcel.get_model_descriptors_df(results_dict)
-            model_descriptor_values_df = ModelToExcel.get_model_descriptor_values_df(results_dict, df_pred_cv, df_pred_test, df_training_model, df_test_model)
-            training_cv_predictions_df = ModelToExcel.get_training_cv_predictions_df(df_pred_cv)
-            test_set_predictions_df = ModelToExcel.get_test_set_predictions_df(df_pred_test, actual_ads)
-            external_predictions_df = ModelToExcel.get_external_predictions_df(df_pred_ext)
-            log_plot = "log" in results_dict["model_details"].get("unitsModel", "").lower()
-            add_subtotals = True  # Set to True to add subtotals in the Excel report
-            exclude_blank_columns = True  # Set to True to remove blank columns from Records sheet
-            display_dropped_columns = False  # Set to True to insert a row at the bottom of Records Field Descriptions listing the dropped columns from Records
+            # cover_sheet_df = ModelToExcel.get_cover_sheet_df(results_dict)
+            # statistics_df = ModelToExcel.get_statistics_df(results_dict)
+            # records_df = ModelToExcel.get_records_df(df_pv)
+            # model_descriptors_df = ModelToExcel.get_model_descriptors_df(results_dict)
+            # model_descriptor_values_df = ModelToExcel.get_model_descriptor_values_df(results_dict, df_pred_cv, df_pred_test, df_training_model, df_test_model)
+            # training_cv_predictions_df = ModelToExcel.get_training_cv_predictions_df(df_pred_cv)
+            # test_set_predictions_df = ModelToExcel.get_test_set_predictions_df(df_pred_test, actual_ads)
+            # external_predictions_df = ModelToExcel.get_external_predictions_df(df_pred_ext)
+            # log_plot = "log" in results_dict["model_details"].get("unitsModel", "").lower()
 
-            # training_set_df = df_pred_cv # TODO: Might need to adjust?
-            # test_set_df = df_pred_test # TODO: Might need to adjust?
-            # records_field_descriptions_df = None # TODO: Make records field descriptions dict/df
+            # add_subtotals = True  # Set to True to add subtotals in the Excel report
+            # exclude_blank_columns = True  # Set to True to remove blank columns from Records sheet
+            # display_dropped_columns = False  # Set to True to insert a row at the bottom of Records Field Descriptions listing the dropped columns from Records
 
-            mte = ModelToExcel(
-                excel_path=os.path.join(folder_path, f"detailed_summary.xlsx"),
-                cover_sheet_df=cover_sheet_df,
-                statistics_df=statistics_df,
-                training_cv_predictions_df=training_cv_predictions_df,
-                test_set_predictions_df=test_set_predictions_df,
-                external_predictions_df=external_predictions_df,
-                records_df=records_df,
-                model_descriptors_df=model_descriptors_df,
-                model_descriptor_values_df=model_descriptor_values_df,
-                log_plot=log_plot,
-                add_subtotals=add_subtotals,
-                exclude_blank_columns=exclude_blank_columns,
-                display_dropped_columns=display_dropped_columns
-            )
+            with open("local_model_data.pkl", "wb") as f:
+                pickle.dump({"model": model, "df_pv": df_pv, "df_gmd": df_dps, "df_gmd_external": df_dps_ext}, f)
+
+            mdo = ModelDataObjects(model=model, df_pv=df_pv, df_gmd=df_dps, df_gmd_external=df_dps_ext)
+            mte = ModelToExcel(mdo, "detailed_summary.xlsx")
             mte.create_excel()
+
+            # mte = ModelToExcel(
+            #     excel_path=os.path.join(folder_path, f"detailed_summary.xlsx"),
+            #     cover_sheet_df=cover_sheet_df,
+            #     statistics_df=statistics_df,
+            #     training_cv_predictions_df=training_cv_predictions_df,
+            #     test_set_predictions_df=test_set_predictions_df,
+            #     external_predictions_df=external_predictions_df,
+            #     records_df=records_df,
+            #     model_descriptors_df=model_descriptors_df,
+            #     model_descriptor_values_df=model_descriptor_values_df,
+            #     log_plot=log_plot,
+            #     add_subtotals=add_subtotals,
+            #     exclude_blank_columns=exclude_blank_columns,
+            #     display_dropped_columns=display_dropped_columns
+            # )
+            # mte.create_excel()
     
     except Exception:
         # Print the exception traceback to standard error
