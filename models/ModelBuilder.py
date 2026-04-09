@@ -1195,10 +1195,9 @@ class ModelDescription:
         self.use_pmml = model.use_pmml
 
         # New Attributes
-        self.externalDatasetName = model.external_dataset_name
+        self.externalDatasetName = getattr(model, "external_dataset_name", None)
 
-        if hasattr(model, "num_external"):
-            self.numExternal = model.num_external
+        self.numExternal = getattr(model, "num_external", None)
 
         if hasattr(model, "training_descriptor_std_devs"):
             self.include_standardization_in_pmml = False
