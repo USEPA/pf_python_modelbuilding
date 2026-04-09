@@ -17,7 +17,8 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.feature_selection import SequentialFeatureSelector
 
-def generateEmbedding(model, df_training, df_prediction, fraction_of_max_importance,min_descriptor_count, max_descriptor_count,
+def generateEmbedding(model, df_training, df_prediction, fraction_of_max_importance,
+                      min_descriptor_count, max_descriptor_count,
                       num_generations=5, n_threads=4,remove_log_p_descriptors=False,
                       use_permutative=False, use_wards=False):
     '''
@@ -191,13 +192,15 @@ def add_new_descriptors(fraction_of_max_importance, max_descriptor_count, min_de
 import logging
 
 
-def perform_iterative_recursive_feature_elimination(model, df_training, n_threads, n_steps=1):
+def perform_iterative_recursive_feature_elimination(model, df_training, n_threads, n_steps=1,cv=5):
     start_time = time.time()
     
     embedding_old = model.embedding
-    
+        
+    # TODO use scoring function to penalize using more variables like in SFS?
+
     while True:  # need to get more aggressive (remove 2 at a time) since first RFE didnt remove enough
-        perform_recursive_feature_elimination(model, df_training, n_threads, n_steps)
+        perform_recursive_feature_elimination(model, df_training, n_threads, n_steps, cv)
         
         logging.debug(f"After RFE iteration, {len(model.embedding)}, descriptors: {model.embedding}")
         
@@ -211,7 +214,7 @@ def perform_iterative_recursive_feature_elimination(model, df_training, n_thread
     return model.embedding, calc_time
 
 
-def perform_recursive_feature_elimination(model, df_training, n_threads, n_steps=1):
+def perform_recursive_feature_elimination(model, df_training, n_threads, n_steps=1, cv=5):
     '''
     Runs CV recursive_feature_elimination
     :param n_steps:
@@ -226,14 +229,18 @@ def perform_recursive_feature_elimination(model, df_training, n_threads, n_steps
 
     train_ids, train_labels, train_features, train_column_names = \
         DFU.prepare_instances2(df_training, model.embedding,True)
-
+        
+    # if model.is_binary:
+    #     scoring = 'balanced_accuracy'
+    #     cv = StratifiedKFold(5)
+    # else:
+    #     scoring = 'neg_root_mean_squared_error'
+    #     cv = KFold(5)
 
     if model.is_binary:
         scoring = 'balanced_accuracy'
-        cv = StratifiedKFold(5)
     else:
         scoring = 'neg_root_mean_squared_error'
-        cv = KFold(5)
 
     # Recursive feature elimination using 5 fold CV:
     # Check if estimator supports feature importance
@@ -285,7 +292,7 @@ def perform_recursive_feature_elimination(model, df_training, n_threads, n_steps
 
 
 
-def perform_iterative_sequential_feature_selection(
+def perform_iterative_sequential_feature_selection_old(
     model,
     df_training,
     cv=5,
@@ -504,111 +511,6 @@ def perform_iterative_sequential_feature_selection(
 
     return best_embedding
 
-def perform_iterative_sequential_feature_selection_old(
-    model,
-    df_training,
-    max_iters=10,
-    min_features=2,
-    cv=5,
-    improvement_threshold=0.01,  # require at least 1% relative improvement to keep going
-    patience=1,                  # stop after this many consecutive iterations without enough improvement
-    shuffle_cv=False,            # optional: explore different CV splits
-    random_state=None,           # used if shuffle_cv=True
-    logger=None
-):
-    """
-    Iteratively runs perform_sequential_feature_selection while keeping the
-    candidate universe fixed. Logs progress via logging.info, tracks the
-    best-scoring embedding, and stops when relative improvement over the best
-    is < improvement_threshold for 'patience' iterations.
-
-    The score used is:
-      - balanced_accuracy for classification (higher is better)
-      - neg_mean_squared_error for regression (higher is better; i.e., lower MSE)
-
-    Returns the best embedding found.
-    """
-
-    if logger is None:
-        logger = logging.getLogger(__name__)
-
-    # Preserve original candidate universe (None => DFU uses all features)
-    original_universe = getattr(model, "embedding", None)
-
-    # Optionally enable shuffled CV folds if your perform_* uses cross_val_score defaults.
-    # Note: perform_sequential_feature_selection must honor this if you want variability.
-    if shuffle_cv and hasattr(model, "cv_splitter"):
-        # If your pipeline can accept a splitter, set it here.
-        # Otherwise, consider modifying perform_* to pass a KFold with shuffle=True.
-        pass
-
-    best_score = -np.inf
-    best_embedding = None
-    no_improve_count = 0
-    eps = 1e-12
-
-    for it in range(1, max_iters + 1):
-        # Reset candidate universe before each SFS run
-        model.embedding = (list(original_universe) if original_universe is not None else None)
-
-        logger.info(
-            f"Iterative SFS: iter={it} | starting candidate_universe="
-            f"{'ALL' if original_universe is None else len(original_universe)}"
-        )
-
-        # Run SFS; this logs pre/post scores and sets model._last_sfs_cv_score
-        perform_sequential_feature_selection(model, df_training, cv=cv)
-
-        # Read post-selection score (higher is better) and the embedding
-        current_score = getattr(model, "_last_sfs_cv_score", None)
-        current_embedding = list(model.embedding or [])
-        current_count = len(current_embedding)
-
-        logger.info(f"Iterative SFS: iter={it} | selected {current_count} features")
-        logger.info(f"Iterative SFS: iter={it} | embedding={current_embedding}")
-        logger.info(f"Iterative SFS: iter={it} | post-score={current_score}")
-
-        # Guard against collapsing to too few features
-        if current_count < min_features:
-            logger.info(
-                f"Iterative SFS: iter={it} | selection dropped to {current_count} < min_features={min_features}; stopping."
-            )
-            # Restore to widest reasonable set (original universe if available)
-            model.embedding = (list(original_universe) if original_universe is not None else current_embedding)
-            break
-
-        # Update best if improved
-        if current_score is not None and current_score > best_score:
-            rel_impr = (current_score - best_score) / max(abs(best_score), eps) if best_score != -np.inf else np.inf
-            logger.info(f"Iterative SFS: iter={it} | relative improvement over best={rel_impr if np.isfinite(rel_impr) else float('inf'):.4%}")
-            best_score = current_score
-            best_embedding = current_embedding
-            no_improve_count = 0
-        else:
-            # Not improved vs. best
-            rel_impr = 0.0
-            logger.info(f"Iterative SFS: iter={it} | relative improvement over best={rel_impr:.4%}")
-            no_improve_count += 1
-
-        # Early stop if improvement is below threshold for 'patience' iterations
-        # Note: We treat any non-increase as < threshold; if you want strict thresholding,
-        #       track the last improvement magnitude and compare to improvement_threshold.
-        if no_improve_count >= patience:
-            logger.info(
-                f"Iterative SFS: iter={it} | no sufficient improvement (< {improvement_threshold:.2%}) "
-                f"for {patience} iteration(s); stopping."
-            )
-            break
-
-    else:
-        logger.info("Iterative SFS: reached max_iters without sufficient improvement.")
-
-    # Restore best embedding before returning
-    if best_embedding is not None:
-        model.embedding = best_embedding
-        logger.info(f"Iterative SFS: best embedding selected (n={len(best_embedding)}), best_score={best_score}")
-
-    return model.embedding
 
 def perform_sequential_feature_selection(model, df_training, cv=5, n_features_to_select='auto'):
     """
@@ -622,7 +524,7 @@ def perform_sequential_feature_selection(model, df_training, cv=5, n_features_to
 
     logger = logging.getLogger(__name__)
     
-    print(f"here1, n_features_to_select: {n_features_to_select}")
+    print(f"perform_sequential_feature_selection, n_features_to_select: {n_features_to_select}")
 
     # Prepare inputs based on current candidate set
     _, y, X, _ = DFU.prepare_instances2(df_training, model.embedding, True)
@@ -690,5 +592,314 @@ def perform_sequential_feature_selection(model, df_training, cv=5, n_features_to
 
     return model.embedding
 
+def perform_iterative_sequential_feature_selection(
+    model,
+    df_training,
+    cv=5,
+    n_min=2,
+    n_max=20,
+    step=1,
+    direction='forward',
+    # descriptor_coefficient=0.0025
+    descriptor_coefficient=0.002,
+    alpha=0.7 # 0.2 yields descriptor_coefficient around 0.0025, alpha was 0.7 from AI
+):
+    """
+    Iteratively runs Sequential Feature Selection, increasing the number of
+    selected features from n_min by 'step' until n_max (if provided) or until
+    the total number of features is reached. Automatically breaks the loop if
+    k exceeds the available number of features.
+
+    Unified objective across tasks (relative units):
+      - error = RMSE (regression) or (1 - BAC) (binary)
+      - objective = (error_mean / base_error) + (error_std / base_error) + C * n_features
+
+    If descriptor_coefficient is None, it is auto-selected based on:
+      - rel_noise = std(error_folds) / base_error
+      - C = max(c_min, alpha * rel_noise * sqrt(log(1+p)/n)), where
+        n = #samples, p = #candidate features, alpha=0.7, c_min=1e-3 by default.
+
+    Parameters
+    ----------
+    model : object
+        Must expose:
+          - model.embedding: list of candidate feature names
+          - model.model_obj: a Pipeline with named steps 'standardizer' and 'estimator'
+          - model.is_binary: boolean
+    df_training : DataFrame
+        Training data.
+    cv : int or CV splitter, default=5  TODO assign a PredefinedSplit instead of just number of folds so get consistent results
+    n_min, n_max, step, direction : SFS controls
+    descriptor_coefficient : float or None
+        If None, a value is auto-selected as described above.
+
+    Returns
+    -------
+    best_embedding : list[str]
+        Feature names that minimize the penalized, relative objective.
+    """
+    import math
+        
+    logger = logging.getLogger(__name__)
+    is_binary = bool(getattr(model, "is_binary", False))
+
+    # Preserve the original candidate feature set
+    candidate_features = list(model.embedding)
+
+    # Prepare data once
+    _, y, X, _ = DFU.prepare_instances2(df_training, candidate_features, True)
+    n_samples = X.shape[0]
+    n_features_total = X.shape[1]
+
+    # Build pipeline
+    pipe = Pipeline([
+        ("scaler", model.model_obj.named_steps['standardizer']),
+        ("estimator", model.model_obj.named_steps['estimator'])
+    ])
+
+    # Bounds
+    n_min = max(1, int(n_min))
+    step = int(step)
+    if step < 1:
+        raise ValueError(f"'step' must be >= 1, got {step}.")
+    if n_max is not None:
+        n_max = int(n_max)
+        if n_min > n_max:
+            raise ValueError(f"n_min ({n_min}) cannot be greater than n_max ({n_max}).")
+
+    # Scoring and baseline
+    scoring = "balanced_accuracy" if is_binary else "neg_mean_squared_error"
+    frac = 1e-4
+    eps = 1e-12
+
+    init_scores = cross_val_score(pipe, X, y, cv=cv, scoring=scoring)
+    if is_binary:
+        # init_mean is BAC; base_error is (1 - BAC0)
+        init_mean = float(np.mean(init_scores))
+        base_error = max(1.0 - init_mean, eps)
+        tol = frac * max(init_mean, eps)  # tol in scoring units (BAC)
+        logger.info(
+            "SFS iterative (pre, binary): total_features=%d, baseline CV BAC=%.3f, "
+            "base_error (1-BAC0)=%.6f, tol=%.3e",
+            n_features_total, init_mean, base_error, tol
+        )
+    else:
+        # init_mean is MSE; base_error is RMSE0
+        init_mean = float(-np.mean(init_scores))  # MSE
+        base_error = max(math.sqrt(init_mean), eps)  # RMSE0
+        tol = frac * max(init_mean, eps)  # tol in scoring units (MSE)
+        logger.info(
+            "SFS iterative (pre): total_features=%d, baseline CV RMSE=%.3f, "
+            "base_error=%.6f, tol=%.3e",
+            n_features_total, base_error, base_error, tol
+        )
+
+    # Convert CV scores to per-fold errors in absolute units
+    def scores_to_error_folds(scores):
+        scores = np.asarray(scores, dtype=float)
+        if is_binary:
+            return 1.0 - scores                       # (1 - BAC_i)
+        else:
+            return np.sqrt(np.maximum(0.0, -scores))  # RMSE_i
+
+    # Auto-select descriptor_coefficient if None
+    if descriptor_coefficient is None:
+        error_folds0 = scores_to_error_folds(init_scores)
+        rel_noise = float(np.std(error_folds0) / max(base_error, eps))
+
+        # Heuristic parameters
+        c_min = 1e-3
+        dim_factor = math.sqrt(max(math.log(1 + max(n_features_total, 1)) / max(n_samples, 1), 1e-6))
+
+        descriptor_coefficient = max(c_min, alpha * rel_noise * dim_factor)
+        logger.info(
+            "Auto-selected descriptor_coefficient=%.6f (alpha=%.2f, rel_noise=%.6f, dim_factor=%.4f, n=%d, p=%d)",
+            descriptor_coefficient, alpha, rel_noise, dim_factor, n_samples, n_features_total
+        )
+    else:
+        logger.info("Using provided descriptor_coefficient=%.6f", float(descriptor_coefficient))
+
+    best_embedding = None
+    best_penalized_score = float("inf")  # lower is better
+    best_error_mean_abs = None
+    best_error_std_abs = None
+
+    # Iterate k from n_min by step; break when exceeding limits
+    k = n_min
+    while True:
+        # Respect user-provided n_max (if any)
+        if n_max is not None and k > n_max:
+            break
+
+        # If k reaches or exceeds the total number of features, evaluate baseline and stop
+        if k >= n_features_total:
+            if n_max is None or n_max >= n_features_total:
+                base_scores = cross_val_score(pipe, X, y, cv=cv, scoring=scoring)
+                error_folds = scores_to_error_folds(base_scores)
+                error_mean = float(np.mean(error_folds))
+                error_std = float(np.std(error_folds))
+                rel_mean = error_mean / max(base_error, eps)
+                rel_std = error_std / max(base_error, eps)
+                objective = rel_mean + rel_std + descriptor_coefficient * n_features_total
+                
+                if is_binary:
+                    bac_mean = 1.0 - error_mean
+                    logger.info(
+                        "SFS iterative (baseline all, binary): n_features=%d, "
+                        "objective_rel=%.4f, CV BAC=%.3f ± %.3f, rel_err=%.4f, rel_std=%.4f",
+                        n_features_total, objective, bac_mean, error_std, rel_mean, rel_std
+                    )
+                else:
+                    logger.info(
+                        "SFS iterative (baseline all): n_features=%d, "
+                        "objective_rel=%.4f, CV RMSE=%.3f ± %.3f, rel_mean=%.4f, rel_std=%.4f",
+                        n_features_total, objective, error_mean, error_std, rel_mean, rel_std
+                    )
+
+                if objective < best_penalized_score:
+                    best_penalized_score = objective
+                    best_embedding = candidate_features
+                    best_error_mean_abs = error_mean
+                    best_error_std_abs = error_std
+            break
+
+        # Run SFS for k < n_features_total
+        sfs = SequentialFeatureSelector(
+            estimator=pipe,
+            n_features_to_select=int(k),
+            tol=tol,
+            direction=direction,
+            scoring=scoring,
+            cv=cv, #need fixed cv or will get different cv each iteration
+            n_jobs=-1
+        )
+        sfs.fit(X, y)
+
+        # Extract selected feature names
+        try:
+            selected_names = sfs.get_feature_names_out().tolist()
+        except AttributeError:
+            mask = sfs.get_support()
+            if hasattr(X, "columns"):
+                selected_names = list(X.columns[mask])
+            else:
+                selected_names = [f"f{i}" for i, m in enumerate(mask) if m]
+        else:
+            mask = sfs.get_support()
+
+        # Evaluate CV on the selected subset
+        if hasattr(X, "loc"):
+            X_sel = X[selected_names]
+        else:
+            X_sel = X[:, mask]
+
+        cv_scores = cross_val_score(pipe, X_sel, y, cv=cv, scoring=scoring)
+        error_folds = scores_to_error_folds(cv_scores)
+        error_mean = float(np.mean(error_folds))
+        error_std = float(np.std(error_folds))
+        rel_mean = error_mean / max(base_error, eps)
+        rel_std = error_std / max(base_error, eps)
+        objective = rel_mean + rel_std + descriptor_coefficient * len(selected_names)
 
 
+        # penalty = descriptor_coefficient * len(selected_names)
+        # err_term = rel_mean + rel_std
+        # logger.info("k=%d: err_term=%.4f, penalty=%.4f (C=%.4f), objective=%.4f", 
+        #             k, err_term, penalty, descriptor_coefficient, err_term + penalty)
+
+        if is_binary:
+            bac_mean = 1.0 - error_mean
+            logger.info(
+                "SFS iterative (binary): n_features=%d, objective_rel=%.4f, "
+                "CV BA=%.3f ± %.3f, rel_err=%.4f, rel_std=%.4f, embedding=%s",
+                k, objective, bac_mean, error_std, rel_mean, rel_std, selected_names
+            )
+        else:
+            logger.info(
+                "SFS iterative: n_features=%d, objective_rel=%.4f, "
+                "CV RMSE=%.3f ± %.3f, rel_mean=%.4f, rel_std=%.4f, embedding=%s",
+                k, objective, error_mean, error_std, rel_mean, rel_std, selected_names
+            )
+
+        if objective < best_penalized_score:
+            best_penalized_score = objective
+            best_embedding = selected_names
+            best_error_mean_abs = error_mean
+            best_error_std_abs = error_std
+
+        # Next k
+        k += step
+
+    from sklearn.base import clone
+    
+    def _compute_pooled_rmse(pipe, X, y, cv, is_binary):
+        # Build/accept a splitter
+        if hasattr(cv, "split"):
+            splitter = cv
+        else:
+            splitter = StratifiedKFold(n_splits=int(cv), shuffle=False) if is_binary \
+                       else KFold(n_splits=int(cv), shuffle=False)
+    
+        y_true_all = []
+        y_pred_all = []
+        for train_idx, test_idx in splitter.split(X, y):
+            pipe_fold = clone(pipe)
+            # Slice X/y whether DataFrame or ndarray
+            X_tr = X.iloc[train_idx] if hasattr(X, "iloc") else X[train_idx]
+            y_tr = y.iloc[train_idx] if hasattr(y, "iloc") else y[train_idx]
+            X_te = X.iloc[test_idx] if hasattr(X, "iloc") else X[test_idx]
+            y_te = y.iloc[test_idx] if hasattr(y, "iloc") else y[test_idx]
+    
+            pipe_fold.fit(X_tr, y_tr)
+            y_hat = pipe_fold.predict(X_te)
+    
+            y_true_all.append(np.asarray(y_te))
+            y_pred_all.append(np.asarray(y_hat))
+    
+        y_true_all = np.concatenate(y_true_all)
+        y_pred_all = np.concatenate(y_pred_all)
+        return float(np.sqrt(np.mean((y_true_all - y_pred_all) ** 2)))
+    
+    
+    # ---------------- existing code block with additions ----------------
+    
+    if best_embedding is None:
+        base_scores = cross_val_score(pipe, X, y, cv=cv, scoring=scoring)
+        error_folds = scores_to_error_folds(base_scores)
+        best_embedding = candidate_features
+        best_error_mean_abs = float(np.mean(error_folds))   # mean-of-folds RMSE
+        best_error_std_abs = float(np.std(error_folds))     # std across folds
+    
+    # Finalize and compute pooled RMSE over the selected features
+    model.embedding = best_embedding
+    
+    # Build X_best using the selected feature names (works for both DataFrame and ndarray X)
+    if hasattr(X, "loc"):
+        X_best = X[best_embedding]
+    else:
+        # Map feature names to column positions based on candidate_features order
+        name_to_pos = {name: idx for idx, name in enumerate(candidate_features)}
+        cols_idx = [name_to_pos[n] for n in best_embedding]
+        X_best = X[:, cols_idx]
+    
+    if is_binary:
+        bac_best = 1.0 - best_error_mean_abs
+        model._last_sfs_cv_score = float(bac_best)  # keep existing convention for binary
+        logger.info(
+            "SFS iterative (best, binary): n_features=%d, CV BAC=%.3f ± %.3f, embedding=%s",
+            len(best_embedding), bac_best, best_error_std_abs, best_embedding
+        )
+    else:
+        # Mean-of-folds RMSE you already computed (best_error_mean_abs ± best_error_std_abs)
+        # Also compute pooled RMSE by concatenating fold predictions:
+        pooled_rmse = _compute_pooled_rmse(pipe, X_best, y, cv, is_binary=False)
+        model._last_sfs_cv_score = -(float(best_error_mean_abs) ** 2)  # keep existing convention
+        model._last_sfs_cv_rmse_pooled = float(pooled_rmse)            # new: pooled RMSE
+    
+        logger.info(
+            "SFS iterative (best): n_features=%d, CV RMSE (mean-of-folds)=%.3f ± %.3f, pooled_RMSE=%.3f, embedding=%s",
+            len(best_embedding), best_error_mean_abs, best_error_std_abs, pooled_rmse, best_embedding
+        )
+    
+    return best_embedding
+    

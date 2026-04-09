@@ -12,7 +12,7 @@ from models.case_studies.run_model_building_db import run_dataset, ParametersGen
 
 from util import predict_constants as pc
 from model_ws_db_utilities import getEngine, getSession
-from ModelToExcel import ModelToExcel
+from models.ModelToExcel import ModelToExcel
 import logging
 import json
 
@@ -28,53 +28,49 @@ def run_Koc():
     dataset_name = "KOC v1 modeling"
     descriptor_set_name = "WebTEST-default"
     splitting_name = "RND_REPRESENTATIVE"  
+    
+    # append_to_models_folder = ""
+    append_to_models_folder = "_test_cv"
+    
 
     # ad_measure_model = [pc.Applicability_Domain_TEST_Embedding_Euclidean, pc.Applicability_Domain_TEST_Fragment_Counts]
     ad_measure_model = [pc.Applicability_Domain_TEST_Embedding_Euclidean, pc.Applicability_Domain_TEST_Fragment_Counts]
 
-    # run_dataset(dataset_name=dataset_name, qsar_method='gcm', feature_selection=False, ad_measure_model=ad_measure_model,
-    #             write_to_db=write_to_db, create_unique_excel=create_unique_excel, create_detailed_excel=False)  # OK
 
-    # Models to upload:
-    # for method in ['rf','xgb', 'reg','knn']:
+    # run_dataset(dataset_name=dataset_name, qsar_method='gcm', feature_selection=False, ad_measure_model=ad_measure_model,
+    #             write_to_db=write_to_db, create_unique_excel=create_unique_excel, create_detailed_excel=True, 
+    #             append_to_models_folder=append_to_models_folder)  # OK
+    
+    for method in ['rf','xgb']:
     # for method in ['rf']:
-    # for method in ['knn']:        
-        # run_dataset(dataset_name=dataset_name, qsar_method=method, feature_selection=True, 
-        #             ad_measure_model=ad_measure_model,write_to_db=write_to_db, create_unique_excel=create_unique_excel, create_detailed_excel=False)  # OK
-    
-    # embedding = ["ALOGP2","nBnz","MATS6v","ATS1p","nDB","Lop","MATS1p"]
-    # results_dict = run_dataset(dataset_name=dataset_name, qsar_method='rf', feature_selection=False, 
-    #                            embedding=embedding, write_to_db=write_to_db, create_unique_excel=create_unique_excel)
-
-
-    # append_to_models_folder=""
-    # append_to_models_folder="_alpha=0.7"
-    append_to_models_folder= "_test_cv"
-    
-    # run_dataset(dataset_name=dataset_name, qsar_method='gcm', feature_selection=False, ad_measure_model=ad_measure_model,
-    #             write_to_db=write_to_db, create_unique_excel=create_unique_excel, create_detailed_excel=False, append_to_models_folder=append_to_models_folder)  # OK
-    
-    # for method in ['rf','xgb']:
-    #     params = set_hyper_parameters(qsar_method=method, feature_selection=True, descriptor_set_name=descriptor_set_name, 
-    #                           splitting_name=splitting_name, dataset_name=dataset_name, ad_measure=ad_measure_model)
-    #
-    #     params.descriptor_coefficient = 0.006
-    #
-    #     run_dataset(dataset_name=dataset_name, qsar_method=params.qsar_method, feature_selection=params.feature_selection,
-    #         params = params, ad_measure_model=ad_measure_model,write_to_db=write_to_db, 
-    #         create_detailed_excel=False, create_unique_excel=create_unique_excel, 
-    #         append_to_models_folder=append_to_models_folder)  
         
-    # for method in ['reg','knn']:
-    # # for method in ['reg']:
+        # run_dataset(dataset_name=dataset_name, qsar_method=method, feature_selection=False, 
+        #     ad_measure_model=ad_measure_model,write_to_db=write_to_db, create_unique_excel=create_unique_excel, 
+        #     create_detailed_excel=True,append_to_models_folder=append_to_models_folder)  
+    
+        # params = set_hyper_parameters(qsar_method=method, feature_selection=True, descriptor_set_name=descriptor_set_name, 
+        #                       splitting_name=splitting_name, dataset_name=dataset_name, ad_measure=ad_measure_model)
+        # params.descriptor_coefficient = 0.006
+        # run_dataset(dataset_name=dataset_name, qsar_method=params.qsar_method, feature_selection=params.feature_selection,
+        #     params = params, ad_measure_model=ad_measure_model,write_to_db=write_to_db, 
+        #     create_detailed_excel=False, create_unique_excel=create_unique_excel, 
+        #     append_to_models_folder=append_to_models_folder)  
+
+        run_dataset(dataset_name=dataset_name, qsar_method=method, feature_selection=True, 
+            ad_measure_model=ad_measure_model,write_to_db=write_to_db, create_unique_excel=create_unique_excel, 
+            create_detailed_excel=True,append_to_models_folder=append_to_models_folder)  
+
+
     #
+    # for method in ['reg','knn','las']:
+    # # for method in ['las']:
     #     params = set_hyper_parameters(qsar_method=method, feature_selection=True, descriptor_set_name=descriptor_set_name, 
     #                                   splitting_name=splitting_name, dataset_name=dataset_name, ad_measure=ad_measure_model)
     #     params.max_features = 12
     #     params.descriptor_coefficient = 0.006
     #     run_dataset(dataset_name=dataset_name, qsar_method=params.qsar_method, feature_selection=params.feature_selection,
     #         params = params, ad_measure_model=ad_measure_model,write_to_db=write_to_db, 
-    #         create_detailed_excel=False, create_unique_excel=create_unique_excel, 
+    #         create_detailed_excel=True, create_unique_excel=create_unique_excel, 
     #         append_to_models_folder=append_to_models_folder)  
         
         
@@ -99,7 +95,9 @@ def run_Koc():
 
 
     
-    Results.summarize_model_stats(dataset_name, append_to_models_folder=append_to_models_folder, continuous_stat_name='RMSE')
+    # Results.summarize_model_stats(dataset_name, append_to_models_folder=append_to_models_folder, continuous_stat_name='RMSE')
+    # Results.summarize_model_stats(dataset_name, append_to_models_folder=append_to_models_folder, continuous_stat_name='MAE')
+    # Results.summarize_model_stats(dataset_name, append_to_models_folder=append_to_models_folder, continuous_stat_name='PearsonRSQ')
     
 
 def run_Koc_knn_ga():
@@ -285,7 +283,7 @@ def run_biodeg_nite():
 def test_model_summary():
     engine = getEngine()
     session = getSession()
-    model_id = 1065
+    model_id = 1746
     excel_path = "summary.xlsx"
     test = ModelToExcel(engine, session, model_id, excel_path)
     test.create_excel()
@@ -295,8 +293,34 @@ def test_model_summary_local():
     dataset_name = "KOC v1 modeling"
     run_dataset(dataset_name=dataset_name, qsar_method='rf', feature_selection=False, create_detailed_excel=True)  # OK
 
-# split_num
-# fk_data_point_id
+
+def test_load_model_with_external_set():
+    create_unique_excel = False
+    write_to_db = False
+    # write_to_db = True
+    dataset_name = "KOC v1 modeling"
+    user = "murdock.weston"
+
+    # ad_measure_model = [pc.Applicability_Domain_TEST_Embedding_Euclidean, pc.Applicability_Domain_TEST_Fragment_Counts]
+    ad_measure_model = [pc.Applicability_Domain_TEST_Embedding_Euclidean, pc.Applicability_Domain_TEST_Fragment_Counts]
+
+    # run_dataset(dataset_name=dataset_name, qsar_method='gcm', feature_selection=False, ad_measure_model=ad_measure_model,
+    #             write_to_db=write_to_db, create_unique_excel=create_unique_excel, create_detailed_excel=False)  # OK
+    
+    run_dataset(dataset_name=dataset_name, qsar_method='gcm', feature_selection=False, ad_measure_model=ad_measure_model,
+                write_to_db=write_to_db, create_unique_excel=create_unique_excel, create_detailed_excel=True, user=user)  # OK
+
+    # Models to upload:
+    # for method in ['rf','xgb', 'reg','knn']:
+    #     run_dataset(dataset_name=dataset_name, qsar_method=method, feature_selection=True, 
+    #                 ad_measure_model=ad_measure_model,write_to_db=write_to_db, create_unique_excel=create_unique_excel)  # OK
+    
+    # embedding = ["ALOGP2","nBnz","MATS6v","ATS1p","nDB","Lop","MATS1p"]
+    # results_dict = run_dataset(dataset_name=dataset_name, qsar_method='rf', feature_selection=False, 
+    #                            embedding=embedding, write_to_db=write_to_db, create_unique_excel=create_unique_excel)
+
+    r = Results()
+    r.summarize_model_stats(dataset_name)
 
 
 if __name__ == '__main__':
@@ -318,4 +342,5 @@ if __name__ == '__main__':
     # test_create_model()
     # test_model_summary()
     # test_model_summary_local()
+    # test_load_model_with_external_set()
 

@@ -42,7 +42,7 @@ from model_ws_utilities import call_build_embedding_ga_db, call_build_model_with
 from models.EmbeddingFromImportance import perform_iterative_recursive_feature_elimination as run_rfe
 from models.EmbeddingFromImportance import perform_iterative_sequential_feature_selection as run_sfs
 
-from ModelToExcel import ModelToExcel
+from models.ModelToExcel import ModelToExcel
 
 from StatsCalculator import calculate_binary_statistics, calculate_continuous_statistics
 
@@ -105,7 +105,7 @@ class ParametersImportance:
     min_descriptor_count: int = 30
     max_descriptor_count: int = 40
     
-    descriptor_coefficient: float = 0.002
+    descriptor_coefficient: float = 0.006
     alpha = 0.7
 
     include_standardization_in_pmml: bool = False
@@ -194,7 +194,7 @@ class ParametersGeneticAlgorithm:
     max_length: int = 24
     max_features: int = 30
 
-    descriptor_coefficient: float = 0.002
+    descriptor_coefficient: float = 0.006
     alpha: float = 0.7
 
     threshold: int = 1
@@ -383,7 +383,9 @@ class ModelLoader():
             "created_by":user,
             "updated_by":user,
             "created_at":created_at,
-            "updated_at":created_at}
+            "updated_at":created_at,
+            "external_dataset_name": model.external_dataset_name
+        }
         # print(json.dumps(to_json_safe(model_row)))
         # print(json.dumps(model_row,indent=4))
 
@@ -536,7 +538,7 @@ class ModelLoader():
         return new_id
 
 
-    def load_model(self, user, model, results, df_pred_training, df_pred_test, df_pred_cv, folder_path):
+    def load_model(self, user, model, results, df_pred_training, df_pred_test, df_pred_cv, folder_path, df_pred_external=None):
 
         params = results["params"]
 
@@ -599,7 +601,7 @@ class ModelLoader():
             params,
             fk_descriptor_embedding_id,
             fk_method_id,
-            fk_ad_method,
+            fk_ad_method
         )
         # fk_model_id=1642
         
@@ -625,6 +627,8 @@ class ModelLoader():
         self.load_predictions(user, "training", df_pred_training, fk_model_id, fk_splitting_id=1)
         self.load_predictions(user, "test", df_pred_test, fk_model_id, fk_splitting_id=1)
         self.load_predictions(user, "training cv", df_pred_cv, fk_model_id)
+        if df_pred_external is not None:
+            self.load_predictions(user, "external", df_pred_external, fk_model_id, fk_splitting_id=43)
         
         # ---- store plots in model_files table ----     
         filePathOutScatter = os.path.join(folder_path, "scatter_plot.png")
@@ -780,9 +784,10 @@ class ModelBuilder:
         # self.crossvalidate(session, dataset_name, descriptorSetName, params, embedding)
 
     @staticmethod
-    def build_and_test_model(df_training, df_prediction, params, embedding, is_binary):
+    def build_and_test_model(df_training, df_prediction, cv, params, embedding, is_binary):
+        
         model = call_build_model_with_preselected_descriptors_from_df(params, df_training.copy(), df_prediction.copy(),
-                                                                      descriptor_names_tsv=embedding,
+                                                                      cv, descriptor_names_tsv=embedding,
                                                                       filterColumnsInBothSets=True)
         
         # generate predictions for test set:
@@ -812,7 +817,8 @@ class ModelBuilder:
     
     @staticmethod
     def build_and_test_model2(df_training, df_prediction, params, embedding):
-        model = call_build_model_with_preselected_descriptors_from_df(params, df_training, df_prediction,
+        
+        model = call_build_model_with_preselected_descriptors_from_df(params, df_training, df_prediction, cv=None,
                                                   descriptor_names_tsv=embedding, filterColumnsInBothSets=True)
         # generate predictions for test set:
         json_predictions = call_do_predictions_from_df(df_prediction, model)
@@ -1671,7 +1677,10 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         
         # ******************************************************************************************************
         # Print main info:
-        logging.info(f"\nStart dataset run")
+        
+        print("\n")
+        
+        logging.info(f"Start dataset run")
         logging.info(f"dataset_name={dataset_name}")
         logging.info(f"qsar_method={qsar_method}")
         logging.info(f"descriptor_set_name={descriptor_set_name}")
@@ -1712,7 +1721,7 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         
         df_prediction_ext = None    
         if dataset_name == 'KOC v1 modeling':
-            dataset_name_ext=  'KOC v1 external'
+            dataset_name_ext = 'KOC v1 external'
             df_prediction_ext = du.get_instances_excluding(session, dataset_name_ext, dataset_name, descriptor_set_name)
             
         
@@ -1722,7 +1731,8 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
 
     
         df_cv_dict = None 
-        if cross_validate:
+        
+        if cross_validate: #TODO we should probably always run these calculations 
             df_cv_dict = du.get_training_cv_instances(session, dataset_name, descriptor_set_name)
             X, y, cv, feature_cols  = du.make_cv_for_base_training(df_training, df_cv_dict, "ID", "Property") # get cv for use in RFE and SFS so that will use CV folds as the final stat reported as RMSE_CV_TRAINING
         
@@ -1740,7 +1750,7 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         if feature_selection:
             embedding = EmbeddingGenerator.feature_selection(df_training, df_prediction, params, cv)
             
-        df_pred_training, df_pred_test, training_stats, test_stats, model = ModelBuilder.build_and_test_model(df_training, df_prediction, params, embedding, is_binary)
+        df_pred_training, df_pred_test, training_stats, test_stats, model = ModelBuilder.build_and_test_model(df_training, df_prediction, cv, params, embedding, is_binary)
                 
         if not feature_selection and fs_previous_embedding and qsar_method != 'gcm':
     
@@ -1766,6 +1776,7 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         df_pred_ext = None
         
         if df_prediction_ext is not None:
+            model.external_dataset_name = dataset_name_ext
             df_pred_ext, ext_stats = ModelBuilder.predict(model, df_prediction_ext, '_External')
             # print(df_pred_ext.shape)
 
@@ -1820,8 +1831,17 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         model.applicabilityDomainName = " and ".join(params.ad_measure)
         model.num_training = df_training.shape[0]
         model.num_prediction = df_prediction.shape[0]
+
+        # New Attributes
+        model.external_dataset_name = dataset_name_ext if dataset_name_ext else None
+        model.num_external = df_prediction_ext.shape[0] if df_prediction_ext is not None else 0
+        model.df_dsstoxRecords_external = df_prediction_ext
+        model.df_preds_training_cv = df_pred_cv
+        model.df_preds_test = df_pred_test
+        model.df_preds_external = df_pred_ext
         
         
+        # Check what happens with ext_stats and how to add new things to the results_dict under the model_details
         results_dict = Results.create_results_dict(
             ad_measure_model=ad_measure_model,
             df_training=df_training,
@@ -1894,27 +1914,34 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         logging.info(f"test set AD stats={json.dumps( results_dict['model_statistics']['test_stats_AD'] , indent=4)}")
 
         if write_to_db:
-            ml.load_model(user, model, results_dict, df_pred_training, df_pred_test, df_pred_cv, folder_path)
+            ml.load_model(user, model, results_dict, df_pred_training, df_pred_test, df_pred_cv, folder_path, df_pred_external=df_pred_ext)
         
         logging.info("run_data_set completed\n")
         
         if qsar_method !='gcm':        
-            logging.info(f"all stats:\t{params.descriptor_coefficient}\t{test_stats['RMSE_Test']:.3f}\t{cv_stats['RMSE_CV_Training']:.3f}\t{ext_stats['RMSE_External']:.3f}\t{len(embedding)}")   
+            logging.info(f"all stats:\t{params.descriptor_coefficient}\t{test_stats['RMSE_Test']:.3f}\t{cv_stats['RMSE_CV_Training']:.3f}\t{ext_stats['RMSE_External']:.3f}\t{len(model.embedding)}")   
         else:
-            logging.info(f"all stats:\tN/A\t{test_stats['RMSE_Test']:.3f}\t{cv_stats['RMSE_CV_Training']:.3f}\t{ext_stats['RMSE_External']:.3f}\t{len(embedding)}")
+            logging.info(f"all stats:\tN/A\t{test_stats['RMSE_Test']:.3f}\t{cv_stats['RMSE_CV_Training']:.3f}\t{ext_stats['RMSE_External']:.3f}\t{len(model.embedding)}")
             
         # logging.info(f"model description={json.dumps(json.loads(model.get_model_description()), indent=4)}")
 
         if create_detailed_excel:
+            logging.info("Creating DataFrames for detailed Excel report...")
+
+            actual_ads = params.ad_measure
+
             cover_sheet_df = ModelToExcel.get_cover_sheet_df(results_dict)
             statistics_df = ModelToExcel.get_statistics_df(results_dict)
             records_df = ModelToExcel.get_records_df(df_pv)
             model_descriptors_df = ModelToExcel.get_model_descriptors_df(results_dict)
             model_descriptor_values_df = ModelToExcel.get_model_descriptor_values_df(results_dict, df_pred_cv, df_pred_test, df_training_model, df_test_model)
             training_cv_predictions_df = ModelToExcel.get_training_cv_predictions_df(df_pred_cv)
-            test_set_predictions_df = ModelToExcel.get_test_set_predictions_df(df_pred_test)
+            test_set_predictions_df = ModelToExcel.get_test_set_predictions_df(df_pred_test, actual_ads)
             external_predictions_df = ModelToExcel.get_external_predictions_df(df_pred_ext)
             log_plot = "log" in results_dict["model_details"].get("unitsModel", "").lower()
+            add_subtotals = True  # Set to True to add subtotals in the Excel report
+            exclude_blank_columns = True  # Set to True to remove blank columns from Records sheet
+            display_dropped_columns = False  # Set to True to insert a row at the bottom of Records Field Descriptions listing the dropped columns from Records
 
             # training_set_df = df_pred_cv # TODO: Might need to adjust?
             # test_set_df = df_pred_test # TODO: Might need to adjust?
@@ -1930,7 +1957,10 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
                 records_df=records_df,
                 model_descriptors_df=model_descriptors_df,
                 model_descriptor_values_df=model_descriptor_values_df,
-                log_plot=log_plot
+                log_plot=log_plot,
+                add_subtotals=add_subtotals,
+                exclude_blank_columns=exclude_blank_columns,
+                display_dropped_columns=display_dropped_columns
             )
             mte.create_excel()
     
@@ -1970,7 +2000,7 @@ class Results:
         logging.info(f"Results folder\n: {folder_path}")
         
         os.makedirs(folder_path, exist_ok=True)
-
+        
         identifier = int(time.time() * 1000)  # time in ms as identifier
         
         # prediction_csv_path = os.path.join(folder_path, f"predictions_{identifier}.csv")    
@@ -2151,9 +2181,13 @@ class Results:
                 len_embedding = None
     
             embedding_str = None
-            if isinstance(len_embedding, int) and len_embedding < 150:
+            
+            if isinstance(len_embedding, int):
                 emb = model_details.get("embedding", [])
                 embedding_str = ", ".join(emb) if isinstance(emb, (list, tuple)) else str(emb)
+    
+            if len(embedding_str)>100:
+                embedding_str = embedding_str[:100]+"..."
     
             rows.append({
                 "Run": run_name,

@@ -75,3 +75,59 @@ def calculate_continuous_statistics(df: pd.DataFrame, mean_exp_training: float, 
         model_statistic_values[pc.R2_TRAINING] = coeff_det
 
     return model_statistic_values
+
+
+def calculate_binary_statistics(df: pd.DataFrame, cutoff: float, tag: str) -> Dict[str, float]:
+    # Keep only rows with a known expected label
+    valid = df.dropna(subset=['exp'])
+    count_total = len(valid)
+
+    # Among those, keep only rows with a prediction
+    predicted = valid.dropna(subset=['pred'])
+    count_predicted = len(predicted)
+
+    # If there are no predicted rows, return coverage and NaNs for other metrics
+    if count_predicted == 0:
+        coverage = (count_predicted / count_total) if count_total else float('nan')
+        return {
+            pc.COVERAGE + tag: coverage,
+            pc.CONCORDANCE + tag: float('nan'),
+            pc.SENSITIVITY + tag: float('nan'),
+            pc.SPECIFICITY + tag: float('nan'),
+            pc.BALANCED_ACCURACY + tag: float('nan'),
+        }
+
+    # Binary predictions using the cutoff
+    pred_bin = (predicted['pred'] >= cutoff).astype(int)
+
+    # Use exp values from the same (predicted) subset
+    exp_vals = predicted['exp']
+
+    # Java logic counts positives/negatives only among rows that have predictions
+    pos_mask = (exp_vals == 1)
+    neg_mask = (exp_vals == 0)
+
+    count_positive = int(pos_mask.sum())
+    count_negative = int(neg_mask.sum())
+
+    tp = int((pos_mask & (pred_bin == 1)).sum())
+    tn = int((neg_mask & (pred_bin == 0)).sum())
+    count_true = tp + tn
+
+    # Safe divisions (match Java behavior but avoid ZeroDivisionError)
+    def safe_div(n, d):
+        return n / d if d else float('nan')
+
+    coverage = safe_div(count_predicted, count_total)
+    concordance = safe_div(count_true, count_predicted)
+    sensitivity = safe_div(tp, count_positive)
+    specificity = safe_div(tn, count_negative)
+    balanced_accuracy = (sensitivity + specificity) / 2.0
+
+    return {
+        pc.COVERAGE + tag: coverage,
+        pc.CONCORDANCE + tag: concordance,
+        pc.SENSITIVITY + tag: sensitivity,
+        pc.SPECIFICITY + tag: specificity,
+        pc.BALANCED_ACCURACY + tag: balanced_accuracy,
+    }

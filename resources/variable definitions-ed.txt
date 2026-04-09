@@ -1,4 +1,5 @@
 Symbol	Definition	Category
+Intercept	y-intercept of the model	Intercept
 MW	Molecular weight	Constitutional
 AMW	Average molecular weight	Constitutional
 Sv	Sum of atomic van der Waals volumes (scaled on Carbon atom)	Constitutional

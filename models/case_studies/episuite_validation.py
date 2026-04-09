@@ -10,7 +10,7 @@ from models.case_studies.run_model_building_db import run_dataset, Results, Para
 from util import predict_constants as pc
 
 from model_ws_db_utilities import getEngine, getSession
-from ModelToExcel import ModelToExcel
+from models.ModelToExcel import ModelToExcel
 import logging
 import json
 from utils import print_first_row

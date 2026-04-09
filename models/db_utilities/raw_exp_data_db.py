@@ -108,7 +108,13 @@ class ExpDataGetter:
                 pv.value_original AS prop_value_original,
                 pv.value_text AS prop_value_text,
                 pv.page_url AS direct_url,
-                pv.document_name AS brief_citation
+                pv.document_name AS brief_citation,
+                pv.notes AS notes,
+                pv.qc_flag AS qc_flag,
+                pv.keep_reason AS flag_reason,
+                pv.value_max AS value_max,
+                pv.value_min AS value_min,
+                sc.source_dtxrid AS source_dtxrid
             FROM qsar_datasets.data_points AS dp
             JOIN qsar_datasets.data_point_contributors AS dpc
                 ON dpc.fk_data_point_id = dp.id
@@ -210,6 +216,7 @@ class ExpDataGetter:
             "value_qualifier",
             "value_min",
             "value_max",
+            "value_units",
             # "parameter_id",
             # "unit_id",
         )
@@ -438,9 +445,9 @@ class ExpDataGetter:
         df = pd.DataFrame.from_records(results)
         df = df.convert_dtypes()       # uses pandas nullable dtypes; missing -> pd.NA
         # df = df.replace({pd.NA: None}) # easier JSON export
-        
+
         df = self._drop_all_null_columns(df)
-        
+
     
         # Sort for consistency
         sort_cols = [c for c in ["canon_qsar_smiles", "prop_value"] if c in df.columns]

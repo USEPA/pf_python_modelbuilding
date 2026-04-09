@@ -37,3 +37,5 @@ my.env
 contractor.env
 *.ipynb
 *.pkl
+test_model_details.txt
+personal.env
