@@ -52,9 +52,13 @@ from util.chemical_image_utils import build_render_image_url, get_render_smiles
 
 from utils import timer, print_first_row
 from applicability_domain import applicability_domain_utilities as adu
+from model_service_common.config import get_env as _get_env
 
 # debug = False
 import logging
+
+STDIZER_API = _get_env('stdizer.url', 'STDIZER_API', default='http://stdizer-api:8200/api/stdizer')
+DESCRIPTORS_API = _get_env('descriptors.url', 'DESCRIPTORS_API', default='http://descriptors-api:8804/api/descriptors')
 
 logging.getLogger('sqlalchemy').setLevel(logging.ERROR)
 
@@ -167,7 +171,7 @@ def getEngine():
                     username=os.getenv('DEV_QSAR_USER'),
                     password=os.getenv('DEV_QSAR_PASS'),
                     host=os.getenv('DEV_QSAR_HOST', 'localhost'),
-                    port=os.getenv('DEV_QSAR_PORT', 5432),
+        port=int(os.getenv('DEV_QSAR_PORT', 5432)),
                     database=os.getenv('DEV_QSAR_DATABASE')
                 )
 
@@ -2902,10 +2906,10 @@ class ModelPredictor:
             pass
 
     @timer
-    def standardizeStructure(self, serverAPIs, smiles, model: Model):
+    def standardizeStructure(self, stdizer_api, smiles, model: Model):
         useFullStandardize = False
         try:
-            chemicals, code = QsarSmilesAPI.call_qsar_ready_standardize_post(server_host=serverAPIs, smiles=smiles, full=useFullStandardize,
+            chemicals, code = QsarSmilesAPI.call_qsar_ready_standardize_post(stdizer_api=stdizer_api, smiles=smiles, full=useFullStandardize,
                                                                workflow=model.qsarReadyRuleSet)
         except Exception as exc:
             logging.exception("Standardization request failed for %s", smiles)
@@ -2931,10 +2935,10 @@ class ModelPredictor:
         logging.debug(f"qsarSmiles: {qsarSmiles}")
         return chemical, 200
         
-    def standardizeStructure2(self, serverAPIs, smiles, qsarReadyRuleSet, omitSalts):
+    def standardizeStructure2(self, stdizer_api, smiles, qsarReadyRuleSet, omitSalts):
         useFullStandardize = False
         try:
-            chemicals, code = QsarSmilesAPI.call_qsar_ready_standardize_post(server_host=serverAPIs, smiles=smiles, full=useFullStandardize,
+            chemicals, code = QsarSmilesAPI.call_qsar_ready_standardize_post(stdizer_api=stdizer_api, smiles=smiles, full=useFullStandardize,
                                                                workflow=qsarReadyRuleSet)
         except Exception as exc:
             logging.exception("Standardization request failed for %s", smiles)
@@ -2976,7 +2980,7 @@ class ModelPredictor:
         descriptorAPI = DescriptorsAPI()
 
         # serverAPIs = "https://hcd.rtpnc.epa.gov" #TODO: this should come from environment variable
-        serverAPIs = "https://cim-dev.sciencedataexperts.com/"
+        # serverAPIs = "https://cim-dev.sciencedataexperts.com/"
 
         mi = ModelInitializer()
 
@@ -2997,7 +3001,7 @@ class ModelPredictor:
 
             # for smiles, predOld in zip(smiles_list, pred_list):
             for smiles in smiles_list:
-                chemical, code = self.standardizeStructure(serverAPIs, smiles, model)
+                chemical, code = self.standardizeStructure(STDIZER_API, smiles, model)
 
                 qsarSmiles = chemical["canonicalSmiles"]
 
@@ -3006,7 +3010,7 @@ class ModelPredictor:
                     file.write(smiles + "\terror smiles")
                     continue
 
-                df_prediction, code = descriptorAPI.calculate_descriptors(serverAPIs, qsarSmiles, model.descriptorService)
+                df_prediction, code = descriptorAPI.calculate_descriptors(DESCRIPTORS_API, qsarSmiles, model.descriptorService)
                 if code != 200:
                     print(smiles, 'error descriptors')
                     file.write(smiles + "\terror descriptors")

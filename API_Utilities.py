@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import threading
+from urllib.parse import urljoin
 
 import httpx
 import requests
@@ -118,16 +119,14 @@ class DescriptorsAPI:
         return False
 
     @timer
-    def calculate_descriptors(self, serverAPIs, qsarSmiles, descriptorService):
+    def calculate_descriptors(self, descriptors_api, qsarSmiles, descriptorService):
 
         if "test" in descriptorService.lower():
             check_results, code = self.check_structure(qsarSmiles)
             if code != 200:
                 return check_results, code
 
-        
-        
-        response = self.call_descriptors_get(server_host=serverAPIs, qsar_smiles=qsarSmiles,
+        response = self.call_descriptors_get(descriptors_api=descriptors_api, qsar_smiles=qsarSmiles,
                                                                 descriptor_name=descriptorService)
         if response.status_code != 200:
             logging.warning(
@@ -158,7 +157,7 @@ class DescriptorsAPI:
         return df_prediction, 200
 
     @timer
-    def calculate_descriptors_batch(self, serverAPIs, qsarSmilesList, descriptorService):
+    def calculate_descriptors_batch(self, descriptors_api, qsarSmilesList, descriptorService):
         qsar_smiles_list = list(qsarSmilesList)
 
         if not qsar_smiles_list:
@@ -172,7 +171,7 @@ class DescriptorsAPI:
                     return check_results, code
 
         response = self.call_descriptors_post(
-            server_host=serverAPIs,
+            descriptors_api=descriptors_api,
             qsar_smiles=qsar_smiles_list,
             descriptor_name=descriptorService,
         )
@@ -203,9 +202,7 @@ class DescriptorsAPI:
 
         return df_prediction, 200
 
-    def call_descriptors_get(self, server_host: str, qsar_smiles: str, descriptor_name: str):
-        # Construct the URL
-        url = f"{server_host}/api/descriptors"
+    def call_descriptors_get(self, descriptors_api: str, qsar_smiles: str, descriptor_name: str):
 
         # Set up query parameters
         params = {
@@ -215,7 +212,7 @@ class DescriptorsAPI:
             # some descriptors dont have header option? Should be fixed so this doesnt cause issue if must be false
         }
 
-        response = get_requests_session().get(url, params=params)
+        response = requests.get(descriptors_api, params=params)
 
         return response 
 
@@ -279,9 +276,7 @@ class DescriptorsAPI:
         except Exception as exc:
             return f"diagnostic_failed={exc}"
 
-    def call_descriptors_post(self, server_host: str, qsar_smiles: list[str], descriptor_name: str):
-        # Construct the URL
-        url = f"{server_host}/api/descriptors"
+    def call_descriptors_post(self, descriptors_api: str, qsar_smiles: list[str], descriptor_name: str):
         payload = {
             "type": descriptor_name,
             "chemicals": qsar_smiles,
@@ -292,13 +287,13 @@ class DescriptorsAPI:
             },
         }
 
-        response = get_requests_session().post(url, json=payload)
+        response = get_requests_session().post(descriptors_api, json=payload)
 
         if response.status_code == 200:
             return response.json(), response.status_code
 
         if response.status_code == 400 and len(qsar_smiles) > 1:
-            diagnostic = self._diagnose_descriptor_batch_400(url, descriptor_name, qsar_smiles)
+            diagnostic = self._diagnose_descriptor_batch_400(descriptors_api, descriptor_name, qsar_smiles)
             logging.warning(
                 "Descriptor batch endpoint returned 400; descriptor_service=%s batch_size=%s smiles=%s diagnostic=%s",
                 descriptor_name,
@@ -486,8 +481,8 @@ class DescriptorsAPI:
 class SearchAPI:
      
     @staticmethod
-    def call_resolver_get(server_host, identifier):
-        url = f"{server_host}/api/resolver/lookup"
+    def call_resolver_get(resolver_api, identifier):
+        url = urljoin(resolver_api, "lookup")
         
         response = get_requests_session().get(url, params={"query": identifier})
         
@@ -567,11 +562,11 @@ class QsarSmilesAPI:
         }
 
     @staticmethod
-    def call_qsar_ready_standardize_post(server_host, smiles, full, workflow):
+    def call_qsar_ready_standardize_post(stdizer_api, smiles, full, workflow):
         jo_body = QsarSmilesAPI._build_standardize_payload(smiles, full, workflow)
 
         # Make the POST request
-        url = f"{server_host}/api/stdizer/chemicals"
+        url = urljoin(stdizer_api, "chemicals")
         response = get_requests_session().post(url, json=jo_body)
 
         # print(response.text)
@@ -584,23 +579,3 @@ class QsarSmilesAPI:
             # Handle the error appropriately
             return response.text,  response.status_code
 
-
-if __name__ == '__main__':
-    from dotenv import load_dotenv
-    load_dotenv()
-    import os
-    serverAPIs = os.getenv("CIM_API_SERVER", "https://cim-dev.sciencedataexperts.com")
-    identifier='71-43-2X'
-    
-    chemicals, code = SearchAPI.call_resolver_get(serverAPIs, identifier)
-    
-    print(chemicals, code)
-    
-    if code == 200:
-        for chemical in chemicals:
-            print(json.dumps(chemical))
-    else:
-        print(chemicals)
-
-    
-    
