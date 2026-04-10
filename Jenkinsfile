@@ -24,7 +24,7 @@ pipeline {
 			steps {
 				sh "echo 'BUILD_TIMESTAMP = \"$BUILD_TIMESTAMP\"' > ./build_info.py"
 				sh "echo BUILD_NUMBER = $BUILD_NUMBER >> ./build_info.py"
-
+				sh "git submodule update --init --recursive model_service_common"
 				sh "docker buildx use mybuilder"
 				sh "docker buildx build --platform linux/amd64 --tag ${DOCKER_REGISTRY}/epa/predictor_models:${IMAGE_TAG} --push ."
 			}
