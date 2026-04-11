@@ -1493,12 +1493,12 @@ class ModelPredictor:
         )
         return None, " ".join(standardization_reason_parts), results_by_index, missing_indices
 
-    def _standardize_smiles_individually(self, serverAPIs, smiles_list, model):
+    def _standardize_smiles_individually(self, stdizer_api, smiles_list, model):
         results = []
 
         for smiles in smiles_list:
             try:
-                results.append(self.standardizeStructure(serverAPIs, smiles, model))
+                results.append(self.standardizeStructure(stdizer_api, smiles, model))
             except Exception as exc:
                 logging.exception(
                     "Single-smiles standardization failed; workflow=%s smiles=%s",
@@ -1509,13 +1509,13 @@ class ModelPredictor:
 
         return results
 
-    def _retry_missing_standardization_subset(self, serverAPIs, smiles_list, model, split_depth=0):
+    def _retry_missing_standardization_subset(self, stdizer_api, smiles_list, model, split_depth=0):
         if not smiles_list:
             return []
 
         try:
             chemicals, code = QsarSmilesAPI.call_qsar_ready_standardize_post(
-                server_host=serverAPIs,
+                stdizer_api,
                 smiles=smiles_list,
                 full=False,
                 workflow=model.qsarReadyRuleSet,
@@ -1530,7 +1530,7 @@ class ModelPredictor:
                 split_depth,
                 self._preview_log_value(exc),
             )
-            return self._standardize_smiles_individually(serverAPIs, smiles_list, model)
+            return self._standardize_smiles_individually(stdizer_api, smiles_list, model)
 
         if code != 200:
             logging.warning(
@@ -1542,7 +1542,7 @@ class ModelPredictor:
                 split_depth,
                 self._preview_log_value(chemicals),
             )
-            return self._standardize_smiles_individually(serverAPIs, smiles_list, model)
+            return self._standardize_smiles_individually(stdizer_api, smiles_list, model)
 
         normalized_results, normalization_diagnostic, partial_results_by_index, missing_indices = (
             self._normalize_standardization_batch_results(
@@ -1578,7 +1578,7 @@ class ModelPredictor:
                 normalization_diagnostic,
             )
             single_results = self._standardize_smiles_individually(
-                serverAPIs,
+                stdizer_api,
                 [smiles_list[index] for index in missing_indices],
                 model,
             )
@@ -1683,7 +1683,7 @@ class ModelPredictor:
         runtime_cache[cache_key] = runtime
         return runtime
 
-    def _resolve_model_context(self, model_id, serverAPIs, fileAPI):
+    def _resolve_model_context(self, model_id, fileAPI):
         mi = ModelInitializer()
         model = mi.init_model(model_id)
 
@@ -1693,17 +1693,16 @@ class ModelPredictor:
 
         self._ensure_model_runtime_cache(model)
 
-        if serverAPIs == "https://hcd.rtpnc.epa.gov/" and model.qsarReadyRuleSet == 'qsar-ready_04242025_0':
-            model.qsarReadyRuleSet = 'qsar-ready_04242025'
+        # TODO: inject stdizer workflow
+        model.qsarReadyRuleSet = 'qsar-ready_04242025'
 
         model_details_dict = self._get_model_details_dict(model, fileAPI)
         return model, model_details_dict, None
 
-    def get_model_details_dict_for_model_id(self, model_id, serverAPIs=None, fileAPI=None):
-        serverAPIs = serverAPIs or os.getenv("CIM_API_SERVER", "https://cim-dev.sciencedataexperts.com")
+    def get_model_details_dict_for_model_id(self, model_id, fileAPI=None):
         fileAPI = fileAPI or os.getenv("FILE_API_SERVER", pc.URL_LOCAL_FILE_API)
 
-        _, model_details_dict, model_error = self._resolve_model_context(model_id, serverAPIs, fileAPI)
+        _, model_details_dict, model_error = self._resolve_model_context(model_id, fileAPI)
         return model_details_dict, model_error
 
     def _get_model_details_dict(self, model, fileAPI):
@@ -2147,13 +2146,13 @@ class ModelPredictor:
             neighbor_results_prediction=neighbor_results_prediction,
         )
 
-    def _standardize_smiles_batch_subset(self, serverAPIs, smiles_list, model, split_depth=0):
+    def _standardize_smiles_batch_subset(self, stdizer_api, smiles_list, model, split_depth=0):
         if len(smiles_list) == 1:
-            return self._standardize_smiles_individually(serverAPIs, smiles_list, model)
+            return self._standardize_smiles_individually(stdizer_api, smiles_list, model)
 
         try:
             chemicals, code = QsarSmilesAPI.call_qsar_ready_standardize_post(
-                server_host=serverAPIs,
+                stdizer_api,
                 smiles=smiles_list,
                 full=False,
                 workflow=model.qsarReadyRuleSet,
@@ -2193,7 +2192,7 @@ class ModelPredictor:
                         normalization_diagnostic,
                     )
                     retried_results = self._retry_missing_standardization_subset(
-                        serverAPIs,
+                        stdizer_api,
                         missing_smiles,
                         model,
                         split_depth + 1,
@@ -2222,7 +2221,7 @@ class ModelPredictor:
                 split_depth,
                 standardization_reason,
             )
-            return self._standardize_smiles_individually(serverAPIs, smiles_list, model)
+            return self._standardize_smiles_individually(stdizer_api, smiles_list, model)
         except Exception as exc:
             logging.warning(
                 "Batch standardization request raised %s, falling back to single requests; "
@@ -2233,15 +2232,15 @@ class ModelPredictor:
                 split_depth,
                 self._preview_log_value(exc),
             )
-            return self._standardize_smiles_individually(serverAPIs, smiles_list, model)
+            return self._standardize_smiles_individually(stdizer_api, smiles_list, model)
 
-    def _standardize_smiles_batch(self, serverAPIs, smiles_list, model):
+    def _standardize_smiles_batch(self, stdizer_api, smiles_list, model):
         if not smiles_list:
             return []
 
         worker_count = self._get_standardize_thread_count()
         if len(smiles_list) <= 1 or worker_count <= 1:
-            return self._standardize_smiles_batch_subset(serverAPIs, smiles_list, model)
+            return self._standardize_smiles_batch_subset(stdizer_api, smiles_list, model)
 
         chunk_size = self._calculate_dynamic_chunk_size(len(smiles_list), worker_count)
         active_workers = min(worker_count, math.ceil(len(smiles_list) / chunk_size))
@@ -2255,17 +2254,17 @@ class ModelPredictor:
             list(smiles_list),
             chunk_size,
             worker_count,
-            lambda chunk: self._standardize_smiles_batch_subset(serverAPIs, chunk, model),
+            lambda chunk: self._standardize_smiles_batch_subset(stdizer_api, chunk, model),
         )
 
-    def _calculate_descriptors_batch_subset(self, serverAPIs, qsar_smiles_subset, descriptor_service, split_depth=0):
+    def _calculate_descriptors_batch_subset(self, descriptors_api, qsar_smiles_subset, descriptor_service, split_depth=0):
         if not qsar_smiles_subset:
             return []
 
         if len(qsar_smiles_subset) == 1:
-            return [self._descriptor_api.calculate_descriptors(serverAPIs, qsar_smiles_subset[0], descriptor_service)]
+            return [self._descriptor_api.calculate_descriptors(descriptors_api, qsar_smiles_subset[0], descriptor_service)]
 
-        df_batch, code = self._descriptor_api.calculate_descriptors_batch(serverAPIs, qsar_smiles_subset, descriptor_service)
+        df_batch, code = self._descriptor_api.calculate_descriptors_batch(descriptors_api, qsar_smiles_subset, descriptor_service)
         if code == 200 and isinstance(df_batch, pd.DataFrame) and len(df_batch.index) == len(qsar_smiles_subset):
             return [(df_batch.iloc[[row_pos]].copy(), 200) for row_pos in range(len(qsar_smiles_subset))]
 
@@ -2284,8 +2283,8 @@ class ModelPredictor:
                 self._preview_smiles_batch(qsar_smiles_subset),
             )
             return (
-                self._calculate_descriptors_batch_subset(serverAPIs, left_subset, descriptor_service, split_depth + 1)
-                + self._calculate_descriptors_batch_subset(serverAPIs, right_subset, descriptor_service, split_depth + 1)
+                self._calculate_descriptors_batch_subset(descriptors_api, left_subset, descriptor_service, split_depth + 1)
+                + self._calculate_descriptors_batch_subset(descriptors_api, right_subset, descriptor_service, split_depth + 1)
             )
 
         if isinstance(df_batch, pd.DataFrame):
@@ -2315,17 +2314,17 @@ class ModelPredictor:
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
             return list(pool.map(
-                lambda smiles: self._descriptor_api.calculate_descriptors(serverAPIs, smiles, descriptor_service),
+                lambda smiles: self._descriptor_api.calculate_descriptors(descriptors_api, smiles, descriptor_service),
                 qsar_smiles_subset,
             ))
 
-    def _calculate_descriptors_batch(self, serverAPIs, qsar_smiles_list, descriptor_service):
+    def _calculate_descriptors_batch(self, descriptors_api, qsar_smiles_list, descriptor_service):
         if not qsar_smiles_list:
             return []
 
         worker_count = self._get_descriptor_thread_count()
         if len(qsar_smiles_list) <= 1 or worker_count <= 1:
-            return self._calculate_descriptors_batch_subset(serverAPIs, list(qsar_smiles_list), descriptor_service)
+            return self._calculate_descriptors_batch_subset(descriptors_api, list(qsar_smiles_list), descriptor_service)
 
         chunk_size = self._calculate_dynamic_chunk_size(len(qsar_smiles_list), worker_count)
         active_workers = min(worker_count, math.ceil(len(qsar_smiles_list) / chunk_size))
@@ -2340,13 +2339,13 @@ class ModelPredictor:
             list(qsar_smiles_list),
             chunk_size,
             worker_count,
-            lambda chunk: self._calculate_descriptors_batch_subset(serverAPIs, chunk, descriptor_service),
+            lambda chunk: self._calculate_descriptors_batch_subset(descriptors_api, chunk, descriptor_service),
         )
 
     def _predict_model_smiles_batch_from_standardized_results(
         self,
         model,
-        serverAPIs,
+        descriptors_api,
         smiles_list,
         standardized_results,
         report_model_details=None,
@@ -2377,7 +2376,7 @@ class ModelPredictor:
             standardized_smiles.append(canonical_smiles)
             standardized_chemicals.append(dict(chemical))
 
-        descriptor_results = self._calculate_descriptors_batch(serverAPIs, standardized_smiles, model.descriptorService)
+        descriptor_results = self._calculate_descriptors_batch(descriptors_api, standardized_smiles, model.descriptorService)
 
         prediction_frames = []
         prediction_indices = []
@@ -2449,18 +2448,17 @@ class ModelPredictor:
 
     @timer
     def predict_model_smiles_batch(self, model_id, smiles_list, generate_report=True, include_model_details=True):
-        serverAPIs = os.getenv("CIM_API_SERVER", "https://cim-dev.sciencedataexperts.com")
         fileAPI = os.getenv("FILE_API_SERVER", pc.URL_LOCAL_FILE_API)
 
-        model, model_details_dict, model_error = self._resolve_model_context(model_id, serverAPIs, fileAPI)
+        model, model_details_dict, model_error = self._resolve_model_context(model_id, fileAPI)
         if model is None:
             return [{"smiles": smiles, "error": model_error} for smiles in smiles_list]
 
         report_model_details = model_details_dict if include_model_details else None
-        standardized_results = self._standardize_smiles_batch(serverAPIs, smiles_list, model)
+        standardized_results = self._standardize_smiles_batch(STDIZER_API, smiles_list, model)
         return self._predict_model_smiles_batch_from_standardized_results(
             model,
-            serverAPIs,
+            DESCRIPTORS_API,
             smiles_list,
             standardized_results,
             report_model_details=report_model_details,
@@ -2491,10 +2489,9 @@ class ModelPredictor:
 
         model_details_dict = None
         if missing_indices or include_model_details:
-            serverAPIs = os.getenv("CIM_API_SERVER", "https://cim-dev.sciencedataexperts.com")
             fileAPI = os.getenv("FILE_API_SERVER", pc.URL_LOCAL_FILE_API)
 
-            model, model_details_dict, model_error = self._resolve_model_context(model_id, serverAPIs, fileAPI)
+            model, model_details_dict, model_error = self._resolve_model_context(model_id, fileAPI)
             if model is None:
                 for idx, smiles in zip(missing_indices, missing_smiles):
                     results[idx] = self._build_prediction_error_report(smiles, None, model_error)
@@ -2508,10 +2505,10 @@ class ModelPredictor:
                 return results
 
         if missing_indices:
-            standardized_results = self._standardize_smiles_batch(serverAPIs, missing_smiles, model)
+            standardized_results = self._standardize_smiles_batch(STDIZER_API, missing_smiles, model)
             generated_results = self._predict_model_smiles_batch_from_standardized_results(
                 model,
-                serverAPIs,
+                DESCRIPTORS_API,
                 missing_smiles,
                 standardized_results,
                 report_model_details=None,
@@ -2978,9 +2975,6 @@ class ModelPredictor:
         """
 
         descriptorAPI = DescriptorsAPI()
-
-        # serverAPIs = "https://hcd.rtpnc.epa.gov" #TODO: this should come from environment variable
-        # serverAPIs = "https://cim-dev.sciencedataexperts.com/"
 
         mi = ModelInitializer()
 
