@@ -10,6 +10,10 @@ from model_ws_db_utilities import ModelPredictor
 from report_creator_dict import ReportCreator
 from starlette.responses import HTMLResponse, JSONResponse
 
+from model_service_common.config import get_env as _get_env
+
+RESOLVER_API = _get_env('resolver.url', 'RESOLVER_API', default='http://resolver-api:8600/api/resolver')
+
 _PROCESS_PREDICTOR = None
 _THREAD_LOCAL = threading.local()
 
@@ -517,7 +521,7 @@ def make_predictdb_post_response(body):
     return JSONResponse(content=build_predictdb_post_payload(model_results, model_details=batch_model_details))
 
 
-def make_predictdb_response(model_id, smiles=None, identifier=None, report_format="json", cim_api_server=None):
+def make_predictdb_response(model_id, smiles=None, identifier=None, report_format="json"):
     if smiles and identifier:
         return JSONResponse(
             build_error_response(smiles, "bad_request", f"Both SMILES '{smiles}' and identifier {identifier} are provided"),
@@ -526,7 +530,7 @@ def make_predictdb_response(model_id, smiles=None, identifier=None, report_forma
 
     if identifier:
         try:
-            chemicals, code = SearchAPI.call_resolver_get(cim_api_server, identifier)
+            chemicals, code = SearchAPI.call_resolver_get(RESOLVER_API, identifier)
         except Exception as exc:
             logging.exception("Resolver lookup failed for identifier=%s", identifier)
             return JSONResponse(

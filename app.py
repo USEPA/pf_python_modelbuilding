@@ -24,8 +24,6 @@ from util.helpers import (
     make_predictdb_response,
 )
 
-CIM_API_SERVER = os.getenv("CIM_API_SERVER", "https://cim-dev.sciencedataexperts.com")
-
 
 def _get_log_level(env_var: str, default: str) -> int:
     value = os.getenv(env_var, default).strip().upper()
@@ -173,8 +171,7 @@ def predictDB(model_id, smiles=None, identifier=None, report_format='json'):
         model_id=model_id,
         smiles=smiles,
         identifier=identifier,
-        report_format=report_format,
-        cim_api_server=CIM_API_SERVER,
+        report_format=report_format
     )
 
 
