@@ -638,6 +638,11 @@ class ModelLoader():
         filePathOutHistogram = os.path.join(folder_path, "histogram.png")
         image_id = self.load_model_file(filePathOutHistogram, user, fk_model_id, 4)
         image_id = logging.info(f"Histogram plot loaded to db with id: {image_id}")
+            
+        filePathOutExcelSummary = os.path.join(folder_path, "detailed_summary.xlsx")
+        image_id = self.load_model_file(filePathOutExcelSummary, user, fk_model_id, 2)
+        image_id = logging.info(f"Excel summary loaded to db with id: {image_id}")
+        
         
         # TODO: created detailed spreadsheet and store in the database
     
@@ -713,7 +718,7 @@ class ModelBuilder:
         mean_exp_training = df_predictions["exp"].mean()
         stats = calculate_continuous_statistics(df_predictions, mean_exp_training, tag)
     
-        logging.info("Done running CV calculations")
+        logging.info("Done running predictions")
         return df_predictions, stats
     
     
@@ -1719,11 +1724,17 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         is_binary = s.isin([0, 1]).all()
         # print('is_binary', is_binary)
         
-        df_prediction_ext = None    
+        df_prediction_ext = None
+        dataset_name_ext = None
+        
         if dataset_name == 'KOC v1 modeling':
             dataset_name_ext = 'KOC v1 external'
+        elif dataset_name == 'ECOTOX_2024_12_12_96HR_Fish_LC50_v3a modeling':
+            dataset_name_ext = 'QSAR_Toolbox_96HR_Fish_LC50_v3 modeling'    
+
+        if dataset_name_ext is not None:
             df_prediction_ext = du.get_instances_excluding(session, dataset_name_ext, dataset_name, descriptor_set_name)
-            
+
         
         # check_for_inchi_key_matches(df_training, df_prediction_ext)
         
@@ -1746,7 +1757,6 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         
         # ******************************************************************************************************
         # ---- Run feature selection and build model ----
-        
         if feature_selection:
             embedding = EmbeddingGenerator.feature_selection(df_training, df_prediction, params, cv)
             
@@ -1769,6 +1779,7 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
             df_pred_training, df_pred_test, training_stats, test_stats, model = ModelBuilder.build_and_test_model(df_training, df_prediction, params, model.embedding, is_binary)
             logging.info(f"After FS, embedding has {len(model.embedding)} descriptors: {model.embedding}")
 
+        # ---- Run cross validation calculations ----
         if cross_validate: 
             df_pred_cv, cv_stats = ModelBuilder.crossvalidate(df_cv_dict, params, model.embedding, is_binary)
         
@@ -1878,7 +1889,7 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         df_pred_test = add_source_chemical_info(df_pred_test, df_dps)
         df_pred_cv = add_source_chemical_info(df_pred_cv, df_dps)        # print_first_row(df_pred_cv)
         
-        
+        df_dps_ext = None
         if df_prediction_ext is not None:
             df_dps_ext = du.getMappedDatapoints(session, dataset_name_ext)
             df_pred_ext = add_source_chemical_info(df_pred_ext, df_dps_ext)
@@ -1918,16 +1929,35 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         
         logging.info("run_data_set completed\n")
 
-        model.modelStatistics = {**training_stats, **cv_stats, **test_stats, **results_dict['model_statistics']['test_stats_AD'], **ext_stats}
+        # model.modelStatistics = {**training_stats, **cv_stats, **test_stats, **results_dict['model_statistics']['test_stats_AD'], **ext_stats}
+        
+        # Safely extract AD stats (could be missing or None)
+        ad_stats = (results_dict.get('model_statistics') or {}).get('test_stats_AD') or {}
+        
+        # Merge; any None becomes {} so it won’t break
+        model.modelStatistics = (
+            (training_stats or {})
+            | (cv_stats or {})
+            | (test_stats or {})
+            | ad_stats
+            | (ext_stats or {})
+        )
+        
         model.df_training = df_training  # df_training_model?
         model.df_prediction = df_prediction  # df_test_model?
         model.modelMethod = results_dict["model_details"].get("qsar_method", None)
         model.modelMethodDescription = results_dict["model_details"].get("qsar_method_description", None)
         
-        if qsar_method !='gcm':        
-            logging.info(f"all stats:\t{params.descriptor_coefficient}\t{test_stats['RMSE_Test']:.3f}\t{cv_stats['RMSE_CV_Training']:.3f}\t{ext_stats['RMSE_External']:.3f}\t{len(model.embedding)}")   
+        if qsar_method !='gcm':    
+            if ext_stats is None:
+                logging.info(f"all stats:\t{params.descriptor_coefficient}\t{test_stats['RMSE_Test']:.3f}\t{cv_stats['RMSE_CV_Training']:.3f}\t{len(model.embedding)}")
+            else:
+                logging.info(f"all stats:\t{params.descriptor_coefficient}\t{test_stats['RMSE_Test']:.3f}\t{cv_stats['RMSE_CV_Training']:.3f}\t{ext_stats['RMSE_External']:.3f}\t{len(model.embedding)}")   
         else:
-            logging.info(f"all stats:\tN/A\t{test_stats['RMSE_Test']:.3f}\t{cv_stats['RMSE_CV_Training']:.3f}\t{ext_stats['RMSE_External']:.3f}\t{len(model.embedding)}")
+            if ext_stats is None:
+                logging.info(f"all stats:\tN/A\t{test_stats['RMSE_Test']:.3f}\t{cv_stats['RMSE_CV_Training']:.3f}\t{len(model.embedding)}")
+            else:
+                logging.info(f"all stats:\tN/A\t{test_stats['RMSE_Test']:.3f}\t{cv_stats['RMSE_CV_Training']:.3f}\t{ext_stats['RMSE_External']:.3f}\t{len(model.embedding)}")
             
         # logging.info(f"model description={json.dumps(json.loads(model.get_model_description()), indent=4)}")
 
@@ -1957,6 +1987,9 @@ class Results:
         params = results_dict["params"]
         
         # print (json.dumps(params))
+        # from pprint import pprint
+        # pprint(results_dict)
+        # print (json.dumps(results_dict))
     
         df_pred_test = prepare_df(df_pred_test)
         
