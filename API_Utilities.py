@@ -568,11 +568,11 @@ class QsarSmilesAPI:
         # Make the POST request
         url = urljoin(stdizer_api, "chemicals")
 
-        print(f"Calling standardize API ({stdizer_api}) with {smiles} SMILES")
+        print(f"Calling standardize API ({url}) with {smiles} SMILES")
 
         response = get_requests_session().post(url, json=jo_body)
 
-        # print(response.text)
+        print(response.text)
 
         # Check if the request was successful
         if response.status_code == 200:
