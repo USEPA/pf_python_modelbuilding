@@ -2548,6 +2548,8 @@ class ModelPredictor:
         :return:
         """
 
+        print(f"Predicting with model {model_id} and {STDIZER_API}, {DESCRIPTORS_API} for {len(smiles)} SMILES")
+
         if isinstance(smiles, str):
             predictions = self._predict_from_db_batch(
                 model_id,
