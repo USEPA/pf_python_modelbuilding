@@ -19,8 +19,7 @@ import requests
 from sklearn2pmml.pipeline import PMMLPipeline as PMMLPipeline
 # from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
-from sqlalchemy.orm.relationships import remote
-from models.case_studies.run_model_building import run_dataset
+
 # from xgboost.testing.ranking import run_ranking_categorical
 # from models.runGA import qsar_method
 
@@ -101,7 +100,7 @@ def call_build_model_with_preselected_descriptors(qsar_method, training_tsv, pre
     return model
 
 
-def call_build_model_with_preselected_descriptors_from_df(params, df_training, df_prediction, 
+def call_build_model_with_preselected_descriptors_from_df(params, df_training, df_prediction, cv=None, 
                                                           descriptor_names_tsv=None, filterColumnsInBothSets=True):
     """Loads TSV training data into a pandas DF and calls the appropriate training method"""
 
@@ -130,7 +129,7 @@ def call_build_model_with_preselected_descriptors_from_df(params, df_training, d
         abort(404, qsar_method + ' not implemented')
 
     model.build_model(use_pmml_pipeline=params.use_pmml_pipeline, 
-                      include_standardization_in_pmml=params.include_standardization_in_pmml,
+                      include_standardization_in_pmml=params.include_standardization_in_pmml, cv=cv, 
                       descriptor_names=descriptor_names_tsv)
     # Returns trained model:
     return model
@@ -211,8 +210,6 @@ def instantiateModel(df_training, n_jobs, qsar_method, remove_log_p, use_pmml_pi
     logging.debug('instantiateModel: model.is_binary: '+str(model.is_binary))
 
     obj = mb.model_registry_model_obj(qsar_method, model.is_binary)
-
-
 
     if use_pmml_pipeline is False or include_standardization_in_pmml:
         model.model_obj = PMMLPipeline([('standardizer', StandardScaler()), ('estimator', obj)])
@@ -316,10 +313,9 @@ def call_build_embedding_ga(qsar_method, training_tsv, prediction_tsv, remove_lo
 
 
 
-def call_build_embedding_ga_db(df_training, df_prediction, gap):
+def call_build_embedding_ga_db(df_training, df_prediction, gap, cv = 5):
     """Loads TSV training data into a pandas DF and calls the appropriate training method"""
         
-                
     df_training = dfu.filter_columns_in_both_sets(df_training, df_prediction)
     qsar_method = gap.qsar_method.lower()
 
@@ -344,12 +340,12 @@ def call_build_embedding_ga_db(df_training, df_prediction, gap):
     from models.EmbeddingFromImportance import perform_iterative_sequential_feature_selection as run_sfs_it
 
     if gap.run_rfe:
-        run_rfe_it(model,df_training,gap.n_threads, n_steps=1)
+        run_rfe_it(model,df_training,gap.n_threads, n_steps=1, cv=cv)
         logging.info(f"embedding after iterative RFE ({len(model.embedding)} descriptors): {model.embedding}")
 
 
     if gap.run_sfs:
-        run_sfs_it(model=model, df_training=df_training)
+        run_sfs_it(model=model, df_training=df_training, cv=cv, descriptor_coefficient=gap.descriptor_coefficient, alpha=gap.alpha)
         logging.info(f"embedding after SFS ({len(model.embedding)} descriptors): {model.embedding}")
 
 
@@ -387,7 +383,7 @@ def call_build_embedding_importance(qsar_method, training_tsv, prediction_tsv, r
 def call_build_embedding_importance_from_df(qsar_method, df_training, df_prediction, remove_log_p_descriptors, n_threads,
                                     num_generations, use_permutative, run_rfe, fraction_of_max_importance,
                                     min_descriptor_count, max_descriptor_count, use_wards, hyperparameter_grid = None,
-                                    run_sfs=False):
+                                    run_sfs=False, cv=5, descriptor_coefficient=0.002, alpha=0.7):
     """Generates importance based embedding"""
 
 
@@ -419,14 +415,14 @@ def call_build_embedding_importance_from_df(qsar_method, df_training, df_predict
     if run_rfe: #Not can't be used for knn        
         # efi.perform_recursive_feature_elimination(model=model, df_training=df_training, n_threads=n_threads,n_steps=1)
         # print('After RFE, ', len(model.embedding), "descriptors", model.embedding)
-        efi.perform_iterative_recursive_feature_elimination(model, df_training, n_threads, n_steps=1)
+        efi.perform_iterative_recursive_feature_elimination(model, df_training, n_threads, n_steps=1,cv=cv)
         logging.info(f"After RFE, {len(model.embedding)} descriptors: {model.embedding}")
 
     
     if run_sfs:
         
         # efi.perform_sequential_feature_selection(model=model, df_training=df_training, n_features_to_select=n_features_to_select)
-        efi.perform_iterative_sequential_feature_selection(model=model, df_training=df_training)
+        efi.perform_iterative_sequential_feature_selection(model=model, df_training=df_training, cv=cv, descriptor_coefficient=descriptor_coefficient, alpha=alpha)
         logging.info(f"After SFS, {len(model.embedding)} descriptors: {model.embedding}")
 
     # Fit final model using final embedding:

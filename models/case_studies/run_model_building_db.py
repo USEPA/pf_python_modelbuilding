@@ -3,6 +3,8 @@
 Created on Dec 30, 2025
 @author: TMARTI02
 '''
+from numba.cuda import descriptor
+from models.runGA import descriptor_coefficient
 """
 from __future__ import annotations lets you:
 -Use forward references without quotes (refer to classes not yet defined)
@@ -10,29 +12,26 @@ from __future__ import annotations lets you:
 -Speed up imports and reduce circular-import issues
 """
 
+
 from datetime import datetime
 import os, json
 
-# from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy import create_engine
 from sqlalchemy.engine import URL
 from sqlalchemy.orm import sessionmaker
 from xlsxwriter.utility import xl_rowcol_to_cell
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy import text, bindparam
 
 import numpy as np
 import pandas as pd
 from io import StringIO
 import math
-from pathlib import Path
 import time
 
 import pickle 
 import re
 import traceback
 
-from sqlalchemy.orm import Session
 from util.database_utilities import DatabaseUtilities
 
 from models import make_test_plots as mtp 
@@ -41,15 +40,16 @@ from model_ws_utilities import call_build_embedding_ga_db, call_build_model_with
     call_do_predictions_from_df, call_build_embedding_importance_from_df
 
 from models.EmbeddingFromImportance import perform_iterative_recursive_feature_elimination as run_rfe
-from models.EmbeddingFromImportance import perform_sequential_feature_selection as run_sfs
+from models.EmbeddingFromImportance import perform_iterative_sequential_feature_selection as run_sfs
 
 from models.ModelToExcel import ModelToExcel, ModelDataObjects
 
-import StatsCalculator as sc
+from StatsCalculator import calculate_binary_statistics, calculate_continuous_statistics
+
 
 import models.db_utilities.dataset_utilities_db as du
 
-from utils import print_first_row, row_to_json, to_json_safe
+from utils import row_to_json
 
 from applicability_domain import applicability_domain_utilities as  adu
 
@@ -69,7 +69,7 @@ level = INFO
 coloredlogs.install(level=level, milliseconds=True, level_styles=custom_level_styles,
                     fmt='%(asctime)s - %(name)s - %(levelname)s - %(message)s (%(filename)s:%(lineno)d)')
 
-from typing import Optional, Dict, Any, Iterable, Tuple
+from typing import Optional, Dict, Any, Iterable, Tuple, Union, List
 from dataclasses import dataclass, field, asdict
 
 feature_selection_method_genetic_algorithm = "Genetic algorithm"
@@ -80,7 +80,7 @@ from util import predict_constants as pc
 
 # PROJECT_ROOT=r"C:\Users\TMARTI02\OneDrive - Environmental Protection Agency (EPA)\0 python\modeling services\pf_python_modelbuilding"    
 PROJECT_ROOT = os.getenv("PROJECT_ROOT")
-
+ 
  
 @dataclass
 class ParametersImportance:
@@ -102,8 +102,11 @@ class ParametersImportance:
     run_rfe: bool = True
     run_sfs: bool = True
     n_features_to_select = 'auto' #not used
-    min_descriptor_count: int = 20
-    max_descriptor_count: int = 30
+    min_descriptor_count: int = 30
+    max_descriptor_count: int = 40
+    
+    descriptor_coefficient: float = 0.006
+    alpha = 0.7
 
     include_standardization_in_pmml: bool = False
     use_pmml_pipeline: bool = False
@@ -169,16 +172,17 @@ class ParametersGeneric:
         return asdict(self)
 
 
+
 @dataclass
 class ParametersGeneticAlgorithm:
     dataset_name: str
-    qsar_method: str    
+    qsar_method: str
     descriptor_set_name: str
-    ad_measure: list[str]
+    ad_measure: List[str]
 
     splitting_name: str = "RND_REPRESENTATIVE"
 
-    feature_selection_method: str = feature_selection_method_genetic_algorithm 
+    feature_selection_method: str = feature_selection_method_genetic_algorithm  # ensure this is defined
     hyperparameter_grid: Optional[Dict[str, Any]] = None
     feature_selection: bool = False
     remove_log_p_descriptors: bool = False
@@ -186,31 +190,32 @@ class ParametersGeneticAlgorithm:
     num_generations: int = 100
     num_optimizers: int = 100
     num_jobs: int = 4
-    n_threads: Optional[int] = None  # set to an int (e.g., 4) if you want to pin threads
-    max_length: int = 24  # max number of variables, used by Nate's code
-    max_features = 20
-    descriptor_coefficient: float = 0.002
+    n_threads: Optional[int] = None
+    max_length: int = 24
+    max_features: int = 30
+
+    descriptor_coefficient: float = 0.006
+    alpha: float = 0.7
+
     threshold: int = 1
-    elitism = True
-    crossover_probability = 0.9
-    mutation_probability = 0.05
-    
+    elitism: bool = True
+    crossover_probability: float = 0.9
+    mutation_probability: float = 0.05
 
     use_wards: bool = False
     run_rfe: bool = True
     run_sfs: bool = True
-    n_features_to_select = 'auto' #not used
     
+    n_features_to_select: Union[int, str] = "auto"
+
     remove_fragment_descriptors: bool = True
     remove_acnt_descriptors: bool = True
-    use_wards: bool = False
 
     include_standardization_in_pmml: bool = False
     use_pmml_pipeline: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
-
 
 
 
@@ -236,8 +241,8 @@ class ModelLoader():
                 'file': binary_data,
                 'updated_at': datetime.now(),
                 'updated_by': username,
-                'fk_file_type_id': fk_file_type_id,  # Example foreign key value
-                'fk_model_id': fk_model_id  # Example foreign key value
+                'fk_file_type_id': fk_file_type_id,  
+                'fk_model_id': fk_model_id
             }
         
             new_id = self.dbl.create_row(table="model_files", record=record)
@@ -633,6 +638,11 @@ class ModelLoader():
         filePathOutHistogram = os.path.join(folder_path, "histogram.png")
         image_id = self.load_model_file(filePathOutHistogram, user, fk_model_id, 4)
         image_id = logging.info(f"Histogram plot loaded to db with id: {image_id}")
+            
+        filePathOutExcelSummary = os.path.join(folder_path, "detailed_summary.xlsx")
+        image_id = self.load_model_file(filePathOutExcelSummary, user, fk_model_id, 2)
+        image_id = logging.info(f"Excel summary loaded to db with id: {image_id}")
+        
         
         # TODO: created detailed spreadsheet and store in the database
     
@@ -694,7 +704,7 @@ class ModelBuilder:
     #     # print(df_predictions_all.shape)
     #
     #     mean_exp_training = df_predictions_all["exp"].mean()
-    #     cv_stats = sc.calculate_continuous_statistics(df_predictions_all, mean_exp_training, "_CV_Training")
+    #     cv_stats = calculate_continuous_statistics(df_predictions_all, mean_exp_training, "_CV_Training")
     #     # print('cross validation stats:\n', json.dumps(cv_stats, indent=4))        
     #
     #     logging.info(f"Done running CV calculations")
@@ -706,14 +716,14 @@ class ModelBuilder:
         df_predictions = pd.read_json(StringIO(json_predictions), orient="records")
         
         mean_exp_training = df_predictions["exp"].mean()
-        stats = sc.calculate_continuous_statistics(df_predictions, mean_exp_training, tag)
+        stats = calculate_continuous_statistics(df_predictions, mean_exp_training, tag)
     
-        logging.info("Done running CV calculations")
+        logging.info("Done running predictions")
         return df_predictions, stats
     
     
     @staticmethod
-    def crossvalidate(df_cv_dict, params, embedding):
+    def crossvalidate(df_cv_dict, params, embedding, is_binary):
         logging.info("Start running CV calculations ...")
     
         def _fold_predictions():
@@ -738,10 +748,16 @@ class ModelBuilder:
         
         # print_first_row(df_predictions_all)
     
-        mean_exp_training = df_predictions_all["exp"].mean()
-        cv_stats = sc.calculate_continuous_statistics(
-            df_predictions_all, mean_exp_training, "_CV_Training"
-        )
+        if is_binary:
+            cv_stats = calculate_binary_statistics(
+                df_predictions_all, 0.5, "_CV_Training"
+            )
+            
+        else:
+            mean_exp_training = df_predictions_all["exp"].mean()
+            cv_stats = calculate_continuous_statistics(
+                df_predictions_all, mean_exp_training, "_CV_Training"
+            )
     
         logging.info("Done running CV calculations")
         return df_predictions_all, cv_stats
@@ -773,9 +789,10 @@ class ModelBuilder:
         # self.crossvalidate(session, dataset_name, descriptorSetName, params, embedding)
 
     @staticmethod
-    def build_and_test_model(df_training, df_prediction, params, embedding):
+    def build_and_test_model(df_training, df_prediction, cv, params, embedding, is_binary):
+        
         model = call_build_model_with_preselected_descriptors_from_df(params, df_training.copy(), df_prediction.copy(),
-                                                                      descriptor_names_tsv=embedding,
+                                                                      cv, descriptor_names_tsv=embedding,
                                                                       filterColumnsInBothSets=True)
         
         # generate predictions for test set:
@@ -789,9 +806,15 @@ class ModelBuilder:
         # print(json.dumps(first_row_dict, indent=4))
     
         # calculate stats for test set
-        mean_exp_training = df_training["Property"].mean()
-        test_stats = sc.calculate_continuous_statistics(df_predictions_test, mean_exp_training, "_Test")
-        training_stats = sc.calculate_continuous_statistics(df_predictions_training, mean_exp_training, "_Training")
+        
+        if is_binary:
+            test_stats = calculate_binary_statistics(df_predictions_test, 0.5, "_Test")
+            training_stats = calculate_binary_statistics(df_predictions_training, 0.5, "_Training")
+
+        else:
+            mean_exp_training = df_training["Property"].mean()
+            test_stats = calculate_continuous_statistics(df_predictions_test, mean_exp_training, "_Test")        
+            training_stats = calculate_continuous_statistics(df_predictions_training, mean_exp_training, "_Training")
                 
         return df_predictions_training, df_predictions_test, training_stats, test_stats, model
                 
@@ -799,14 +822,15 @@ class ModelBuilder:
     
     @staticmethod
     def build_and_test_model2(df_training, df_prediction, params, embedding):
-        model = call_build_model_with_preselected_descriptors_from_df(params, df_training, df_prediction,
+        
+        model = call_build_model_with_preselected_descriptors_from_df(params, df_training, df_prediction, cv=None,
                                                   descriptor_names_tsv=embedding, filterColumnsInBothSets=True)
         # generate predictions for test set:
         json_predictions = call_do_predictions_from_df(df_prediction, model)
         df_predictions = pd.read_json(StringIO(json_predictions), orient="records")
         
         # mean_exp_training = df_training["Property"].mean()
-        # test_stats = sc.calculate_continuous_statistics(df_predictions, mean_exp_training, "_Test")
+        # test_stats = calculate_continuous_statistics(df_predictions, mean_exp_training, "_Test")
         # print(test_stats["MAE_Test"])
         return df_predictions
 
@@ -814,21 +838,22 @@ class ModelBuilder:
 class EmbeddingGenerator:
 
     @staticmethod
-    def feature_selection(df_training, df_prediction, params):
+    def feature_selection(df_training, df_prediction, params, cv = 5):
         # ga_methods = ['knn', 'reg','las']
         # imp_methods = ['rf', 'xgb']
         
         # print(f"here1:{params.n_features_to_select}")
-        
+
         if params.feature_selection_method == feature_selection_method_genetic_algorithm:
-            embedding, _ = call_build_embedding_ga_db(df_training, df_prediction, params)
+            embedding, _ = call_build_embedding_ga_db(df_training, df_prediction, params, cv)
         
         elif params.feature_selection_method == feature_selection_method_importance:
             ip = params
             embedding, _ = call_build_embedding_importance_from_df(params.qsar_method, df_training, df_prediction, ip.remove_log_p_descriptors,
                                                        ip.n_threads, ip.num_generations, ip.use_permutative, ip.run_rfe,
                                                        ip.fraction_of_max_importance, ip.min_descriptor_count, ip.max_descriptor_count,
-                                                       ip.use_wards, hyperparameter_grid=ip.hyperparameter_grid, run_sfs=ip.run_sfs)
+                                                       ip.use_wards, hyperparameter_grid=ip.hyperparameter_grid, run_sfs=ip.run_sfs,
+                                                       cv=cv, descriptor_coefficient=ip.descriptor_coefficient, alpha=ip.alpha)
 
         elif params.feature_selection_method == feature_selection_method_group_contribution:
             # embedding = call_build_embedding_group_contribution_from_df(df_training, params.min_count)
@@ -1322,8 +1347,9 @@ def set_hyper_parameters(qsar_method, feature_selection, descriptor_set_name, sp
         params.remove_acnt_descriptors = True        
 
     elif qsar_method == "las": 
-        grid = {'estimator__alpha': [np.round(i, 5) for i in np.logspace(-4, 0, num=20)],
-                                    'estimator__max_iter': [1000000]}
+        # grid = {'estimator__alpha': [np.round(i, 5) for i in np.logspace(-4, 0, num=20)],
+        #                             'estimator__max_iter': [1000000]}
+        grid = {}
         params = ParametersGeneticAlgorithm(qsar_method=qsar_method, hyperparameter_grid=grid, feature_selection=feature_selection,
                                             descriptor_set_name=descriptor_set_name, dataset_name=dataset_name,
                                             splitting_name=splitting_name, ad_measure=ad_measure)
@@ -1346,70 +1372,211 @@ def set_hyper_parameters(qsar_method, feature_selection, descriptor_set_name, sp
         
 
 def runAD(df_training, df_prediction, params, embedding, df_predictions, ad_measure, stats_dict):
+    
     df_ad_output, _ = adu.generate_applicability_domain_with_preselected_descriptors_from_dfs(
         train_df=df_training.copy(), test_df=df_prediction.copy(),
         remove_log_p=params.remove_log_p_descriptors,
         embedding=embedding, applicability_domain=ad_measure,
         filterColumnsInBothSets=False,
-        returnTrainingAD=False)
+        returnTrainingAD=False
+    )
     
+    # AD coverage (fraction of test rows inside AD)
     count = df_ad_output.shape[0]
     count_inside = df_ad_output['AD'].eq(True).sum()
-    coverage = count_inside / count
+    coverage_ad = count_inside / count if count else float('nan')
     
-    # print_first_row(df_ad_output)
+    # print(ad_measure, count_inside, count - count_inside)
+    
     colAD = "AD_" + ad_measure.replace(" ", "_")
     
-    # append the AD to the predictions dataframe:
-    df_predictions = df_predictions.merge(df_ad_output.rename(columns={'idTest':'id'})[['id', 'AD']], on='id', how='left').rename(columns={'AD':colAD})
- 
-    mae_inside = (df_predictions.loc[df_predictions[colAD].eq(True), 'exp'] 
-              -df_predictions.loc[df_predictions[colAD].eq(True), 'pred']).abs().mean()
+    # Append AD flag to predictions
+    df_predictions = (
+        df_predictions
+        .merge(
+            df_ad_output.rename(columns={'idTest': 'id'})[['id', 'AD']],
+            on='id', how='left'
+        )
+        .rename(columns={'AD': colAD})
+    )
 
-    mae_outside = (df_predictions.loc[df_predictions[colAD].eq(False), 'exp'] 
-              -df_predictions.loc[df_predictions[colAD].eq(False), 'pred']).abs().mean()
+    # Determine if task is binary (exp in {0,1}, ignoring NaNs)
+    exp_nonnull = df_predictions['exp'].dropna()
+    is_binary = exp_nonnull.isin([0, 1]).all()
 
-    mae_ratio = mae_outside / mae_inside
-       
-    stats = {"ad_measure":ad_measure, "MAE_Test_inside_AD": mae_inside, "MAE_Test_outside_AD": mae_outside, "mae_ratio": mae_ratio,
-             "Coverage_Test":coverage}    
+    # Subsets: inside and outside AD, only exp/pred columns are needed by metrics
+    inside_mask = df_predictions[colAD].eq(True)
+    outside_mask = df_predictions[colAD].eq(False)
+    df_inside = df_predictions.loc[inside_mask, ['exp', 'pred']].copy()
+    df_outside = df_predictions.loc[outside_mask, ['exp', 'pred']].copy()
+
+    # Helpers
+    def safe_div(n, d):
+        try:
+            return n / d if (d is not None and d != 0 and not (isinstance(d, float) and math.isnan(d))) else float('nan')
+        except ZeroDivisionError:
+            return float('nan')
+
+    # Compute statistics using the provided functions
+    if is_binary:
+        cutoff = getattr(params, 'cutoff', getattr(params, 'classification_cutoff', 0.5))
+
+        stats_inside = calculate_binary_statistics(df_inside, cutoff=cutoff, tag=pc.TAG_TEST)
+        stats_outside = calculate_binary_statistics(df_outside, cutoff=cutoff, tag=pc.TAG_TEST)
+        
+        ba_inside = stats_inside.get(pc.BALANCED_ACCURACY + pc.TAG_TEST, float('nan'))
+        ba_outside = stats_outside.get(pc.BALANCED_ACCURACY + pc.TAG_TEST, float('nan'))
+        ba_ratio = safe_div(ba_inside, ba_outside)
+
+        stats = {
+            "ad_measure": ad_measure,
+            "BA_Test_inside_AD": ba_inside,
+            "BA_Test_outside_AD": ba_outside,
+            "ba_ratio": ba_ratio,
+            "Coverage_Test": coverage_ad
+        }
+
+    else:
+        # Mean of training exp for Q2/R2 in continuous stats
+        mean_exp_training = float('nan') #not needed for calculating MAE inside and outside
+
+        # calculate_continuous_statistics raises if no valid predictions; handle gracefully
+        try:
+            stats_inside = calculate_continuous_statistics(df_inside, mean_exp_training=mean_exp_training, tag=pc.TAG_TEST)
+            mae_inside = stats_inside.get(pc.MAE + pc.TAG_TEST, float('nan'))
+        except Exception:
+            mae_inside = float('nan')
+
+        try:
+            stats_outside = calculate_continuous_statistics(df_outside, mean_exp_training=mean_exp_training, tag=pc.TAG_TEST)
+            mae_outside = stats_outside.get(pc.MAE + pc.TAG_TEST, float('nan'))
+        except Exception:
+            mae_outside = float('nan')
+
+        mae_ratio = safe_div(mae_outside, mae_inside)
+
+        stats = {
+            "ad_measure": ad_measure,
+            "MAE_Test_inside_AD": mae_inside,
+            "MAE_Test_outside_AD": mae_outside,
+            "mae_ratio": mae_ratio,
+            "Coverage_Test": coverage_ad
+        }
+
     stats_dict[ad_measure] = stats
-
-    # product = mae_ratio * coverage
-    # print(f"ad_measure={ad_measure}, mae_ratio={mae_ratio:.2f}, Coverage={coverage:.2f}, Product={product:.2f}")
-     
     return df_predictions
 
+
+
+# def generate_consensus_ad(df_predictions, stats_dict, ad_measure_final):
+#     # Build list of AD columns
+#     colsAD = [f"AD_{ad.replace(' ', '_')}" for ad in ad_measure_final]
+#
+#     # Rows where all AD flags are True (inside consensus AD)
+#     mask_all_true = df_predictions[colsAD].eq(True).all(axis=1)
+#
+#     # MAE inside the consensus AD
+#     mae_inside = (df_predictions.loc[mask_all_true, 'exp'] - 
+#                   df_predictions.loc[mask_all_true, 'pred']).abs().mean()
+#
+#     # Rows outside consensus AD: at least one AD flag is False
+#     mask_outside = ~mask_all_true
+#
+#     # MAE outside the consensus AD
+#     mae_outside = (df_predictions.loc[mask_outside, 'exp'] - 
+#                    df_predictions.loc[mask_outside, 'pred']).abs().mean()
+#
+#     mae_ratio = mae_outside / mae_inside
+#
+#     ad_measure = " and ".join(ad_measure_final)
+#
+#     total_rows = len(df_predictions)
+#     coverage = (mask_all_true.sum() / total_rows) if total_rows > 0 else float('nan')
+#
+#     stats = {"ad_measure":ad_measure, "MAE_Test_inside_AD": mae_inside, "MAE_Test_outside_AD": mae_outside, "mae_ratio": mae_ratio,
+#              "Coverage_Test":coverage}    
+#     stats_dict[ad_measure] = stats
+
+
+
+# from your_metrics_script import calculate_continuous_statistics, calculate_binary_statistics
 
 def generate_consensus_ad(df_predictions, stats_dict, ad_measure_final):
     # Build list of AD columns
     colsAD = [f"AD_{ad.replace(' ', '_')}" for ad in ad_measure_final]
 
-    # Rows where all AD flags are True (inside consensus AD)
+    # Inside/outside consensus AD masks
     mask_all_true = df_predictions[colsAD].eq(True).all(axis=1)
-
-    # MAE inside the consensus AD
-    mae_inside = (df_predictions.loc[mask_all_true, 'exp'] - 
-                  df_predictions.loc[mask_all_true, 'pred']).abs().mean()
-
-    # Rows outside consensus AD: at least one AD flag is False
     mask_outside = ~mask_all_true
 
-    # MAE outside the consensus AD
-    mae_outside = (df_predictions.loc[mask_outside, 'exp'] - 
-                   df_predictions.loc[mask_outside, 'pred']).abs().mean()
-                                      
-    mae_ratio = mae_outside / mae_inside
-    
-    ad_measure = " and ".join(ad_measure_final)
-    
+    # Coverage of consensus AD
     total_rows = len(df_predictions)
     coverage = (mask_all_true.sum() / total_rows) if total_rows > 0 else float('nan')
-    
-    stats = {"ad_measure":ad_measure, "MAE_Test_inside_AD": mae_inside, "MAE_Test_outside_AD": mae_outside, "mae_ratio": mae_ratio,
-             "Coverage_Test":coverage}    
-    stats_dict[ad_measure] = stats
 
+    # Prepare subsets for consistency
+    df_inside = df_predictions.loc[mask_all_true, ['exp', 'pred']].copy()
+    df_outside = df_predictions.loc[mask_outside, ['exp', 'pred']].copy()
+    valid_inside = df_inside.dropna(subset=['exp', 'pred'])
+    valid_outside = df_outside.dropna(subset=['exp', 'pred'])
+
+    # Check if task is binary (all non-null exp ∈ {0,1})
+    exp_nonnull = df_predictions['exp'].dropna()
+    is_binary = exp_nonnull.isin([0, 1]).all()
+
+    def safe_div(n, d):
+        return n / d if d else float('nan')
+
+    ad_measure = " and ".join(ad_measure_final)
+
+    if is_binary:
+        # Balanced Accuracy path
+        cutoff = 0.5  # change if you have a project-wide threshold
+
+        stats_inside = calculate_binary_statistics(valid_inside, cutoff=cutoff, tag=pc.TAG_TEST)
+        stats_outside = calculate_binary_statistics(valid_outside, cutoff=cutoff, tag=pc.TAG_TEST)
+
+        ba_inside = stats_inside.get(pc.BALANCED_ACCURACY + pc.TAG_TEST, float('nan'))
+        ba_outside = stats_outside.get(pc.BALANCED_ACCURACY + pc.TAG_TEST, float('nan'))
+        ba_ratio = safe_div(ba_inside, ba_outside) 
+
+        # print('for consensus ad:')
+        # print('rows outside', df_outside.shape[0])
+        # print('stats_outside', stats_outside)
+
+        stats = {
+            "ad_measure": ad_measure,
+            "BA_Test_inside_AD": ba_inside,
+            "BA_Test_outside_AD": ba_outside,
+            "ba_ratio": ba_ratio,
+            "Coverage_Test": coverage
+        }
+    else:
+        # Continuous (MAE) path via calculate_continuous_statistics
+        # mean_exp_training not needed for MAE; pass NaN and only read MAE from the result
+        try:
+            stats_inside = calculate_continuous_statistics(df_inside, mean_exp_training=float('nan'), tag=pc.TAG_TEST)
+            mae_inside = stats_inside.get(pc.MAE + pc.TAG_TEST, float('nan'))
+        except Exception:
+            mae_inside = float('nan')
+
+        try:
+            stats_outside = calculate_continuous_statistics(df_outside, mean_exp_training=float('nan'), tag=pc.TAG_TEST)
+            mae_outside = stats_outside.get(pc.MAE + pc.TAG_TEST, float('nan'))
+                        
+        except Exception:
+            mae_outside = float('nan')
+
+        mae_ratio = safe_div(mae_outside, mae_inside)
+
+        stats = {
+            "ad_measure": ad_measure,
+            "MAE_Test_inside_AD": mae_inside,
+            "MAE_Test_outside_AD": mae_outside,
+            "mae_ratio": mae_ratio,
+            "Coverage_Test": coverage
+        }
+
+    stats_dict[ad_measure] = stats
 
 def add_log_p_martin_columns(df_training, df_prediction, cross_validate, df_cv_dict=None):
     """
@@ -1458,17 +1625,16 @@ def check_for_inchi_key_matches(df_training, df_prediction_ext):
         if ik in smiles_to_key_ext:
             print("Have ext set match in training set:", ik, smiles_to_key_ext[ik])
 
-
+@staticmethod
 def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None, cross_validate=True,
                 run_AD=True, feature_selection=True, fs_previous_embedding=True, params=None,
                 descriptor_set_name="WebTEST-default", splitting_name="RND_REPRESENTATIVE",
                 ad_measure_model=None, add_LOGP_Martin=False, write_to_db=False, user="tmarti02", create_detailed_excel=True,
-                create_unique_excel=True):
+                create_unique_excel=True, append_to_models_folder=""):
     # TODO: reg model using descriptors from XGB or RF model
     # TODO: gcm model that uses reg with fragment descriptors such that it deletes rows with less than 3 instances and the associated rows
     # TODO does add the LOGP predicted from my LOGP model improve the results?
     splitting_name = "RND_REPRESENTATIVE"
-    
     try:
         engine = getEngine()
         session = getSession()
@@ -1516,6 +1682,10 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         
         # ******************************************************************************************************
         # Print main info:
+        
+        print("\n")
+        
+        logging.info(f"Start dataset run")
         logging.info(f"dataset_name={dataset_name}")
         logging.info(f"qsar_method={qsar_method}")
         logging.info(f"descriptor_set_name={descriptor_set_name}")
@@ -1537,6 +1707,8 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         
         # make sure they match
         params.feature_selection = feature_selection
+        
+        # params.run_rfe = False
 
         # hyperparameter_grid = None # use default
         
@@ -1545,36 +1717,50 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         logging.info("start getting dataframes from db")
     
         df_training, df_prediction = du.get_training_prediction_instances(session, dataset_name, descriptor_set_name, params.splitting_name)
+        
         # print(df_training.shape)
-    
-    
-    
-        df_prediction_ext = None    
+        
+        s = df_training.iloc[:, 1]
+        is_binary = s.isin([0, 1]).all()
+        # print('is_binary', is_binary)
+        
+        df_prediction_ext = None
+        dataset_name_ext = None
+        
         if dataset_name == 'KOC v1 modeling':
             dataset_name_ext = 'KOC v1 external'
+        elif dataset_name == 'ECOTOX_2024_12_12_96HR_Fish_LC50_v3a modeling':
+            dataset_name_ext = 'QSAR_Toolbox_96HR_Fish_LC50_v3 modeling'    
+
+        if dataset_name_ext is not None:
             df_prediction_ext = du.get_instances_excluding(session, dataset_name_ext, dataset_name, descriptor_set_name)
-            
+
         
-        check_for_inchi_key_matches(df_training, df_prediction_ext)
+        # check_for_inchi_key_matches(df_training, df_prediction_ext)
         
         # print(json.dumps( smiles_to_key_training, indent = 4))
 
     
         df_cv_dict = None 
-        if cross_validate:
+        
+        if cross_validate: #TODO we should probably always run these calculations 
             df_cv_dict = du.get_training_cv_instances(session, dataset_name, descriptor_set_name)
+            X, y, cv, feature_cols  = du.make_cv_for_base_training(df_training, df_cv_dict, "ID", "Property") # get cv for use in RFE and SFS so that will use CV folds as the final stat reported as RMSE_CV_TRAINING
         
         if add_LOGP_Martin:
             df_training, df_prediction = add_log_p_martin_columns(df_training, df_prediction, cross_validate, df_cv_dict)
+        
+        # print(df_cv_dict)
+        
         
         logging.info("done getting dataframes from db")
         
         # ******************************************************************************************************
         # ---- Run feature selection and build model ----
         if feature_selection:
-            embedding = EmbeddingGenerator.feature_selection(df_training, df_prediction, params)
+            embedding = EmbeddingGenerator.feature_selection(df_training, df_prediction, params, cv)
             
-        df_pred_training, df_pred_test, training_stats, test_stats, model = ModelBuilder.build_and_test_model(df_training, df_prediction, params, embedding)
+        df_pred_training, df_pred_test, training_stats, test_stats, model = ModelBuilder.build_and_test_model(df_training, df_prediction, cv, params, embedding, is_binary)
                 
         if not feature_selection and fs_previous_embedding and qsar_method != 'gcm':
     
@@ -1585,15 +1771,17 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
                 logging.info(f"After RFE, {len(model.embedding)} descriptors: {model.embedding}")
                 
             if params.run_sfs:
-                run_sfs(model, df_training, params.n_features_to_select)
+                # run_sfs(model, df_training, params.n_features_to_select)
+                run_sfs(model, df_training) #iterative
                 logging.info(f"After SFS, {len(model.embedding)} descriptors: {model.embedding}")
     
             # redo model and predictions:
-            df_pred_training, df_pred_test, training_stats, test_stats, model = ModelBuilder.build_and_test_model(df_training, df_prediction, params, model.embedding)
+            df_pred_training, df_pred_test, training_stats, test_stats, model = ModelBuilder.build_and_test_model(df_training, df_prediction, params, model.embedding, is_binary)
             logging.info(f"After FS, embedding has {len(model.embedding)} descriptors: {model.embedding}")
 
+        # ---- Run cross validation calculations ----
         if cross_validate: 
-            df_pred_cv, cv_stats = ModelBuilder.crossvalidate(df_cv_dict, params, model.embedding)
+            df_pred_cv, cv_stats = ModelBuilder.crossvalidate(df_cv_dict, params, model.embedding, is_binary)
         
         ext_stats = None
         df_pred_ext = None
@@ -1603,9 +1791,6 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
             df_pred_ext, ext_stats = ModelBuilder.predict(model, df_prediction_ext, '_External')
             # print(df_pred_ext.shape)
 
-
-        
-                
         # df_training["inchi_key_qsar_ready"] = df_training["canon_qsar_smiles"].map(smiles_to_key_training)
 
         
@@ -1704,7 +1889,7 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         df_pred_test = add_source_chemical_info(df_pred_test, df_dps)
         df_pred_cv = add_source_chemical_info(df_pred_cv, df_dps)        # print_first_row(df_pred_cv)
         
-        
+        df_dps_ext = None
         if df_prediction_ext is not None:
             df_dps_ext = du.getMappedDatapoints(session, dataset_name_ext)
             df_pred_ext = add_source_chemical_info(df_pred_ext, df_dps_ext)
@@ -1729,7 +1914,8 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
             df_test_model=df_test_model,
             df_pv=df_pv,
             folder_embedding=folder_embedding,
-            create_unique_excel=create_unique_excel
+            create_unique_excel=create_unique_excel,
+            append_to_models_folder=append_to_models_folder
         )
 
         logging.info(f"test set stats={json.dumps(test_stats, indent=4)}")
@@ -1743,12 +1929,36 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         
         logging.info("run_data_set completed\n")
 
-        model.modelStatistics = {**training_stats, **cv_stats, **test_stats, **results_dict['model_statistics']['test_stats_AD'], **ext_stats}
+        # model.modelStatistics = {**training_stats, **cv_stats, **test_stats, **results_dict['model_statistics']['test_stats_AD'], **ext_stats}
+        
+        # Safely extract AD stats (could be missing or None)
+        ad_stats = (results_dict.get('model_statistics') or {}).get('test_stats_AD') or {}
+        
+        # Merge; any None becomes {} so it won’t break
+        model.modelStatistics = (
+            (training_stats or {})
+            | (cv_stats or {})
+            | (test_stats or {})
+            | ad_stats
+            | (ext_stats or {})
+        )
+        
         model.df_training = df_training  # df_training_model?
         model.df_prediction = df_prediction  # df_test_model?
         model.modelMethod = results_dict["model_details"].get("qsar_method", None)
         model.modelMethodDescription = results_dict["model_details"].get("qsar_method_description", None)
         
+        if qsar_method !='gcm':    
+            if ext_stats is None:
+                logging.info(f"all stats:\t{params.descriptor_coefficient}\t{test_stats['RMSE_Test']:.3f}\t{cv_stats['RMSE_CV_Training']:.3f}\t{len(model.embedding)}")
+            else:
+                logging.info(f"all stats:\t{params.descriptor_coefficient}\t{test_stats['RMSE_Test']:.3f}\t{cv_stats['RMSE_CV_Training']:.3f}\t{ext_stats['RMSE_External']:.3f}\t{len(model.embedding)}")   
+        else:
+            if ext_stats is None:
+                logging.info(f"all stats:\tN/A\t{test_stats['RMSE_Test']:.3f}\t{cv_stats['RMSE_CV_Training']:.3f}\t{len(model.embedding)}")
+            else:
+                logging.info(f"all stats:\tN/A\t{test_stats['RMSE_Test']:.3f}\t{cv_stats['RMSE_CV_Training']:.3f}\t{ext_stats['RMSE_External']:.3f}\t{len(model.embedding)}")
+            
         # logging.info(f"model description={json.dumps(json.loads(model.get_model_description()), indent=4)}")
 
         if create_detailed_excel:
@@ -1773,10 +1983,13 @@ class Results:
 
     @staticmethod
     def save_results(model, results_dict, df_pred_test, df_pred_training, df_pred_cv=None, df_pred_ext=None, df_test_model=None, df_pv=None,
-                     folder_embedding=None, create_unique_excel=True):
+                     folder_embedding=None, create_unique_excel=True, append_to_models_folder=""):
         params = results_dict["params"]
         
         # print (json.dumps(params))
+        # from pprint import pprint
+        # pprint(results_dict)
+        # print (json.dumps(results_dict))
     
         df_pred_test = prepare_df(df_pred_test)
         
@@ -1791,15 +2004,15 @@ class Results:
     
         if folder_embedding is not None:
             subfolder = subfolder + "_" + folder_embedding
-        
-        path_segments = [PROJECT_ROOT, "data", "models", params["dataset_name"], subfolder]
+            
+        path_segments = [PROJECT_ROOT, "data", "models"+append_to_models_folder, params["dataset_name"], subfolder]
         
         folder_path = os.path.join(*path_segments)
         
         logging.info(f"Results folder\n: {folder_path}")
         
         os.makedirs(folder_path, exist_ok=True)
-
+        
         identifier = int(time.time() * 1000)  # time in ms as identifier
         
         # prediction_csv_path = os.path.join(folder_path, f"predictions_{identifier}.csv")    
@@ -1832,12 +2045,13 @@ class Results:
         
         filePathOutHistogram = os.path.join(folder_path, "histogram.png")
         mtp.generateHistogram2(filePathOutHistogram, model.propertyName, model.unitsModel, mpsTraining, mpsTest, seriesNameTrain="Training set", seriesNameTest="Test set")
-        
-        filePathOutScatter = os.path.join(folder_path, "scatter_plot.png")
-        title = "Prediction results for " + model.propertyName
-        mtp.generateScatterPlot2(filePathOut=filePathOutScatter, title=title, unitName=model.unitsModel,
-                                 mpsTraining=mpsTraining, mpsTest=mpsTest,
-                                 seriesNameTrain="Training set (CV)", seriesNameTest="Test set")
+    
+        if not model.is_binary:
+            filePathOutScatter = os.path.join(folder_path, "scatter_plot.png")
+            title = "Prediction results for " + model.propertyName
+            mtp.generateScatterPlot2(filePathOut=filePathOutScatter, title=title, unitName=model.unitsModel,
+                                     mpsTraining=mpsTraining, mpsTest=mpsTest,
+                                     seriesNameTrain="Training set (CV)", seriesNameTest="Test set")
         
         return folder_path
     
@@ -1907,95 +2121,289 @@ class Results:
         return results_dict
 
     @staticmethod
-    def summarize_model_stats(dataset_name, excel_name="model_stats.xlsx", sheet_name="stats", col_width_pad=4, min_col_width=5):
-        """
-        Iterate subfolders, print model stats, collect them into a DataFrame,
-        and save to an Excel file in that folder.
+    def summarize_model_stats(
+        dataset_name,
+        excel_name="model_stats.xlsx",
+        sheet_name="stats",
+        col_width_pad=4,
+        min_col_width=5,
+        append_to_models_folder="",
+        continuous_stat_name="MAE",
+        binary_stat_name="BA"
+    ):
+        from pathlib import Path
+        import os, json
+        import numpy as np
+        import pandas as pd
     
-        Returns:
-            df_stats (pd.DataFrame): Summary table of runs and stats.
-            excel_path (str): Path to the saved Excel file.
-        """
-        
-        folder = os.path.join(PROJECT_ROOT, "data", "models", dataset_name)
+        folder = os.path.join(PROJECT_ROOT, "data", "models" + append_to_models_folder, dataset_name)
         os.makedirs(folder, exist_ok=True)
-        
+    
         print(folder)
+        print(f"\n\nStats for all models for {dataset_name}")
     
-        print("\n\nStats for all models for " + dataset_name)
-        print("Run\tMAE_Test\tMAE_Training_CV\tMAE_External\t#_variables")
+        rows = []
     
-        rows = []  # collect printed model_statistics for the dataframe
+        def to_float(v):
+            try:
+                f = float(v)
+                if np.isnan(f):
+                    return None
+                return f
+            except Exception:
+                return None
     
-        for entry in Path(folder).iterdir():
-            if entry.is_dir():
-                json_path = entry / "results.json"
-                if json_path.is_file():
-                    try:
-                        with json_path.open("r", encoding="utf-8") as f:
-                            
-                            results = json.load(f)
-                            
-                            model_statistics = results["model_statistics"]  # this is a dict
+        def fmt3(v):
+            try:
+                if v is None:
+                    return "N/A"
+                f = float(v)
+                if np.isnan(f):
+                    return "N/A"
+                return f"{f:.3f}"
+            except Exception:
+                return "N/A"
     
-                            # print(json.dumps(model_statistics,indent=4))
-                            # Extract values safely
-                            mae_test_val = model_statistics.get("test_stats", {}).get("MAE_Test", None)
-                            mae_cv_val = model_statistics.get("cv_stats", {}).get("MAE_CV_Training", None)
-                            mae_ext_val = model_statistics.get("ext_stats", {}).get("MAE_External", None)
+        # Collect rows (don’t print yet so we can decide header once)
+        for json_path in Path(folder).glob("*/results.json"):
+            try:
+                with json_path.open("r", encoding="utf-8") as f:
+                    results = json.load(f)
+            except json.JSONDecodeError as e:
+                print(f"Skipping {json_path}: invalid JSON ({e})")
+                continue
     
-                            model_details = results["model_details"]
+            model_statistics = results.get("model_statistics", {})
+            model_details = results.get("model_details", {})
+            run_name = json_path.parent.name
     
-                            # Embedding length
-                            if "embedding_len" in model_details:
-                                lenEmbedding = model_details["embedding_len"]
-                            elif "embedding" in model_details and isinstance(model_details["embedding"], (list, tuple)):
-                                lenEmbedding = len(model_details["embedding"])
-                            else:
-                                lenEmbedding = None
-                            
-                            embedding = None
-                            if lenEmbedding is not None and lenEmbedding < 150:
-                                embedding = model_details.get("embedding", [])
-                                embedding = ", ".join(embedding) if isinstance(embedding, (list, tuple)) else str(embedding)
+            is_binary = bool(model_details.get("is_binary", False))
+            stat = binary_stat_name if is_binary else continuous_stat_name
     
-                            # Format for printing (and store as strings to match the print)
-                            mae_test_str = f"{mae_test_val:.3f}" if isinstance(mae_test_val, (int, float)) else "N/A"
-                            mae_cv_str = f"{mae_cv_val:.3f}"   if isinstance(mae_cv_val, (int, float)) else "N/A"
-                            mae_ext_str = f"{mae_ext_val:.3f}"   if isinstance(mae_ext_val, (int, float)) else "N/A"
-                            lenEmb_str = str(lenEmbedding) if lenEmbedding is not None else "N/A"
+            test_val = to_float(model_statistics.get("test_stats", {}).get(f"{stat}_Test"))
+            cv_val   = to_float(model_statistics.get("cv_stats", {}).get(f"{stat}_CV_Training"))
+            ext_val  = to_float(model_statistics.get("ext_stats", {}).get(f"{stat}_External"))
     
-                            print(f"{entry.name}\t{mae_test_str}\t{mae_cv_str}\t{mae_ext_str}\t{lenEmb_str}")
+            # Embedding length and optional short embedding string
+            if "embedding_len" in model_details:
+                len_embedding = model_details["embedding_len"]
+            elif isinstance(model_details.get("embedding"), (list, tuple)):
+                len_embedding = len(model_details["embedding"])
+            else:
+                len_embedding = None
     
-                            rows.append({
-                                "Run": entry.name,
-                                "MAE_Test": float(mae_test_str) if mae_test_str != "N/A" else None,
-                                "MAE_Training_CV": float(mae_cv_str) if mae_cv_str != "N/A" else None,
-                                "MAE_External": float(mae_ext_str) if mae_ext_str != "N/A" else None,
-                                "#_variables": int(lenEmb_str) if lenEmb_str != "N/A" else None,
-                                "Embedding": embedding if embedding is not None else None
-                            })
+            embedding_str = None
+            
+            if isinstance(len_embedding, int):
+                emb = model_details.get("embedding", [])
+                embedding_str = ", ".join(emb) if isinstance(emb, (list, tuple)) else str(emb)
     
-                    except json.JSONDecodeError as e:
-                        print(f"Skipping {json_path}: invalid JSON ({e})")
+            if len(embedding_str)>100:
+                embedding_str = embedding_str[:100]+"..."
     
-        # Save the collected results to Excel in the same folder
-        df_stats = pd.DataFrame(rows, columns=["Run", "MAE_Test", "MAE_Training_CV","MAE_External", "#_variables", "Embedding"])
+            rows.append({
+                "Run": run_name,
+                "Metric": stat,  # which metric these numbers represent (MAE or BA)
+                f"{stat}_Test": test_val,
+                f"{stat}_Training_CV": cv_val,
+                f"{stat}_External": ext_val,
+                "#_variables": int(len_embedding) if isinstance(len_embedding, int) else None,
+                "Embedding": embedding_str
+            })
+    
+        if not rows:
+            df_stats = pd.DataFrame(columns=[
+                "Run", f"{continuous_stat_name}_Test", f"{continuous_stat_name}_Training_CV",
+                f"{continuous_stat_name}_External", "#_variables", "Embedding", "Metric"
+            ])
+            excel_path = os.path.join(folder, excel_name)
+            df_stats.to_excel(excel_path, index=False)
+            print(f"No models found. Created empty summary: {excel_path}")
+            return df_stats, excel_path
+    
+        # Decide homogeneous vs mixed and print header once
+        metrics_in_rows = sorted(set(r["Metric"] for r in rows))
+        if len(metrics_in_rows) == 1:
+            stat = metrics_in_rows[0]
+            print(f"Run\t{stat}_Test\t{stat}_Training_CV\t{stat}_External\t#_variables")
+            for r in rows:
+                print(f"{r['Run']}\t{fmt3(r.get(f'{stat}_Test'))}\t{fmt3(r.get(f'{stat}_Training_CV'))}\t"
+                      f"{fmt3(r.get(f'{stat}_External'))}\t{r.get('#_variables', 'N/A')}")
+            # Build homogeneous DataFrame (only the active metric’s columns)
+            columns = ["Run", f"{stat}_Test", f"{stat}_Training_CV", f"{stat}_External", "#_variables", "Embedding"]
+            df_stats = pd.DataFrame(rows).reindex(columns=columns)
+        else:
+            # Mixed: print generic header once, include Metric column
+            print("Run\tMetric\tTest\tTraining_CV\tExternal\t#_variables")
+            for r in rows:
+                stat_row = r["Metric"]
+                print(f"{r['Run']}\t{stat_row}\t{fmt3(r.get(f'{stat_row}_Test'))}\t"
+                      f"{fmt3(r.get(f'{stat_row}_Training_CV'))}\t{fmt3(r.get(f'{stat_row}_External'))}\t"
+                      f"{r.get('#_variables', 'N/A')}")
+            # Include both MAE_* and BA_* columns in DataFrame; fill whichever applies per row
+            columns = [
+                "Run",
+                f"{continuous_stat_name}_Test", f"{continuous_stat_name}_Training_CV", f"{continuous_stat_name}_External",
+                f"{binary_stat_name}_Test", f"{binary_stat_name}_Training_CV", f"{binary_stat_name}_External",
+                "#_variables", "Embedding", "Metric"
+            ]
+            # Ensure all expected keys exist in each row
+            for r in rows:
+                for c in columns:
+                    r.setdefault(c, None)
+            df_stats = pd.DataFrame(rows).reindex(columns=columns)
+    
         excel_path = os.path.join(folder, excel_name)
     
+        # Write with 3-decimal display. Simple approach: float_format writes strings with 3 decimals.
         with pd.ExcelWriter(excel_path, engine="xlsxwriter") as writer:
-            df_stats.to_excel(writer, sheet_name=sheet_name, index=False)
+            df_stats.to_excel(writer, sheet_name=sheet_name, index=False, float_format="%.3f")
     
-            # Add autofilter and freeze header row
             ws = writer.sheets[sheet_name]
             nrows, ncols = df_stats.shape
             ws.autofilter(0, 0, nrows, ncols - 1)
             ws.freeze_panes(1, 0)
-            ExcelCreator.set_column_width(writer, sheet_name=sheet_name, df=df_stats, col_width_pad=col_width_pad, min_col_width=min_col_width, how="full")
+    
+            # Set column widths (if your helper does this)
+            ExcelCreator.set_column_width(
+                writer,
+                sheet_name=sheet_name,
+                df=df_stats,
+                col_width_pad=col_width_pad,
+                min_col_width=min_col_width,
+                how="full"
+            )
+    
+        # Write HTML summary using your helper
+        html_path = Results.write_model_stats_html(
+            df_stats=df_stats,
+            dataset_name=dataset_name,
+            output_folder=folder,
+            excel_path=excel_path,
+            html_name=None
+        )
     
         print(f"Saved summary to: {excel_path}")
-        return df_stats, excel_path    
+        print(f"Saved HTML summary to: {html_path}")
+        return df_stats, excel_path
+        
 
+
+    @staticmethod
+    def write_model_stats_html(df_stats, dataset_name, output_folder, excel_path, html_name=None):
+        """
+        Save a simple HTML summary page for model stats, with the table constrained
+        to 100% width and the 'Embedding' (descriptor) column wrapping.
+        - Displays numeric metrics with exactly 3 decimal places in HTML.
+        - Renders NaN/None as blank strings.
+        """
+        import os
+        from datetime import datetime
+        import pandas as pd
+    
+        if html_name is None:
+            base_name = os.path.splitext(os.path.basename(excel_path))[0] or "model_stats"
+            html_name = f"{base_name}.html"
+    
+        html_path = os.path.join(output_folder, html_name)
+    
+        # Compute CSS nth-child index (1-based) for the Embedding column (so it wraps)
+        try:
+            embed_idx = int(df_stats.columns.get_loc("Embedding")) + 1
+        except Exception:
+            embed_idx = df_stats.shape[1]
+    
+        # Identify metric columns that should be rendered with 3 decimals
+        metric_suffixes = ("_Test", "_Training_CV", "_External")
+        metric_cols = [c for c in df_stats.columns if any(c.endswith(sfx) for sfx in metric_suffixes)]
+    
+        # Make a copy and coerce metric columns to numeric so float_format applies
+        df_html = df_stats.copy()
+        if metric_cols:
+            df_html[metric_cols] = df_html[metric_cols].apply(pd.to_numeric, errors="coerce")
+    
+        # Float formatter for to_html (3 decimals for all floats)
+        fmt3 = lambda x: f"{x:.3f}"
+    
+        # Generate HTML table with 3-decimal float rendering and blanks for NaN
+        table_html = df_html.to_html(
+            index=False,
+            classes="stats-table",
+            border=0,
+            justify="center",
+            na_rep="",
+            float_format=fmt3
+        )
+    
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+        html_doc = f"""<!DOCTYPE html>
+    <html lang="en">
+    <head>
+    <meta charset="utf-8" />
+    <title>Model Stats - {dataset_name}</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      body {{
+        font-family: Arial, Helvetica, sans-serif;
+        margin: 20px;
+        color: #222;
+        background-color: #fff;
+      }}
+      h1 {{
+        font-size: 1.5rem;
+        margin-bottom: 0.25rem;
+      }}
+      .meta {{
+        color: #666;
+        margin-bottom: 1rem;
+      }}
+      table.stats-table {{
+        width: 100%;
+        max-width: 100%;
+        border-collapse: collapse;
+        table-layout: auto; /* allow Embedding column to wrap */
+      }}
+      table.stats-table th, table.stats-table td {{
+        border: 1px solid #ddd;
+        padding: 8px 10px;
+        text-align: left;
+        vertical-align: top;
+        white-space: nowrap; /* default: keep compact */
+      }}
+      table.stats-table th {{
+        background-color: #f5f5f5;
+        position: sticky;
+        top: 0;
+        z-index: 1;
+      }}
+      table.stats-table tr:nth-child(even) td {{
+        background-color: #fafafa;
+      }}
+      /* Make the Embedding (descriptor) column wrap lines */
+      table.stats-table th:nth-child({embed_idx}), 
+      table.stats-table td:nth-child({embed_idx}) {{
+        white-space: normal;
+        overflow-wrap: anywhere;   /* modern browsers */
+        word-break: break-word;    /* fallback */
+      }}
+    </style>
+    </head>
+    <body>
+      <h1>Model Stats - {dataset_name}</h1>
+      <div class="meta">Generated: {timestamp}</div>
+      {table_html}
+      <div class="footer" style="margin-top: 1rem; font-size: 0.9rem; color: #666;">
+        Saved Excel: {os.path.basename(excel_path)}
+      </div>
+    </body>
+    </html>
+    """
+    
+        with open(html_path, "w", encoding="utf-8") as f:
+            f.write(html_doc)
+    
+        return html_path
 
 def update_tester_page():
     from dotenv import load_dotenv
@@ -2006,7 +2414,6 @@ def update_tester_page():
 
     # ml.load_model_file(file_path, "tmarti02", 1670, 5)
     ml.update_model_file(file_path, "tmarti02", 1670, 5)
-
 
 if __name__ == '__main__':
     update_tester_page()

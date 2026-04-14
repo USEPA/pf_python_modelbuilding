@@ -893,13 +893,12 @@ def run_episuite(
     url = "https://episuite.app/EpiWebSuite/api/submit"
     PROJECT_ROOT = os.getenv("PROJECT_ROOT")
 
-    dataset_name = "KOC v1 modeling"
-    property_name = "Koc"
+    # dataset_name = "KOC v1 modeling"
+    # property_name = "Koc"
 
     # Examples:
-    # dataset_name = 'ECOTOX_2024_12_12_96HR_Fish_LC50_v3 modeling'
-    # dataset_name = 'ECOTOX_2024_12_12_96HR_Fish_LC50_v3a modeling'
-    # property = "96 hr Fish LC50"
+    dataset_name = 'ECOTOX_2024_12_12_96HR_Fish_LC50_v3a modeling'
+    property_name = "96 hr Fish LC50"
 
     base_dir = Path(PROJECT_ROOT) / "data" / "models" / dataset_name
     episuite_dir = base_dir / "episuite"
@@ -1021,7 +1020,7 @@ def run_episuite(
     for split in splits:
         build_split_html(
             episuite_dir,
-            property,
+            property_name,
             split,
             summaries[split],
             columns_per_row=max_cols_per_row,

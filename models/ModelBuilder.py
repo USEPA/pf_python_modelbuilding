@@ -41,7 +41,7 @@ from sklearn_pmml_model.svm import PMMLSVR
 from sklearn_pmml_model.neighbors import PMMLKNeighborsRegressor
 from sklearn_pmml_model.neighbors import PMMLKNeighborsClassifier
 
-from sklearn.model_selection import GridSearchCV, KFold, cross_val_score
+from sklearn.model_selection import GridSearchCV, KFold, StratifiedKFold, cross_val_score
 from sklearn.metrics import balanced_accuracy_score
 
 import numpy as np
@@ -495,7 +495,7 @@ class Model:
             parameters[key] = self.hyperparameter_grid[key][0]
         return parameters
 
-    def build_model(self, use_pmml_pipeline, include_standardization_in_pmml, descriptor_names=None):
+    def build_model(self, use_pmml_pipeline, include_standardization_in_pmml, cv, descriptor_names=None):
         logging.debug('enter build model')
 
 
@@ -553,15 +553,18 @@ class Model:
         if self.has_hyperparameter_grid():
             logging.debug('Hyperparameter grid has multiple sets of parameters, running grid search')
 
-            kfold_splitter = KFold(n_splits=5, shuffle=True, random_state=42)
+            if cv is None:
+                if self.is_binary==True:
+                    cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+                else:
+                    cv = KFold(n_splits=5, shuffle=True, random_state=42)      
+                # print('in build model, cv was null now cv=',cv)
 
             optimizer = GridSearchCV(self.model_obj, self.hyperparameter_grid, n_jobs=self.n_jobs,
-                                     scoring=scoring_strategy_defaults(self.is_binary), cv=kfold_splitter)
+                                     scoring=scoring_strategy_defaults(self.is_binary), cv=cv) #TODO instead use PredefinedSplit
             # optimizer = GridSearchCV(self.model_obj, self.hyperparameter_grid, n_jobs=self.n_jobs,
             #                              scoring=scoring_strategy_defaults(self.is_categorical))
-
             optimizer.fit(train_features, train_labels)
-
             self.model_obj.set_params(**optimizer.best_params_)
             self.hyperparameters = optimizer.best_params_
 

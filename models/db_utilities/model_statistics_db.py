@@ -18,6 +18,7 @@ from util.database_utilities import getSession
 from applicability_domain import applicability_domain_utilities as adu
 
 import traceback
+from _tkinter import create
     
 def redo_cv_stats(session, model: Model):
 
@@ -87,27 +88,15 @@ def determineApplicabilityDomainBatch(model: Model, applicabilityDomainName, df_
     return output
 
 
-def calculate_ad_stats(session, model:Model):
-
-    mi = ModelInitializer()
-    mi.get_training_prediction_instances(session, model)
-
-    df_preds_test = mi.get_predictions(session, model=model, split_num=1, fk_splitting_id=1)
-    df_ad = determineApplicabilityDomainBatch(model, model.applicabilityDomainName, model.df_prediction)
-    
-    # from utils import print_first_row
-    # print_first_row(df_ad)
-    
-    calculate_AD_stats(df_ad, df_preds_test, pc.TAG_TEST, model.modelId, session)
-
 def updateStatsPredictModuleModels():
 
     try:
-
         session = getSession()
         # print(dbl.session == None)
         # import os
         # print(os.getenv('DEV_QSAR_PASS'))
+
+        create_statistics(session)
 
         mi = ModelInitializer()
 
@@ -118,10 +107,14 @@ def updateStatsPredictModuleModels():
         # Process the result
         for row in results:
             model = mi.init_model(row.id)
+            
             # print(json.dumps(json.loads(model.get_model_description()), indent=4))
             # recalculate_test_set_stats(session, model)
             # redo_cv_stats(session, model)
-            calculate_ad_stats(session, model)
+            
+            df_ad = determineApplicabilityDomainBatch(model, model.applicabilityDomainName, model.df_prediction)
+            calculate_AD_stats(df_ad, model.df_preds_test, pc.TAG_TEST, model, session)
+
             # if True:
             #     break # stop after first model for testing
 
@@ -132,7 +125,7 @@ def updateStatsPredictModuleModels():
         # Close the session - close it later after get training/test sets
         session.close()
 
-def calculate_AD_stats(df_ad, df_preds, tag, model_id, session):
+def calculate_AD_stats(df_ad, df_preds, tag, model, session):
 
     merged_df = pd.merge(df_ad, df_preds, left_on='idTest', right_on='id')
     # print(merged_df.columns)
@@ -159,12 +152,57 @@ def calculate_AD_stats(df_ad, df_preds, tag, model_id, session):
 
     for statistic_name in dict_stats:
         new_statistic_value = dict_stats[statistic_name]
-        print(f"model_id:{model_id}, statistic_name:{statistic_name}, new_statistic_value:{new_statistic_value:.3f}")
-        update_statistic_value(session, model_id, statistic_name, new_statistic_value, "tmarti02")
+        print(f"model_name:{model.modelName}, model_id:{model.modelId}, statistic_name:{statistic_name}, new_statistic_value:{new_statistic_value:.3f}")
+        
+        update_statistic_value(session, model.modelId, statistic_name, new_statistic_value, "tmarti02")
 
     # print(dict_stats)
 
     return MAE_inside_AD, MAE_outside_AD, coverage
+
+
+def create_statistics(session):
+    """
+    Insert two rows into qsar_models.statistics and do nothing if they already exist.
+    - Assumes a UNIQUE constraint on (name) so ON CONFLICT (name) DO NOTHING works.
+    - id is auto-increment, so it is omitted.
+    - created_at uses datetime.now().
+    """
+    now = datetime.now()
+    rows = [
+        {
+            "created_at": now,
+            "created_by": "tmarti02",
+            "description": "Mean absolute error for test set inside the applicability domain",
+            "is_binary": False,
+            "name": "MAE_Test_inside_AD",
+            "updated_at": None,
+            "updated_by": None,
+        },
+        {
+            "created_at": now,
+            "created_by": "tmarti02",
+            "description": "Mean absolute error for test set outside the applicability domain",
+            "is_binary": False,
+            "name": "MAE_Test_outside_AD",
+            "updated_at": None,
+            "updated_by": None,
+        },
+    ]
+
+    insert_sql = text("""
+        INSERT INTO qsar_models.statistics
+            (created_at, created_by, description, is_binary, name, updated_at, updated_by)
+        VALUES
+            (:created_at, :created_by, :description, :is_binary, :name, :updated_at, :updated_by)
+        ON CONFLICT (name) DO NOTHING
+    """)
+
+    session.execute(insert_sql, rows)
+    session.commit()
+    
+    
+
 
 def update_statistic_value(session, model_id: int, statistic_name: str, new_statistic_value: float, user_id: str):
     try:
@@ -268,7 +306,7 @@ def compare_stats(model, stats_new):
 if __name__ == '__main__':
     
     from dotenv import load_dotenv
-    load_dotenv('../../personal.env')
+    load_dotenv('../../personal.env') #change to .env to use SDE database 
     
     # print(username)
     updateStatsPredictModuleModels()

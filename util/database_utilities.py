@@ -257,7 +257,6 @@ class DatabaseUtilities:
     ) -> Any:
         """
         Insert a single row into schema.table and return the primary key.
-        - Does not commit; caller should session.commit() or rollback().
         - 'record' can include any subset of columns; DB defaults will be applied if defined.
         """
         cls = self._get_mapped_class(table)

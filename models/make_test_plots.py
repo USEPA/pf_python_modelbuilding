@@ -4,11 +4,20 @@ Class to make plots for TEST5.1.3 for web page reports
 """
 
 import json
-# import random
 from math import floor, ceil
 import numpy as np
-import matplotlib.pyplot as plt
+import io
 
+# Choose a non-GUI backend to avoid error messages when doing multiple parallel runs in same run
+import os
+os.environ.setdefault("MPLBACKEND", "Agg")
+
+import matplotlib
+# If someone set a GUI backend earlier, force Agg here (must be before pyplot)
+if matplotlib.get_backend().lower() != "agg":
+    matplotlib.use("Agg")
+
+import matplotlib.pyplot as plt
 
 
 def getBin(exps, property_name,unit_name):
@@ -87,6 +96,10 @@ def getBin2(expsTrain,expsTest, property_name, unit_name):
             bins = np.linspace(minVal, maxVal, 2*(maxVal-minVal)+1)
         else:
             bins = range(minVal, maxVal)
+    
+    elif unit_name == 'Binary 0/1':
+        bins = [-0.5, 0.5, 1.5]
+
     else:
         print('\n*** else', property_name,unit_name)
         bins = range(minVal, maxVal)
@@ -149,54 +162,101 @@ def generateHistogram(file_path_json, property_name, unit_name, mpsTraining, mps
     plt.savefig(fileOutHistogram, dpi=300)
     plt.close()
     
-def generateHistogram2(fileOutHistogram, property_name, unit_name, mpsTraining, mpsTest, seriesNameTrain, seriesNameTest):
-    expsTraining = getExpArray(mpsTraining)
+def _fit_title_fontsize_to_ax_width(ax, title, max_fontsize=16, min_fontsize=8, step=1, pad_px=4, wrap_if_needed=True):
+    """
+    Set ax title and shrink its font size until it fits within the axes width.
+    Optionally wraps as a last resort if even the minimum size doesn't fit.
+    """
+    import textwrap
+    fig = ax.figure
 
+    # Start at max size
+    text = ax.set_title(title, fontsize=max_fontsize)
+    fig.canvas.draw()  # needed to compute extents
+    renderer = fig.canvas.get_renderer()
+
+    ax_width = ax.get_window_extent(renderer).width
+    # Shrink until fits or min size reached
+    while text.get_window_extent(renderer).width + pad_px > ax_width and text.get_fontsize() > min_fontsize:
+        text.set_fontsize(text.get_fontsize() - step)
+        fig.canvas.draw()
+
+    # If still too wide, wrap text as a fallback
+    if wrap_if_needed and (text.get_window_extent(renderer).width + pad_px > ax_width):
+        current_width = text.get_window_extent(renderer).width
+        ratio = max(0.1, ax_width / current_width)
+        max_chars = max(10, int(len(title) * ratio))
+        wrapped = textwrap.fill(title, width=max_chars)
+        text.set_text(wrapped)
+        fig.canvas.draw()
+
+    return text
+
+
+def generateHistogram2(fileOutHistogram, property_name, unit_name, mpsTraining, mpsTest, seriesNameTrain, seriesNameTest, displayPlots=False):
+    expsTraining = getExpArray(mpsTraining)
     expsTest = getExpArray(mpsTest)
 
-    # print(expsTraining)
-
-    # binsTraining=getBin(expsTraining,property_name,unit_name)
-    # binsTest = getBin(expsTest, property_name, unit_name)
-    # plt.hist(expsTraining, binsTraining, alpha=0.5, label=seriesNameTrain, color='darkblue', edgecolor='black')
-    # plt.hist(expsTest, binsTest, alpha=1.0, label=seriesNameTest, color='white', edgecolor='black')
-
-    fig, ax = plt.subplots(figsize=(5, 5), layout='constrained',dpi=200)
+    fig, ax = plt.subplots(figsize=(5, 5), layout='constrained', dpi=200)
 
     if len(expsTraining) == 0 and len(expsTest) == 0:
+        plt.close(fig)
         return
 
-    bins = getBin2(expsTraining,expsTest, property_name, unit_name)
+    bins = getBin2(expsTraining, expsTest, property_name, unit_name)
 
+    # Binary handling: narrow bars centered at 0 and 1
+    is_binary = (str(unit_name).strip().lower() == "binary 0/1")
+    if is_binary:
+        hist_kwargs = dict(rwidth=0.5)  # shrink bars so they don't fill the bin
+    else:
+        hist_kwargs = {}
 
+    # Plot histograms
     if len(expsTraining) > 0:
-        plt.hist(expsTraining, bins, alpha=0.5, label=seriesNameTrain, color='black', edgecolor='black')
+        ax.hist(expsTraining, bins=bins, alpha=0.5, label=seriesNameTrain,
+                color='black', edgecolor='black', **hist_kwargs)
 
     if len(expsTest) > 0:
-        plt.hist(expsTest, bins, alpha=1.0, label=seriesNameTest, color='red', edgecolor='black')
+        ax.hist(expsTest, bins=bins, alpha=1.0, label=seriesNameTest,
+                color='red', edgecolor='black', **hist_kwargs)
 
-    plt.xlabel('Experimental ' + unit_name)
-    plt.ylabel('Count')
-    plt.title("Histogram of " + property_name + " datasets")
+    ax.set_xlabel('Experimental ' + unit_name)
+    ax.set_ylabel('Count')
 
-    # plt.legend(loc='upper left')
+    if is_binary:
+        ax.set_xlim(-0.5, 1.5)
+        ax.set_xticks([0, 1])
 
-    if property_name == 'Vapor Pressure' \
-            or property_name == 'In Vitro Intrinsic Hepatic Clearance' \
-            or (property_name == 'Oral Rat LD50' and '-log' not in unit_name) \
-            or (property_name == 'Water Solubility' and '-log' not in unit_name) \
-            or property_name == 'Atmos. Hydroxylation Rate':
-        plt.legend(loc="upper left")
+    # Legend placement rules preserved
+    if property_name in ('Vapor Pressure', 'In Vitro Intrinsic Hepatic Clearance', 'Ready Binary Biodegradability') \
+       or (property_name == 'Oral Rat LD50' and '-log' not in unit_name) \
+       or (property_name == 'Water Solubility' and '-log' not in unit_name) \
+       or property_name == 'Atmos. Hydroxylation Rate':
+        ax.legend(loc="upper left")
     else:
-        plt.legend(loc="upper right")
+        ax.legend(loc="upper right")
 
+    # Auto-fit title font size (do this after legend/layout changes)
+    title_text = f"Histogram of {property_name} Datasets"
+    _fit_title_fontsize_to_ax_width(ax, title_text, max_fontsize=16, min_fontsize=8, step=1)
 
-    # plt.show()
+    if displayPlots:
+        plt.show()
 
-    plt.savefig(fileOutHistogram, dpi=200)
-    plt.close()
+    # Save figure to bytes
+    buf = io.BytesIO()
+    fig.savefig(buf, format='png')  # uses fig's dpi=200
+    img_bytes = buf.getvalue()
+    buf.close()
 
+    # Optionally also save to a file path if provided
+    if fileOutHistogram:
+        with open(fileOutHistogram, 'wb') as f:
+            f.write(img_bytes)
 
+    plt.close(fig)
+    return img_bytes
 def getMinMax2(exp1, exp2):
     minVal = 9999
     maxVal = -9999
@@ -349,13 +409,13 @@ def generateScatterPlot3(filePathOut, title, unitName, mps, seriesName, limits=N
     return limits
 
 def generateScatterPlot2(filePathOut, title, unitName, mpsTraining, mpsTest, seriesNameTrain,
-                    seriesNameTest):
+                    seriesNameTest, displayPlots=False):
     
         
     expsTraining, predsTraining = getArraysOmitNullPreds(mpsTraining)
     expsTest, predsTest = getArraysOmitNullPreds(mpsTest)
 
-    fig, ax = plt.subplots(figsize=(5, 5), layout='constrained', dpi=150)
+    fig, ax = plt.subplots(figsize=(5, 5), layout='constrained', dpi=200)
 
     plt.xlabel('Experimental ' + unitName)
     plt.ylabel('Predicted  '+ unitName)
@@ -378,6 +438,9 @@ def generateScatterPlot2(filePathOut, title, unitName, mpsTraining, mpsTest, ser
     # ax.plot(exp, yreg, label='Regression ('+strR2+')',color='red')
 
     plt.legend(loc="lower right")
+    
+    if displayPlots:
+        plt.show()
 
     # plt.savefig(fileOutPNG)
     # figure = plt.gcf()  # get current figure
@@ -385,8 +448,18 @@ def generateScatterPlot2(filePathOut, title, unitName, mpsTraining, mpsTest, ser
     # when saving, specify the DPI
 
     # print(fileOut)
-    plt.savefig(filePathOut, dpi=200)
-    plt.close()
+    buf = io.BytesIO()
+    fig.savefig(buf, format='png')  # uses fig's dpi=200
+    img_bytes = buf.getvalue()
+    buf.close()
+
+    # Optionally also save to a file path if provided
+    if filePathOut is not None:
+        with open(filePathOut, 'wb') as f:
+            f.write(img_bytes)
+
+    plt.close(fig)
+    return img_bytes
 
 def generateScatterPlot(file_path_json, property_name, unit_name, mpsTraining, mpsTest, seriesNameTrain,
                         seriesNameTest):

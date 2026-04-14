@@ -17,9 +17,10 @@ def _init_mongo():
         client = MongoClient(
             host=os.getenv("MONGO_HOST", "localhost"),
             port=int(os.getenv("MONGO_PORT", "27017")),
-            username=os.getenv("MONGO_USER", "root"),
+            username=os.getenv("MONGO_USER"),
             password=os.getenv("MONGO_PASSWORD"),
             authSource="admin",
+            appname=os.getenv("WEBTEST_V2_MONGO_APP_NAME", os.getenv("MONGO_APP_NAME", "WebTEST v2")),
             # Keep these short so app startup isn’t delayed if Mongo is down
             serverSelectionTimeoutMS=int(os.getenv("MONGO_SERVER_SELECTION_TIMEOUT_MS", "500")),
             connectTimeoutMS=int(os.getenv("MONGO_CONNECT_TIMEOUT_MS", "500")),

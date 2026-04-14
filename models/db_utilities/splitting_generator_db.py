@@ -455,15 +455,21 @@ def make_representative_and_inner_cv_splits(
     y_oof = np.empty_like(y, dtype=float)
     fold_scores = []
 
-    print("fold\tRMSE\tMAE")
+    if is_binary:
+        print("fold\tBA")
+    else:
+        print("fold\tRMSE\tMAE")
 
     for i, (tr_idx, te_idx) in enumerate(folds):
         m = clone(base_model)
         m.fit(X.iloc[tr_idx], y[tr_idx])
         preds = m.predict(X.iloc[te_idx])
         y_oof[te_idx] = preds
+        
         if is_binary:
-            fold_scores.append(balanced_accuracy_score(y[te_idx], preds))
+            BA = balanced_accuracy_score(y[te_idx], preds)
+            print(f"{i}\t{BA:.3f}")
+            fold_scores.append(BA)
         else:
             RMSE = root_mean_squared_error(y[te_idx], preds)
             MAE = mean_absolute_error(y[te_idx], preds)
@@ -477,9 +483,11 @@ def make_representative_and_inner_cv_splits(
     rep_fold = int(np.argmin(np.abs(np.asarray(fold_scores) - pooled)))
     rep_test_idx = folds[rep_fold][1]
     rep_train_idx = folds[rep_fold][0]
-    
-    print(f"Best fold:{rep_fold} with RMSE = {fold_scores[rep_fold]:.3f}, pooled value = {pooled:.3f}")
-    
+        
+    if is_binary:
+        print(f"Best fold:{rep_fold} with BA = {fold_scores[rep_fold]:.3f}, pooled value = {pooled:.3f}")
+    else:
+        print(f"Best fold:{rep_fold} with RMSE = {fold_scores[rep_fold]:.3f}, pooled value = {pooled:.3f}")
 
     # ---- Map to fk_data_point_id ----
     df_lookup = getDatapointsLookup(session, datasetName)  # must contain qsar_smiles, fk_data_point_id
@@ -560,6 +568,7 @@ def create_splittings(datasetName, descriptorSetName = 'WebTEST-default'):
     """
     
     write_to_db = True
+    delete_old = False
     
     user="tmarti02"
     remove_log_p_descriptors = False
@@ -569,13 +578,14 @@ def create_splittings(datasetName, descriptorSetName = 'WebTEST-default'):
     n_threads = 8
     shuffle = True
 
-    preview_and_delete_splittings_by_dataset(
-        dataset_name="KOC v1 modeling",
-        split_ids=None,
-        head_n=10,
-        dry_run=False
-    )
     
+    if delete_old:
+        preview_and_delete_splittings_by_dataset(
+            dataset_name=datasetName,
+            split_ids=None,
+            head_n=10,
+            dry_run=False
+        )
     
     # old way:
     # find_representative_split(datasetName, descriptorSetName, remove_log_p_descriptors, user, n_threads=4, n_splits=5, random_state=42,
@@ -596,7 +606,10 @@ if __name__ == '__main__':
     from dotenv import load_dotenv
     load_dotenv('../../personal.env')
     
-    dataset_name = 'KOC v1 modeling'
+    # dataset_name = 'KOC v1 modeling'
+    # dataset_name = 'exp_prop_RBIODEG_RIFM_BY_DTXSID'    
+    # dataset_name = 'exp_prop_RBIODEG_NITE_OPPT v1.0'
+    dataset_name = 'exp_prop_RBIODEG_RIFM_CHEMREG'
     # dataset_name = 'ECOTOX_2024_12_12_96HR_Fish_LC50_v3a modeling'
     create_splittings(dataset_name)
     

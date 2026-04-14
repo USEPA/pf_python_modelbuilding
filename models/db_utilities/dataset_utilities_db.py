@@ -35,16 +35,6 @@ def _load_df(tsv_string):
     return df
 
 
-def get_training_cv_instances(session, dataset_name, descriptor_set_name):
-    folds = {}
-    for i in range(1, 6):
-        fold_splitting_name = f'RND_REPRESENTATIVE_CV{i}'
-            
-        df_training, df_prediction = get_training_prediction_instances(
-            session, dataset_name, descriptor_set_name, fold_splitting_name
-        )
-        folds[i] = {"train": df_training, "pred": df_prediction}
-    return folds
 
 def getSqlMappedDataPoints():
         """
@@ -165,6 +155,8 @@ def get_training_ids(session, datasetName, descriptorSetName, splittingName):
         return None     
 
 
+
+
 # @timer    
 def get_training_prediction_instances(session, datasetName, descriptorSetName, splittingName):
 
@@ -232,10 +224,97 @@ def get_training_prediction_instances(session, datasetName, descriptorSetName, s
         return None, None     
 
 
+def get_training_cv_instances(session, dataset_name, descriptor_set_name):
+    folds = {}
+    for i in range(1, 6):
+        fold_splitting_name = f'RND_REPRESENTATIVE_CV{i}'
+            
+        df_training, df_prediction = get_training_prediction_instances(
+            session, dataset_name, descriptor_set_name, fold_splitting_name
+        )
+        folds[i] = {"train": df_training, "pred": df_prediction}
+    return folds
 
-from sqlalchemy import text
-from sqlalchemy.exc import SQLAlchemyError
-import logging
+
+
+from sklearn.model_selection import PredefinedSplit
+
+def make_cv_for_base_training(df_training_base, folds, id_col="ID", y_col="Property"):
+    """
+    Build a PredefinedSplit CV for scikit-learn that:
+      - uses df_training_base rows as the sample universe,
+      - assigns fold test membership from folds[i]["pred"] (returned by get_training_cv_instances),
+      - ensures IDs match df_training_base[id_col] exactly.
+
+    Returns:
+      X (DataFrame), y (Series), cv (PredefinedSplit), feature_cols (list[str])
+    """
+    # Basic checks
+    if id_col not in df_training_base.columns or y_col not in df_training_base.columns:
+        raise ValueError(f"df_training_base must have columns '{id_col}' and '{y_col}'")
+
+    # Keep a clean index and consistent ID dtype
+    df = df_training_base.reset_index(drop=True).copy()
+    # Convert IDs to string for robust matching (optional; drop if IDs are numeric and consistent)
+    df[id_col] = df[id_col].astype(str)
+
+    # Build mapping of ID -> fold_id (0-based) from the CV folds' test (pred) sets
+    id_to_fold = {}
+    all_cv_test_ids = []
+
+    for fold_key, fold_dict in sorted(folds.items(), key=lambda kv: kv[0]):
+        pred_df = fold_dict.get("pred")
+        if pred_df is None or pred_df.empty:
+            continue
+
+        # Be robust to dtype mismatches
+        pred_ids = pred_df[id_col].astype(str).tolist()
+        fold_id = int(fold_key) - 1  # keys are 1..K in your get_training_cv_instances()
+
+        for _id in pred_ids:
+            all_cv_test_ids.append(_id)
+            if _id in id_to_fold and id_to_fold[_id] != fold_id:
+                raise ValueError(f"ID '{_id}' appears as test in multiple folds: {id_to_fold[_id]} and {fold_id}")
+            id_to_fold[_id] = fold_id
+
+    # Validate membership relative to base training
+    train_ids_set = set(df[id_col].tolist())
+    test_only_outside = sorted(set(all_cv_test_ids) - train_ids_set)
+    
+    if test_only_outside:
+        # These IDs exist in the CV pred sets but not in the base training set.
+        # We ignore them in the test_fold array (they won't be used by scikit-learn anyway).
+        print(f"Warning: {len(test_only_outside)} CV test IDs not in base training; they will be ignored. "
+              f"Examples: {test_only_outside[:5]}")
+
+    # Build test_fold array aligned to df rows:
+    #  - value = fold_id (0..K-1) if row is in that fold's test set,
+    #  - value = -1 if the row never appears as test in any CV fold (always-train row).
+    test_fold = np.full(len(df), -1, dtype=int)
+    missing_from_all_folds = 0
+
+    id_to_index = {idv: idx for idx, idv in enumerate(df[id_col].tolist())}
+    for _id, fold_id in id_to_fold.items():
+        idx = id_to_index.get(_id)
+        if idx is not None:
+            test_fold[idx] = fold_id
+
+    # Report any base training IDs missing from all CV test sets
+    missing_from_all_folds = int((test_fold == -1).sum())
+    if missing_from_all_folds > 0:
+        print(f"Note: {missing_from_all_folds} base training rows are not in any CV fold's test set "
+              f"(they will be in the training set for every fold).")
+
+    cv = PredefinedSplit(test_fold)
+
+    # Build X and y from the base training DataFrame, using its columns only
+    feature_cols = [c for c in df.columns if c not in (id_col, y_col)]
+    X = df[feature_cols].copy()
+    y = df[y_col].copy()
+
+    return X, y, cv, feature_cols
+
+
 
 def get_instances_excluding(
     session,

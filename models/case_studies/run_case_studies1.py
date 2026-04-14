@@ -4,39 +4,17 @@ Created on Feb 3, 2026
 @author: TMARTI02
 '''
 
+
 from dotenv import load_dotenv
 load_dotenv('../../personal.env')
 
-from models.case_studies.run_model_building_db import run_dataset, Results, ParametersGeneticAlgorithm, \
-    ParametersImportance
+from models.case_studies.run_model_building_db import run_dataset, ParametersGeneticAlgorithm, set_hyper_parameters, Results
 
 from util import predict_constants as pc
 from model_ws_db_utilities import getEngine, getSession
 from models.ModelToExcel import ModelToExcel
 import logging
 import json
-from typing import List, Dict, Any
-
-
-def format_value(v: Any) -> str:
-    if v is None:
-        return ""
-    if isinstance(v, float):
-        return f"{v:.3g}"  # compact numeric formatting
-    return str(v)
-
-
-def compute_columns(items: List[Dict[str, Any]],
-                    preferred: List[str]=("exp", "Episuite", "gcm", "rf")) -> List[str]:
-    all_keys: List[str] = []
-    for it in items:
-        vals = it.get("values") or {}
-        all_keys.extend(list(vals.keys()))
-    seen = set()
-    uniq = [k for k in all_keys if not (k in seen or seen.add(k))]
-    ordered = [c for c in preferred if c in uniq] + [c for c in uniq if c not in preferred]
-    return list(ordered) or list(preferred)
-
 
 def run_example():
     dataset_name = "KOC v1 modeling"
@@ -45,30 +23,94 @@ def run_example():
 
 def run_Koc():
     create_unique_excel = False
+    # write_to_db = True
     write_to_db = False
     # write_to_db=True
     dataset_name = "KOC v1 modeling"
+    descriptor_set_name = "WebTEST-default"
+    splitting_name = "RND_REPRESENTATIVE"  
+    
+    # append_to_models_folder = ""
+    # append_to_models_folder = "_v2.0"
+    append_to_models_folder = "_bob"
+    
 
     # ad_measure_model = [pc.Applicability_Domain_TEST_Embedding_Euclidean, pc.Applicability_Domain_TEST_Fragment_Counts]
     ad_measure_model = [pc.Applicability_Domain_TEST_Embedding_Euclidean, pc.Applicability_Domain_TEST_Fragment_Counts]
 
     # run_dataset(dataset_name=dataset_name, qsar_method='gcm', feature_selection=False, ad_measure_model=ad_measure_model,
-    #             write_to_db=write_to_db, create_unique_excel=create_unique_excel, create_detailed_excel=False)  # OK
-    
-    run_dataset(dataset_name=dataset_name, qsar_method='gcm', feature_selection=False, ad_measure_model=ad_measure_model,
-                write_to_db=write_to_db, create_unique_excel=create_unique_excel, create_detailed_excel=True)  # OK
+    #             write_to_db=write_to_db, create_unique_excel=create_unique_excel, create_detailed_excel=True, 
+    #             append_to_models_folder=append_to_models_folder)  # OK
 
-    # Models to upload:
-    # for method in ['rf','xgb', 'reg','knn']:
-    #     run_dataset(dataset_name=dataset_name, qsar_method=method, feature_selection=True, 
-    #                 ad_measure_model=ad_measure_model,write_to_db=write_to_db, create_unique_excel=create_unique_excel)  # OK
-    
-    # embedding = ["ALOGP2","nBnz","MATS6v","ATS1p","nDB","Lop","MATS1p"]
-    # results_dict = run_dataset(dataset_name=dataset_name, qsar_method='rf', feature_selection=False, 
-    #                            embedding=embedding, write_to_db=write_to_db, create_unique_excel=create_unique_excel)
 
-    r = Results()
-    r.summarize_model_stats(dataset_name)
+    # for method in ['xgb']:
+    for method in ['rf','xgb']:
+    
+        params = set_hyper_parameters(qsar_method=method, feature_selection=True, descriptor_set_name=descriptor_set_name, 
+                            splitting_name=splitting_name, dataset_name=dataset_name, ad_measure=ad_measure_model)
+        # params.descriptor_coefficient = 0.006
+        if method == 'rf':
+            params.hyperparameter_grid = {'estimator__max_features': ['sqrt', 'log2'],
+                                         'estimator__min_impurity_decrease': [10 ** x for x in range(-5, 0)],
+                                         'estimator__n_estimators': [10, 100, 250, 500]}
+        elif method=='xgb':
+            params.hyperparameter_grid = {'estimator__n_estimators': [50, 100], 'estimator__eta': [0.1, 0.2, 0.3],
+                                    'estimator__gamma': [0, 1, 10], 'estimator__max_depth': [3, 6, 9, 12],
+                                    'estimator__min_child_weight': [1, 3, 5], 'estimator__subsample': [0.5, 1]}
+    
+        run_dataset(dataset_name=dataset_name, qsar_method=params.qsar_method, feature_selection=params.feature_selection,
+            params = params, ad_measure_model=ad_measure_model,write_to_db=write_to_db, 
+            create_detailed_excel=True, create_unique_excel=create_unique_excel, 
+            append_to_models_folder=append_to_models_folder)  
+        
+        # params.feature_selection = False
+        # run_dataset(dataset_name=dataset_name, qsar_method=params.qsar_method, feature_selection=params.feature_selection,
+        #     params = params, ad_measure_model=ad_measure_model,write_to_db=write_to_db, 
+        #     create_detailed_excel=True, create_unique_excel=create_unique_excel, 
+        #     append_to_models_folder=append_to_models_folder)  
+        
+
+        # run_dataset(dataset_name=dataset_name, qsar_method=method, feature_selection=True, 
+        #     ad_measure_model=ad_measure_model,write_to_db=write_to_db, create_unique_excel=create_unique_excel, 
+        #     create_detailed_excel=True,append_to_models_folder=append_to_models_folder)  
+
+
+    for method in ['reg','knn']:
+    # # for method in ['las']:
+        params = set_hyper_parameters(qsar_method=method, feature_selection=True, descriptor_set_name=descriptor_set_name, 
+                                      splitting_name=splitting_name, dataset_name=dataset_name, ad_measure=ad_measure_model)
+        params.max_features = 12
+        params.descriptor_coefficient = 0.006
+        run_dataset(dataset_name=dataset_name, qsar_method=params.qsar_method, feature_selection=params.feature_selection,
+            params = params, ad_measure_model=ad_measure_model,write_to_db=write_to_db, 
+            create_detailed_excel=True, create_unique_excel=create_unique_excel, 
+            append_to_models_folder=append_to_models_folder)  
+        
+        
+        
+        # for i in range(1, 8):
+        #     params.alpha = 0.2+(i-1)*0.1
+        #     params.descriptor_coefficient = None
+        #
+        #     run_dataset(dataset_name=dataset_name, qsar_method=params.qsar_method, feature_selection=params.feature_selection,
+        #         params = params, ad_measure_model=ad_measure_model,write_to_db=write_to_db, 
+        #         create_detailed_excel=False, create_unique_excel=create_unique_excel, 
+        #         append_to_models_folder=append_to_models_folder)  # OK
+
+    
+        # for i in range(1, 11):
+        #     params.descriptor_coefficient = round(0.002 * i, 3)          
+        #     # params.n_features_to_select = 10
+        #     run_dataset(dataset_name=dataset_name, qsar_method=params.qsar_method, feature_selection=params.feature_selection,
+        #                 params = params, ad_measure_model=ad_measure_model,write_to_db=write_to_db, 
+        #                 create_detailed_excel=False, create_unique_excel=create_unique_excel, 
+        #                 append_to_models_folder=append_to_models_folder)  # OK
+
+
+    
+    Results.summarize_model_stats(dataset_name, append_to_models_folder=append_to_models_folder, continuous_stat_name='RMSE')
+    # Results.summarize_model_stats(dataset_name, append_to_models_folder=append_to_models_folder, continuous_stat_name='MAE')
+    # Results.summarize_model_stats(dataset_name, append_to_models_folder=append_to_models_folder, continuous_stat_name='PearsonRSQ')
     
 
 def run_Koc_knn_ga():
@@ -110,30 +152,166 @@ def run_fish_tox():
     splitting_name = "RND_REPRESENTATIVE"    
     ad_measure_model = [pc.Applicability_Domain_TEST_Embedding_Euclidean, pc.Applicability_Domain_TEST_Fragment_Counts]
 
-    write_to_db = True
+    write_to_db = False
     create_unique_excel = False
+    
+    append_to_models_folder = "_v2.0"
+    
 
-    # for method in ['rf','xgb', 'reg','knn']:
-    #     params = set_hyper_parameters(qsar_method=method, feature_selection=True, descriptor_set_name="WebTEST-default", 
+    # ad_measure_model = [pc.Applicability_Domain_TEST_Embedding_Euclidean, pc.Applicability_Domain_TEST_Fragment_Counts]
+    ad_measure_model = [pc.Applicability_Domain_TEST_Embedding_Euclidean, pc.Applicability_Domain_TEST_Fragment_Counts]
+
+    # run_dataset(dataset_name=dataset_name, qsar_method='gcm', feature_selection=False, ad_measure_model=ad_measure_model,
+    #             write_to_db=write_to_db, create_unique_excel=create_unique_excel, create_detailed_excel=True, 
+    #             append_to_models_folder=append_to_models_folder)  # OK
+
+
+    # for method in ['rf']:
+    # for method in ['rf','xgb']:
+    for method in ['xgb']:
+        params = set_hyper_parameters(qsar_method=method, feature_selection=True, descriptor_set_name=descriptor_set_name, 
+                            splitting_name=splitting_name, dataset_name=dataset_name, ad_measure=ad_measure_model)
+        # params.descriptor_coefficient = 0.006
+        if method == 'rf':
+            params.hyperparameter_grid = {'estimator__max_features': ['sqrt', 'log2'],
+                                         'estimator__min_impurity_decrease': [10 ** x for x in range(-5, 0)],
+                                         'estimator__n_estimators': [10, 100, 250, 500]}
+        elif method=='xgb':
+            params.hyperparameter_grid = {'estimator__n_estimators': [50, 100], 'estimator__eta': [0.1, 0.2, 0.3],
+                                    'estimator__gamma': [0, 1, 10], 'estimator__max_depth': [3, 6, 9, 12],
+                                    'estimator__min_child_weight': [1, 3, 5], 'estimator__subsample': [0.5, 1]}
+    
+        # run_dataset(dataset_name=dataset_name, qsar_method=params.qsar_method, feature_selection=params.feature_selection,
+        #     params = params, ad_measure_model=ad_measure_model,write_to_db=write_to_db, 
+        #     create_detailed_excel=True, create_unique_excel=create_unique_excel, 
+        #     append_to_models_folder=append_to_models_folder)  
+    
+        params.feature_selection = False
+        run_dataset(dataset_name=dataset_name, qsar_method=params.qsar_method, feature_selection=params.feature_selection,
+            params = params, ad_measure_model=ad_measure_model,write_to_db=write_to_db, 
+            create_detailed_excel=True, create_unique_excel=create_unique_excel, 
+            append_to_models_folder=append_to_models_folder)  
+        
+
+        # run_dataset(dataset_name=dataset_name, qsar_method=method, feature_selection=True, 
+        #     ad_measure_model=ad_measure_model,write_to_db=write_to_db, create_unique_excel=create_unique_excel, 
+        #     create_detailed_excel=True,append_to_models_folder=append_to_models_folder)  
+
+
+    # for method in ['reg','knn']:
+    # # # for method in ['las']:
+    #     params = set_hyper_parameters(qsar_method=method, feature_selection=True, descriptor_set_name=descriptor_set_name, 
     #                                   splitting_name=splitting_name, dataset_name=dataset_name, ad_measure=ad_measure_model)
-    #     params.n_features_to_select = 6
-    #     # params.n_features_to_select = 10
-    #     run_dataset(dataset_name=dataset_name, qsar_method=params.qsar_method, feature_selection=True, params = params, 
-    #                 ad_measure_model=ad_measure_model,write_to_db=write_to_db, create_unique_excel=create_unique_excel)  # OK
+    #     params.max_features = 20
+    #     params.descriptor_coefficient = 0.006
+    #     run_dataset(dataset_name=dataset_name, qsar_method=params.qsar_method, feature_selection=params.feature_selection,
+    #         params = params, ad_measure_model=ad_measure_model,write_to_db=write_to_db, 
+    #         create_detailed_excel=True, create_unique_excel=create_unique_excel, 
+    #         append_to_models_folder=append_to_models_folder)  
+    
+    
+    Results.summarize_model_stats(dataset_name,append_to_models_folder=append_to_models_folder, continuous_stat_name='RMSE')
+    
+    
+    
+def run_biodeg_rifm():
+    
+    # dataset_name = 'exp_prop_RBIODEG_RIFM_BY_DTXSID' 
+    dataset_name = 'exp_prop_RBIODEG_RIFM_CHEMREG' # automapped one
+    write_to_db = False
+    create_unique_excel = False
+    ad_measure_model = [pc.Applicability_Domain_TEST_Embedding_Euclidean, pc.Applicability_Domain_TEST_Fragment_Counts]
 
-    # # embedding = ['ALOGP', 'XLOGP2', 'MW', 'BEHm3', 'xv1', 'Mp', 'AMW'] 
-    # # embedding = ['ALOGP', 'XLOGP2', 'MW', 'BEHm3', 'Mp', 'AMW']
-    # embedding = ['ALOGP', 'ALOGP2', 'MW', 'Mp', 'AMW']
+    # run_dataset(dataset_name=dataset_name, qsar_method='gcm', feature_selection=False, ad_measure_model=ad_measure_model,
+    #             write_to_db=write_to_db, create_unique_excel=create_unique_excel, create_detailed_excel=False)  # OK
+
+    # Models to upload:
+    for method in ['rf','xgb']:
+    # for method in ['reg','knn']:
+        run_dataset(dataset_name=dataset_name, qsar_method=method, feature_selection=True, 
+                    ad_measure_model=ad_measure_model,write_to_db=write_to_db, create_unique_excel=create_unique_excel, create_detailed_excel=False)  # OK
+
+    # for method in ['rf','xgb', 'knn']:
+    #     run_dataset(dataset_name=dataset_name, qsar_method=method, feature_selection=False, 
+    #                 ad_measure_model=ad_measure_model,write_to_db=write_to_db, create_unique_excel=create_unique_excel, create_detailed_excel=False)  # OK
+                
+        
+    # for method in ['rf','xgb','knn','reg']:
+    #     params = set_hyper_parameters(qsar_method=method, feature_selection=True, descriptor_set_name="WebTEST-default", 
+    #                                 splitting_name="RND_REPRESENTATIVE", dataset_name=dataset_name, ad_measure=ad_measure_model)
     #
-    # results_dict = run_dataset(dataset_name=dataset_name, qsar_method='rf', feature_selection=False, 
-    #                            embedding=embedding, write_to_db=write_to_db, create_unique_excel=create_unique_excel)
+    #     params.run_rfe = False
+    #     run_dataset(dataset_name=dataset_name, qsar_method=params.qsar_method, feature_selection=params.feature_selection, params = params, 
+    #                 ad_measure_model=ad_measure_model,write_to_db=write_to_db, create_unique_excel=create_unique_excel,create_detailed_excel=False)  # OK
     
-    run_dataset(dataset_name=dataset_name, qsar_method='gcm', feature_selection=False, ad_measure_model=ad_measure_model, write_to_db=write_to_db, create_unique_excel=create_unique_excel)  # OK
+    
+    Results.summarize_model_stats(dataset_name)
 
-    for method in ['rf', 'xgb', 'reg', 'knn']:
-        run_dataset(dataset_name=dataset_name, qsar_method=method, feature_selection=True,
-                    ad_measure_model=ad_measure_model, write_to_db=write_to_db, create_unique_excel=create_unique_excel)  # OK
+
+def run_pchem():
     
+    # dataset_name = 'exp_prop_RBIODEG_RIFM_BY_DTXSID' 
+    dataset_name = 'HLC v1 modeling' # automapped one
+    write_to_db = False
+    create_unique_excel = False
+    ad_measure_model = [pc.Applicability_Domain_TEST_Embedding_Euclidean, pc.Applicability_Domain_TEST_Fragment_Counts]
+
+    # run_dataset(dataset_name=dataset_name, qsar_method='gcm', feature_selection=False, ad_measure_model=ad_measure_model,
+    #             write_to_db=write_to_db, create_unique_excel=create_unique_excel, create_detailed_excel=False)  # OK
+
+    # Models to upload:
+    # for method in ['rf','xgb']:
+    # for method in ['reg','knn']:
+    #     run_dataset(dataset_name=dataset_name, qsar_method=method, feature_selection=True, 
+    #                 ad_measure_model=ad_measure_model,write_to_db=write_to_db, create_unique_excel=create_unique_excel, create_detailed_excel=False)  # OK
+
+    for method in ['rf','xgb', 'knn']:
+        run_dataset(dataset_name=dataset_name, qsar_method=method, feature_selection=False, 
+                    ad_measure_model=ad_measure_model,write_to_db=write_to_db, create_unique_excel=create_unique_excel, create_detailed_excel=False)  # OK
+                
+        
+    # for method in ['rf','xgb','knn','reg']:
+    #     params = set_hyper_parameters(qsar_method=method, feature_selection=True, descriptor_set_name="WebTEST-default", 
+    #                                 splitting_name="RND_REPRESENTATIVE", dataset_name=dataset_name, ad_measure=ad_measure_model)
+    #
+    #     params.run_rfe = False
+    #     run_dataset(dataset_name=dataset_name, qsar_method=params.qsar_method, feature_selection=params.feature_selection, params = params, 
+    #                 ad_measure_model=ad_measure_model,write_to_db=write_to_db, create_unique_excel=create_unique_excel,create_detailed_excel=False)  # OK
+    
+    
+    Results.summarize_model_stats(dataset_name)
+
+def run_biodeg_nite():
+    
+    dataset_name = 'exp_prop_RBIODEG_NITE_OPPT v1.0'    
+
+    write_to_db = False
+    create_unique_excel = False
+    ad_measure_model = [pc.Applicability_Domain_TEST_Embedding_Euclidean, pc.Applicability_Domain_TEST_Fragment_Counts]
+
+
+    # for method in ['rf','xgb','knn']:
+    #     run_dataset(dataset_name=dataset_name, qsar_method=method, feature_selection=False, ad_measure_model=ad_measure_model,
+    #                 write_to_db=write_to_db, create_unique_excel=create_unique_excel, create_detailed_excel=False)  # OK
+
+    #     params = set_hyper_parameters(qsar_method=method, feature_selection=False, descriptor_set_name="WebTEST-default", 
+    #                                 splitting_name="RND_REPRESENTATIVE", dataset_name=dataset_name, ad_measure=ad_measure_model)
+    #
+    #     run_dataset(dataset_name=dataset_name, qsar_method=params.qsar_method, feature_selection=params.feature_selection, params = params, 
+    #                 ad_measure_model=ad_measure_model,write_to_db=write_to_db, create_detailed_excel=False, 
+    #                 create_unique_excel=create_unique_excel)  # OK
+
+
+    run_dataset(dataset_name=dataset_name, qsar_method='gcm', feature_selection=False, ad_measure_model=ad_measure_model,
+                write_to_db=write_to_db, create_unique_excel=create_unique_excel, create_detailed_excel=True)  # OK
+
+    # Models to upload:
+    # for method in ['rf','xgb', 'reg','knn']:
+    # # for method in ['rf']:                
+    #     run_dataset(dataset_name=dataset_name, qsar_method=method, feature_selection=True, 
+    #                 ad_measure_model=ad_measure_model,write_to_db=write_to_db, create_unique_excel=create_unique_excel, create_detailed_excel=False)  # OK
+        
+        
     Results.summarize_model_stats(dataset_name)
 
 
@@ -186,7 +364,11 @@ if __name__ == '__main__':
     # run_Koc_knn_ga()
         
     # run_Koc()
-    # run_fish_tox()
+    run_fish_tox()
+    # run_biodeg_rifm()
+    
+    # run_pchem()
+    # run_biodeg_nite()
     # test_create_model()
     # test_model_summary()
 
@@ -195,5 +377,5 @@ if __name__ == '__main__':
     # test_create_model()
     # test_model_summary()
     # test_model_summary_local()
-    test_load_model_with_external_set()
+    # test_load_model_with_external_set()
 

@@ -1,5 +1,5 @@
 """
-Uvicorn webservice to build QSAR models with a variety of modeling strategies (RF, SVM, DNN, XGB...more to come?)
+Uvicorn webservice to generate predictions from QSAR models using various modeling strategies (RF, SVM, DNN, XGB...more to come?)
 Run with Python 3.12
 @author: TMARTI02 (Todd Martin) - RF, base webservice code, predictions for new chemicals and reports
 @author: GSincl01 (Gabriel Sinclair), XGB, refactored webservice code
