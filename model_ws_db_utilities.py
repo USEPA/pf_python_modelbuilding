@@ -2448,7 +2448,7 @@ class ModelPredictor:
 
     @timer
     def predict_model_smiles_batch(self, model_id, smiles_list, generate_report=True, include_model_details=True):
-        logging.info(f"Predicting with model {model_id} and {STDIZER_API}, {DESCRIPTORS_API} for {len(smiles_list)} SMILES")
+        print(f"Predicting with model {model_id} and {STDIZER_API}, {DESCRIPTORS_API} for {len(smiles_list)} SMILES")
 
         fileAPI = os.getenv("FILE_API_SERVER", pc.URL_LOCAL_FILE_API)
 
@@ -2468,6 +2468,9 @@ class ModelPredictor:
         )
 
     def _predict_from_db_batch(self, model_id, smiles_list, include_model_details=True):
+
+        print(f"Predicting with model {model_id} and {STDIZER_API}, {DESCRIPTORS_API} for {len(smiles_list)} SMILES")
+
         if not smiles_list:
             return []
 
