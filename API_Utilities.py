@@ -568,6 +568,7 @@ class QsarSmilesAPI:
         # Make the POST request
         url = urljoin(stdizer_api, "chemicals")
 
+        print(f"stdizer_api: {stdizer_api}, url: {url}")
         print(f"Calling standardize API ({url}) with {smiles} SMILES")
 
         response = get_requests_session().post(url, json=jo_body)
