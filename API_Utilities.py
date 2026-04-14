@@ -482,7 +482,7 @@ class SearchAPI:
      
     @staticmethod
     def call_resolver_get(resolver_api, identifier):
-        url = urljoin(resolver_api, "lookup")
+        url = urljoin(resolver_api.rstrip("/") + "/", "lookup")
         
         response = get_requests_session().get(url, params={"query": identifier})
         
@@ -566,7 +566,7 @@ class QsarSmilesAPI:
         jo_body = QsarSmilesAPI._build_standardize_payload(smiles, full, workflow)
 
         # Make the POST request
-        url = urljoin(stdizer_api, "chemicals")
+        url = urljoin(stdizer_api.rstrip("/") + "/", "chemicals")
 
         print(f"stdizer_api: {stdizer_api}, url: {url}")
         print(f"Calling standardize API ({url}) with {smiles} SMILES")
