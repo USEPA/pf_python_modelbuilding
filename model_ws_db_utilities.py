@@ -2469,7 +2469,7 @@ class ModelPredictor:
 
     def _predict_from_db_batch(self, model_id, smiles_list, include_model_details=True):
 
-        print(f"Predicting with model {model_id} and {STDIZER_API}, {DESCRIPTORS_API} for {len(smiles_list)} SMILES")
+        print(f"_predict_from_db_batch: {model_id} and {STDIZER_API}, {DESCRIPTORS_API} for {len(smiles_list)} SMILES")
 
         if not smiles_list:
             return []
@@ -2548,7 +2548,7 @@ class ModelPredictor:
         :return:
         """
 
-        print(f"Predicting with model {model_id} and {STDIZER_API}, {DESCRIPTORS_API} for {len(smiles)} SMILES")
+        print(f"predictFromDB: {model_id} and {STDIZER_API}, {DESCRIPTORS_API} for {len(smiles)} SMILES")
 
         if isinstance(smiles, str):
             predictions = self._predict_from_db_batch(
