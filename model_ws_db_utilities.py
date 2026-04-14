@@ -238,6 +238,33 @@ class ModelInitializer:
         finally:
             session.close()
 
+    def get_external_dataset_description(self, session, model: Model):
+        if hasattr(model, "external_dataset_description") and model.external_dataset_description:
+            return model.external_dataset_description
+
+        logging.debug("Getting external dataset description")
+
+        sql = text("""
+            select d.description
+            from qsar_models.models m
+            join qsar_datasets.datasets d
+                on m.external_dataset_name = d.name
+            where m.id = :model_id
+            """)
+        
+        try:
+            results = session.execute(sql, {"model_id": model.modelId})
+            row = results.fetchone()
+            if row:
+                return row[0]
+            else:
+                return None
+        except SQLAlchemyError as ex:
+            print(f"An error occurred: {ex}")
+            return None
+        finally:
+            session.close()
+
     def get_external_predictions(self, session, model: Model, external_dataset_name: str=None):
 
         logging.debug("Getting model external set TSVs")
@@ -405,8 +432,10 @@ class ModelInitializer:
         model.external_dataset_name = self.get_external_dataset_name(session, model)
         if model.external_dataset_name:
             self.get_dsstox_records_for_dataset_external(session, model=model, external_dataset_name=model.external_dataset_name)
+            self.get_external_instances(session, model)
+            model.external_dataset_description = self.get_external_dataset_description(session, model)
             model.df_preds_external = self.get_external_predictions(session, model=model, external_dataset_name=model.external_dataset_name)  # Get external set predictions
-            model.num_external = model.df_preds_external.shape[0]
+            # model.num_external = model.df_preds_external.shape[0]
 
         logging.debug(f"model_description with added metadata:{model.get_model_description_pretty()}")
 
@@ -559,6 +588,52 @@ class ModelInitializer:
             
             logging.debug(f"trainingSet shape:{model.df_training.shape}")
             logging.debug(f"predictionSet shape:{model.df_prediction.shape}")
+
+        except SQLAlchemyError as ex:
+            print(f"An error occurred: {ex}")
+        finally:
+            pass
+    
+    def get_external_instances(self, session, model:Model):
+        # TODO: Finish implementation
+        logging.debug("Getting model external set TSVs")
+
+        instance_header = f"ID\tProperty\t{model.headersTsv}\r\n"
+        sql = text("""
+            select dp.canon_qsar_smiles, dp.qsar_property_value, dv.values_tsv
+            from qsar_datasets.data_points dp
+            join qsar_datasets.datasets d
+                on dp.fk_dataset_id = d.id
+            join qsar_descriptors.descriptor_values dv
+                on dp.canon_qsar_smiles = dv.canon_qsar_smiles
+            where d.name = :datasetName
+            and dv.fk_descriptor_set_id = :descriptorSetId
+            order by dp.canon_qsar_smiles;
+            """)
+
+        sb_external = [instance_header]
+
+        counter_external = 0
+
+        try:
+            results = session.execute(sql, {'datasetName': model.external_dataset_name, 'descriptorSetId': model.descriptorSetId})
+
+            for row in results:
+                chemical_id, qsar_property_value, descriptors = row
+                instance = self.generate_instance(chemical_id, qsar_property_value, descriptors)
+
+                if instance is None:
+                    logging.debug(f"{id}\tnull instance\tdatasetName={model.datasetName}\tdescriptorSetName={model.descriptorSetName}")
+                    continue
+
+                sb_external.append(instance)
+                counter_external += 1
+
+            model.df_external = dfu.load_df("".join(sb_external))
+
+            model.num_external = model.df_external.shape[0]
+            
+            logging.debug(f"external_set shape:{model.df_external.shape}")
 
         except SQLAlchemyError as ex:
             print(f"An error occurred: {ex}")

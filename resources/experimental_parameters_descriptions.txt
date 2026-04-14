@@ -1,0 +1,52 @@
+Field                                       	 Description
+Pressure                                    	 Pressure at which the experiment was performed
+Temperature                                 	 Temperature at which the experiment was performed
+pH                                          	 pH at which the experiment was performed
+Measurement Method                          	 Measurement method
+Reliability                                 	 Reliability
+Toxval ID                                   	 toxval_id field in toxval table in ToxVal database
+Lifestage                                   	 lifestage field in toxval table in ToxVal database
+Exposure Route                              	 exposure route field in toxval table in ToxVal database
+Test ID                                     	 test_id field in tests table in Ecotox database
+Exposure Type                               	 Type of exposure (S=static, F=flowthrough, R=renewal, etc)
+Chem Analysis Method                        	 Analysis method for water concentration (M=measured, U=unmeasured etc)
+Concentration Type                          	 How concentration is reported
+Set                                         	 Training (T) or Validation (V) set
+Species Common                              	 Common name for animal tested
+Media Type                                  	 Media type where exposure occurs (e.g. fresh water)
+Species Latin                               	 Latin name of tested organism (e.g. Pimephales promelas)
+Response Site                               	 Part of organism tested for the chemical
+Test Location                               	 Where the test was performed (e.g. laboratory)
+Exposure Concentration                      	 Water concentration
+Maximum Concentration                       	 Maximum concentration tested
+Library                                     	 Experimental data library used
+Tested In Concentration Response            	 Whether or not tested for concentration response
+Dataset                                     	 Which dataset the chemical appears in
+QSAR Ready SMILES                           	 QSAR ready SMILES
+PubChem CID                                 	 CID used to identify chemical in PubChem
+Criterion 1- Water Concentration            	 Whether or not water concentration has been measured on a scale from 1 to 3
+Criterion 2- Radiolabel                     	 Whether or not radiolabel based concentrations have been corrected for metabolites on a scale from 1 to 3
+Criterion 3- Aqueous Solubility             	 Whether or not the water concentration exceeds the water solubility on a scale from 1 to 3
+Criterion 4- Exposure Duration              	 Whether or not the exposure duration is long enough to achieve steady state on a scale from 1 to 3
+Criterion 6- Other Major Source             	 Whether or not another criterion has not been met on a scale from 1 to 3
+Criterion 5- Tissue Analyzed                	 Whether or not the response_site is whole body on a scale from 1 to 3
+Overall Score                               	 Whether or not a data record is acceptable on a scale from 1 to 3
+Species Supercategory                       	 Type of organism (e.g. fish)
+Organism Classification                     	 Organism classification (e.g. vertebrate)
+Media                                       	 Media type where exposure occurs (e.g. fresh water)
+Percentage Organic Carbon                   	 Percent of organic carbon found in the experimental media
+Percentage Organic Matter                   	 Percent of organic matter found in the experimental media
+Soil Type                                   	 Type of soil in the experimental media
+Testing Conditions                          	 Conditions of the experimental tests
+Exposure Duration (In Days Or Lifetime)     	 Exposure Duration (in days or Lifetime)
+Water Concentration                         	 Concentration in water
+Exposure Duration                           	 Time exposed to chemical
+Test Guideline                              	 Test guideline used
+Species Type                                	 Type of species (e.g. standard, invasive, etc.)
+Test Type                                   	 Type of test (e.g. LC50, EC50)
+Effect                                      	 Toxicity effect (e.g. mortality)
+Result ID                                   	 result_id field in results table in Ecotox database
+Observation Duration                        	 Duration for the given toxicity value
+Chemical Number                             	 Chemical Number in ECHA Reach dossier
+Principles Of Method If Other Than Guideline	 Details of method used if other than a known guideline (REACH)
+Type Of Method Other                        	 Special method used (REACH)

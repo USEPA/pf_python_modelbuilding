@@ -207,8 +207,10 @@ class Model:
         self.df_preds_training_cv = None  # cross validation predictions for training set
 
         self.external_dataset_name = None
+        self.external_dataset_description = None
         self.num_external = None
         self.df_dsstoxRecords_external = None  # dsstoxRecords for external set
+        self.df_external = None
         self.df_preds_external = None  # external predictions for external set
         
         self.detailsFile = None

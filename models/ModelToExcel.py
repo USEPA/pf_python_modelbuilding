@@ -19,11 +19,29 @@ from models.db_utilities.raw_exp_data_db import ExpDataGetter
 from models.db_utilities.dataset_utilities_db import getMappedDatapoints
 import applicability_domain.applicability_domain_utilities as adu
 from dataclasses import dataclass, field
+from pathlib import Path
+import warnings
 
 import logging
-logging.getLogger('sqlalchemy').setLevel(logging.ERROR)
-logging.basicConfig(level=logging.INFO, force=True)
+import coloredlogs
 
+logging.getLogger('sqlalchemy').setLevel(logging.ERROR)
+
+logging_level = logging.INFO
+
+level_styles = {
+    "debug": {"color": "cyan"},
+    "info": {"color": "yellow"},
+    "warning": {"color": "red", "bold": True},
+    "error": {"color": "white", "background": "red"}
+}
+
+coloredlogs.install(level=logging_level, milliseconds=True, level_styles=level_styles,
+                    fmt='%(asctime)s - %(name)s - %(levelname)s - %(message)s (%(filename)s:%(lineno)d)')
+
+PROJECT_ROOT = os.getenv("PROJECT_ROOT")
+
+pd.options.mode.chained_assignment = None  # default='warn'
 
 # ============================================================
 # STORAGE CLASS
@@ -46,6 +64,7 @@ class ModelDataObjects:
     df_pv: Optional[pd.DataFrame] = None
     df_gmd: Optional[pd.DataFrame] = None
     df_gmd_external: Optional[pd.DataFrame] = None
+    experimental_parameters: Optional[pd.DataFrame] = None
 
     # Pre-constructed dataframes for Excel sheets
     cover_sheet_df: Optional[pd.DataFrame] = None
@@ -82,17 +101,18 @@ class ModelDataObjects:
             self.df_pv = data_querier.df_pv
             self.df_gmd = data_querier.df_gmd
             self.df_gmd_external = data_querier.df_gmd_external
+            self.experimental_parameters = data_querier.experimental_parameters
 
             self.cover_sheet_df = data_querier.query_cover_sheet_df()
             self.statistics_df = data_querier.query_statistics_df()
             self.records_df = data_querier.query_records_df()
-            self.records_field_descriptions_df = DataTransformer.get_records_field_descriptions_df()
+            self.records_field_descriptions_df = DataTransformer.get_records_field_descriptions_df(self.experimental_parameters)
             self.model_descriptors_df = data_querier.query_model_descriptors_df()
             self.model_descriptor_values_df = data_querier.query_model_descriptor_values_df()
             self.training_cv_predictions_df = data_querier.query_training_cv_predictions_df()
             self.test_set_predictions_df = data_querier.query_test_set_predictions_df()
             self.external_predictions_df = data_querier.query_external_predictions_df()
-            self.superheaders = DataTransformer.get_superheaders(self.records_df)
+            self.superheaders = DataTransformer.get_superheaders(self.records_df, self.experimental_parameters["Field"].tolist())
 
         elif self.model is not None:
             logging.info("Initializing with provided model and dataframes...")
@@ -105,17 +125,18 @@ class ModelDataObjects:
             
             self.model_id = getattr(self.model, "modelId", None)
 
-            data_querier = DataQuerier(model=self.model, df_pv=self.df_pv, df_gmd=self.df_gmd, df_gmd_external=self.df_gmd_external, query_args=self.query_args)
+            data_querier = DataQuerier(model=self.model, df_pv=self.df_pv, df_gmd=self.df_gmd, df_gmd_external=self.df_gmd_external, experimental_parameters=self.experimental_parameters, query_args=self.query_args)
             self.data_querier = data_querier
 
             self.df_pv = data_querier.df_pv
             self.df_gmd = data_querier.df_gmd
             self.df_gmd_external = data_querier.df_gmd_external
+            self.experimental_parameters = data_querier.experimental_parameters
 
             self.cover_sheet_df = data_querier.query_cover_sheet_df()
             self.statistics_df = data_querier.query_statistics_df()
             self.records_df = data_querier.query_records_df()
-            self.records_field_descriptions_df = DataTransformer.get_records_field_descriptions_df()
+            self.records_field_descriptions_df = DataTransformer.get_records_field_descriptions_df(self.experimental_parameters)
             self.model_descriptors_df = data_querier.query_model_descriptors_df()
             self.model_descriptor_values_df = data_querier.query_model_descriptor_values_df()
             self.training_cv_predictions_df = data_querier.query_training_cv_predictions_df()
@@ -143,29 +164,34 @@ class ExcelFormatter:
         writer: Any,
         sheet_name: str,
         df: pd.DataFrame,
-        col_width_pad: int=5,
-        min_col_width: int=7,
+        col_width_pad: int=6,
+        min_col_width: int=8,
         how: str="header",
         first_col_format: Optional[Any] = None
-        ) -> None:
+        ) -> list[int]:
         """Set column widths in Excel sheet based on content.
         
         Args:
             writer: pandas ExcelWriter object.
             sheet_name: Name of the worksheet to format.
             df: DataFrame corresponding to the sheet (used to get column names and widths).
-            col_width_pad: Extra padding to add to calculated width. Defaults to 5.
-            min_col_width: Minimum width for any column. Defaults to 7.
+            col_width_pad: Extra padding to add to calculated width. Defaults to 6.
+            min_col_width: Minimum width for any column. Defaults to 8.
             how: Strategy for width calculation - 'header' uses header text width, 'full' considers all cell values. Defaults to 'header'.
             first_col_format: Optional cell format to apply to the first column only.
+        
+        Returns:
+            list[int] of column widths.
         """
         worksheet = writer.sheets[sheet_name]
-                
+        
+        col_widths = []
         for col_idx in range(len(df.columns)):
             if how == "header":
                 header_entry = df.columns[col_idx]
                 header_width = len(header_entry)
                 col_width = max(header_width, min_col_width) + col_width_pad
+                col_widths.append(col_width)
                 worksheet.set_column(col_idx, col_idx, col_width, first_col_format if col_idx == 0 else None)
             elif how == "full":
                 header_entry = df.columns[col_idx]
@@ -178,8 +204,46 @@ class ExcelFormatter:
                         cell_value = str(cell_value)
                         max_width = max(max_width, len(cell_value))
                 col_width = max_width + col_width_pad
+                col_widths.append(col_width)
                 worksheet.set_column(col_idx, col_idx, col_width, first_col_format if col_idx == 0 else None)
+        return col_widths
+    
+    @staticmethod
+    def set_sig_figs(
+        df: pd.DataFrame,
+        columns: list[str],
+        sig_figs: int = 3,
+        in_place: bool = True
+        ) -> Optional[pd.DataFrame]:
+        """Set numerical columns to have the desired number of significant figures.
+        
+        Args:
+            df: DataFrame corresponding to the sheet (used to get column names and widths).
+            columns: A list of columns to apply significant figures to. If None, all numerical columns are formatted.
+            sig_figs: Number of significant figures for numerical columns. Defaults to 3.
+            in_place: Whether to perform the transformation in place on the provided DataFrame. Defaults to True.
+        """
+        numerical_types = [np.float64, np.float32, float]
 
+        logging.debug(f"Columns:\n\t{df.columns.tolist()}\nTypes:\n\t{df.dtypes.to_dict()}")
+
+        if not in_place:
+            df = df.copy()
+        
+        if columns is None:
+            for col in df.columns.tolist():
+                if df[col].dtype in numerical_types:
+                    df[col] = df[col].apply(lambda x: f"{x:.{sig_figs}g}").astype(float)
+                    logging.debug(f"Formatted column '{col}' with {sig_figs} significant figures:\n\t{df[col].iloc[:5].tolist()}")
+        else:
+            for col in columns:
+                if df[col].dtype in numerical_types:
+                    df[col] = df[col].apply(lambda x: f"{x:.{sig_figs}g}").astype(float)
+                    logging.debug(f"Formatted column '{col}' with {sig_figs} significant figures:\n\t{df[col].iloc[:5].tolist()}")
+        
+        if not in_place:
+            return df
+    
     @staticmethod
     def get_header_row(has_subtotals: bool = False, has_superheaders: bool = False) -> int:
         """Get the row number where column headers are located.
@@ -395,7 +459,17 @@ class ExcelFormatter:
                         # Add the hyperlink using Excel COM API
                         screen_tip = f"Link to {target_sheet} Row {target_row}"
 
-                        ws_source.write_url(cell_range, url=address, string=src_val_str, tip=screen_tip)
+                        # Catch UserWarning from xlsxwriter when hyperlink limit is exceeded
+                        with warnings.catch_warnings(record=True) as w:
+                            warnings.simplefilter("always")
+                            ws_source.write_url(cell_range, url=address, string=src_val_str, tip=screen_tip)
+                            
+                            # Check if a UserWarning about hyperlinks was raised
+                            if w and any(issubclass(warning.category, UserWarning) for warning in w):
+                                logging.warning(f"Hyperlink limit exceeded in {source_sheet}. Maximum hyperlinks reached. Skipping remaining {len(df_source) - src_idx} rows.")
+                                # Count remaining unmatched cells and exit loop
+                                unmatched_count += sum(1 for idx in range(src_idx, len(df_source)) if str(df_source[link_column].iloc[idx]).strip() in target_row_map)
+                                break
 
                         hyperlinks_added += 1
                     except Exception as e:
@@ -498,6 +572,55 @@ class ChartBuilder:
             return float(int_min), float(int_max), float(major_unit)
     
         return mn, mx, None
+    
+    @staticmethod
+    def get_min_max(unit_name: str, exps: Iterable[float], preds: Iterable[float]) -> Tuple[float, float]:
+        min_value = min(min(exps), min(preds))
+        max_value = max(max(exps), max(preds))
+        # Check if "log" is in unit_name
+        if "log" in unit_name.lower():
+            min_int = int(np.floor(min_value))
+            max_int = int(np.ceil(max_value))
+            # Determine if padding is needed
+            if (min_value - min_int) < 0.5:
+                min_value = min_int - 1
+            else:
+                min_value = min_int
+            if (max_int - max_value) < 0.5:
+                max_value = max_int + 1
+            else:
+                max_value = max_int
+            
+            # ax.set_xticks(range(min_value, max_value + 1))
+            # ax.set_yticks(range(min_value, max_value + 1))
+            
+        elif unit_name == "°C":
+            min_value = (np.floor(min_value / 50) * 50) - 50
+            max_value = (np.ceil(max_value / 50) * 50) + 50
+        
+        else:
+            padding = (max_value - min_value) * 0.05
+            min_value -= padding
+            max_value += padding
+            
+        return (min_value, max_value)
+    
+    @staticmethod
+    def get_major_unit(unit_name: str, min_limit: int, max_limit: int) -> int:
+        """Get the major tick unit for the axis.
+        
+        Args:
+            unit_name: 
+            min_limit: 
+            max_limit: 
+
+        Returns:
+            int: The major tick unit for the axis.
+        """
+        if "log" in unit_name.lower():
+            return 1
+        else:
+            return (max_limit - min_limit) // 5
 
     @staticmethod
     def add_plot(
@@ -567,13 +690,24 @@ class ChartBuilder:
             logging.error(f"Dataframe columns:\n\t{list(df.columns)}")
             raise ValueError(f"Column not found: {e}")
 
-        mn, mx, major_unit = ChartBuilder.compute_equal_axis_bounds(
-            df[x_col], df[y_col], pad_ratio=pad_ratio, integer_ticks=integer_ticks, log_plot=log_plot, target_ticks=5)
+        # mn, mx, major_unit = ChartBuilder.compute_equal_axis_bounds(
+        #     df[x_col], df[y_col], pad_ratio=pad_ratio, integer_ticks=integer_ticks, log_plot=log_plot, target_ticks=5)
+        
+        mn, mx = ChartBuilder.get_min_max(unit_name=property_units, exps=df[x_col], preds=df[y_col])
+        major_unit = ChartBuilder.get_major_unit(unit_name=property_units, min_limit=mn, max_limit=mx)
         
         chart = workbook.add_chart({"type":"scatter", "subtype":"straight_with_markers"})
         title = f"{sheet_name} for {property_name}" if property_name is not None else f"{y_col.capitalize()} vs {x_col.capitalize()}"
+        title_len = len(title)
+        title_font_size = 18 - 4*(title_len // 30)
         series_name = f"{y_col.capitalize()} vs {x_col.capitalize()}"
-        chart.set_title({"name": title})
+        chart.set_title({
+            "name": title,
+            "overlay": False,
+            "name_font": {
+                "size": title_font_size
+            }
+            })
         chart.set_style(10)
         
         data_end_row = data_start_row + nrows - 1
@@ -581,8 +715,18 @@ class ChartBuilder:
                 "name":series_name,
                 "categories":[sheet_name, data_start_row, x_col_idx, data_end_row, x_col_idx],
                 "values":[sheet_name, data_start_row, y_col_idx, data_end_row, y_col_idx],
-                "marker":{"type":"circle", "size":6},
-                "line":{"none":True}})
+                "marker":{
+                    "type":"circle",
+                    "size":6,
+                    "border":{
+                        "color":"#000000",
+                        "width": 0.25
+                        }
+                    },
+                "line":{
+                    "none":True
+                    }
+                })
         
         yx_row_start = data_end_row + 1 + yx_offset_rows
         worksheet.write_number(yx_row_start, x_col_idx, mn)
@@ -660,9 +804,10 @@ class DataQuerier:
             session: Optional[Any] = None,
             query_args: Optional[dict[str, dict[str, Any]]] = None,
             model: Optional[Any] = None,
-            df_pv: Optional[Any] = None,
-            df_gmd: Optional[Any] = None,
-            df_gmd_external: Optional[Any] = None
+            df_pv: Optional[pd.DataFrame] = None,
+            df_gmd: Optional[pd.DataFrame] = None,
+            df_gmd_external: Optional[pd.DataFrame] = None,
+            experimental_parameters: Optional[pd.DataFrame] = None
         ):
         """Initialize DataQuerier for database access and data retrieval.
 
@@ -691,6 +836,8 @@ class DataQuerier:
         self.df_gmd = df_gmd
         self.df_gmd_external = df_gmd_external
 
+        self.experimental_parameters = experimental_parameters
+
         self.query_args = query_args if query_args is not None else {}
 
         self.post_init()
@@ -705,6 +852,7 @@ class DataQuerier:
         self.query_df_pv(**self.query_args.get("query_df_pv", {}))
         self.query_df_gmd(external=False)
         self.query_df_gmd(external=True)
+        self.query_experimental_parameters()
 
     @staticmethod
     def getEngine(connect_args: Optional[dict] = {}) -> Any:
@@ -765,7 +913,8 @@ class DataQuerier:
             if model is None:
                 logging.error(f"Failed to load model {self.model_id}")
                 return None
-                        
+
+            self.model = model
             return model
         
         except Exception as e:
@@ -826,6 +975,7 @@ class DataQuerier:
         elif not external and self.dataset_name is not None:
             dataset_name = self.dataset_name
         else:
+            logging.error("Must set dataset name on DataQuerier object prior to querying GMD")
             return None
         
         try:
@@ -847,7 +997,36 @@ class DataQuerier:
             logging.error(f"Error retrieving df_gmd: {e}")
             traceback.print_exc()
             return None
-    
+        
+    def query_experimental_parameters(self) -> Optional[pd.DataFrame]:
+        """Query database for experimental parameters.
+        
+        Returns:
+            pd.DataFrame: DataFrame with experimental parameters and their descriptions.
+        """
+        if self.experimental_parameters is not None:
+            return self.experimental_parameters
+
+        logging.info("Querying experimental parameters from database")
+
+        sql = text("""
+            select p.name as "Field", p.description as "Description"
+            from exp_prop.parameters p;
+        """)
+
+        param_rows = self.session.execute(sql).mappings().all()
+        if not param_rows:
+            logging.warning("No experimental parameters found in the database.")
+            return None
+
+        experimental_parameters = pd.DataFrame(param_rows)
+        experimental_parameters["Field"] = experimental_parameters["Field"].apply(lambda x: ExcelFormatter.clean_col_titles(x))
+        experimental_parameters = experimental_parameters[["Field", "Description"]]
+
+        self.experimental_parameters = experimental_parameters
+
+        return self.experimental_parameters
+
     def query_cover_sheet_df(self) -> pd.DataFrame:
         """Query database for model summary information to populate the cover sheet.
         
@@ -875,6 +1054,7 @@ class DataQuerier:
         }
         if getattr(model, "external_dataset_name", False):
             summary_dict["External Dataset Name"] = [model.external_dataset_name]
+            summary_dict["External Dataset Description"] = [model.external_dataset_description]
             summary_dict["nExternal"] = [model.num_external]
         summary = pd.DataFrame(summary_dict)
 
@@ -992,10 +1172,10 @@ class DataQuerier:
         kfold_splitter = KFold(n_splits=5, shuffle=True, random_state=42)
         fold_col = np.zeros(len(model.df_training), dtype=int)
         for fold_index, (train_index, val_index) in enumerate(kfold_splitter.split(model.df_training)):
-            fold_col[val_index] = fold_index
+            fold_col[val_index] = fold_index + 1
 
         training["Fold"] = fold_col
-        training["Set"] = training.Fold.apply(lambda x: f"Training, Fold {x}")
+        training["Set"] = training.Fold.apply(lambda x: f"Training CV, Fold {x}")
 
         df_preds_test = model.df_preds_test.rename(columns={"canon_qsar_smiles": "id"})
 
@@ -1046,7 +1226,7 @@ class DataQuerier:
         kfold_splitter = KFold(n_splits=5, shuffle=True, random_state=42)
         fold_col = np.zeros(len(model.df_preds_training_cv), dtype=int)
         for fold_index, (train_index, val_index) in enumerate(kfold_splitter.split(model.df_preds_training_cv)):
-            fold_col[val_index] = fold_index
+            fold_col[val_index] = fold_index + 1
 
         df_preds_training_cv = model.df_preds_training_cv.rename(columns={"canon_qsar_smiles": "id"})
 
@@ -1121,13 +1301,17 @@ class DataQuerier:
 
         return test_set_predictions_df
     
-    def query_external_predictions_df(self) -> pd.DataFrame:
+    def query_external_predictions_df(self) -> Optional[pd.DataFrame]:
         """
         Query database for external validation set predictions.
                 
         Returns:
             pd.DataFrame: External predictions from database (currently returns empty result).
         """
+        if self.dataset_name_external is None:
+            logging.info(f"External dataset name is None for Model {self.model_id}")
+            return None
+        
         logging.info(f"Building External Predictions from Model {self.model_id}")
 
         model = self.query_model()
@@ -1137,11 +1321,23 @@ class DataQuerier:
 
         temp = pd.merge(df_preds_external, df_gmd_external, left_on="id", right_on="canon_qsar_smiles", how="left")
 
+        ads = model.applicabilityDomainName.split(" and ")
+        ad_test_columns = {}
+        for ad in ads:
+            df_ad_output, _ = adu.generate_applicability_domain_with_preselected_descriptors_from_dfs(
+                    train_df=model.df_training.copy(), test_df=model.df_external.copy(),
+                    remove_log_p=model.remove_log_p_descriptors,
+                    embedding=model.embedding, applicability_domain=ad,
+                    filterColumnsInBothSets=False,
+                    returnTrainingAD=False)
+            ad_test_columns[f"AD {ad}"] = df_ad_output["AD"]
+
         external_predictions_dict = {
             "Exp Prop ID": temp["qsar_exp_prop_property_values_id_first"],
             "Canon QSAR SMILES": temp["canon_qsar_smiles"],
             "Exp": temp["exp"],
             "Pred": temp["pred"],
+            **ad_test_columns,
             "DTXCID": temp["dtxcid"],
             "DTXSID": temp["dtxsid"],
             "CASRN": temp["casrn"],
@@ -1333,6 +1529,7 @@ class DataTransformer:
         }
         if results_dict["model_details"].get("externalDatasetName", False):
             cover_sheet_df["External Dataset Name"] = [results_dict["model_details"].get("externalDatasetName", None)]
+            cover_sheet_df["External Dataset Description"] = [results_dict["model_details"].get("externalDatasetDescription", None)]
             cover_sheet_df["nExternal"] = [results_dict["model_details"].get("numExternal", None)]
         cover_sheet_df = pd.DataFrame.from_dict(cover_sheet_df)
         return cover_sheet_df
@@ -1415,22 +1612,26 @@ class DataTransformer:
         return records_df
 
     @staticmethod
-    def get_superheaders(records_df: pd.DataFrame) -> dict:
+    def get_superheaders(records_df: pd.DataFrame, experimental_details_columns: Optional[list] = None) -> dict:
         """Generate logical groupings (superheaders) for records columns.
         
         Args:
             records_df: Records dataframe to categorize.
+            experimental_details_columns: List of experimental details column names. 
         
         Returns:
             dict: Dictionary mapping superheader names (e.g., 'Identifiers', 'Source Metadata') to lists of column names.
         """
+        if experimental_details_columns is None:
+            experimental_details_columns = ["Measurement Method", "Media", "Percentage Organic Carbon", "Percentage Organic Matter", "pH", "Soil Type", "Temperature", "Testing Conditions", "Notes", "Pressure", "Reliability"]
+
         superheaders = {
             "Identifiers": ["Exp Prop ID", "Canon QSAR SMILES"],
             "Literature Source Metadata": ["Page URL", "Public Source Name", "Public Source URL", "Literature Source Citation", "Literature Source DOI"],
             "Source Chemical Metadata": ["Source DTXRID", "Source DTXSID", "Source CASRN", "Source Chemical Name", "Source SMILES"],
             "Mapped DSSTox Record Metadata": ["Mapped DTXCID", "Mapped DTXSID", "Mapped CAS", "Mapped Chemical Name", "Mapped SMILES", "Mapped Molweight"],
             "Property Value Data": ["Value Original", "Value Max", "Value Min", "Value Point Estimate", "Value Units", "QSAR Property Value", "QSAR Property Units"],
-            "Experimental Details": ["Measurement Method", "Media", "Percentage Organic Carbon", "Percentage Organic Matter", "pH", "Soil Type", "Temperature", "Testing Conditions", "Notes"],
+            "Experimental Details": experimental_details_columns,
             "Quality Control": ["QC Flag", "Flag Reason"]
         }
 
@@ -1440,6 +1641,8 @@ class DataTransformer:
         for superheader in superheaders.keys():
             if superheaders[superheader]:
                 superheaders[superheader] = [col for col in records_df.columns if col in superheaders[superheader]]
+                if not superheaders[superheader]:
+                    empty_superheaders.append(superheader)
             else:
                 empty_superheaders.append(superheader)
         for superheader in empty_superheaders:
@@ -1448,8 +1651,11 @@ class DataTransformer:
         return superheaders
 
     @staticmethod
-    def get_records_field_descriptions_df() -> pd.DataFrame:
+    def get_records_field_descriptions_df(experimental_parameters: Optional[pd.DataFrame] = None) -> pd.DataFrame:
         """Load field descriptions from resource file.
+
+        Args:
+            experimental_parameters: Optional dataframe with experimental parameter descriptions.
         
         Returns:
             pd.DataFrame: Records field names and descriptions from 'resources/records_field_descriptions.txt'.
@@ -1457,6 +1663,21 @@ class DataTransformer:
         PROJECT_ROOT = os.getenv("PROJECT_ROOT")
         path_segments = [PROJECT_ROOT, "resources", "records_field_descriptions.txt"]
         records_field_descriptions_df = pd.read_csv(os.path.join(*path_segments), sep="\t")
+        records_field_descriptions_df.columns = records_field_descriptions_df.columns.str.strip()
+        records_field_descriptions_df = records_field_descriptions_df.map(lambda x: x.strip() if isinstance(x, str) else x)
+
+        if experimental_parameters is not None:
+            # Merge with experimental parameters if provided
+            records_field_descriptions_df = pd.concat([records_field_descriptions_df, experimental_parameters], ignore_index=True)
+        else:
+            # Merge with local experimental parameters
+            path_segments_params = [PROJECT_ROOT, "resources", "experimental_parameters_descriptions.txt"]
+            experimental_parameters_df = pd.read_csv(os.path.join(*path_segments_params), sep="\t")
+            experimental_parameters_df.columns = experimental_parameters_df.columns.str.strip()
+            experimental_parameters_df = experimental_parameters_df.map(lambda x: x.strip() if isinstance(x, str) else x)
+
+            records_field_descriptions_df = pd.concat([records_field_descriptions_df, experimental_parameters_df], ignore_index=True)
+        logging.debug(f"records_field_descriptions_df:\n\tFields: {records_field_descriptions_df.Field.tolist()}")
         return records_field_descriptions_df
 
     @staticmethod
@@ -1520,7 +1741,7 @@ class DataTransformer:
         test["Set"] = "Test"
 
         training = df_pred_cv.loc[:, columns]
-        training["Set"] = df_pred_cv.cv_fold.apply(lambda x: f"Training, Fold {x}")
+        training["Set"] = df_pred_cv.cv_fold.apply(lambda x: f"Training CV, Fold {x + 1}")  # TODO: Test on local dataframe to ensure this is correct
 
         full = pd.concat([test, training], ignore_index=True)
         full["canon_qsar_smiles"] = full["canon_qsar_smiles"].astype(str)
@@ -1590,17 +1811,37 @@ class DataTransformer:
         return df_test
 
     @staticmethod
-    def get_external_predictions_df(df_ext: pd.DataFrame) -> pd.DataFrame:
+    def get_external_predictions_df(df_ext: pd.DataFrame, ad_columns: Optional[list|str] = None, df_training: Optional[pd.DataFrame] = None, remove_log_p_descriptors: Optional[bool] = True, embedding: Optional[list[str]] = None) -> pd.DataFrame:
         """Format external/validation set predictions for Excel sheet.
         
         Args:
             df_ext: External dataset predictions dataframe.
+            ad_columns: List of applicability domain column names to include.
+            df_training: Training dataset dataframe for handling applicability domains.
+            remove_log_p_descriptors: Whether to remove logP descriptors. Defaults to True.
+            embedding: List of embedding column names.
         
         Returns:
             pd.DataFrame: Formatted predictions ready for Excel output.
         """
         exp_prop_id = df_ext.pop("exp_prop_id")
         df_ext.insert(0, "Exp Prop ID", exp_prop_id)
+
+        if ad_columns and df_training:
+            if isinstance(ad_columns, str):
+                ads = ad_columns.split(" and ")
+            else:
+                ads = ad_columns
+            ad_test_columns = {}
+            for ad in ads:
+                df_ad_output, _ = adu.generate_applicability_domain_with_preselected_descriptors_from_dfs(
+                        train_df=df_training.copy(), test_df=df_ext.copy(),
+                        remove_log_p=remove_log_p_descriptors,
+                        embedding=embedding, applicability_domain=ad,
+                        filterColumnsInBothSets=False,
+                        returnTrainingAD=False)
+                ad_test_columns[f"AD {ad}"] = df_ad_output["AD"]
+
         df_ext.rename(columns={col: ExcelFormatter.clean_col_titles(col) for col in df_ext.columns}, inplace=True)
         return df_ext
     
@@ -1681,7 +1922,7 @@ class ModelToExcel:
             log_plot: Use logarithmic scale for prediction plot axes. Defaults to True.
             colors: Color palette for superheader cells (list of hex color strings). Defaults to EPA color palette.
         """
-        self.excel_path = excel_path
+        self.excel_path = Path(excel_path)
 
         self.exclude_blank_columns = exclude_blank_columns
         self.include_value_original = include_value_original
@@ -1739,7 +1980,7 @@ class ModelToExcel:
         
         worksheet.freeze_panes(0, 1)
 
-        ExcelFormatter.set_column_width(writer, "Summary", cover_sheet, how="full", first_col_format=bold_format)
+        ExcelFormatter.set_column_width(writer, "Summary", cover_sheet, how="full", first_col_format=bold_format, col_width_pad=1, min_col_width=5)
 
         return cover_sheet
 
@@ -1838,8 +2079,11 @@ class ModelToExcel:
 
         ExcelFormatter.set_column_width(writer, "Statistics", statistics, how="full")
 
-        img_path = os.path.join(os.getenv("PROJECT_ROOT"), "resources", "equations.png")        
-        worksheet.insert_image("A8", img_path, {"x_scale": 0.7, "y_scale": 0.7, "x_offset": 10, "y_offset": 2})
+        img_path = os.path.join(os.getenv("PROJECT_ROOT"), "resources", "continuous_equations.png")
+        try:
+            worksheet.insert_image("A8", img_path, {"x_scale": 0.7, "y_scale": 0.7, "x_offset": 10, "y_offset": 2})
+        except Exception as e:
+            logging.error(f"Error inserting image in Statistics sheet: {e}")
 
         return statistics
 
@@ -1862,9 +2106,9 @@ class ModelToExcel:
         if exclude_blank_columns:
             records = records.dropna(axis=1, how="all")
         if not include_qc_columns:
-            records = records.drop(columns=["qc_flag", "flag_reason"], errors="ignore")
+            records = records.drop(columns=["QC Flag", "Flag Reason"], errors="ignore")
         if not include_value_original:
-            records = records.drop(columns=["value_original"], errors="ignore")
+            records = records.drop(columns=["Value Original"], errors="ignore")
         
         workbook = writer.book
         worksheet = workbook.add_worksheet("Records")
@@ -1876,9 +2120,14 @@ class ModelToExcel:
                 colors = self.colors
                 merge_formats = [workbook.add_format({"bold": True, "align": "center", "fg_color": color}) for color in colors]
 
+                other_cols = superheaders.get("Other", [])
+                records = records[[col for col in records.columns if col not in other_cols] + other_cols]
+
                 i = 0
                 for superheader in superheaders.keys():
                         col_idxs = [records.columns.get_loc(col) for col in superheaders[superheader]]
+                        if not col_idxs:
+                            continue
 
                         start_col = xl_col_to_name(min(col_idxs))  # Get the column letter using xlsxwriter utility
                         end_col = xl_col_to_name(max(col_idxs))  # Get the column letter using xlsxwriter utility
@@ -1900,7 +2149,7 @@ class ModelToExcel:
         else:
             worksheet.freeze_panes(1 + [0, 1][self.create_records_superheaders], 0)
 
-        ExcelFormatter.set_column_width(writer, "Records", records, col_width_pad=5, how="header")
+        ExcelFormatter.set_column_width(writer, "Records", records, col_width_pad=6, how="header")
         ExcelFormatter.add_filter(writer, "Records", records, has_subtotals=add_subtotals, has_superheaders=self.create_records_superheaders)
 
         return records
@@ -1929,9 +2178,9 @@ class ModelToExcel:
             records_field_descriptions = records_field_descriptions[records_field_descriptions["Field"].isin(temp.columns)]
 
             if not self.include_qc_columns:
-                dropped_columns.update({"qc_flag", "flag_reason"})
+                dropped_columns.update({"QC Flag", "Flag Reason"})
             if not self.include_value_original:
-                dropped_columns.update({"value_original"})
+                dropped_columns.update({"Value Original"})
 
             records_field_descriptions = records_field_descriptions[~records_field_descriptions["Field"].isin(dropped_columns)]
             records_field_descriptions["Field"] = pd.Categorical(records_field_descriptions["Field"], categories=temp.columns, ordered=True)
@@ -1946,16 +2195,27 @@ class ModelToExcel:
         if self.create_records_superheaders and self.records_df is not None:
             superheaders = DataTransformer.get_superheaders(self.records_df)
             colors = self.colors
-            merge_formats = [workbook.add_format({"bold": True, "align": "center", "fg_color": color}) for color in colors]
+            merge_formats = [workbook.add_format({"bold": True, "align": "center", "valign": "vcenter", "fg_color": color}) for color in colors]
             bold_format = workbook.add_format({"bold": True, "align": "center"})
 
             worksheet.write_string("A1", "Field Group", bold_format)
 
             records_field_descriptions["Field Group"] = records_field_descriptions["Field"].map(lambda x: next((k for k, v in superheaders.items() if x in v), "Other"))
+            records_field_descriptions.reset_index(drop=True, inplace=True)
 
-            for row in range(len(records_field_descriptions)):
-                group = records_field_descriptions.iloc[row]["Field Group"]
-                worksheet.write_string(row + 1, 0, group, merge_formats[list(superheaders.keys()).index(group)%len(merge_formats)])
+            i = 0
+            for superheader in superheaders.keys():
+                    row_idxs = records_field_descriptions[records_field_descriptions["Field"].isin(superheaders[superheader])].index.tolist()
+                    if not row_idxs:
+                        continue
+
+                    start_row = min(row_idxs) + 2
+                    end_row = max(row_idxs) + 2
+
+                    logging.debug(f"Processing superheader: {superheader}\n\t{superheaders[superheader]}\n\tMerging Range: A{start_row}:A{end_row}")
+
+                    worksheet.merge_range(f"A{start_row}:A{end_row}", superheader, merge_formats[i%len(merge_formats)])
+                    i += 1
 
             startcol=1
         
@@ -1966,7 +2226,7 @@ class ModelToExcel:
         worksheet = writer.sheets["Records Field Descriptions"]
         worksheet.freeze_panes(1, 0)
 
-        ExcelFormatter.set_column_width(writer, "Records Field Descriptions", records_field_descriptions, how="full")
+        ExcelFormatter.set_column_width(writer, "Records Field Descriptions", records_field_descriptions, how="full", col_width_pad=1, min_col_width=5)
         ExcelFormatter.add_filter(writer, "Records Field Descriptions", records_field_descriptions)
 
         return records_field_descriptions
@@ -1988,6 +2248,8 @@ class ModelToExcel:
             return None
         
         start_row = ExcelFormatter.get_header_row(has_subtotals=add_subtotals)
+        if "Coefficient" in model_descriptors.columns and "Standard Error" in model_descriptors.columns:
+            ExcelFormatter.set_sig_figs(model_descriptors, sig_figs=3, columns=["Coefficient", "Standard Error"])
         model_descriptors.to_excel(writer, sheet_name="Model Descriptors", index=False, startrow=start_row)
 
         workbook = writer.book
@@ -1998,7 +2260,7 @@ class ModelToExcel:
         else:
             worksheet.freeze_panes(1, 0)
 
-        ExcelFormatter.set_column_width(writer, "Model Descriptors", model_descriptors, how="full")
+        col_widths = ExcelFormatter.set_column_width(writer, "Model Descriptors", model_descriptors, how="full")
         ExcelFormatter.add_filter(writer, "Model Descriptors", model_descriptors, has_subtotals=add_subtotals)
 
         return model_descriptors
@@ -2021,6 +2283,8 @@ class ModelToExcel:
             return None
         
         start_row = ExcelFormatter.get_header_row(has_subtotals=add_subtotals)
+        # format_cols = [col for col in model_descriptor_values.columns if col.startswith("Observed") or col.startswith("Predicted")]
+        ExcelFormatter.set_sig_figs(model_descriptor_values, sig_figs=3, columns=None)
         model_descriptor_values.to_excel(writer, sheet_name="Model Descriptor Values", index=False, startrow=start_row)
 
         workbook = writer.book
@@ -2031,12 +2295,12 @@ class ModelToExcel:
         else:
             worksheet.freeze_panes(1, 0)
 
-        ExcelFormatter.set_column_width(writer, "Model Descriptor Values", model_descriptor_values, min_col_width=7, col_width_pad=5, how="header")
+        col_widths = ExcelFormatter.set_column_width(writer, "Model Descriptor Values", model_descriptor_values, min_col_width=7, col_width_pad=5, how="header")
         ExcelFormatter.add_filter(writer, "Model Descriptor Values", model_descriptor_values, has_subtotals=add_subtotals)
 
         return model_descriptor_values
     
-    def training_cv_predictions(self, writer: Any, training_cv_predictions: Optional[pd.DataFrame]=None, add_subtotals: bool=True, x_col: str=None, y_col: str=None, chart_size_px: int=520, pad_ratio: float=0.02, integer_ticks: bool=True, yx_offset_rows: int=3, col_width_pad: int=5, min_col_width: int=7, property_name: Optional[str]=None, property_units: Optional[str]=None) -> pd.DataFrame:
+    def training_cv_predictions(self, writer: Any, training_cv_predictions: Optional[pd.DataFrame]=None, add_subtotals: bool=True, x_col: str=None, y_col: str=None, chart_size_px: int=520, pad_ratio: float=0.02, integer_ticks: bool=True, yx_offset_rows: int=3, col_width_pad: int=6, min_col_width: int=8, property_name: Optional[str]=None, property_units: Optional[str]=None) -> pd.DataFrame:
         """Create the training CV predictions sheet with observed vs predicted scatter plot.
         
         Displays cross-validation predictions for training set compounds with integrated scatter plot,
@@ -2052,8 +2316,8 @@ class ModelToExcel:
             pad_ratio: Axis padding ratio. Defaults to 0.02.
             integer_ticks: Use integer tick spacing. Defaults to True.
             yx_offset_rows: Empty rows before y=x reference points. Defaults to 3.
-            col_width_pad: Column width padding. Defaults to 5.
-            min_col_width: Minimum column width. Defaults to 7.
+            col_width_pad: Column width padding. Defaults to 6.
+            min_col_width: Minimum column width. Defaults to 8.
             property_name: Property name for chart title. Defaults to None.
             property_units: Property units for axis labels. Defaults to None.
         
@@ -2064,6 +2328,7 @@ class ModelToExcel:
             return None
         
         start_row = ExcelFormatter.get_header_row(has_subtotals=add_subtotals)
+        ExcelFormatter.set_sig_figs(training_cv_predictions, sig_figs=3, columns=["Exp", "Pred"])
         training_cv_predictions.to_excel(writer, sheet_name="Training CV Predictions", index=False, startrow=start_row)
 
         workbook = writer.book
@@ -2074,14 +2339,14 @@ class ModelToExcel:
         else:
             worksheet.freeze_panes(1, 0)
 
-        ExcelFormatter.set_column_width(writer, "Training CV Predictions", training_cv_predictions, min_col_width=min_col_width, col_width_pad=col_width_pad, how="header")
+        col_widths = ExcelFormatter.set_column_width(writer, "Training CV Predictions", training_cv_predictions, min_col_width=min_col_width, col_width_pad=col_width_pad, how="header")
         ExcelFormatter.add_filter(writer, "Training CV Predictions", training_cv_predictions, has_subtotals=add_subtotals)
         
         ChartBuilder.add_plot(writer, workbook, "Training CV Predictions", "Training CV Predictions", training_cv_predictions, x_col=x_col, y_col=y_col, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, log_plot=self.log_plot, yx_offset_rows=yx_offset_rows, property_name=property_name, property_units=property_units, has_subtotals=add_subtotals)
 
         return training_cv_predictions
     
-    def test_set_predictions(self, writer: Any, test_set_predictions: Optional[pd.DataFrame]=None, add_subtotals: bool=True, x_col: str=None, y_col: str=None, chart_size_px: int=520, pad_ratio: float=0.02, integer_ticks: bool=True, yx_offset_rows: int=3, col_width_pad: int=5, min_col_width: int=7, property_name: Optional[str]=None, property_units: Optional[str]=None) -> pd.DataFrame:
+    def test_set_predictions(self, writer: Any, test_set_predictions: Optional[pd.DataFrame]=None, add_subtotals: bool=True, x_col: str=None, y_col: str=None, chart_size_px: int=520, pad_ratio: float=0.02, integer_ticks: bool=True, yx_offset_rows: int=3, col_width_pad: int=6, min_col_width: int=8, property_name: Optional[str]=None, property_units: Optional[str]=None) -> pd.DataFrame:
         """Create the test set predictions sheet with observed vs predicted scatter plot and AD information.
         
         Displays test set predictions with compound identifiers, observed/predicted values, applicability domain
@@ -2097,8 +2362,8 @@ class ModelToExcel:
             pad_ratio: Axis padding ratio. Defaults to 0.02.
             integer_ticks: Use integer tick spacing. Defaults to True.
             yx_offset_rows: Empty rows before y=x reference points. Defaults to 3.
-            col_width_pad: Column width padding. Defaults to 5.
-            min_col_width: Minimum column width. Defaults to 7.
+            col_width_pad: Column width padding. Defaults to 6.
+            min_col_width: Minimum column width. Defaults to 8.
             property_name: Property name for chart title. Defaults to None.
             property_units: Property units for axis labels. Defaults to None.
         
@@ -2109,6 +2374,7 @@ class ModelToExcel:
             return None
         
         start_row = ExcelFormatter.get_header_row(has_subtotals=add_subtotals)
+        ExcelFormatter.set_sig_figs(test_set_predictions, sig_figs=3, columns=["Exp", "Pred"])
         test_set_predictions.to_excel(writer, sheet_name="Test Set Predictions", index=False, startrow=start_row)
 
         workbook = writer.book
@@ -2119,14 +2385,14 @@ class ModelToExcel:
         else:
             worksheet.freeze_panes(1, 0)
 
-        ExcelFormatter.set_column_width(writer, "Test Set Predictions", test_set_predictions, min_col_width=min_col_width, col_width_pad=col_width_pad, how="header")
+        col_widths = ExcelFormatter.set_column_width(writer, "Test Set Predictions", test_set_predictions, min_col_width=min_col_width, col_width_pad=col_width_pad, how="header")
         ExcelFormatter.add_filter(writer, "Test Set Predictions", test_set_predictions, has_subtotals=add_subtotals)
-        
+
         ChartBuilder.add_plot(writer, workbook, "Test Set Predictions", "Test Set Predictions", test_set_predictions, x_col=x_col, y_col=y_col, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, log_plot=self.log_plot, yx_offset_rows=yx_offset_rows, property_name=property_name, property_units=property_units, has_subtotals=add_subtotals)
 
         return test_set_predictions
 
-    def external_predictions(self, writer: Any, external_predictions: Optional[pd.DataFrame]=None, add_subtotals: bool=True, x_col: str=None, y_col: str=None, chart_size_px: int=520, pad_ratio: float=0.02, integer_ticks: bool=True, yx_offset_rows: int=3, col_width_pad: int=5, min_col_width: int=7, property_name: Optional[str]=None, property_units: Optional[str]=None) -> Optional[pd.DataFrame]:
+    def external_predictions(self, writer: Any, external_predictions: Optional[pd.DataFrame]=None, add_subtotals: bool=True, x_col: str=None, y_col: str=None, chart_size_px: int=520, pad_ratio: float=0.02, integer_ticks: bool=True, yx_offset_rows: int=3, col_width_pad: int=6, min_col_width: int=8, property_name: Optional[str]=None, property_units: Optional[str]=None) -> Optional[pd.DataFrame]:
         """Create the external validation set predictions sheet with scatter plot.
         
         Displays external/validation dataset predictions with observed/predicted values, compound metadata, and
@@ -2142,8 +2408,8 @@ class ModelToExcel:
             pad_ratio: Axis padding ratio. Defaults to 0.02.
             integer_ticks: Use integer tick spacing. Defaults to True.
             yx_offset_rows: Empty rows before y=x reference points. Defaults to 3.
-            col_width_pad: Column width padding. Defaults to 5.
-            min_col_width: Minimum column width. Defaults to 7.
+            col_width_pad: Column width padding. Defaults to 6.
+            min_col_width: Minimum column width. Defaults to 8.
             property_name: Property name for chart title. Defaults to None.
             property_units: Property units for axis labels. Defaults to None.
         
@@ -2154,6 +2420,7 @@ class ModelToExcel:
             return None
         
         start_row = ExcelFormatter.get_header_row(has_subtotals=add_subtotals)
+        ExcelFormatter.set_sig_figs(external_predictions, sig_figs=3, columns=["Exp", "Pred"])
         external_predictions.to_excel(writer, sheet_name="External Predictions", index=False, startrow=start_row)
 
         workbook = writer.book
@@ -2164,7 +2431,7 @@ class ModelToExcel:
         else:
             worksheet.freeze_panes(1, 0)
 
-        ExcelFormatter.set_column_width(writer, "External Predictions", external_predictions, min_col_width=min_col_width, col_width_pad=col_width_pad, how="header")
+        col_widths = ExcelFormatter.set_column_width(writer, "External Predictions", external_predictions, min_col_width=min_col_width, col_width_pad=col_width_pad, how="header")
         ExcelFormatter.add_filter(writer, "External Predictions", external_predictions, has_subtotals=add_subtotals)
         
         ChartBuilder.add_plot(writer, workbook, "External Predictions", "External Predictions", external_predictions, x_col=x_col, y_col=y_col, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, log_plot=self.log_plot, yx_offset_rows=yx_offset_rows, property_name=property_name, property_units=property_units, has_subtotals=add_subtotals)
@@ -2179,8 +2446,8 @@ class ModelToExcel:
             pad_ratio: float=0.02,
             integer_ticks: bool=True,
             yx_offset_rows: int=3,
-            col_width_pad: int=4,
-            min_col_width: int=5
+            col_width_pad: int=6,
+            min_col_width: int=8
         ) -> None:
         """Generate complete Excel workbook with all model summary sheets and charts.
         
@@ -2199,6 +2466,7 @@ class ModelToExcel:
             min_col_width: Minimum width for any column. Defaults to 5 characters.
         """
         logging.info("Creating detailed Excel...")
+        self.excel_path.parent.mkdir(parents=True, exist_ok=True)
         with pd.ExcelWriter(self.excel_path, engine="xlsxwriter") as writer:
             workbook = writer.book
 
@@ -2284,37 +2552,44 @@ def custom_encoder(obj: Any) -> Any:
         return obj.to_dict(orient='records')
 
 
-def main() -> None:
+def query_example() -> None:
     """Example: Generate Excel report for model queried from the database.
     
     Creates ModelDataObjects from model_id, which automatically queries all necessary
     data from the database, then generates the Excel workbook.
     """
     model_id = 1746
+    file_path = os.path.join(PROJECT_ROOT, "data", "reports", f"model_{model_id}_summary.xlsx")
+
     mdo = ModelDataObjects(model_id=model_id)
-    mte = ModelToExcel(mdo, "test_summary_refactor.xlsx")
+    mte = ModelToExcel(mdo, file_path)
     mte.create_excel()
 
 
-def main2() -> None:
+def local_example() -> None:
     """Example: Generate Excel report for a locally constructed model.
     
     Loads pre-computed model and data objects from a pickle file (local_model_data.pkl),
     then generates the Excel workbook using local data instead of querying database.
     """
-    with open("local_model_data.pkl", "rb") as f:
-        stuff = pickle.load(f)
-    model = stuff.get("model")
-    df_pv = stuff.get("df_pv")
-    df_gmd = stuff.get("df_gmd")
-    df_gmd_external = stuff.get("df_gmd_external")
-    
-    mdo = ModelDataObjects(model=model, df_pv=df_pv, df_gmd=df_gmd, df_gmd_external=df_gmd_external)
-    mte = ModelToExcel(mdo, "test_summary_refactor_local.xlsx")
-    mte.create_excel()
+    try:
+        with open("local_model_data.pkl", "rb") as f:
+            stuff = pickle.load(f)
+        model = stuff.get("model")
+        df_pv = stuff.get("df_pv")
+        df_gmd = stuff.get("df_gmd")
+        df_gmd_external = stuff.get("df_gmd_external")
+
+        file_path = os.path.join(PROJECT_ROOT, "data", "reports", "test", "test_summary_refactor_local.xlsx")
+        
+        mdo = ModelDataObjects(model=model, df_pv=df_pv, df_gmd=df_gmd, df_gmd_external=df_gmd_external)
+        mte = ModelToExcel(mdo, file_path)
+        mte.create_excel()
+    except Exception as e:
+        logging.error(f"Error in local_example: {e}")
 
 
-def main3() -> None:
+def test_model_details_pv() -> None:
     """Testing/debugging: Query model and property values from database.
     
     Demonstrates direct use of DataQuerier to retrieve model object and property values,
@@ -2331,13 +2606,16 @@ def main3() -> None:
         json.dump(model.__dict__, f, indent=4, default=custom_encoder)
     with open("test_model.pkl", "wb") as f:
         f.write(pickle.dumps(model))
+
+    with open("test_experimental_parameters.pkl", "wb") as f:
+        f.write(pickle.dumps(test.experimental_parameters))
     
     df_pv = test.query_df_pv()
     with open("test_df_pv.pkl", "wb") as f:
         pickle.dump(df_pv, f)
 
 
-def main4() -> None:
+def test_model_details_gmd() -> None:
     """Testing/debugging: Query descriptor values from database.
     
     Demonstrates retrieval of molecular descriptor values (GMD dataframes) for both
@@ -2358,8 +2636,24 @@ def main4() -> None:
         pickle.dump(df_gmd_external, f)
 
 
+def test_query_old_models() -> None:
+    """Testing/debugging: Generate Excel report for multiple older models queried from the database.
+    
+    Creates ModelDataObjects from the model_id's provided, which automatically queries all necessary
+    data from the database, then generates the Excel workbook.
+    """
+    model_ids = list(range(1065, 1071))
+    # model_ids = [1070]
+    for model_id in model_ids:
+        file_path = os.path.join(PROJECT_ROOT, "data", "reports", f"model_{model_id}_summary.xlsx")
+        mdo = ModelDataObjects(model_id=model_id)
+        mte = ModelToExcel(mdo, file_path)
+        mte.create_excel()
+
+
 if __name__ == "__main__":
-    # main()
-    main2()
-    # main3()
-    # main4()
+    # query_example()
+    # local_example()
+    # test_model_details_pv()
+    # test_model_details_gmd()
+    test_query_old_models()

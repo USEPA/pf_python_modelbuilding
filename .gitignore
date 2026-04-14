@@ -23,6 +23,7 @@ datasets_benchmark_TEST/
 *.pmml
 *.tsv
 *.png
+!resources/continuous_equations.png
 *.json
 *.pdf
 models/old/__init__.py
