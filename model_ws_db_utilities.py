@@ -2448,6 +2448,8 @@ class ModelPredictor:
 
     @timer
     def predict_model_smiles_batch(self, model_id, smiles_list, generate_report=True, include_model_details=True):
+        logging.info(f"Predicting with model {model_id} and {STDIZER_API}, {DESCRIPTORS_API} for {len(smiles_list)} SMILES")
+
         fileAPI = os.getenv("FILE_API_SERVER", pc.URL_LOCAL_FILE_API)
 
         model, model_details_dict, model_error = self._resolve_model_context(model_id, fileAPI)
