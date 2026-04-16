@@ -2559,7 +2559,7 @@ def query_example() -> None:
     data from the database, then generates the Excel workbook.
     """
     model_id = 1746
-    file_path = os.path.join(PROJECT_ROOT, "data", "reports", f"model_{model_id}_summary.xlsx")
+    file_path = os.path.join(PROJECT_ROOT, "data", "excel_summaries", f"model_{model_id}_summary.xlsx")
 
     mdo = ModelDataObjects(model_id=model_id)
     mte = ModelToExcel(mdo, file_path)
@@ -2580,7 +2580,7 @@ def local_example() -> None:
         df_gmd = stuff.get("df_gmd")
         df_gmd_external = stuff.get("df_gmd_external")
 
-        file_path = os.path.join(PROJECT_ROOT, "data", "reports", "test", "test_summary_refactor_local.xlsx")
+        file_path = os.path.join(PROJECT_ROOT, "data", "excel_summaries", "test", "test_summary_refactor_local.xlsx")
         
         mdo = ModelDataObjects(model=model, df_pv=df_pv, df_gmd=df_gmd, df_gmd_external=df_gmd_external)
         mte = ModelToExcel(mdo, file_path)
@@ -2645,7 +2645,7 @@ def test_query_old_models() -> None:
     model_ids = list(range(1065, 1071))
     # model_ids = [1070]
     for model_id in model_ids:
-        file_path = os.path.join(PROJECT_ROOT, "data", "reports", f"model_{model_id}_summary.xlsx")
+        file_path = os.path.join(PROJECT_ROOT, "data", "excel_summaries", f"{model_id}_summary.xlsx")
         mdo = ModelDataObjects(model_id=model_id)
         mte = ModelToExcel(mdo, file_path)
         mte.create_excel()
