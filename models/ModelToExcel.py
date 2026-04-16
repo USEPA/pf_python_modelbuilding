@@ -967,15 +967,24 @@ class DataQuerier:
             Optional[pd.DataFrame]: Descriptor values dataframe (GMD), or None if query fails.
         """
         if external and self.df_gmd_external is not None:
+            # If external df_gmd already initialized, return it immediately
             return self.df_gmd_external
         elif external and self.dataset_name_external is not None:
+            # If external df_gmd not already initialized and model has an external dataset, prepare to query it
             dataset_name = self.dataset_name_external
+        elif external and self.dataset_name_external is None:
+            # If external df_gmd not already initialized and model doesn't have an external dataset, return nothing
+            logging.warning("Provided model has no external dataset provided, skipping initialization of external GMD\n\t(If this is not desired, set dataset_name_external on the DataQuerier object before running query_df_gmd with external = True)")
+            return None
         elif not external and self.df_gmd is not None:
+            # If df_gmd already initialized, return it immediately
             return self.df_gmd
         elif not external and self.dataset_name is not None:
+            # If df_gmd not already initialized, prepare to query it from the dataset name
             dataset_name = self.dataset_name
         else:
-            logging.error("Must set dataset name on DataQuerier object prior to querying GMD")
+            # If none of the above cases occurred, there is some kind of error
+            logging.error("Must set dataset_name on DataQuerier object prior to querying GMD")
             return None
         
         try:
@@ -1142,7 +1151,7 @@ class DataQuerier:
             coefficients_df = DataTransformer.get_model_coefficients(model)
             results_dict["model_details"]["model_coefficients"] = coefficients_df
         else:
-            logging.warning(f"Model type {method_name} does not support coefficient retrieval.")
+            logging.warning(f"Model type {method_name} does not support coefficient retrieval, coefficient values will not be added to Model Descriptors sheet")
         
         model_descriptors = DataTransformer.get_model_descriptors_df(results_dict)
 
@@ -1309,7 +1318,7 @@ class DataQuerier:
             pd.DataFrame: External predictions from database (currently returns empty result).
         """
         if self.dataset_name_external is None:
-            logging.info(f"External dataset name is None for Model {self.model_id}")
+            logging.info(f"External dataset name is None for provided Model (model_id = {self.model_id}), skipping External Predictions sheet")
             return None
         
         logging.info(f"Building External Predictions from Model {self.model_id}")
@@ -2505,8 +2514,9 @@ class ModelToExcel:
             logging.info("Creating Test Set Predictions...")
             df = self.test_set_predictions(writer, self.test_set_predictions_df, add_subtotals=self.add_subtotals, x_col=x_col, y_col=y_col, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, yx_offset_rows=yx_offset_rows, col_width_pad=col_width_pad, min_col_width=min_col_width, property_name=property_name, property_units=property_units)
 
-            logging.info("Creating External Predictions...")
-            df = self.external_predictions(writer, self.external_predictions_df, add_subtotals=self.add_subtotals, x_col=x_col, y_col=y_col, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, yx_offset_rows=yx_offset_rows, col_width_pad=col_width_pad, min_col_width=min_col_width, property_name=property_name, property_units=property_units)
+            if self.external_predictions_df is not None:
+                logging.info("Creating External Predictions...")
+                df = self.external_predictions(writer, self.external_predictions_df, add_subtotals=self.add_subtotals, x_col=x_col, y_col=y_col, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, yx_offset_rows=yx_offset_rows, col_width_pad=col_width_pad, min_col_width=min_col_width, property_name=property_name, property_units=property_units)
 
             # logging.info("Done creating detailed Excel!")
             # logging.info("Done with initial passthrough of all sheets!")
