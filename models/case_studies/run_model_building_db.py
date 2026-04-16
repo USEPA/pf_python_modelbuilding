@@ -1948,16 +1948,28 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         model.modelMethod = results_dict["model_details"].get("qsar_method", None)
         model.modelMethodDescription = results_dict["model_details"].get("qsar_method_description", None)
         
-        if qsar_method !='gcm':    
-            if ext_stats is None:
-                logging.info(f"all stats:\t{params.descriptor_coefficient}\t{test_stats['RMSE_Test']:.3f}\t{cv_stats['RMSE_CV_Training']:.3f}\t{len(model.embedding)}")
+        if not is_binary:
+            if qsar_method !='gcm':    
+                if ext_stats is None:
+                    logging.info(f"all stats:\t{params.descriptor_coefficient}\t{test_stats['RMSE_Test']:.3f}\t{cv_stats['RMSE_CV_Training']:.3f}\t{len(model.embedding)}")
+                else:
+                    logging.info(f"all stats:\t{params.descriptor_coefficient}\t{test_stats['RMSE_Test']:.3f}\t{cv_stats['RMSE_CV_Training']:.3f}\t{ext_stats['RMSE_External']:.3f}\t{len(model.embedding)}")   
             else:
-                logging.info(f"all stats:\t{params.descriptor_coefficient}\t{test_stats['RMSE_Test']:.3f}\t{cv_stats['RMSE_CV_Training']:.3f}\t{ext_stats['RMSE_External']:.3f}\t{len(model.embedding)}")   
+                if ext_stats is None:
+                    logging.info(f"all stats:\tN/A\t{test_stats['RMSE_Test']:.3f}\t{cv_stats['RMSE_CV_Training']:.3f}\t{len(model.embedding)}")
+                else:
+                    logging.info(f"all stats:\tN/A\t{test_stats['RMSE_Test']:.3f}\t{cv_stats['RMSE_CV_Training']:.3f}\t{ext_stats['RMSE_External']:.3f}\t{len(model.embedding)}")
         else:
-            if ext_stats is None:
-                logging.info(f"all stats:\tN/A\t{test_stats['RMSE_Test']:.3f}\t{cv_stats['RMSE_CV_Training']:.3f}\t{len(model.embedding)}")
+            if qsar_method !='gcm':    
+                if ext_stats is None:
+                    logging.info(f"all stats:\t{params.descriptor_coefficient}\t{test_stats['BA_Test']:.3f}\t{cv_stats['BA_CV_Training']:.3f}\t{len(model.embedding)}")
+                else:
+                    logging.info(f"all stats:\t{params.descriptor_coefficient}\t{test_stats['BA_Test']:.3f}\t{cv_stats['BA_CV_Training']:.3f}\t{ext_stats['BA_External']:.3f}\t{len(model.embedding)}")   
             else:
-                logging.info(f"all stats:\tN/A\t{test_stats['RMSE_Test']:.3f}\t{cv_stats['RMSE_CV_Training']:.3f}\t{ext_stats['RMSE_External']:.3f}\t{len(model.embedding)}")
+                if ext_stats is None:
+                    logging.info(f"all stats:\tN/A\t{test_stats['BA_Test']:.3f}\t{cv_stats['BA_CV_Training']:.3f}\t{len(model.embedding)}")
+                else:
+                    logging.info(f"all stats:\tN/A\t{test_stats['BA_Test']:.3f}\t{cv_stats['BA_CV_Training']:.3f}\t{ext_stats['BA_External']:.3f}\t{len(model.embedding)}")
             
         # logging.info(f"model description={json.dumps(json.loads(model.get_model_description()), indent=4)}")
 
