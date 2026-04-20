@@ -53,6 +53,8 @@ from utils import row_to_json
 
 from applicability_domain import applicability_domain_utilities as  adu
 
+from model_ws_db_utilities import ModelInitializer
+
 custom_level_styles = {
     'debug': {'color': 'cyan'},
     'info': {'color': 'yellow'},
@@ -1733,6 +1735,7 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
             dataset_name_ext = 'QSAR_Toolbox_96HR_Fish_LC50_v3 modeling'    
 
         if dataset_name_ext is not None:
+            dataset_description_ext = du.get_dataset_details(session, dataset_name_ext).get('dataset_description')
             df_prediction_ext = du.get_instances_excluding(session, dataset_name_ext, dataset_name, descriptor_set_name)
 
         
@@ -1843,14 +1846,21 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         model.num_training = df_training.shape[0]
         model.num_prediction = df_prediction.shape[0]
 
-        # New Attributes
-        model.external_dataset_name = dataset_name_ext if dataset_name_ext else None
-        model.num_external = df_prediction_ext.shape[0] if df_prediction_ext is not None else 0
-        model.df_dsstoxRecords_external = df_prediction_ext
+        model.descriptorSetName = descriptor_set_name
+
         model.df_preds_training_cv = df_pred_cv
         model.df_preds_test = df_pred_test
-        model.df_preds_external = df_pred_ext
-        
+
+        # New Attributes
+        if dataset_name_ext is not None:
+            model.external_dataset_name = dataset_name_ext if dataset_name_ext else None
+            model.external_dataset_description = dataset_description_ext
+            model.df_dsstoxRecords_external = df_prediction_ext
+            model.df_preds_external = df_pred_ext
+
+            model.df_external = du.get_external_instances(session, model)
+            model.num_external = model.df_external.shape[0] if model.df_external is not None else 0        
+            # model.num_external = df_prediction_ext.shape[0] if df_prediction_ext is not None else 0
         
         # Check what happens with ext_stats and how to add new things to the results_dict under the model_details
         results_dict = Results.create_results_dict(

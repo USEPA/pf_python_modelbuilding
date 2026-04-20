@@ -12,6 +12,8 @@ import pandas as pd
 import numpy as np
 
 
+from qsar_models import Model
+from models.ModelBuilder import Model
 from utils import print_first_row
 from model_ws_db_utilities import getSession
 import webbrowser      
@@ -222,6 +224,65 @@ def get_training_prediction_instances(session, datasetName, descriptorSetName, s
     except SQLAlchemyError:
         logging.exception("An exception was thrown!")
         return None, None     
+
+
+def get_external_instances(session, model: Model):
+        # TODO: Finish implementation
+        logging.debug("Getting model external set TSVs")
+        
+        sql = text("""
+        select headers_tsv from qsar_descriptors.descriptor_sets ds
+        where ds.name=:descriptorSetName
+        """)
+    
+        try:
+            results = session.execute(sql, {'descriptorSetName': model.descriptorSetName}).fetchone()
+            instance_header = "ID\tProperty\t" + results[0] + "\r\n"
+    
+            sql = text("""
+                select dp.canon_qsar_smiles, dp.qsar_property_value, dv.values_tsv
+                from qsar_datasets.data_points dp
+                join qsar_datasets.datasets d
+                    on dp.fk_dataset_id = d.id
+                join qsar_descriptors.descriptor_values dv
+                    on dp.canon_qsar_smiles = dv.canon_qsar_smiles
+                join qsar_descriptors.descriptor_sets ds
+                    on dv.fk_descriptor_set_id = ds.id
+                where d.name = :datasetName
+                and ds.name = :descriptorSetName
+                order by dp.canon_qsar_smiles;
+                """)
+
+            sb_external = [instance_header]
+
+            counter_external = 0
+
+            results = session.execute(sql, {'datasetName': model.external_dataset_name, 'descriptorSetName': model.descriptorSetName})
+
+            for row in results:
+                chemical_id, qsar_property_value, descriptors = row
+                instance = _generate_instance(chemical_id, qsar_property_value, descriptors)
+
+                if instance is None:
+                    logging.debug(f"{id}\tnull instance\tdatasetName={model.external_dataset_name}\tdescriptorSetName={model.descriptorSetName}")
+                    continue
+
+                sb_external.append(instance)
+                counter_external += 1
+
+            # model.df_external = _load_df("".join(sb_external))
+            df_external = _load_df("".join(sb_external))
+
+            # model.num_external = model.df_external.shape[0]
+            
+            logging.debug(f"external_set shape:{df_external.shape}")
+
+            return df_external
+
+        except SQLAlchemyError as ex:
+            print(f"An error occurred: {ex}")
+        finally:
+            pass
 
 
 def get_training_cv_instances(session, dataset_name, descriptor_set_name):
