@@ -1,3 +1,0 @@
-[submodule "model_service_common"]
-	path = model_service_common
-	url = https://bitbucket.com/scidataexperts/model-service-common.git
