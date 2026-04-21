@@ -1376,11 +1376,13 @@ class DataQuerier:
         return statistics
     
     def query_records_df(self) -> pd.DataFrame:
-        """
-        Query database for detailed experimental records.
+        """Query database for detailed experimental records.
+        
+        Retrieves experimental property values and transforms them into a detailed records
+        dataframe with metadata, sources, and measurement details.
                 
         Returns:
-            pd.DataFrame: Records dataframe from database (currently returns empty result).
+            pd.DataFrame: Records dataframe with experimental data, sources, and measurement details.
         """
         logging.info(f"Building Records from Model (model_id = {self.model_id})")
         
@@ -1394,11 +1396,13 @@ class DataQuerier:
         return records_df
     
     def query_model_descriptors_df(self) -> pd.DataFrame:
-        """
-        Query database for model descriptors and their definitions.
+        """Query database for model descriptors and their definitions.
+        
+        Retrieves descriptor names from the model embedding and merges with descriptor definitions
+        from resource files. Includes model coefficients if available (for regression methods).
                 
         Returns:
-            pd.DataFrame: Model descriptors from database (currently returns empty result).
+            pd.DataFrame: Model descriptors with definitions, classifications, and optional coefficients.
         """
         logging.info(f"Building Model Descriptors from Model (model_id = {self.model_id})")
         
@@ -1425,11 +1429,13 @@ class DataQuerier:
         return model_descriptors
     
     def query_model_descriptor_values_df(self) -> pd.DataFrame:
-        """
-        Query database for predictions and descriptor values.
+        """Query database for predictions and descriptor values.
+        
+        Retrieves molecular descriptor values for all training and test compounds, merges with
+        predictions, and organizes by dataset (Training CV folds or Test). Escapes accidental formula characters.
                 
         Returns:
-            pd.DataFrame: Predictions and descriptor values from database (currently returns empty result).
+            pd.DataFrame: All compounds with observed/predicted values, fold assignments, and descriptor values.
         """
         logging.info(f"Building Model Descriptor Values from Model (model_id = {self.model_id})")
 
@@ -1484,11 +1490,13 @@ class DataQuerier:
         return model_descriptor_values_df
     
     def query_training_cv_predictions_df(self) -> pd.DataFrame:
-        """
-        Query database for training set cross-validation predictions.
+        """Query database for training set cross-validation predictions.
+        
+        Retrieves cross-validation predictions for the training set and merges with molecular
+        descriptor values. Assigns compounds to CV folds.
                 
         Returns:
-            pd.DataFrame: Training predictions from database (currently returns empty result).
+            pd.DataFrame: Training CV predictions with compound identifiers, experimental/predicted values, and fold assignments.
         """
         logging.info(f"Building Training CV Predictions from Model (model_id = {self.model_id})")
 
@@ -1529,11 +1537,13 @@ class DataQuerier:
         return training_cv_predictions_df
 
     def query_test_set_predictions_df(self) -> pd.DataFrame:
-        """
-        Query database for test set predictions.
+        """Query database for test set predictions.
+        
+        Retrieves test set predictions and merges with molecular descriptor values. Calculates
+        applicability domain membership for each compound if configured in the model.
                 
         Returns:
-            pd.DataFrame: Test predictions from database (currently returns empty result).
+            pd.DataFrame: Test set predictions with compound identifiers, experimental/predicted values, and AD membership.
         """
         logging.info(f"Building Test Set Predictions from Model (model_id = {self.model_id})")
 
@@ -1578,11 +1588,13 @@ class DataQuerier:
         return test_set_predictions_df
     
     def query_external_predictions_df(self) -> Optional[pd.DataFrame]:
-        """
-        Query database for external validation set predictions.
+        """Query database for external validation set predictions.
+        
+        Retrieves predictions for the external dataset (if available) and merges with molecular
+        descriptor values. Calculates applicability domain membership for each compound.
                 
         Returns:
-            pd.DataFrame: External predictions from database (currently returns empty result).
+            Optional[pd.DataFrame]: External predictions with compound identifiers and AD membership, or None if no external dataset.
         """
         if self.dataset_name_external is None:
             logging.info(f"External dataset name is None for provided Model (model_id = {self.model_id}), skipping External Predictions sheet")
@@ -2018,7 +2030,10 @@ class DataTransformer:
 
     @staticmethod
     def get_model_descriptor_values_df(results_dict: Dict[str, Any], df_pred_cv: pd.DataFrame, df_pred_test: pd.DataFrame, df_training_model: pd.DataFrame, df_test_model: pd.DataFrame) -> pd.DataFrame:
-        """Generate dataframe combining predictions with all descriptor values.
+        """Generate dataframe combining predictions with all descriptor values (DEPRECATED).
+        
+        This method is superseded by DataQuerier.query_model_descriptor_values_df() which provides
+        the same functionality with direct database integration.
         
         Args:
             results_dict: Dictionary with model details (units, etc.).
@@ -2108,7 +2123,10 @@ class DataTransformer:
 
     @staticmethod
     def get_external_predictions_df(df_ext: pd.DataFrame, ad_columns: Optional[list|str] = None, df_training: Optional[pd.DataFrame] = None, remove_log_p_descriptors: Optional[bool] = True, embedding: Optional[list[str]] = None) -> pd.DataFrame:
-        """Format external/validation set predictions for Excel sheet.
+        """Format external/validation set predictions for Excel sheet (DEPRECATED).
+        
+        This method is superseded by DataQuerier.query_external_predictions_df() which provides
+        the same functionality with direct database integration and better error handling.
         
         Args:
             df_ext: External dataset predictions dataframe.
@@ -2436,17 +2454,21 @@ class ModelToExcel:
         return statistics
 
     def records(self, writer: Any, records: Optional[pd.DataFrame]=None, add_subtotals: bool=True, exclude_blank_columns: bool=True, include_qc_columns: bool=False, include_value_original: bool=False) -> pd.DataFrame:
-        """
-        Create the records sheet in the Excel workbook with detailed experimental data.
+        """Create the records sheet in the Excel workbook with detailed experimental data.
         
         Includes autofilter for easy data filtering, frozen header row, and appropriately sized columns.
+        Optionally groups columns under superheader categories by data type/source.
         
         Args:
             writer: pandas ExcelWriter object for writing to the workbook.
-            records (pd.DataFrame, optional): Records dataframe. If None, queries from database or uses instance dataframe.
+            records: Records dataframe with experimental data. If None, returns None.
+            add_subtotals: Add row count formulas above headers. Defaults to True.
+            exclude_blank_columns: Remove completely empty columns. Defaults to True.
+            include_qc_columns: Include QC flag and reason columns. Defaults to False.
+            include_value_original: Include original measured values column. Defaults to False.
         
         Returns:
-            pd.DataFrame: The records dataframe that was written.
+            pd.DataFrame: The records dataframe that was written, or None if input was None.
         """
         if records is None:
             return None
@@ -2523,7 +2545,7 @@ class ModelToExcel:
         
         Args:
             writer: pandas ExcelWriter object for writing to the workbook.
-            records_field_descriptions: Field documentation dataframe. If None, returns None.
+            records_field_descriptions: Field documentation dataframe. If None, queries from instance or returns None.
         
         Returns:
             pd.DataFrame: The formatted field descriptions dataframe that was written, or None if input was None.
@@ -2603,17 +2625,18 @@ class ModelToExcel:
         return records_field_descriptions
     
     def model_descriptors(self, writer: Any, model_descriptors: Optional[pd.DataFrame]=None, add_subtotals: bool=True) -> pd.DataFrame:
-        """
-        Create the model descriptors sheet in the Excel workbook.
+        """Create the model descriptors sheet in the Excel workbook.
         
-        Lists all descriptors used in the model with their definitions and classifications. Includes autofilter and properly sized columns.
+        Lists all descriptors used in the model with their definitions and classifications. 
+        Includes model coefficients if available (for regression methods). Includes autofilter and properly sized columns.
         
         Args:
             writer: pandas ExcelWriter object for writing to the workbook.
-            model_descriptors (pd.DataFrame, optional): Model descriptors dataframe. If None, queries from database or uses instance dataframe.
+            model_descriptors: Model descriptors dataframe. If None, returns None.
+            add_subtotals: Add row count formulas above headers. Defaults to True.
         
         Returns:
-            pd.DataFrame: The model descriptors dataframe that was written.
+            pd.DataFrame: The model descriptors dataframe that was written, or None if input was None.
         """
         if model_descriptors is None:
             return None
@@ -2641,6 +2664,7 @@ class ModelToExcel:
         
         Shows all training and test compounds with their observed/predicted values, fold assignments,
         and all descriptor values used in the model. Includes subtotals, autofilter, and column widths.
+        Applies significant figures formatting to all numerical columns.
         
         Args:
             writer: pandas ExcelWriter object for writing to the workbook.
@@ -2676,6 +2700,7 @@ class ModelToExcel:
         
         Displays cross-validation predictions for training set compounds with integrated scatter plot,
         compound metadata, fold assignments, and autofilter. Plot includes y=x reference line and equal axes.
+        Applies significant figures formatting to observed and predicted columns.
         
         Args:
             writer: pandas ExcelWriter object for writing to the workbook.
@@ -2722,6 +2747,7 @@ class ModelToExcel:
         
         Displays test set predictions with compound identifiers, observed/predicted values, applicability domain
         membership, compound metadata, and integrated scatter plot with y=x reference line and equal axes.
+        Applies significant figures formatting to observed and predicted columns.
         
         Args:
             writer: pandas ExcelWriter object for writing to the workbook.
@@ -2766,8 +2792,10 @@ class ModelToExcel:
     def external_predictions(self, writer: Any, external_predictions: Optional[pd.DataFrame]=None, add_subtotals: bool=True, x_col: str=None, y_col: str=None, chart_size_px: int=520, pad_ratio: float=0.02, integer_ticks: bool=True, yx_offset_rows: int=3, col_width_pad: int=6, min_col_width: int=8, property_name: Optional[str]=None, property_units: Optional[str]=None) -> Optional[pd.DataFrame]:
         """Create the external validation set predictions sheet with scatter plot.
         
-        Displays external/validation dataset predictions with observed/predicted values, compound metadata, and
-        integrated scatter plot with y=x reference line and equal axes. Only created if external data is available.
+        Displays external/validation dataset predictions with observed/predicted values, applicability domain
+        membership, compound metadata, and integrated scatter plot with y=x reference line and equal axes. 
+        Applies significant figures formatting to observed and predicted columns.
+        Only created if external data is available.
         
         Args:
             writer: pandas ExcelWriter object for writing to the workbook.
@@ -2785,7 +2813,7 @@ class ModelToExcel:
             property_units: Property units for axis labels. Defaults to None.
         
         Returns:
-            pd.DataFrame: The formatted external predictions dataframe that was written, or None if input was None.
+            Optional[pd.DataFrame]: The formatted external predictions dataframe that was written, or None if input was None.
         """
         if external_predictions is None:
             return None
@@ -2823,8 +2851,9 @@ class ModelToExcel:
         """Generate complete Excel workbook with all model summary sheets and charts.
         
         Orchestrates creation of the final Excel file by calling sheet methods in order, extracting
-        property metadata, and adding hyperlinks between related sheets. Creates sheets for model
-        summary, statistics, experimental records, descriptors, predictions, and charts.
+        property metadata from the model, adding hyperlinks between related sheets, and writing the
+        final workbook to disk. Creates sheets for model summary, statistics, experimental records, 
+        descriptor definitions, descriptors used, predictions with charts, and optional external data.
         
         Args:
             x_col: Column name for x-axis (observed values) in prediction plots. Defaults to 'Exp'.
@@ -2833,8 +2862,8 @@ class ModelToExcel:
             pad_ratio: Axis padding as fraction of data range. Defaults to 0.02 (2%).
             integer_ticks: Use integer-based tick spacing on chart axes. Defaults to True.
             yx_offset_rows: Empty rows between data and y=x reference line points. Defaults to 3.
-            col_width_pad: Extra padding to add to calculated column widths. Defaults to 4.
-            min_col_width: Minimum width for any column. Defaults to 5 characters.
+            col_width_pad: Extra padding to add to calculated column widths. Defaults to 6.
+            min_col_width: Minimum width for any column. Defaults to 8 characters.
         """
         logging.info("Creating detailed Excel...")
         self.excel_path.parent.mkdir(parents=True, exist_ok=True)
@@ -3011,8 +3040,8 @@ def test_model_details_gmd() -> None:
 def test_query_old_models() -> None:
     """Testing/debugging: Generate Excel report for multiple older models queried from the database.
     
-    Creates ModelDataObjects from the model_id's provided, which automatically queries all necessary
-    data from the database, then generates the Excel workbook.
+    Creates ModelDataObjects from model_id's provided, which automatically queries all necessary
+    data from the database, then generates the Excel workbook for each model.
     """
     model_ids = list(range(1065, 1071))
     # model_ids = [1070]
@@ -3024,10 +3053,10 @@ def test_query_old_models() -> None:
 
 
 def test_query_binary_models() -> None:
-    """Testing/debugging: Generate Excel report for an older binary model queried from the database.
+    """Testing/debugging: Generate Excel report for binary models queried from the database.
     
-    Creates ModelDataObjects from teh model_id's provided, which automatically queries all necessary
-    data from the database, then generates the Excel workbook.
+    Creates ModelDataObjects from model_id's provided, which automatically queries all necessary
+    data from the database, then generates the Excel workbook for each binary model.
     """
     model_ids = [1567, 1568, 1569, 1570, 1571, 1577, 1578] # 1567, 1568, 1569, 1570, 1571, 1577, 1578
     for model_id in model_ids:
