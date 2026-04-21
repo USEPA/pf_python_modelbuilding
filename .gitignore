@@ -24,6 +24,7 @@ datasets_benchmark_TEST/
 *.tsv
 *.png
 !resources/continuous_equations.png
+!resources/binary_equations.png
 *.json
 *.pdf
 models/old/__init__.py

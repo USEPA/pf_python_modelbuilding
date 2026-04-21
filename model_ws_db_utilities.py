@@ -537,7 +537,8 @@ class ModelInitializer:
             print(f"Exception occurred: {e}")
             return None
 
-    def get_training_prediction_instances(self, session, model:Model):
+    @staticmethod
+    def get_training_prediction_instances(session, model:Model):
         logging.debug("Getting model training/prediction set TSVs")
 
         instance_header = f"ID\tProperty\t{model.headersTsv}\r\n"
@@ -564,7 +565,7 @@ class ModelInitializer:
 
             for row in results:
                 chemical_id, qsar_property_value, descriptors, split_num = row
-                instance = self.generate_instance(chemical_id, qsar_property_value, descriptors)
+                instance = ModelInitializer.generate_instance(chemical_id, qsar_property_value, descriptors)
 
                 if instance is None:
                     logging.debug(f"{id}\tnull instance\tdatasetName={model.datasetName}\tdescriptorSetName={model.descriptorSetName}")
@@ -594,11 +595,25 @@ class ModelInitializer:
         finally:
             pass
     
-    def get_external_instances(self, session, model:Model):
+    @staticmethod
+    def get_external_instances(session, model:Model):
         # TODO: Finish implementation
         logging.debug("Getting model external set TSVs")
 
-        instance_header = f"ID\tProperty\t{model.headersTsv}\r\n"
+        if model.headersTsv is None:
+            sql = text("""
+            select headers_tsv from qsar_descriptors.descriptor_sets ds
+            where ds.name=:descriptorSetName
+            """)
+            try:
+                results = session.execute(sql, {'descriptorSetName': model.descriptorSetName}).fetchone()
+                instance_header = "ID\tProperty\t" + results[0] + "\r\n"
+            except Exception as e:
+                logging.error(f"Error occurred while fetching external instance header: {e}")
+                pass
+        else:
+            instance_header = f"ID\tProperty\t{model.headersTsv}\r\n"
+        
         sql = text("""
             select dp.canon_qsar_smiles, dp.qsar_property_value, dv.values_tsv
             from qsar_datasets.data_points dp
@@ -606,8 +621,10 @@ class ModelInitializer:
                 on dp.fk_dataset_id = d.id
             join qsar_descriptors.descriptor_values dv
                 on dp.canon_qsar_smiles = dv.canon_qsar_smiles
+            join qsar_descriptors.descriptor_sets ds
+                on dv.fk_descriptor_set_id = ds.id
             where d.name = :datasetName
-            and dv.fk_descriptor_set_id = :descriptorSetId
+            and ds.name = :descriptorSetName
             order by dp.canon_qsar_smiles;
             """)
 
@@ -616,14 +633,14 @@ class ModelInitializer:
         counter_external = 0
 
         try:
-            results = session.execute(sql, {'datasetName': model.external_dataset_name, 'descriptorSetId': model.descriptorSetId})
+            results = session.execute(sql, {'datasetName': model.external_dataset_name, 'descriptorSetName': model.descriptorSetName})
 
             for row in results:
                 chemical_id, qsar_property_value, descriptors = row
-                instance = self.generate_instance(chemical_id, qsar_property_value, descriptors)
+                instance = ModelInitializer.generate_instance(chemical_id, qsar_property_value, descriptors)
 
                 if instance is None:
-                    logging.debug(f"{id}\tnull instance\tdatasetName={model.datasetName}\tdescriptorSetName={model.descriptorSetName}")
+                    logging.debug(f"{id}\tnull instance\tdatasetName={model.external_dataset_name}\tdescriptorSetName={model.descriptorSetName}")
                     continue
 
                 sb_external.append(instance)
@@ -639,8 +656,9 @@ class ModelInitializer:
             print(f"An error occurred: {ex}")
         finally:
             pass
-
-    def generate_instance(self, chemical_id, qsar_property_value, descriptors):
+    
+    @staticmethod
+    def generate_instance(chemical_id, qsar_property_value, descriptors):
         return f"{chemical_id}\t{qsar_property_value}\t{descriptors}\n"
     
     def getModelMetaDataQuery(self):

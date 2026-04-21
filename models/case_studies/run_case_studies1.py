@@ -156,7 +156,7 @@ def run_fish_tox():
     
     create_unique_excel = False
     
-    append_to_models_folder = "_v2.0"
+    append_to_models_folder = "_bob"
     
 
     # ad_measure_model = [pc.Applicability_Domain_TEST_Embedding_Euclidean, pc.Applicability_Domain_TEST_Fragment_Counts]
@@ -220,16 +220,21 @@ def run_biodeg_rifm():
     dataset_name = 'exp_prop_RBIODEG_RIFM_CHEMREG' # automapped one
     write_to_db = False
     create_unique_excel = False
+    create_detailed_excel = True
     ad_measure_model = [pc.Applicability_Domain_TEST_Embedding_Euclidean, pc.Applicability_Domain_TEST_Fragment_Counts]
 
+
+    append_to_models_folder=""
     run_dataset(dataset_name=dataset_name, qsar_method='gcm', feature_selection=False, ad_measure_model=ad_measure_model,
-                write_to_db=write_to_db, create_unique_excel=create_unique_excel, create_detailed_excel=True)  # OK
+                write_to_db=write_to_db, create_unique_excel=create_unique_excel, create_detailed_excel=create_detailed_excel,
+                append_to_models_folder=append_to_models_folder)  # OK
 
     # Models to upload:
     # for method in ['rf','xgb']:
-    # # for method in ['reg','knn']:
-    #     run_dataset(dataset_name=dataset_name, qsar_method=method, feature_selection=True, 
-    #                 ad_measure_model=ad_measure_model,write_to_db=write_to_db, create_unique_excel=create_unique_excel, create_detailed_excel=False)  # OK
+    # for method in ['reg','knn']:
+        # run_dataset(dataset_name=dataset_name, qsar_method=method, feature_selection=True, 
+                    # ad_measure_model=ad_measure_model,write_to_db=write_to_db, create_unique_excel=create_unique_excel, create_detailed_excel=create_detailed_excel)  # OK
+
 
     # for method in ['rf','xgb', 'knn']:
     #     run_dataset(dataset_name=dataset_name, qsar_method=method, feature_selection=False, 
@@ -245,7 +250,7 @@ def run_biodeg_rifm():
     #                 ad_measure_model=ad_measure_model,write_to_db=write_to_db, create_unique_excel=create_unique_excel,create_detailed_excel=False)  # OK
     
     
-    Results.summarize_model_stats(dataset_name)
+    Results.summarize_model_stats(dataset_name, append_to_models_folder=append_to_models_folder)
 
 
 def run_pchem():
@@ -254,7 +259,9 @@ def run_pchem():
     dataset_name = 'HLC v1 modeling' # automapped one
     write_to_db = False
     create_unique_excel = False
+    create_detailed_excel = True
     ad_measure_model = [pc.Applicability_Domain_TEST_Embedding_Euclidean, pc.Applicability_Domain_TEST_Fragment_Counts]
+    append_to_models_folder = "_bob"
 
     run_dataset(dataset_name=dataset_name, qsar_method='gcm', feature_selection=False, ad_measure_model=ad_measure_model,
                 write_to_db=write_to_db, create_unique_excel=create_unique_excel, create_detailed_excel=True)  # OK
@@ -279,11 +286,12 @@ def run_pchem():
     #                 ad_measure_model=ad_measure_model,write_to_db=write_to_db, create_unique_excel=create_unique_excel,create_detailed_excel=False)  # OK
     
     
-    Results.summarize_model_stats(dataset_name)
+    Results.summarize_model_stats(dataset_name, append_to_models_folder=append_to_models_folder)
 
 def run_biodeg_nite():
     
-    dataset_name = 'exp_prop_RBIODEG_NITE_OPPT v1.0'    
+    dataset_name = 'exp_prop_RBIODEG_NITE_OPPT v1.0'
+    append_to_models_folder = ""
 
     write_to_db = False
     create_unique_excel = False
@@ -312,7 +320,7 @@ def run_biodeg_nite():
     #                 ad_measure_model=ad_measure_model,write_to_db=write_to_db, create_unique_excel=create_unique_excel, create_detailed_excel=False)  # OK
         
         
-    Results.summarize_model_stats(dataset_name)
+    Results.summarize_model_stats(dataset_name, append_to_models_folder=append_to_models_folder)
 
 
 def test_model_summary():
@@ -326,7 +334,8 @@ def test_model_summary():
 
 def test_model_summary_local():
     dataset_name = "KOC v1 modeling"
-    run_dataset(dataset_name=dataset_name, qsar_method='rf', feature_selection=False, create_detailed_excel=True)  # OK
+    create_unique_excel = False
+    run_dataset(dataset_name=dataset_name, qsar_method='rf', feature_selection=False, create_detailed_excel=True, create_unique_excel=create_unique_excel)  # OK
 
 
 def test_load_model_with_external_set():
@@ -335,6 +344,7 @@ def test_load_model_with_external_set():
     # write_to_db = True
     dataset_name = "KOC v1 modeling"
     user = "murdock.weston"
+    append_to_models_folder = ""
 
     # ad_measure_model = [pc.Applicability_Domain_TEST_Embedding_Euclidean, pc.Applicability_Domain_TEST_Fragment_Counts]
     ad_measure_model = [pc.Applicability_Domain_TEST_Embedding_Euclidean, pc.Applicability_Domain_TEST_Fragment_Counts]
@@ -355,7 +365,7 @@ def test_load_model_with_external_set():
     #                            embedding=embedding, write_to_db=write_to_db, create_unique_excel=create_unique_excel)
 
     r = Results()
-    r.summarize_model_stats(dataset_name)
+    r.summarize_model_stats(dataset_name, append_to_models_folder=append_to_models_folder)
 
 
 if __name__ == '__main__':
@@ -368,7 +378,12 @@ if __name__ == '__main__':
     # run_biodeg_rifm()
     # run_pchem()
     
-    # run_pchem()
+    # These 4 should be able to run for the gcm model
+    # run_Koc()  # OK
+    # run_fish_tox()  # Takes too long to run on my machine? (E.g. started a run at 1:55, errored out at 4:53 because the SQL connection closed automatically)
+    run_biodeg_rifm()  # OK
+    # run_pchem()  # OK
+
     # run_biodeg_nite()
     # test_create_model()
     # test_model_summary()
