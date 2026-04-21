@@ -1728,7 +1728,7 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         dataset_name_ext = None
         
         if dataset_name == 'KOC v1 modeling':
-            dataset_name_ext = 'KOC v1 external'
+            dataset_name_ext = 'KOC v2 external'
         elif dataset_name == 'ECOTOX_2024_12_12_96HR_Fish_LC50_v3a modeling':
             dataset_name_ext = 'QSAR_Toolbox_96HR_Fish_LC50_v3 modeling'    
 
