@@ -2037,7 +2037,7 @@ class DataTransformer:
         test["Set"] = "Test"
 
         training = df_pred_cv.loc[:, columns]
-        training["Set"] = df_pred_cv.cv_fold.apply(lambda x: f"Training CV, Fold {x + 1}")  # TODO: Test on local dataframe to ensure this is correct
+        training["Set"] = df_pred_cv.cv_fold.apply(lambda x: f"Training CV, Fold {x + 1}")
 
         full = pd.concat([test, training], ignore_index=True)
         full["canon_qsar_smiles"] = full["canon_qsar_smiles"].astype(str)
@@ -2931,7 +2931,7 @@ def query_example() -> None:
     data from the database, then generates the Excel workbook.
     """
     model_id = 1746
-    file_path = os.path.join(PROJECT_ROOT, "data", "excel_summaries", f"model_{model_id}_summary.xlsx")
+    file_path = os.path.join(PROJECT_ROOT, "data", "excel_summaries", f"{model_id}_summary.xlsx")
 
     mdo = ModelDataObjects(model_id=model_id)
     mte = ModelToExcel(mdo, file_path)
@@ -3043,9 +3043,9 @@ def test_query_binary_models() -> None:
 
 
 if __name__ == "__main__":
-    # query_example()
+    query_example()
     # local_example()
     # test_model_details_pv()
     # test_model_details_gmd()
-    test_query_old_models()
+    # test_query_old_models()
     # test_query_binary_models()
