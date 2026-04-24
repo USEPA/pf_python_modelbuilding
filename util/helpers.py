@@ -113,16 +113,20 @@ def _build_chemical_identifiers(value=None, fallback=""):
     return chemical_identifiers
 
 
-def build_error_response(chemical_identifier, code, message, details=None):
+def build_error_response(chemical_identifier, code, message, details=None, standardized_chemical=None):
     error = {"code": code, "message": message}
     if details is not None:
         error["details"] = _coerce_json_safe(details)
 
-    return _coerce_json_safe({
+    payload = {
         "chemicalIdentifiers": _build_chemical_identifiers(chemical_identifier),
         "modelResults": None,
         "error": error,
-    })
+    }
+    if isinstance(standardized_chemical, dict):
+        payload["standardizedChemical"] = _build_chemical_identifiers(standardized_chemical)
+
+    return _coerce_json_safe(payload)
 
 
 def build_batch_error_response(code, message, details=None, model_details=None, predictions=None):
@@ -172,6 +176,8 @@ def normalize_error_payload(payload, chemical_identifier=""):
                 obj.get("chemicalIdentifiers"),
                 _extract_chemical_identifier(obj, chemical_identifier),
             )
+            if isinstance(obj.get("standardizedChemical"), dict):
+                obj["standardizedChemical"] = _build_chemical_identifiers(obj.get("standardizedChemical"))
             return _coerce_json_safe(obj)
 
         if "error" in obj:
@@ -182,6 +188,7 @@ def normalize_error_payload(payload, chemical_identifier=""):
                 "prediction_error",
                 message,
                 details,
+                standardized_chemical=obj.get("standardizedChemical"),
             ))
 
         model_results = obj.get("modelResults")
@@ -194,6 +201,7 @@ def normalize_error_payload(payload, chemical_identifier=""):
                 "prediction_error",
                 message,
                 details,
+                standardized_chemical=obj.get("standardizedChemical"),
             ))
 
     return _coerce_json_safe(obj)

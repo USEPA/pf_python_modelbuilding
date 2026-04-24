@@ -851,6 +851,38 @@ def _sanitize_api_chemical_identifiers(chemical):
     }
 
 
+def _normalize_smiles_text(value):
+    if not isinstance(value, str):
+        return ""
+    return value.strip()
+
+
+def _standardized_chemical_changes_smiles(input_smiles, standardized_chemical):
+    if not isinstance(standardized_chemical, dict):
+        return False
+
+    original_smiles = _normalize_smiles_text(input_smiles)
+    standardized_smiles = _normalize_smiles_text(
+        standardized_chemical.get("canonicalSmiles") or standardized_chemical.get("smiles")
+    )
+
+    return bool(original_smiles and standardized_smiles and standardized_smiles != original_smiles)
+
+
+def _build_input_chemical(smiles):
+    return {
+        "chemId": smiles,
+        "cid": None,
+        "sid": None,
+        "casrn": None,
+        "name": None,
+        "smiles": smiles,
+        "canonicalSmiles": smiles,
+        "inchi": None,
+        "additionalProps": {},
+    }
+
+
 class Report:
 
     def __init__(self, chemical, modelDetails:ModelDetails, modelResults:ModelResults):
@@ -1019,7 +1051,7 @@ class ModelPredictor:
             if isinstance(value, dict):
                 sanitized = {}
                 for key, item in value.items():
-                    if key == "chemicalIdentifiers":
+                    if key in {"chemicalIdentifiers", "standardizedChemical"}:
                         sanitized[key] = _sanitize_api_chemical_identifiers(
                             ModelPredictor._ensure_chemical_inchi_key(item)
                         )
@@ -1169,6 +1201,29 @@ class ModelPredictor:
         return ModelPredictor._strip_model_details_from_prediction(
             ModelPredictor._prediction_to_obj(prediction)
         )
+
+    def _prediction_from_cached_value_for_smiles(self, prediction, fallback_smiles=None):
+        prediction_obj = self._prediction_from_cached_value(prediction)
+        return self._ensure_cached_prediction_uses_input_chemical(prediction_obj, fallback_smiles)
+
+    def _ensure_cached_prediction_uses_input_chemical(self, prediction, fallback_smiles):
+        if not isinstance(prediction, dict) or not fallback_smiles:
+            return prediction
+
+        if isinstance(prediction.get("standardizedChemical"), dict):
+            return prediction
+
+        chemical = prediction.get("chemicalIdentifiers")
+        if not isinstance(chemical, dict):
+            return prediction
+
+        if not _standardized_chemical_changes_smiles(fallback_smiles, chemical):
+            return prediction
+
+        updated_prediction = dict(prediction)
+        updated_prediction["chemicalIdentifiers"] = self._build_minimal_chemical(fallback_smiles)
+        updated_prediction["standardizedChemical"] = chemical
+        return updated_prediction
 
     @staticmethod
     def _standardization_match_key(value):
@@ -1733,20 +1788,23 @@ class ModelPredictor:
         model_results,
         neighbor_results_training=None,
         neighbor_results_prediction=None,
+        standardized_chemical=None,
     ):
-        return {
+        report = {
             "chemicalIdentifiers": _sanitize_api_chemical_identifiers(chemical),
+        }
+        if standardized_chemical is not None:
+            report["standardizedChemical"] = _sanitize_api_chemical_identifiers(standardized_chemical)
+        report.update({
             "modelDetails": model_details_dict,
             "modelResults": model_results.to_dict() if hasattr(model_results, "to_dict") else model_results,
             "neighborResultsTraining": neighbor_results_training,
             "neighborResultsPrediction": neighbor_results_prediction,
-        }
+        })
+        return report
 
     def _build_minimal_chemical(self, smiles):
-        chemical = {
-            "chemId": smiles,
-            "smiles": smiles,
-        }
+        chemical = _build_input_chemical(smiles)
 
         img_base64 = self.smiles_to_base64(smiles)
         chemical["imageSrc"] = f'data:image/png;base64,{img_base64}' if img_base64 else "N/A"
@@ -1755,7 +1813,8 @@ class ModelPredictor:
     def _prepare_chemical_for_report(self, chemical):
         chemical = dict(chemical)
 
-        if "smiles" in chemical and "cid" not in chemical:
+        cid_value = chemical.get("cid")
+        if "smiles" in chemical and (not cid_value or cid_value == "N/A"):
             img_base64 = self.smiles_to_base64(chemical["smiles"])
             chemical["imageSrc"] = f'data:image/png;base64,{img_base64}' if img_base64 else "N/A"
         else:
@@ -1775,14 +1834,24 @@ class ModelPredictor:
 
         return self._ensure_chemical_inchi_key(chemical)
 
-    def _build_prediction_error_report(self, chemical, model_details_dict, error):
+    def _build_prediction_error_report(self, chemical, model_details_dict, error, standardized_chemical=None):
         if isinstance(chemical, dict):
             prepared_chemical = self._prepare_chemical_for_report(chemical)
         else:
             prepared_chemical = self._build_minimal_chemical(chemical)
+        prepared_standardized_chemical = (
+            self._prepare_chemical_for_report(standardized_chemical)
+            if isinstance(standardized_chemical, dict)
+            else None
+        )
         model_results = ModelResults()
         model_results.predictionError = error
-        return self._build_report_dict(prepared_chemical, model_details_dict, model_results)
+        return self._build_report_dict(
+            prepared_chemical,
+            model_details_dict,
+            model_results,
+            standardized_chemical=prepared_standardized_chemical,
+        )
 
     def _fast_test_embedding_euclidean_ad_batch(self, model, applicability_domain_name, df_prediction):
         runtime = self._get_test_embedding_ad_runtime(model)
@@ -1943,7 +2012,15 @@ class ModelPredictor:
         pred_array,
         report_model_details,
         generate_report,
+        response_chemicals=None,
+        standardized_chemicals_for_response=None,
     ):
+        response_chemicals = response_chemicals if response_chemicals is not None else prediction_chemicals
+        standardized_chemicals_for_response = (
+            standardized_chemicals_for_response
+            if standardized_chemicals_for_response is not None
+            else [None] * len(prediction_chemicals)
+        )
         ad_results_by_row = self._determine_applicability_domains_batch(model, batch_prediction_df)
         neighbor_results_training = None
         neighbor_results_prediction = None
@@ -1958,6 +2035,14 @@ class ModelPredictor:
         prepared_chemicals = [
             self._prepare_chemical_for_report(chemical)
             for chemical in prediction_chemicals
+        ]
+        prepared_response_chemicals = [
+            self._prepare_chemical_for_report(chemical)
+            for chemical in response_chemicals
+        ]
+        prepared_standardized_chemicals_for_response = [
+            self._prepare_chemical_for_report(chemical) if isinstance(chemical, dict) else None
+            for chemical in standardized_chemicals_for_response
         ]
 
         reports = []
@@ -1974,6 +2059,8 @@ class ModelPredictor:
                     neighbor_results_training=None if neighbor_results_training is None else neighbor_results_training[row_pos],
                     neighbor_results_prediction=None if neighbor_results_prediction is None else neighbor_results_prediction[row_pos],
                     prepared_chemical=prepared_chemicals[row_pos],
+                    prepared_response_chemical=prepared_response_chemicals[row_pos],
+                    prepared_standardized_chemical=prepared_standardized_chemicals_for_response[row_pos],
                 )
             )
 
@@ -1987,10 +2074,19 @@ class ModelPredictor:
         pred_array,
         report_model_details,
         generate_report,
+        response_chemicals=None,
+        standardized_chemicals_for_response=None,
     ):
         row_count = len(prediction_chemicals)
         if row_count == 0:
             return []
+
+        response_chemicals = response_chemicals if response_chemicals is not None else prediction_chemicals
+        standardized_chemicals_for_response = (
+            standardized_chemicals_for_response
+            if standardized_chemicals_for_response is not None
+            else [None] * len(prediction_chemicals)
+        )
 
         worker_count = self._get_postprocess_process_count()
         if row_count <= 1 or worker_count <= 1:
@@ -2001,6 +2097,8 @@ class ModelPredictor:
                 pred_array,
                 report_model_details,
                 generate_report,
+                response_chemicals=response_chemicals,
+                standardized_chemicals_for_response=standardized_chemicals_for_response,
             )
 
         chunk_size = self._calculate_dynamic_chunk_size(row_count, worker_count)
@@ -2016,6 +2114,8 @@ class ModelPredictor:
                         batch_prediction_df.iloc[start:stop].copy(),
                         list(chemicals_chunk),
                         np.asarray(pred_array[start:stop]).reshape(-1),
+                        list(response_chemicals[start:stop]),
+                        list(standardized_chemicals_for_response[start:stop]),
                     )
                 )
 
@@ -2028,7 +2128,13 @@ class ModelPredictor:
             )
 
             def _process_chunk_thread(task):
-                chunk_prediction_df, chunk_prediction_chemicals, chunk_pred_array = task
+                (
+                    chunk_prediction_df,
+                    chunk_prediction_chemicals,
+                    chunk_pred_array,
+                    chunk_response_chemicals,
+                    chunk_standardized_chemicals_for_response,
+                ) = task
                 return self._build_reports_for_precomputed_predictions(
                     model,
                     chunk_prediction_df,
@@ -2036,6 +2142,8 @@ class ModelPredictor:
                     chunk_pred_array,
                     report_model_details,
                     generate_report,
+                    response_chemicals=chunk_response_chemicals,
+                    standardized_chemicals_for_response=chunk_standardized_chemicals_for_response,
                 )
 
             with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -2057,6 +2165,8 @@ class ModelPredictor:
                     np.asarray(pred_array[start:stop]).reshape(-1).tolist(),
                     report_model_details,
                     generate_report,
+                    list(response_chemicals[start:stop]),
+                    list(standardized_chemicals_for_response[start:stop]),
                 )
             )
 
@@ -2091,6 +2201,8 @@ class ModelPredictor:
         neighbor_results_training=None,
         neighbor_results_prediction=None,
         prepared_chemical=None,
+        prepared_response_chemical=None,
+        prepared_standardized_chemical=None,
     ):
         chemical = prepared_chemical if prepared_chemical is not None else self._prepare_chemical_for_report(chemical)
         model_results = ModelResults()
@@ -2139,11 +2251,12 @@ class ModelPredictor:
             neighbor_results_training, neighbor_results_prediction = self.addNeighborsFromSets(model, model_results, df_prediction)
 
         return self._build_report_dict(
-            chemical,
+            prepared_response_chemical if prepared_response_chemical is not None else chemical,
             model_details_dict,
             model_results,
             neighbor_results_training=neighbor_results_training,
             neighbor_results_prediction=neighbor_results_prediction,
+            standardized_chemical=prepared_standardized_chemical,
         )
 
     def _standardize_smiles_batch_subset(self, stdizer_api, smiles_list, model, split_depth=0):
@@ -2355,6 +2468,8 @@ class ModelPredictor:
         standardized_indices = []
         standardized_smiles = []
         standardized_chemicals = []
+        response_chemicals = []
+        standardized_chemicals_for_response = []
 
         for idx, (chemical, code) in enumerate(standardized_results):
             if code != 200:
@@ -2374,58 +2489,84 @@ class ModelPredictor:
 
             standardized_indices.append(idx)
             standardized_smiles.append(canonical_smiles)
-            standardized_chemicals.append(dict(chemical))
+            standardized_chemical = dict(chemical)
+            standardized_chemicals.append(standardized_chemical)
+
+            if _standardized_chemical_changes_smiles(smiles_list[idx], standardized_chemical):
+                response_chemicals.append(_build_input_chemical(smiles_list[idx]))
+                standardized_chemicals_for_response.append(standardized_chemical)
+            else:
+                response_chemicals.append(standardized_chemical)
+                standardized_chemicals_for_response.append(None)
 
         descriptor_results = self._calculate_descriptors_batch(descriptors_api, standardized_smiles, model.descriptorService)
 
         prediction_frames = []
         prediction_indices = []
         prediction_chemicals = []
+        prediction_response_chemicals = []
+        prediction_standardized_chemicals_for_response = []
 
         for offset, descriptor_result in enumerate(descriptor_results):
             original_idx = standardized_indices[offset]
             chemical = standardized_chemicals[offset]
+            response_chemical = response_chemicals[offset]
+            standardized_chemical_for_response = standardized_chemicals_for_response[offset]
 
             if descriptor_result is None:
                 results[original_idx] = self._build_prediction_error_report(
-                    self._prepare_chemical_for_report(chemical),
+                    response_chemical,
                     report_model_details,
                     "Descriptor calculation did not return a result",
+                    standardized_chemical=standardized_chemical_for_response,
                 )
                 continue
 
             df_prediction, code = descriptor_result
             if code != 200:
                 results[original_idx] = self._build_prediction_error_report(
-                    self._prepare_chemical_for_report(chemical),
+                    response_chemical,
                     report_model_details,
                     df_prediction,
+                    standardized_chemical=standardized_chemical_for_response,
                 )
                 continue
 
             prediction_frames.append(df_prediction)
             prediction_indices.append(original_idx)
             prediction_chemicals.append(chemical)
+            prediction_response_chemicals.append(response_chemical)
+            prediction_standardized_chemicals_for_response.append(standardized_chemical_for_response)
 
         if prediction_frames:
             batch_prediction_df = pd.concat(prediction_frames, ignore_index=True)
             predictions = model.do_predictions(batch_prediction_df)
 
             if predictions is None:
-                for idx, chemical in zip(prediction_indices, prediction_chemicals):
+                for idx, response_chemical, standardized_chemical_for_response in zip(
+                    prediction_indices,
+                    prediction_response_chemicals,
+                    prediction_standardized_chemicals_for_response,
+                ):
                     results[idx] = self._build_prediction_error_report(
-                        chemical,
+                        response_chemical,
                         report_model_details,
                         "Model could not generate predictions",
+                        standardized_chemical=standardized_chemical_for_response,
                     )
             else:
                 pred_array = np.asarray(predictions).reshape(-1)
                 if pred_array.size != len(prediction_indices):
-                    for idx, chemical in zip(prediction_indices, prediction_chemicals):
+                    for idx, response_chemical, standardized_chemical_for_response in zip(
+                        prediction_indices,
+                        prediction_response_chemicals,
+                        prediction_standardized_chemicals_for_response,
+                    ):
                         results[idx] = self._build_prediction_error_report(
-                            chemical,
+                            response_chemical,
                             report_model_details,
                             "Model returned an unexpected number of predictions",
+                            standardized_chemical=standardized_chemical_for_response,
                         )
                 else:
                     finalized_reports = self._build_reports_for_precomputed_predictions_parallel(
@@ -2435,6 +2576,8 @@ class ModelPredictor:
                         pred_array,
                         report_model_details,
                         generate_report,
+                        response_chemicals=prediction_response_chemicals,
+                        standardized_chemicals_for_response=prediction_standardized_chemicals_for_response,
                     )
 
                     for row_pos, idx in enumerate(prediction_indices):
@@ -2485,7 +2628,7 @@ class ModelPredictor:
         for idx, cache_key in enumerate(cache_keys):
             prediction = cached_predictions.get(cache_key) if cache_key is not None else None
             if prediction is not None:
-                results[idx] = self._prediction_from_cached_value(prediction)
+                results[idx] = self._prediction_from_cached_value_for_smiles(prediction, smiles_list[idx])
                 continue
 
             missing_indices.append(idx)
@@ -3054,6 +3197,8 @@ def _postprocess_prediction_chunk(args):
         pred_values,
         report_model_details,
         generate_report,
+        response_chemicals,
+        standardized_chemicals_for_response,
     ) = args
 
     predictor = _get_postprocess_predictor()
@@ -3062,8 +3207,16 @@ def _postprocess_prediction_chunk(args):
     if model is None or hasattr(model, "modelId") is False:
         model_error = f"Invalid model_id: {model_id}"
         return [
-            predictor._build_prediction_error_report(chemical, report_model_details, model_error)
-            for chemical in prediction_chemicals
+            predictor._build_prediction_error_report(
+                response_chemical,
+                report_model_details,
+                model_error,
+                standardized_chemical=standardized_chemical,
+            )
+            for response_chemical, standardized_chemical in zip(
+                response_chemicals,
+                standardized_chemicals_for_response,
+            )
         ]
 
     predictor._ensure_model_runtime_cache(model)
@@ -3075,6 +3228,8 @@ def _postprocess_prediction_chunk(args):
         pred_array,
         report_model_details,
         generate_report,
+        response_chemicals=response_chemicals,
+        standardized_chemicals_for_response=standardized_chemicals_for_response,
     )
 
 
