@@ -1373,7 +1373,7 @@ def set_hyper_parameters(qsar_method, feature_selection, descriptor_set_name, sp
     return params
         
 
-def runAD(df_training, df_prediction, params, embedding, df_predictions, ad_measure, stats_dict):
+def runAD(df_training, df_prediction, params, embedding, df_predictions, ad_measure, stats_dict, is_binary=False, is_external=False):
     
     df_ad_output, _ = adu.generate_applicability_domain_with_preselected_descriptors_from_dfs(
         train_df=df_training.copy(), test_df=df_prediction.copy(),
@@ -1403,8 +1403,8 @@ def runAD(df_training, df_prediction, params, embedding, df_predictions, ad_meas
     )
 
     # Determine if task is binary (exp in {0,1}, ignoring NaNs)
-    exp_nonnull = df_predictions['exp'].dropna()
-    is_binary = exp_nonnull.isin([0, 1]).all()
+    # exp_nonnull = df_predictions['exp'].dropna()
+    # is_binary = exp_nonnull.isin([0, 1]).all()
 
     # Subsets: inside and outside AD, only exp/pred columns are needed by metrics
     inside_mask = df_predictions[colAD].eq(True)
@@ -1465,7 +1465,7 @@ def runAD(df_training, df_prediction, params, embedding, df_predictions, ad_meas
             "Coverage_Test": coverage_ad
         }
 
-    stats_dict[ad_measure] = stats
+    stats_dict[f"{ad_measure}{'_External' if is_external else ''}"] = stats
     return df_predictions
 
 
@@ -1503,7 +1503,7 @@ def runAD(df_training, df_prediction, params, embedding, df_predictions, ad_meas
 
 # from your_metrics_script import calculate_continuous_statistics, calculate_binary_statistics
 
-def generate_consensus_ad(df_predictions, stats_dict, ad_measure_final):
+def generate_consensus_ad(df_predictions, stats_dict, ad_measure_final, is_binary=False, is_external=False):
     # Build list of AD columns
     colsAD = [f"AD_{ad.replace(' ', '_')}" for ad in ad_measure_final]
 
@@ -1522,8 +1522,8 @@ def generate_consensus_ad(df_predictions, stats_dict, ad_measure_final):
     valid_outside = df_outside.dropna(subset=['exp', 'pred'])
 
     # Check if task is binary (all non-null exp ∈ {0,1})
-    exp_nonnull = df_predictions['exp'].dropna()
-    is_binary = exp_nonnull.isin([0, 1]).all()
+    # exp_nonnull = df_predictions['exp'].dropna()
+    # is_binary = exp_nonnull.isin([0, 1]).all()
 
     def safe_div(n, d):
         return n / d if d else float('nan')
@@ -1578,7 +1578,7 @@ def generate_consensus_ad(df_predictions, stats_dict, ad_measure_final):
             "Coverage_Test": coverage
         }
 
-    stats_dict[ad_measure] = stats
+    stats_dict[f"{ad_measure}{'_External' if is_external else ''}"] = stats
 
 def add_log_p_martin_columns(df_training, df_prediction, cross_validate, df_cv_dict=None):
     """
@@ -1730,7 +1730,7 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         dataset_name_ext = None
         
         if dataset_name == 'KOC v1 modeling':
-            dataset_name_ext = 'KOC v1 external'
+            dataset_name_ext = 'KOC v2 external'
         elif dataset_name == 'ECOTOX_2024_12_12_96HR_Fish_LC50_v3a modeling':
             dataset_name_ext = 'QSAR_Toolbox_96HR_Fish_LC50_v3 modeling'    
 
@@ -1803,10 +1803,10 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         stats_dict = {}
         if run_AD:
             for ad_measure in ad_measures:
-                df_pred_test = runAD(df_training, df_prediction, params, model.embedding, df_pred_test, ad_measure, stats_dict)
+                df_pred_test = runAD(df_training, df_prediction, params, model.embedding, df_pred_test, ad_measure, stats_dict, is_binary=is_binary, is_external=False)
     
             if len(ad_measure) > 1:
-                generate_consensus_ad(df_pred_test, stats_dict, ad_measure_model)
+                generate_consensus_ad(df_pred_test, stats_dict, ad_measure_model, is_binary=is_binary, is_external=False)
     
             # print(json.dumps(stats_dict,indent=4))
 
@@ -1861,6 +1861,13 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
             model.df_external = du.get_external_instances(session, model)
             model.num_external = model.df_external.shape[0] if model.df_external is not None else 0        
             # model.num_external = df_prediction_ext.shape[0] if df_prediction_ext is not None else 0
+
+            if run_AD:
+                for ad_measure in ad_measures:
+                    df_pred_ext = runAD(df_training, df_prediction_ext, params, model.embedding, df_pred_ext, ad_measure, stats_dict, is_binary=is_binary, is_external=True)
+        
+                if len(ad_measure) > 1:
+                    generate_consensus_ad(df_pred_ext, stats_dict, ad_measure_model, is_binary=is_binary, is_external=True)
         
         # Check what happens with ext_stats and how to add new things to the results_dict under the model_details
         results_dict = Results.create_results_dict(
@@ -1943,6 +1950,8 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         
         # Safely extract AD stats (could be missing or None)
         ad_stats = (results_dict.get('model_statistics') or {}).get('test_stats_AD') or {}
+        external_ad_stats = results_dict.get('model_statistics', {}).get('ext_stats_AD', {}) or {}
+        external_ad_stats = {key + "_External": value for key, value in external_ad_stats.items() if value is not None}
         
         # Merge; any None becomes {} so it won’t break
         model.modelStatistics = (
@@ -1951,6 +1960,7 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
             | (test_stats or {})
             | ad_stats
             | (ext_stats or {})
+            | external_ad_stats
         )
         
         model.df_training = df_training  # df_training_model?
@@ -2139,6 +2149,11 @@ class Results:
             str_ad_measure_final = " and ".join(ad_measure_model)                        
             ms["test_stats_AD"] = stats_dict[str_ad_measure_final]
             ms["test_stats_all_AD"] = stats_dict
+        
+        if len(stats_dict) > 0 and ext_stats:
+            external_ad = str_ad_measure_final + "_External"
+            ms["ext_stats_AD"] = stats_dict[external_ad]
+            ms["ext_stats_all_AD"] = stats_dict
         
         return results_dict
 

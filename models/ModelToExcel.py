@@ -1,6 +1,7 @@
 import pickle
 import re
 
+from charset_normalizer import is_binary
 import pandas as pd
 from sqlalchemy import URL, text, create_engine
 from sqlalchemy.orm import sessionmaker
@@ -14,9 +15,12 @@ import json
 from sklearn2pmml.pipeline import PMMLPipeline as PMMLPipeline
 from sklearn.model_selection import KFold
 from model_ws_db_utilities import ModelInitializer
+from models.case_studies.run_model_building import runAD
 from models.ModelBuilder import Model
 from models.db_utilities.raw_exp_data_db import ExpDataGetter
 from models.db_utilities.dataset_utilities_db import getMappedDatapoints
+from StatsCalculator import calculate_continuous_statistics, calculate_binary_statistics, calculate_mean_exp_training
+from util import predict_constants as pc
 import applicability_domain.applicability_domain_utilities as adu
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -42,6 +46,9 @@ coloredlogs.install(level=logging_level, milliseconds=True, level_styles=level_s
 PROJECT_ROOT = os.getenv("PROJECT_ROOT")
 
 pd.options.mode.chained_assignment = None  # default='warn'
+warnings.filterwarnings("ignore", category=FutureWarning, 
+                        message="The behavior of DataFrame concatenation with empty or all-NA entries is deprecated.*")
+
 
 # ============================================================
 # STORAGE CLASS
@@ -70,12 +77,15 @@ class ModelDataObjects:
     cover_sheet_df: Optional[pd.DataFrame] = None
     statistics_df: Optional[pd.DataFrame] = None
     records_df: Optional[pd.DataFrame] = None
+    external_records_df: Optional[pd.DataFrame] = None
     records_field_descriptions_df: Optional[pd.DataFrame] = None
     model_descriptors_df: Optional[pd.DataFrame] = None
     model_descriptor_values_df: Optional[pd.DataFrame] = None
     training_cv_predictions_df: Optional[pd.DataFrame] = None
     test_set_predictions_df: Optional[pd.DataFrame] = None
     external_predictions_df: Optional[pd.DataFrame] = None
+    superheaders: Optional[dict] = None
+    external_superheaders: Optional[dict] = None
 
     # Optional arguments for queries (passed to DataQuerier)
     query_args: Optional[Dict[str, Any]] = field(default_factory=dict)
@@ -106,6 +116,7 @@ class ModelDataObjects:
             self.cover_sheet_df = data_querier.query_cover_sheet_df()
             self.statistics_df = data_querier.query_statistics_df()
             self.records_df = data_querier.query_records_df()
+            self.external_records_df = data_querier.query_external_records_df()
             self.records_field_descriptions_df = DataTransformer.get_records_field_descriptions_df(self.experimental_parameters)
             self.model_descriptors_df = data_querier.query_model_descriptors_df()
             self.model_descriptor_values_df = data_querier.query_model_descriptor_values_df()
@@ -113,6 +124,7 @@ class ModelDataObjects:
             self.test_set_predictions_df = data_querier.query_test_set_predictions_df()
             self.external_predictions_df = data_querier.query_external_predictions_df()
             self.superheaders = DataTransformer.get_superheaders(self.records_df, self.experimental_parameters["Field"].tolist())
+            self.external_superheaders = DataTransformer.get_superheaders(self.external_records_df, self.experimental_parameters["Field"].tolist())
 
         elif self.model is not None:
             logging.info("Initializing with provided model and dataframes...")
@@ -136,13 +148,15 @@ class ModelDataObjects:
             self.cover_sheet_df = data_querier.query_cover_sheet_df()
             self.statistics_df = data_querier.query_statistics_df()
             self.records_df = data_querier.query_records_df()
+            self.external_records_df = data_querier.query_external_records_df()
             self.records_field_descriptions_df = DataTransformer.get_records_field_descriptions_df(self.experimental_parameters)
             self.model_descriptors_df = data_querier.query_model_descriptors_df()
             self.model_descriptor_values_df = data_querier.query_model_descriptor_values_df()
             self.training_cv_predictions_df = data_querier.query_training_cv_predictions_df()
             self.test_set_predictions_df = data_querier.query_test_set_predictions_df()
             self.external_predictions_df = data_querier.query_external_predictions_df()
-            self.superheaders = DataTransformer.get_superheaders(self.records_df, self.experimental_parameters["Field"].tolist())            
+            self.superheaders = DataTransformer.get_superheaders(self.records_df, self.experimental_parameters["Field"].tolist())
+            self.external_superheaders = DataTransformer.get_superheaders(self.external_records_df, self.experimental_parameters["Field"].tolist())
 
         else:
             logging.info("Not initialized with model_id or model, manual initialization required")
@@ -701,11 +715,13 @@ class ChartBuilder:
                     }
                 })
         
+        yx_format = workbook.add_format({"num_format": ";;;"})
+
         yx_row_start = data_end_row + 1 + yx_offset_rows
-        worksheet.write_number(yx_row_start, x_col_idx, mn)
-        worksheet.write_number(yx_row_start, y_col_idx, mn)
-        worksheet.write_number(yx_row_start + 1, x_col_idx, mx)
-        worksheet.write_number(yx_row_start + 1, y_col_idx, mx)
+        worksheet.write_number(yx_row_start, x_col_idx, mn, yx_format)
+        worksheet.write_number(yx_row_start, y_col_idx, mn, yx_format)
+        worksheet.write_number(yx_row_start + 1, x_col_idx, mx, yx_format)
+        worksheet.write_number(yx_row_start + 1, y_col_idx, mx, yx_format)
         
         chart.add_series({
                 "name":"y = x",
@@ -758,7 +774,7 @@ class ChartBuilder:
             worksheet_plot.insert_chart(0, 0, chart, {'x_scale': 1.0, 'y_scale': 1.0})
     
     @staticmethod
-    def add_histogram(
+    def add_confusion_matrix(
         workbook: Any,
         sheet_name: str,
         sheet_name_plot: str,
@@ -778,10 +794,8 @@ class ChartBuilder:
         yx_offset_rows: int,
         chart_size_px: int
     ) -> None:
-        """Add a stacked histogram of binary data to the plot sheet.
+        """Add a confusion matrix of binary data to the plot sheet.
         Called in add_plot if is_binary = True.
-        Creates a stacked column chart showing prediction accuracy, with predicted values as bars
-        and correct predictions in green, incorrect predictions in red.
 
         Args:
             workbook: The Excel workbook object.
@@ -815,7 +829,8 @@ class ChartBuilder:
         count_1_0 = ((df[x_col] == 1) & (df[y_col] < 0.5)).sum()  # Exp=1, Pred=0 (incorrect)
         count_1_1 = ((df[x_col] == 1) & (df[y_col] >= 0.5)).sum()  # Exp=1, Pred=1 (correct)
 
-        logging.info(f"Frequency counts for {sheet_name}:\n\tExp=0, Pred=0: {count_0_0}\n\tExp=0, Pred=1: {count_0_1}\n\tExp=1, Pred=0: {count_1_0}\n\tExp=1, Pred=1: {count_1_1}")
+        # logging.info(f"Frequency counts for {sheet_name}:\n\tExp=0, Pred=0: {count_0_0}\n\tExp=0, Pred=1: {count_0_1}\n\tExp=1, Pred=0: {count_1_0}\n\tExp=1, Pred=1: {count_1_1}")
+        logging.info(f"Frequency counts for {sheet_name}:\n\t\t\tPredicted 0\t\tPredicted 1\n\tExperimental 0\t\t{count_0_0}\t\t{count_0_1}\n\tExperimental 1\t\t{count_1_0}\t\t{count_1_1}")
 
         # Worksheet formats
         centered = workbook.add_format({"align": "center", "valign": "vcenter", "bold": True})
@@ -824,62 +839,63 @@ class ChartBuilder:
 
         # Write data to worksheet for chart
         # Row 1: Category labels (predicted values)
-        # freq_row_start = data_end_row + 1 + yx_offset_rows
-        freq_row_start = data_start_row
+        # freq_row_start = data_start_row
+        freq_row_start = 0
         freq_col_start = chart_start_col + 2
+        worksheet.write_string(freq_row_start, freq_col_start - 1, "Confusion Matrix", centered)
         worksheet.write_string(freq_row_start, freq_col_start, "Predicted 0", centered)
         worksheet.write_string(freq_row_start, freq_col_start + 1, "Predicted 1", centered)
         worksheet.write_string(freq_row_start + 1, freq_col_start - 1, "Experimental 0", centered)
         worksheet.write_string(freq_row_start + 2, freq_col_start - 1, "Experimental 1", centered)
 
-        worksheet.write_string(data_end_row + 1 + yx_offset_rows, x_col_idx, "Correct", centered)
-        worksheet.write_string(data_end_row + 1 + yx_offset_rows, x_col_idx + 1, "Incorrect", centered)
+        # worksheet.write_string(data_end_row + 1 + yx_offset_rows, x_col_idx, "Correct", centered)
+        # worksheet.write_string(data_end_row + 1 + yx_offset_rows, x_col_idx + 1, "Incorrect", centered)
 
         # Row 2: Correct predictions (green series) - diagonal: count_0_0 and count_1_1
         worksheet.write_number(freq_row_start + 1, freq_col_start, count_0_0, green)
         worksheet.write_number(freq_row_start + 2, freq_col_start + 1, count_1_1, green)
 
-        worksheet.write_number(data_end_row + 2 + yx_offset_rows, x_col_idx, count_0_0)
-        worksheet.write_number(data_end_row + 3 + yx_offset_rows, x_col_idx, count_1_1)
+        # worksheet.write_number(data_end_row + 2 + yx_offset_rows, x_col_idx, count_0_0)
+        # worksheet.write_number(data_end_row + 3 + yx_offset_rows, x_col_idx, count_1_1)
 
         # Row 3: Incorrect predictions (red series) - off-diagonal: count_0_1 and count_1_0
         worksheet.write_number(freq_row_start + 1, freq_col_start + 1, count_0_1, red)
         worksheet.write_number(freq_row_start + 2, freq_col_start, count_1_0, red)
 
-        worksheet.write_number(data_end_row + 2 + yx_offset_rows, x_col_idx + 1, count_1_0)
-        worksheet.write_number(data_end_row + 3 + yx_offset_rows, x_col_idx + 1, count_0_1)
+        # worksheet.write_number(data_end_row + 2 + yx_offset_rows, x_col_idx + 1, count_1_0)
+        # worksheet.write_number(data_end_row + 3 + yx_offset_rows, x_col_idx + 1, count_0_1)
 
         # Create stacked column chart
-        chart = workbook.add_chart({"type": "column", "subtype": "stacked"})
-        title = f"{sheet_name} Prediction Accuracy" if property_name is None else f"{sheet_name} Prediction Accuracy for {property_name}"
-        title_len = len(title)
-        title_font_size = 18 - 2*(title_len // 20)
-        chart.set_title({
-            "name": title,
-            "overlay": False,
-            "name_font": {
-                "size": title_font_size
-            }
-        })
-        chart.set_style(10)
+        # chart = workbook.add_chart({"type": "column", "subtype": "stacked"})
+        # title = f"{sheet_name} Prediction Accuracy" if property_name is None else f"{sheet_name} Prediction Accuracy for {property_name}"
+        # title_len = len(title)
+        # title_font_size = 18 - 2*(title_len // 20)
+        # chart.set_title({
+        #     "name": title,
+        #     "overlay": False,
+        #     "name_font": {
+        #         "size": title_font_size
+        #     }
+        # })
+        # chart.set_style(10)
         
         # Add series for correct predictions (green)
-        chart.add_series({
-            "name": "Correct Predictions",
-            "categories": [sheet_name, freq_row_start, freq_col_start, freq_row_start, freq_col_start + 1],
-            "values": [sheet_name, data_end_row + 2 + yx_offset_rows, x_col_idx, data_end_row + 3 + yx_offset_rows, x_col_idx],
-            "fill": {"color": "#00B050"},  # Green
-            "data_labels": {"value": True}
-        })
+        # chart.add_series({
+        #     "name": "Correct Predictions",
+        #     "categories": [sheet_name, freq_row_start, freq_col_start, freq_row_start, freq_col_start + 1],
+        #     "values": [sheet_name, data_end_row + 2 + yx_offset_rows, x_col_idx, data_end_row + 3 + yx_offset_rows, x_col_idx],
+        #     "fill": {"color": "#00B050"},  # Green
+        #     "data_labels": {"value": True}
+        # })
         
         # Add series for incorrect predictions (red)
-        chart.add_series({
-            "name": "Incorrect Predictions",
-            "categories": [sheet_name, freq_row_start, freq_col_start, freq_row_start, freq_col_start + 1],
-            "values": [sheet_name, data_end_row + 2 + yx_offset_rows, x_col_idx + 1, data_end_row + 3 + yx_offset_rows, x_col_idx + 1],
-            "fill": {"color": "#FF0000"},  # Red
-            "data_labels": {"value": True}
-        })
+        # chart.add_series({
+        #     "name": "Incorrect Predictions",
+        #     "categories": [sheet_name, freq_row_start, freq_col_start, freq_row_start, freq_col_start + 1],
+        #     "values": [sheet_name, data_end_row + 2 + yx_offset_rows, x_col_idx + 1, data_end_row + 3 + yx_offset_rows, x_col_idx + 1],
+        #     "fill": {"color": "#FF0000"},  # Red
+        #     "data_labels": {"value": True}
+        # })
         
         # Calculate and add percentage correct labels above each bar
         # percent_row_start = data_end_row + 4 + yx_offset_rows
@@ -909,45 +925,45 @@ class ChartBuilder:
         # })
         
         # Configure axes
-        x_axis_opts = {
-            "name": "Model Prediction",
-            "num_format": "0",
-            "major_gridlines": {"visible": False},
-            "minor_gridlines": {"visible": False}
-        }
+        # x_axis_opts = {
+        #     "name": "Model Prediction",
+        #     "num_format": "0",
+        #     "major_gridlines": {"visible": False},
+        #     "minor_gridlines": {"visible": False}
+        # }
         
-        y_axis_opts = {
-            "name": "Frequency (Count)",
-            "num_format": "0",
-            "major_gridlines": {"visible": True},
-            "minor_gridlines": {"visible": False}
-        }
+        # y_axis_opts = {
+        #     "name": "Frequency (Count)",
+        #     "num_format": "0",
+        #     "major_gridlines": {"visible": True},
+        #     "minor_gridlines": {"visible": False}
+        # }
         
-        chart.set_x_axis(x_axis_opts)
-        chart.set_y_axis(y_axis_opts)
+        # chart.set_x_axis(x_axis_opts)
+        # chart.set_y_axis(y_axis_opts)
         
-        chart.set_size({"width": chart_size_px, "height": chart_size_px})
-        chart.set_plotarea({
-            "fill": {"none": True},
-            "border": {"color": "#666666", "width": 1.0},
-            "layout": {
-                "x": 0.12,
-                "y": 0.10,
-                "width": 0.84,
-                "height": 0.80
-            }
-        })
-        chart.set_legend({
-            "overlay": True,
-            # "layout": {"x": 0.7, "y": 0.75, "width": 0.25, "height": 0.1}
-            "layout": {"x": 0.15, "y": 0.1, "width": 0.25, "height": 0.1}
-        })
+        # chart.set_size({"width": chart_size_px, "height": chart_size_px})
+        # chart.set_plotarea({
+        #     "fill": {"none": True},
+        #     "border": {"color": "#666666", "width": 1.0},
+        #     "layout": {
+        #         "x": 0.12,
+        #         "y": 0.10,
+        #         "width": 0.84,
+        #         "height": 0.80
+        #     }
+        # })
+        # chart.set_legend({
+        #     "overlay": True,
+        #     # "layout": {"x": 0.7, "y": 0.75, "width": 0.25, "height": 0.1}
+        #     "layout": {"x": 0.15, "y": 0.1, "width": 0.25, "height": 0.1}
+        # })
         
-        if sheet_name == sheet_name_plot:
-            chart_position = xl_rowcol_to_cell(data_start_row + 3, chart_start_col)
-            worksheet_plot.insert_chart(chart_position, chart, {"x_offset": 20, "y_offset": 10})
-        else:
-            worksheet_plot.insert_chart(0, 0, chart, {'x_scale': 1.0, 'y_scale': 1.0})
+        # if sheet_name == sheet_name_plot:
+        #     chart_position = xl_rowcol_to_cell(data_start_row + 3, chart_start_col)
+        #     worksheet_plot.insert_chart(chart_position, chart, {"x_offset": 20, "y_offset": 10})
+        # else:
+        #     worksheet_plot.insert_chart(0, 0, chart, {'x_scale': 1.0, 'y_scale': 1.0})
     
     @staticmethod
     def add_plot(
@@ -1024,7 +1040,7 @@ class ChartBuilder:
         if not is_binary:
             ChartBuilder.add_scatter_plot(workbook, sheet_name, sheet_name_plot, worksheet, worksheet_plot, df, x_col, y_col, x_col_idx, y_col_idx, x_col_name, y_col_name, property_name, property_units, nrows, data_start_row, yx_offset_rows, chart_size_px)
         else:
-            ChartBuilder.add_histogram(workbook, sheet_name, sheet_name_plot, worksheet, worksheet_plot, df, x_col, y_col, x_col_idx, y_col_idx, x_col_name, y_col_name, property_name, property_units, nrows, data_start_row, yx_offset_rows, chart_size_px)
+            ChartBuilder.add_confusion_matrix(workbook, sheet_name, sheet_name_plot, worksheet, worksheet_plot, df, x_col, y_col, x_col_idx, y_col_idx, x_col_name, y_col_name, property_name, property_units, nrows, data_start_row, yx_offset_rows, chart_size_px)
 
 
 # ============================================================
@@ -1047,6 +1063,7 @@ class DataQuerier:
             query_args: Optional[dict[str, dict[str, Any]]] = None,
             model: Optional[Any] = None,
             df_pv: Optional[pd.DataFrame] = None,
+            df_pv_external: Optional[pd.DataFrame] = None,
             df_gmd: Optional[pd.DataFrame] = None,
             df_gmd_external: Optional[pd.DataFrame] = None,
             experimental_parameters: Optional[pd.DataFrame] = None
@@ -1062,6 +1079,7 @@ class DataQuerier:
             query_args: Dictionary of query argument sets for different query methods. Defaults to empty dict.
             model: Pre-loaded Model object (if None, will be queried from database).
             df_pv: Pre-loaded property values dataframe (if None, will be queried from database).
+            df_pv_external: Pre-loaded external dataset property values (if None, will be queried from database).
             df_gmd: Pre-loaded descriptor values dataframe (if None, will be queried from database).
             df_gmd_external: Pre-loaded external dataset descriptor values (if None, will be queried from database).
         """
@@ -1075,6 +1093,7 @@ class DataQuerier:
         self.dataset_name_external = None
 
         self.df_pv = df_pv
+        self.df_pv_external = df_pv_external
         self.df_gmd = df_gmd
         self.df_gmd_external = df_gmd_external
 
@@ -1091,7 +1110,8 @@ class DataQuerier:
             self.dataset_name = getattr(self.model, "datasetName", None)
             self.dataset_name_external = getattr(self.model, "external_dataset_name", None)
         
-        self.query_df_pv(**self.query_args.get("query_df_pv", {}))
+        self.query_df_pv(**self.query_args.get("query_df_pv", {}), external=False)
+        self.query_df_pv(**self.query_args.get("query_df_pv", {}), external=True)
         self.query_df_gmd(external=False)
         self.query_df_gmd(external=True)
         self.query_experimental_parameters()
@@ -1156,6 +1176,12 @@ class DataQuerier:
                 logging.error(f"Failed to load model {self.model_id}")
                 return None
 
+            # Trim out rows from the external set that are in the training/test set
+            if getattr(model, "dataset_name_external", False):
+                model.df_dsstoxRecords_external = model.df_dsstoxRecords_external[~model.df_dsstoxRecords_external.canonicalSmiles.isin(model.df_dsstoxRecords.canonicalSmiles)]
+                model.df_external = model.df_external[~model.df_external.ID.isin(model.df_dsstoxRecords.canonicalSmiles)]
+                model.df_preds_external = model.df_preds_external[~model.df_preds_external.canon_qsar_smiles.isin(model.df_dsstoxRecords.canonicalSmiles)]
+
             self.model = model
             return model
         
@@ -1164,38 +1190,63 @@ class DataQuerier:
             traceback.print_exc()
             return None
 
-    def query_df_pv(self, snapshot_id: int = 4, duplicate_strategy: str = "id_suffix") -> Optional[pd.DataFrame]:
+    def query_df_pv(self, external: bool = False, snapshot_id: int = 4, duplicate_strategy: str = "id_suffix") -> Optional[pd.DataFrame]:
         """Query property values dataframe from the database using ExpDataGetter.
         
         Args:
+            external: If True, retrieves external dataset property values; if False, retrieves training dataset property values. Defaults to False.
             snapshot_id: Database snapshot ID to use for query. Defaults to 4.
             duplicate_strategy: How to handle duplicate property values - 'id_suffix' or 'keep_first'. Defaults to 'id_suffix'.
         
         Returns:
             Optional[pd.DataFrame]: Property values dataframe with experimental data, or None if query fails.
         """
-        if self.df_pv is not None:
+        if external and self.df_pv_external is not None:
+            # If external df_pv already initialized, return it immediately
+            return self.df_pv_external
+        elif external and self.dataset_name_external is not None:
+            # If external df_pv not already initialized and model has an external dataset, prepare to query it
+            dataset_name = self.dataset_name_external
+        elif external and self.dataset_name_external is None:
+            # If external df_pv not already initialized and model doesn't have an external dataset, return nothing
+            logging.warning("Provided model has no external dataset provided, skipping initialization of external df_pv\n\t(If this is not desired, set dataset_name_external on the DataQuerier object before running query_df_pv with external = True)")
+            return None
+        elif not external and self.df_pv is not None:
+            # If df_pv already initialized, return it immediately
             return self.df_pv
-        elif self.dataset_name is not None:
+        elif not external and self.dataset_name is not None:
+            # If df_pv not already initialized, prepare to query it from the dataset name
             dataset_name = self.dataset_name
         else:
+            # If none of the above cases occurred, there is some kind of error
+            logging.error("Must set dataset_name on DataQuerier object prior to querying df_pv")
             return None
         
         try:
-            logging.info("Loading df_pv from database")
+            logging.info(f"Loading df_pv for {dataset_name} from database")
             edg = ExpDataGetter()
             df_pv, _ = edg.get_mapped_property_values(self.session, dataset_name, snapshot_id, duplicate_strategy=duplicate_strategy)
-            logging.info(f"Done loading df_pv from database")
+            logging.info(f"Done loading df_pv for {dataset_name} from database")
             
             if df_pv is None:
-                logging.error(f"Failed to query df_pv")
+                logging.error(f"Failed to query df_pv for {dataset_name}")
+                return None
+            if df_pv.empty:
+                logging.warning(f"Query for df_pv for {dataset_name} returned empty dataframe")
                 return None
 
-            self.df_pv = df_pv
+            if external:
+                try:
+                    df_pv = df_pv[~df_pv.canon_qsar_smiles.isin(self.df_pv.canon_qsar_smiles)]
+                except AttributeError:
+                    logging.warning("Training dataset not initialized prior to external dataset, cannot trim external dataset")
+                self.df_pv_external = df_pv
+            else:
+                self.df_pv = df_pv
             return df_pv
         
         except Exception as e:
-            logging.error(f"Error retrieving df_pv: {e}")
+            logging.error(f"Error retrieving df_pv for {dataset_name}: {e}")
             traceback.print_exc()
             return None
 
@@ -1230,15 +1281,22 @@ class DataQuerier:
             return None
         
         try:
-            logging.info("Loading df_gmd from database")
+            logging.info(f"Loading df_gmd for {dataset_name} from database")
             df_gmd = getMappedDatapoints(self.session, dataset_name)
-            logging.info(f"Done loading df_gmd from database")
+            logging.info(f"Done loading df_gmd for {dataset_name} from database")
             
             if df_gmd is None:
-                logging.error(f"Failed to query df_gmd")
+                logging.error(f"Failed to query df_gmd for {dataset_name}")
+                return None
+            if df_gmd.empty:
+                logging.warning(f"Query for df_gmd for {dataset_name} returned empty dataframe")
                 return None
 
             if external:
+                try:
+                    df_gmd = df_gmd[~df_gmd.canon_qsar_smiles.isin(self.df_gmd.canon_qsar_smiles)]
+                except AttributeError:
+                    logging.warning("Training dataset not initialized prior to external dataset, cannot trim external dataset")
                 self.df_gmd_external = df_gmd
             else:
                 self.df_gmd = df_gmd
@@ -1277,6 +1335,84 @@ class DataQuerier:
         self.experimental_parameters = experimental_parameters
 
         return self.experimental_parameters
+
+    @staticmethod
+    def generate_consensus_ad(df_predictions, stats_dict, ad_measure_final, is_binary=False, is_external=False):
+        # Build list of AD columns
+        colsAD = [f"AD_{ad.replace(' ', '_')}" for ad in ad_measure_final]
+
+        # Inside/outside consensus AD masks
+        mask_all_true = df_predictions[colsAD].eq(True).all(axis=1)
+        mask_outside = ~mask_all_true
+
+        # Coverage of consensus AD
+        total_rows = len(df_predictions)
+        coverage = (mask_all_true.sum() / total_rows) if total_rows > 0 else float('nan')
+
+        # Prepare subsets for consistency
+        df_inside = df_predictions.loc[mask_all_true, ['exp', 'pred']].copy()
+        df_outside = df_predictions.loc[mask_outside, ['exp', 'pred']].copy()
+        valid_inside = df_inside.dropna(subset=['exp', 'pred'])
+        valid_outside = df_outside.dropna(subset=['exp', 'pred'])
+
+        # Check if task is binary (all non-null exp ∈ {0,1})
+        # exp_nonnull = df_predictions['exp'].dropna()
+        # is_binary = exp_nonnull.isin([0, 1]).all()
+
+        def safe_div(n, d):
+            return n / d if d else float('nan')
+
+        ad_measure = " and ".join(ad_measure_final)
+
+        if is_binary:
+            # Balanced Accuracy path
+            cutoff = 0.5  # change if you have a project-wide threshold
+
+            stats_inside = calculate_binary_statistics(valid_inside, cutoff=cutoff, tag=pc.TAG_TEST)
+            stats_outside = calculate_binary_statistics(valid_outside, cutoff=cutoff, tag=pc.TAG_TEST)
+
+            ba_inside = stats_inside.get(pc.BALANCED_ACCURACY + pc.TAG_TEST, float('nan'))
+            ba_outside = stats_outside.get(pc.BALANCED_ACCURACY + pc.TAG_TEST, float('nan'))
+            ba_ratio = safe_div(ba_inside, ba_outside) 
+
+            # print('for consensus ad:')
+            # print('rows outside', df_outside.shape[0])
+            # print('stats_outside', stats_outside)
+
+            stats = {
+                "ad_measure": ad_measure,
+                "BA_Test_inside_AD": ba_inside,
+                "BA_Test_outside_AD": ba_outside,
+                "ba_ratio": ba_ratio,
+                "Coverage_Test": coverage
+            }
+        else:
+            # Continuous (MAE) path via calculate_continuous_statistics
+            # mean_exp_training not needed for MAE; pass NaN and only read MAE from the result
+            try:
+                stats_inside = calculate_continuous_statistics(df_inside, mean_exp_training=float('nan'), tag=pc.TAG_TEST)
+                mae_inside = stats_inside.get(pc.MAE + pc.TAG_TEST, float('nan'))
+            except Exception:
+                mae_inside = float('nan')
+
+            try:
+                stats_outside = calculate_continuous_statistics(df_outside, mean_exp_training=float('nan'), tag=pc.TAG_TEST)
+                mae_outside = stats_outside.get(pc.MAE + pc.TAG_TEST, float('nan'))
+                            
+            except Exception:
+                mae_outside = float('nan')
+
+            mae_ratio = safe_div(mae_outside, mae_inside)
+
+            stats = {
+                "ad_measure": ad_measure,
+                "MAE_Test_inside_AD": mae_inside,
+                "MAE_Test_outside_AD": mae_outside,
+                "mae_ratio": mae_ratio,
+                "Coverage_Test": coverage
+            }
+
+        stats_dict[f"{ad_measure}{'_External' if is_external else ''}"] = stats
 
     def query_cover_sheet_df(self) -> pd.DataFrame:
         """Query database for model summary information to populate the cover sheet.
@@ -1330,43 +1466,141 @@ class DataQuerier:
         model = self.query_model()
 
         if not model.is_binary:
+            # TODO: Add code to automatically generate these statistics from the model dataframes if modelStatistics is unpopulated
             statistics_dict = {
                 "nTraining": [model.num_training],
                 "nTest": [model.num_prediction],
-                "RSQ_Training": [model.modelStatistics.get("PearsonRSQ_Training", 0)],
-                "RMSE_Training": [model.modelStatistics.get("RMSE_Training", 0)],
-                "MAE_Training": [model.modelStatistics.get("MAE_Training", 0)],
-                "RSQ_CV_Training": [model.modelStatistics.get("PearsonRSQ_CV_Training", 0)],
-                "RMSE_CV_Training": [model.modelStatistics.get("RMSE_CV_Training", 0)],
-                "MAE_CV_Training": [model.modelStatistics.get("MAE_CV_Training", 0)],
-                "RSQ_Test": [model.modelStatistics.get("PearsonRSQ_Test", 0)],
-                "RMSE_Test": [model.modelStatistics.get("RMSE_Test", 0)],
-                "MAE_Test": [model.modelStatistics.get("MAE_Test", 0)],
-                "Q2_Test": [model.modelStatistics.get("Q2_Test", 0)],
-                "MAE_Test_Inside_AD": [model.modelStatistics.get("MAE_Test_inside_AD", 0)],
-                "MAE_Test_Outside_AD": [model.modelStatistics.get("MAE_Test_outside_AD", 0)],
-                "Coverage_Test": [model.modelStatistics.get("Coverage_Test", 0)]
+                "RSQ_Training": [model.modelStatistics.get("PearsonRSQ_Training", float("nan"))],
+                "RMSE_Training": [model.modelStatistics.get("RMSE_Training", float("nan"))],
+                "MAE_Training": [model.modelStatistics.get("MAE_Training", float("nan"))],
+                "RSQ_CV_Training": [model.modelStatistics.get("PearsonRSQ_CV_Training", float("nan"))],
+                "RMSE_CV_Training": [model.modelStatistics.get("RMSE_CV_Training", float("nan"))],
+                "MAE_CV_Training": [model.modelStatistics.get("MAE_CV_Training", float("nan"))],
+                "RSQ_Test": [model.modelStatistics.get("PearsonRSQ_Test", float("nan"))],
+                "RMSE_Test": [model.modelStatistics.get("RMSE_Test", float("nan"))],
+                "MAE_Test": [model.modelStatistics.get("MAE_Test", float("nan"))],
+                "Q2_Test": [model.modelStatistics.get("Q2_Test", float("nan"))],
+                "MAE_Test_Inside_AD": [model.modelStatistics.get("MAE_Test_inside_AD", float("nan"))],
+                "MAE_Test_Outside_AD": [model.modelStatistics.get("MAE_Test_outside_AD", float("nan"))],
+                "Coverage_Test": [model.modelStatistics.get("Coverage_Test", float("nan"))]
             }
+            if getattr(model, "external_dataset_name", False):
+                if model.modelStatistics.get("PearsonRSQ_External", False):
+                    statistics_dict.update({
+                        "nExternal": [getattr(model, "num_external", float("nan"))],
+                        "RSQ_External": [model.modelStatistics.get("PearsonRSQ_External", float("nan"))],
+                        "RMSE_External": [model.modelStatistics.get("RMSE_External", float("nan"))],
+                        "MAE_External": [model.modelStatistics.get("MAE_External", float("nan"))],
+                        "MAE_Test_Inside_AD_External": [model.modelStatistics.get("MAE_Test_inside_AD_External", float("nan"))],
+                        "MAE_Test_Outside_AD_External": [model.modelStatistics.get("MAE_Test_outside_AD_External", float("nan"))],
+                        "Coverage_Test_External": [model.modelStatistics.get("Coverage_Test_External", float("nan"))]
+                    })
+                else:
+                    temp_dict = {}
+                    temp_df = model.df_preds_external.copy()
+                    ad_measures = model.applicabilityDomainName.split(" and ")
+                    for ad_measure in ad_measures:
+                        df_ad_output, _ = adu.generate_applicability_domain_with_preselected_descriptors_from_dfs(
+                            train_df=model.df_training.copy(), test_df=model.df_external.copy(),
+                            remove_log_p=model.remove_log_p_descriptors,
+                            embedding=model.embedding, applicability_domain=ad_measure,
+                            filterColumnsInBothSets=False,
+                            returnTrainingAD=False
+                        )
+                                                
+                        colAD = "AD_" + ad_measure.replace(" ", "_")
+                        
+                        # Append AD flag to predictions
+                        temp_df = (
+                            temp_df
+                            .merge(
+                                df_ad_output.rename(columns={'idTest': 'id'})[['id', 'AD']],
+                                on='id', how='left'
+                            )
+                            .rename(columns={'AD': colAD})
+                        )
+
+                    DataQuerier.generate_consensus_ad(temp_df, temp_dict, ad_measures, is_binary=model.is_binary, is_external=True)
+                    temp_dict = temp_dict.get(f"{model.applicabilityDomainName}_External", {})
+                    temp_dict.update(calculate_continuous_statistics(temp_df, calculate_mean_exp_training(model.df_preds_training_cv.copy()), tag="_External"))
+                    statistics_dict.update({
+                        "nExternal": [getattr(model, "num_external", float("nan"))],
+                        "RSQ_External": [temp_dict.get("PearsonRSQ_External", float("nan"))],  # Need to handle next 3
+                        "RMSE_External": [temp_dict.get("RMSE_External", float("nan"))],
+                        "MAE_External": [temp_dict.get("MAE_External", float("nan"))],
+                        "MAE_Test_Inside_AD_External": [temp_dict.get("MAE_Test_inside_AD", float("nan"))],
+                        "MAE_Test_Outside_AD_External": [temp_dict.get("MAE_Test_outside_AD", float("nan"))],
+                        "Coverage_Test_External": [temp_dict.get("Coverage_Test", float("nan"))]
+                    })
         else:
+            # TODO: Add code to automatically generate these statistics from the model dataframes if modelStatistics is unpopulated
             statistics_dict = {
                 "nTraining": [model.num_training],
                 "nTest": [model.num_prediction],
-                "Concordance_Training": [model.modelStatistics.get("Concordance_Training", 0)],
-                "BA_Training": [model.modelStatistics.get("BA_Training", 0)],
-                "SN_Training": [model.modelStatistics.get("SN_Training", 0)],
-                "SP_Training": [model.modelStatistics.get("SP_Training", 0)],
-                "Concordance_CV_Training": [model.modelStatistics.get("Concordance_CV_Training", 0)],
-                "BA_CV_Training": [model.modelStatistics.get("BA_CV_Training", 0)],
-                "SN_CV_Training": [model.modelStatistics.get("SN_CV_Training", 0)],
-                "SP_CV_Training": [model.modelStatistics.get("SP_CV_Training", 0)],
-                "Concordance_Test": [model.modelStatistics.get("Concordance_Test", 0)],
-                "BA_Test": [model.modelStatistics.get("BA_Test", 0)],
-                "SN_Test": [model.modelStatistics.get("SN_Test", 0)],
-                "SP_Test": [model.modelStatistics.get("SP_Test", 0)],
-                "BA_Test_Inside_AD": [model.modelStatistics.get("BA_Test_inside_AD", 0)],
-                "BA_Test_Outside_AD": [model.modelStatistics.get("BA_Test_outside_AD", 0)],
-                "Coverage_Test": [model.modelStatistics.get("Coverage_Test", 0)]
+                "Concordance_Training": [model.modelStatistics.get("Concordance_Training", float("nan"))],
+                "BA_Training": [model.modelStatistics.get("BA_Training", float("nan"))],
+                "SN_Training": [model.modelStatistics.get("SN_Training", float("nan"))],
+                "SP_Training": [model.modelStatistics.get("SP_Training", float("nan"))],
+                "Concordance_CV_Training": [model.modelStatistics.get("Concordance_CV_Training", float("nan"))],
+                "BA_CV_Training": [model.modelStatistics.get("BA_CV_Training", float("nan"))],
+                "SN_CV_Training": [model.modelStatistics.get("SN_CV_Training", float("nan"))],
+                "SP_CV_Training": [model.modelStatistics.get("SP_CV_Training", float("nan"))],
+                "Concordance_Test": [model.modelStatistics.get("Concordance_Test", float("nan"))],
+                "BA_Test": [model.modelStatistics.get("BA_Test", float("nan"))],
+                "SN_Test": [model.modelStatistics.get("SN_Test", float("nan"))],
+                "SP_Test": [model.modelStatistics.get("SP_Test", float("nan"))],
+                "BA_Test_Inside_AD": [model.modelStatistics.get("BA_Test_inside_AD", float("nan"))],
+                "BA_Test_Outside_AD": [model.modelStatistics.get("BA_Test_outside_AD", float("nan"))],
+                "Coverage_Test": [model.modelStatistics.get("Coverage_Test", float("nan"))]
             }
+            if getattr(model, "external_dataset_name", False):
+                if model.modelStatistics.get("BA_External", False):
+                    statistics_dict.update({
+                        "nExternal": [getattr(model, "num_external", float("nan"))],
+                        "BA_External": [model.modelStatistics.get("BA_External", float("nan"))],
+                        "SN_External": [model.modelStatistics.get("SN_External", float("nan"))],
+                        "SP_External": [model.modelStatistics.get("SP_External", float("nan"))],
+                        "BA_Test_Inside_AD_External": [model.modelStatistics.get("BA_Test_inside_AD_External", float("nan"))],
+                        "BA_Test_Outside_AD_External": [model.modelStatistics.get("BA_Test_outside_AD_External", float("nan"))],
+                        "Coverage_Test_External": [model.modelStatistics.get("Coverage_Test_External", float("nan"))]
+                    })
+                else:
+                    temp_dict = {}
+                    temp_df = model.df_preds_external.copy()
+                    ad_measures = model.applicabilityDomainName.split(" and ")
+                    for ad_measure in ad_measures:
+                        df_ad_output, _ = adu.generate_applicability_domain_with_preselected_descriptors_from_dfs(
+                            train_df=model.df_training.copy(), test_df=model.df_external.copy(),
+                            remove_log_p=model.remove_log_p_descriptors,
+                            embedding=model.embedding, applicability_domain=ad_measure,
+                            filterColumnsInBothSets=False,
+                            returnTrainingAD=False
+                        )
+                                                
+                        colAD = "AD_" + ad_measure.replace(" ", "_")
+                        
+                        # Append AD flag to predictions
+                        temp_df = (
+                            temp_df
+                            .merge(
+                                df_ad_output.rename(columns={'idTest': 'id'})[['id', 'AD']],
+                                on='id', how='left'
+                            )
+                            .rename(columns={'AD': colAD})
+                        )
+
+                    DataQuerier.generate_consensus_ad(temp_df, temp_dict, ad_measures, is_binary=model.is_binary, is_external=True)
+                    temp_dict = temp_dict.get(f"{model.applicabilityDomainName}_External", {})
+                    temp_dict.update(calculate_binary_statistics(temp_df, 0.5, tag="_External"))
+                    statistics_dict.update({
+                        "nExternal": [getattr(model, "num_external", float("nan"))],
+                        "BA_External": [temp_dict.get("BA_External", float("nan"))],  # Need to handle next 3
+                        "SN_External": [temp_dict.get("SN_External", float("nan"))],
+                        "SP_External": [temp_dict.get("SP_External", float("nan"))],
+                        "BA_Test_Inside_AD_External": [temp_dict.get("BA_Test_inside_AD", float("nan"))],
+                        "BA_Test_Outside_AD_External": [temp_dict.get("BA_Test_outside_AD", float("nan"))],
+                        "Coverage_Test_External": [temp_dict.get("Coverage_Test", float("nan"))]
+                    })
         statistics = pd.DataFrame(statistics_dict).apply(lambda x: round(x, 2) if isinstance(x, float) else x)
 
         # self.statistics_df = statistics
@@ -1395,6 +1629,29 @@ class DataQuerier:
 
         return records_df
     
+    def query_external_records_df(self) -> pd.DataFrame:
+        """Query database for detailed experimental records for the external set.
+        
+        Retrieves experimental property values and transforms them into a detailed records
+        dataframe with metadata, sources, and measurement details.
+                
+        Returns:
+            pd.DataFrame: Records dataframe with experimental data, sources, and measurement details.
+        """
+        logging.info(f"Building External Records from Model (model_id = {self.model_id})")
+        
+        df_pv = self.query_df_pv(external=True)
+        if df_pv is None:
+            logging.warning(f"Skipping External Records for model (model_id = {self.model_id}), as df_pv_external is None")
+            return None
+        external_records_df = DataTransformer.get_records_df(df_pv)
+        logging.info(f"Finished building External Records from Model (model_id = {self.model_id})")
+        # self.records_df = records_df
+
+        # DataTransformer.get_superheaders(records_df)
+
+        return external_records_df
+    
     def query_model_descriptors_df(self) -> pd.DataFrame:
         """Query database for model descriptors and their definitions.
         
@@ -1410,7 +1667,17 @@ class DataQuerier:
 
         results_dict = {}
         results_dict["model_details"] = {}
-        results_dict["model_details"]["embedding"] = ["Intercept", *model.embedding]
+        
+        try:
+            fit_intercept = getattr(model.model_obj.named_steps["estimator"], "fit_intercept", False)
+        except Exception as e:
+            logging.error(f"Error occurred while fetching fit_intercept: {e}")
+            fit_intercept = False
+        
+        if fit_intercept:
+            results_dict["model_details"]["embedding"] = ["Intercept", *model.embedding]
+        else:
+            results_dict["model_details"]["embedding"] = model.embedding
 
         method_name = getattr(model, "qsar_method", False) or getattr(model, "regressor_name", False) or ""
         # method_name = getattr(model, "regressor_name", "") if method_name == "" else method_name
@@ -1464,6 +1731,19 @@ class DataQuerier:
 
         temp = pd.concat([test, training], ignore_index=True)
 
+        if getattr(model, "df_external", None) is not None and model.df_external.any().any():
+            df_gmd_external = self.query_df_gmd(external=True)
+
+            df_preds_external = model.df_preds_external.rename(columns={"canon_qsar_smiles": "id"})
+
+            external = pd.merge(model.df_external, df_gmd_external, left_on="ID", right_on="canon_qsar_smiles", how="left")
+            external = pd.merge(external, df_preds_external, left_on="ID", right_on="id", how="left")
+
+            external["Set"] = "External"
+
+            temp = pd.concat([temp, external], ignore_index=True)
+            temp.dropna(axis=0, subset=["exp", "pred"], inplace=True)
+
         headers = model.embedding
         header_columns = {}
         for header in headers:
@@ -1477,6 +1757,7 @@ class DataQuerier:
             "Canonical QSAR Ready Smiles": temp["canon_qsar_smiles"],
             f"Observed ({model.unitsModel})": temp["exp"],
             f"Predicted ({model.unitsModel})": temp["pred"],
+            f"Absolute Error ({model.unitsModel})": abs(temp["exp"] - temp["pred"]),
             "Set": temp["Set"],
             **header_columns
         }
@@ -1520,6 +1801,7 @@ class DataQuerier:
             "Canon QSAR SMILES": temp["canon_qsar_smiles"],
             "Exp": temp["exp"],
             "Pred": temp["pred"],
+            "Absolute Error": abs(temp["exp"] - temp["pred"]),
             "CV Fold": fold_col,
             "DTXCID": temp["dtxcid"],
             "DTXSID": temp["dtxsid"],
@@ -1571,6 +1853,7 @@ class DataQuerier:
             "Canon QSAR SMILES": temp["canon_qsar_smiles"],
             "Exp": temp["exp"],
             "Pred": temp["pred"],
+            "Absolute Error": abs(temp["exp"] - temp["pred"]),
             **ad_test_columns,
             "DTXCID": temp["dtxcid"],
             "DTXSID": temp["dtxsid"],
@@ -1625,6 +1908,7 @@ class DataQuerier:
             "Canon QSAR SMILES": temp["canon_qsar_smiles"],
             "Exp": temp["exp"],
             "Pred": temp["pred"],
+            "Absolute Error": abs(temp["exp"] - temp["pred"]),
             **ad_test_columns,
             "DTXCID": temp["dtxcid"],
             "DTXSID": temp["dtxsid"],
@@ -1634,6 +1918,7 @@ class DataQuerier:
             "Mol Weight": temp["mol_weight"]
         }
         external_predictions_df = pd.DataFrame(external_predictions_dict)
+        external_predictions_df.dropna(axis=0, subset=["Exp Prop ID", "Exp", "Pred"], how="any", inplace=True)
 
         # self.external_predictions_df = external_predictions_df
 
@@ -1835,36 +2120,54 @@ class DataTransformer:
         """
         if not is_binary:
             statistics_df = {
-                "nTraining": [results_dict["model_details"].get("numTraining", 0)],
-                "nTest": [results_dict["model_details"].get("numPrediction", 0)],
-                "RSQ_Training": [results_dict["model_statistics"].get("training_stats", {}).get("PearsonRSQ_Training", 0)],
-                "RMSE_Training": [results_dict["model_statistics"].get("training_stats", {}).get("RMSE_Training", 0)],
-                "MAE_Training": [results_dict["model_statistics"].get("training_stats", {}).get("MAE_Training", 0)],
-                "RSQ_CV_Training": [results_dict["model_statistics"].get("cv_stats", {}).get("PearsonRSQ_CV_Training", 0)],
-                "RMSE_CV_Training": [results_dict["model_statistics"].get("cv_stats", {}).get("RMSE_CV_Training", 0)],
-                "MAE_CV_Training": [results_dict["model_statistics"].get("cv_stats", {}).get("MAE_CV_Training", 0)],
-                "RSQ_Test": [results_dict["model_statistics"].get("test_stats", {}).get("PearsonRSQ_Test", 0)],
-                "RMSE_Test": [results_dict["model_statistics"].get("test_stats", {}).get("RMSE_Test", 0)],
-                "MAE_Test": [results_dict["model_statistics"].get("test_stats", {}).get("MAE_Test", 0)],
-                "Q2_Test": [results_dict["model_statistics"].get("test_stats", {}).get("Q2_Test", 0)],
-                "MAE_Test_Inside_AD": [results_dict["model_statistics"].get("test_stats_AD", {}).get("MAE_Test_inside_AD", 0)],
-                "MAE_Test_Outside_AD": [results_dict["model_statistics"].get("test_stats_AD", {}).get("MAE_Test_outside_AD", 0)],
-                "Coverage_Test": [results_dict["model_statistics"].get("test_stats_AD", {}).get("Coverage_Test", 0)],
+                "nTraining": [results_dict["model_details"].get("numTraining", float("nan"))],
+                "nTest": [results_dict["model_details"].get("numPrediction", float("nan"))],
+                "RSQ_Training": [results_dict["model_statistics"].get("training_stats", {}).get("PearsonRSQ_Training", float("nan"))],
+                "RMSE_Training": [results_dict["model_statistics"].get("training_stats", {}).get("RMSE_Training", float("nan"))],
+                "MAE_Training": [results_dict["model_statistics"].get("training_stats", {}).get("MAE_Training", float("nan"))],
+                "RSQ_CV_Training": [results_dict["model_statistics"].get("cv_stats", {}).get("PearsonRSQ_CV_Training", float("nan"))],
+                "RMSE_CV_Training": [results_dict["model_statistics"].get("cv_stats", {}).get("RMSE_CV_Training", float("nan"))],
+                "MAE_CV_Training": [results_dict["model_statistics"].get("cv_stats", {}).get("MAE_CV_Training", float("nan"))],
+                "RSQ_Test": [results_dict["model_statistics"].get("test_stats", {}).get("PearsonRSQ_Test", float("nan"))],
+                "RMSE_Test": [results_dict["model_statistics"].get("test_stats", {}).get("RMSE_Test", float("nan"))],
+                "MAE_Test": [results_dict["model_statistics"].get("test_stats", {}).get("MAE_Test", float("nan"))],
+                "Q2_Test": [results_dict["model_statistics"].get("test_stats", {}).get("Q2_Test", float("nan"))],
+                "MAE_Test_Inside_AD": [results_dict["model_statistics"].get("test_stats_AD", {}).get("MAE_Test_inside_AD", float("nan"))],
+                "MAE_Test_Outside_AD": [results_dict["model_statistics"].get("test_stats_AD", {}).get("MAE_Test_outside_AD", float("nan"))],
+                "Coverage_Test": [results_dict["model_statistics"].get("test_stats_AD", {}).get("Coverage_Test", float("nan"))],
             }
+            statistics_df.update({
+                "nExternal": [results_dict["model_details"].get("num_external", float("nan"))],
+                "RSQ_External": [results_dict["model_statistics"].get("ext_stats", {}).get("PearsonRSQ_External", float("nan"))],
+                "RMSE_External": [results_dict["model_statistics"].get("ext_stats", {}).get("RMSE_External", float("nan"))],
+                "MAE_External": [results_dict["model_statistics"].get("ext_stats", {}).get("MAE_External", float("nan"))],
+                "MAE_Test_Inside_AD_External": [results_dict["model_statistics"].get("ext_stats_AD", {}).get("MAE_Test_inside_AD_External", float("nan"))],
+                "MAE_Test_Outside_AD_External": [results_dict["model_statistics"].get("ext_stats_AD", {}).get("MAE_Test_outside_AD_External", float("nan"))],
+                "Coverage_Test_External": [results_dict["model_statistics"].get("ext_stats_AD", {}).get("Coverage_Test_External", float("nan"))]
+            })
         else:
             statistics_df = {
-                "nTraining": [results_dict["model_details"].get("numTraining", 0)],
-                "nTest": [results_dict["model_details"].get("numPrediction", 0)],
-                "Concordance_Training": [results_dict["model_statistics"].get("training_stats", {}).get("Concordance_Training", 0)],
-                "BA_Training": [results_dict["model_statistics"].get("training_stats", {}).get("BA_Training", 0)],
-                "Concordance_CV_Training": [results_dict["model_statistics"].get("cv_stats", {}).get("Concordance_CV_Training", 0)],
-                "BA_CV_Training": [results_dict["model_statistics"].get("cv_stats", {}).get("BA_CV_Training", 0)],
-                "Concordance_Test": [results_dict["model_statistics"].get("test_stats", {}).get("Concordance_Test", 0)],
-                "BA_Test": [results_dict["model_statistics"].get("test_stats", {}).get("BA_Test", 0)],
-                "BA_Test_Inside_AD": [results_dict["model_statistics"].get("test_stats_AD", {}).get("BA_Test_inside_AD", 0)],
-                "BA_Test_Outside_AD": [results_dict["model_statistics"].get("test_stats_AD", {}).get("BA_Test_outside_AD", 0)],
-                "Coverage_Test": [results_dict["model_statistics"].get("test_stats_AD", {}).get("Coverage_Test", 0)],
+                "nTraining": [results_dict["model_details"].get("numTraining", float("nan"))],
+                "nTest": [results_dict["model_details"].get("numPrediction", float("nan"))],
+                "Concordance_Training": [results_dict["model_statistics"].get("training_stats", {}).get("Concordance_Training", float("nan"))],
+                "BA_Training": [results_dict["model_statistics"].get("training_stats", {}).get("BA_Training", float("nan"))],
+                "Concordance_CV_Training": [results_dict["model_statistics"].get("cv_stats", {}).get("Concordance_CV_Training", float("nan"))],
+                "BA_CV_Training": [results_dict["model_statistics"].get("cv_stats", {}).get("BA_CV_Training", float("nan"))],
+                "Concordance_Test": [results_dict["model_statistics"].get("test_stats", {}).get("Concordance_Test", float("nan"))],
+                "BA_Test": [results_dict["model_statistics"].get("test_stats", {}).get("BA_Test", float("nan"))],
+                "BA_Test_Inside_AD": [results_dict["model_statistics"].get("test_stats_AD", {}).get("BA_Test_inside_AD", float("nan"))],
+                "BA_Test_Outside_AD": [results_dict["model_statistics"].get("test_stats_AD", {}).get("BA_Test_outside_AD", float("nan"))],
+                "Coverage_Test": [results_dict["model_statistics"].get("test_stats_AD", {}).get("Coverage_Test", float("nan"))],
             }
+            statistics_df.update({
+                "nExternal": [results_dict["model_details"].get("num_external", float("nan"))],
+                "SN_External": [results_dict["model_statistics"].get("ext_stats", {}).get("SN_External", float("nan"))],
+                "SP_External": [results_dict["model_statistics"].get("ext_stats", {}).get("SP_External", float("nan"))],
+                "BA_External": [results_dict["model_statistics"].get("ext_stats", {}).get("BA_External", float("nan"))],
+                "BA_Test_Inside_AD_External": [results_dict["model_statistics"].get("ext_stats_AD", {}).get("BA_Test_inside_AD_External", float("nan"))],
+                "BA_Test_Outside_AD_External": [results_dict["model_statistics"].get("ext_stats_AD", {}).get("BA_Test_outside_AD_External", float("nan"))],
+                "Coverage_Test_External": [results_dict["model_statistics"].get("ext_stats_AD", {}).get("Coverage_Test_External", float("nan"))]
+            })
         statistics_df = pd.DataFrame(statistics_df).apply(lambda x: round(x, 2) if isinstance(x, float) else x)
         return statistics_df
 
@@ -1878,6 +2181,8 @@ class DataTransformer:
         Returns:
             pd.DataFrame: Experimental records with identifiers, sources, properties, and measurement details.
         """
+        if df_pv is None:
+            return None
         df_pv = DataTransformer.convert_exp_details_to_strings(df_pv)
         str_columns = [col for col in df_pv.columns if col.startswith("exp_details_") and col.endswith("_str")]
         exp_details_columns = {ExcelFormatter.clean_col_titles(col): df_pv[col] for col in str_columns}
@@ -1926,6 +2231,8 @@ class DataTransformer:
         Returns:
             dict: Dictionary mapping superheader names (e.g., 'Identifiers', 'Source Metadata') to lists of column names.
         """
+        if records_df is None or records_df.empty:
+            return None
         if experimental_details_columns is None:
             experimental_details_columns = ["Measurement Method", "Media", "Percentage Organic Carbon", "Percentage Organic Matter", "pH", "Soil Type", "Temperature", "Testing Conditions", "Notes", "Pressure", "Reliability"]
 
@@ -2094,6 +2401,7 @@ class DataTransformer:
         exp_prop_id = df_training_cv.pop("exp_prop_id")
         df_training_cv.insert(0, "Exp Prop ID", exp_prop_id)
         df_training_cv.rename(columns={col: ExcelFormatter.clean_col_titles(col) for col in df_training_cv.columns}, inplace=True)
+        df_training_cv.insert(df_training_cv.columns.get_loc("Pred") + 1, "Absolute Error", abs(df_training_cv["Exp"] - df_training_cv["Pred"]))
         return df_training_cv
 
     @staticmethod
@@ -2119,6 +2427,7 @@ class DataTransformer:
                     df_test.pop(col)
         
         df_test.rename(columns={col: ExcelFormatter.clean_col_titles(col) for col in df_test.columns}, inplace=True)
+        df_test.insert(df_test.columns.get_loc("Pred") + 1, "Absolute Error", abs(df_test["Exp"] - df_test["Pred"]))
         return df_test
 
     @staticmethod
@@ -2157,6 +2466,8 @@ class DataTransformer:
                 ad_test_columns[f"AD {ad}"] = df_ad_output["AD"]
 
         df_ext.rename(columns={col: ExcelFormatter.clean_col_titles(col) for col in df_ext.columns}, inplace=True)
+        df_ext.dropna(axis=0, subset=["Exp Prop ID", "Exp", "Pred"], how="any", inplace=True)
+        df_ext.insert(df_ext.columns.get_loc("Pred") + 1, "Absolute Error", abs(df_ext["Exp"] - df_ext["Pred"]))
         return df_ext
     
     @staticmethod
@@ -2252,6 +2563,7 @@ class ModelToExcel:
         self.cover_sheet_df = getattr(model_data_objects, "cover_sheet_df", None)
         self.statistics_df = getattr(model_data_objects, "statistics_df", None)
         self.records_df = getattr(model_data_objects, "records_df", None)
+        self.external_records_df = getattr(model_data_objects, "external_records_df", None)
         self.records_field_descriptions_df = getattr(model_data_objects, "records_field_descriptions_df", None)
         self.model_descriptors_df = getattr(model_data_objects, "model_descriptors_df", None)
         self.model_descriptor_values_df = getattr(model_data_objects, "model_descriptor_values_df", None)
@@ -2259,6 +2571,7 @@ class ModelToExcel:
         self.test_set_predictions_df = getattr(model_data_objects, "test_set_predictions_df", None)
         self.external_predictions_df = getattr(model_data_objects, "external_predictions_df", None)
         self.superheaders = getattr(model_data_objects, "superheaders", None)
+        self.external_superheaders = getattr(model_data_objects, "external_superheaders", None)
 
     def cover_sheet(self, writer: Any, cover_sheet: Optional[pd.DataFrame]=None) -> pd.DataFrame:
         """Create the cover sheet in the Excel workbook with model summary information.
@@ -2322,6 +2635,13 @@ class ModelToExcel:
         workbook = writer.book
         worksheet = workbook.add_worksheet("Statistics")
 
+        if self.external_predictions_df is not None:
+            has_external = True
+            picture_start_cell = "A12"
+        else:
+            has_external = False
+            picture_start_cell = "A8"
+
         format_center = workbook.add_format({
             "align": "center"
         })
@@ -2338,32 +2658,46 @@ class ModelToExcel:
         merge_format_training = workbook.add_format({
             "bold": True,
             "align": "center",
-            "fg_color": "#d3d3d3"
+            "fg_color": "#D3D3D3"
         })
         merge_format_cv = workbook.add_format({
             "bold": True,
             "align": "center",
-            "fg_color": "#ccffcc"
+            "fg_color": self.colors[0%len(self.colors)]
         })
         merge_format_test = workbook.add_format({
             "bold": True,
             "align": "center",
-            "fg_color": "#ccccff"
+            "fg_color": self.colors[1%len(self.colors)]
         })
         merge_format_ad = workbook.add_format({
             "bold": True,
             "align": "center",
-            "fg_color": "#ffffcc"
+            "fg_color": self.colors[2%len(self.colors)]
         })
+        if has_external:
+            merge_format_external = workbook.add_format({
+                "bold": True,
+                "align": "center",
+                "fg_color": self.colors[3%len(self.colors)]
+            })
+            merge_format_ad_external = workbook.add_format({
+                "bold": True,
+                "align": "center",
+                "fg_color": self.colors[4%len(self.colors)]
+            })
+
+        # Make section headers
+        worksheet.merge_range("A1:C1", f"Training Set ({statistics.at[0, 'nTraining']})", merge_format_training)
+        worksheet.merge_range("D1:F1", f"5-Fold CV ({statistics.at[0, 'nTraining']})", merge_format_cv)
+        worksheet.merge_range("A5:C5", f"Test Set ({statistics.at[0, 'nTest']})", merge_format_test)
+        worksheet.merge_range("D5:F5", f"Test Set Applicability Domain Statistics", merge_format_ad)
+        if has_external:
+            worksheet.merge_range("A9:C9", f"External Set ({statistics.at[0, 'nExternal']})", merge_format_external)
+            worksheet.merge_range("D9:F9", f"External Set Applicability Domain Statistics", merge_format_ad_external)
 
         if not is_binary:
             # Continuous model statistics layout
-            # Make section headers
-            worksheet.merge_range("A1:C1", f"Training Set ({statistics.at[0, 'nTraining']})", merge_format_training)
-            worksheet.merge_range("D1:F1", f"5-Fold CV ({statistics.at[0, 'nTraining']})", merge_format_cv)
-            worksheet.merge_range("A5:C5", f"Test Set ({statistics.at[0, 'nTest']})", merge_format_test)
-            worksheet.merge_range("D5:F5", f"Test Set Applicability Domain Statistics", merge_format_ad)
-
             # Make section sub-headers (column titles)
             worksheet.write_rich_string("A2", "R", format_super, "2", format_center)
             worksheet.write_rich_string("D2", "R", format_super, "2", format_center)
@@ -2398,16 +2732,27 @@ class ModelToExcel:
             worksheet.write_number("E7", statistics.at[0, "MAE_Test_Outside_AD"], format_number)
             worksheet.write_number("F7", statistics.at[0, "Coverage_Test"], format_number)
 
+            if has_external:
+                worksheet.write_rich_string("A10", "R", format_super, "2", format_center)
+                worksheet.write_string("B10", "RMSE", format_center)
+                worksheet.write_string("C10", "MAE", format_center)
+
+                worksheet.write_rich_string("D10", "MAE", format_sub, "External", " Inside AD", format_center)
+                worksheet.write_rich_string("E10", "MAE", format_sub, "External", " Outside AD", format_center)
+                worksheet.write_string("F10", "Fraction Inside AD", format_center)
+
+                worksheet.write_number("A11", statistics.at[0, "RSQ_External"], format_number)
+                worksheet.write_number("B11", statistics.at[0, "RMSE_External"], format_number)
+                worksheet.write_number("C11", statistics.at[0, "MAE_External"], format_number)
+
+                worksheet.write_number("D11", statistics.at[0, "MAE_Test_Inside_AD_External"], format_number)
+                worksheet.write_number("E11", statistics.at[0, "MAE_Test_Outside_AD_External"], format_number)
+                worksheet.write_number("F11", statistics.at[0, "Coverage_Test_External"], format_number)
+
             img_path = os.path.join(os.getenv("PROJECT_ROOT"), "resources", "continuous_equations.png")
         
         else:
             # Binary model statistics layout
-            # Make section headers
-            worksheet.merge_range("A1:C1", f"Training Set ({statistics.at[0, 'nTraining']})", merge_format_training)
-            worksheet.merge_range("D1:F1", f"5-Fold CV ({statistics.at[0, 'nTraining']})", merge_format_cv)
-            worksheet.merge_range("A5:C5", f"Test Set ({statistics.at[0, 'nTest']})", merge_format_test)
-            worksheet.merge_range("D5:F5", f"Test Set Applicability Domain Statistics", merge_format_ad)
-
             # Make section sub-headers (column titles)
             worksheet.write_string("A2", "Sensitivity", format_center)
             worksheet.write_string("D2", "Sensitivity", format_center)
@@ -2442,18 +2787,35 @@ class ModelToExcel:
             worksheet.write_number("E7", statistics.at[0, "BA_Test_Outside_AD"], format_number)
             worksheet.write_number("F7", statistics.at[0, "Coverage_Test"], format_number)
 
+            if has_external:
+                worksheet.write_string("A10", "Sensitivity", format_center)
+                worksheet.write_string("B10", "Specificity", format_center)
+                worksheet.write_string("C10", "Balanced Accuracy", format_center)
+
+                worksheet.write_rich_string("D10", "BA", format_sub, "External", " Inside AD", format_center)
+                worksheet.write_rich_string("E10", "BA", format_sub, "External", " Outside AD", format_center)
+                worksheet.write_string("F10", "Fraction Inside AD", format_center)
+
+                worksheet.write_number("A11", statistics.at[0, "Sensitivity_External"], format_number)
+                worksheet.write_number("B11", statistics.at[0, "Specificity_External"], format_number)
+                worksheet.write_number("C11", statistics.at[0, "BA_External"], format_number)
+
+                worksheet.write_number("D11", statistics.at[0, "BA_Test_Inside_AD_External"], format_number)
+                worksheet.write_number("E11", statistics.at[0, "BA_Test_Outside_AD_External"], format_number)
+                worksheet.write_number("F11", statistics.at[0, "Coverage_Test_External"], format_number)
+
             img_path = os.path.join(os.getenv("PROJECT_ROOT"), "resources", "binary_equations.png")
 
         ExcelFormatter.set_column_width(writer, "Statistics", statistics, how="full")
 
         try:
-            worksheet.insert_image("A8", img_path, {"x_scale": 0.7, "y_scale": 0.7, "x_offset": 10, "y_offset": 2})
+            worksheet.insert_image(picture_start_cell, img_path, {"x_scale": 0.7, "y_scale": 0.7, "x_offset": 10, "y_offset": 2})
         except Exception as e:
             logging.error(f"Error inserting image in Statistics sheet: {e}")
 
         return statistics
 
-    def records(self, writer: Any, records: Optional[pd.DataFrame]=None, add_subtotals: bool=True, exclude_blank_columns: bool=True, include_qc_columns: bool=False, include_value_original: bool=False) -> pd.DataFrame:
+    def records(self, writer: Any, records: Optional[pd.DataFrame]=None, external: bool=False, add_subtotals: bool=True, exclude_blank_columns: bool=True, include_qc_columns: bool=False, include_value_original: bool=False) -> pd.DataFrame:
         """Create the records sheet in the Excel workbook with detailed experimental data.
         
         Includes autofilter for easy data filtering, frozen header row, and appropriately sized columns.
@@ -2472,68 +2834,80 @@ class ModelToExcel:
         """
         if records is None:
             return None
+
+        # Catch UserWarning from xlsxwriter when hyperlink limit is exceeded
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
         
-        dropped_cols = set()
-        if exclude_blank_columns:
-            dropped_cols.update(records.columns[records.isnull().all()])
-            records = records.dropna(axis=1, how="all")
-        if not include_qc_columns:
-            dropped_cols.update({"QC Flag", "Flag Reason"})
-            records = records.drop(columns=["QC Flag", "Flag Reason"], errors="ignore")
-        if not include_value_original:
-            dropped_cols.update({"Value Original"})
-            records = records.drop(columns=["Value Original"], errors="ignore")
+            dropped_cols = set()
+            if exclude_blank_columns:
+                dropped_cols.update(records.columns[records.isnull().all()])
+                records = records.dropna(axis=1, how="all")
+            if not include_qc_columns:
+                dropped_cols.update({"QC Flag", "Flag Reason"})
+                records = records.drop(columns=["QC Flag", "Flag Reason"], errors="ignore")
+            if not include_value_original:
+                dropped_cols.update({"Value Original"})
+                records = records.drop(columns=["Value Original"], errors="ignore")
+            
+            sheet_name = f"{'External ' if external else ''}Records"
+            workbook = writer.book
+            worksheet = workbook.add_worksheet(sheet_name)
+
+            if self.create_records_superheaders:
+                if external:
+                    superheaders = getattr(self, "external_superheaders", None)
+                else:
+                    superheaders = getattr(self, "superheaders", None)
+                if superheaders is None:
+                    superheaders = DataTransformer.get_superheaders(records)
+
+                if superheaders:
+                    colors = self.colors
+                    merge_formats = [workbook.add_format({"bold": True, "align": "center", "fg_color": color}) for color in colors]
+
+                    other_cols = superheaders.get("Other", [])
+                    records = records[[col for col in records.columns if col not in other_cols] + other_cols]
+
+                    i = 0
+                    for superheader in superheaders.keys():
+                            for col in dropped_cols:
+                                if col in superheaders[superheader]:
+                                    superheaders[superheader].remove(col)
+                            col_idxs = [records.columns.get_loc(col) for col in superheaders[superheader]]
+                            if not col_idxs:
+                                continue
+
+                            start_col = xl_col_to_name(min(col_idxs))  # Get the column letter using xlsxwriter utility
+                            end_col = xl_col_to_name(max(col_idxs))  # Get the column letter using xlsxwriter utility
+                            superheader_row = ExcelFormatter.get_header_row(has_subtotals=add_subtotals, has_superheaders=self.create_records_superheaders)
+
+                            logging.debug(f"Processing superheader: {superheader}\n\t{superheaders[superheader]}\n\tMerging Range: {start_col}{superheader_row}:{end_col}{superheader_row}")
+
+                            if start_col == end_col:
+                                worksheet.write_string(f"{start_col}{superheader_row}", superheader, merge_formats[i%len(merge_formats)])
+                            else:
+                                worksheet.merge_range(f"{start_col}{superheader_row}:{end_col}{superheader_row}", superheader, merge_formats[i%len(merge_formats)])
+                            i += 1
+            
+            start_row = ExcelFormatter.get_header_row(has_subtotals=add_subtotals, has_superheaders=self.create_records_superheaders)
+            records.to_excel(writer, sheet_name=sheet_name, index=False, startrow=start_row)
+
+            workbook = writer.book
+            worksheet = writer.sheets[sheet_name]
+            if add_subtotals:
+                ExcelFormatter.add_subtotals(writer, sheet_name, records)
+                worksheet.freeze_panes(3 + [0, 1][self.create_records_superheaders], 0)
+            else:
+                worksheet.freeze_panes(1 + [0, 1][self.create_records_superheaders], 0)
+
+            ExcelFormatter.set_column_width(writer, sheet_name, records, col_width_pad=6, how="header")
+            ExcelFormatter.add_filter(writer, sheet_name, records, has_subtotals=add_subtotals, has_superheaders=self.create_records_superheaders)
+
+            # Check if a UserWarning about hyperlinks was raised
+            if w and any(issubclass(warning.category, UserWarning) for warning in w):
+                logging.warning(f"Hyperlink limit exceeded in {sheet_name}. Maximum hyperlinks reached.")
         
-        workbook = writer.book
-        worksheet = workbook.add_worksheet("Records")
-
-        if self.create_records_superheaders:
-            superheaders = getattr(self, "superheaders", None)
-            if superheaders is None:
-                superheaders = DataTransformer.get_superheaders(records)
-
-            if superheaders:
-                colors = self.colors
-                merge_formats = [workbook.add_format({"bold": True, "align": "center", "fg_color": color}) for color in colors]
-
-                other_cols = superheaders.get("Other", [])
-                records = records[[col for col in records.columns if col not in other_cols] + other_cols]
-
-                i = 0
-                for superheader in superheaders.keys():
-                        for col in dropped_cols:
-                            if col in superheaders[superheader]:
-                                superheaders[superheader].remove(col)
-                        col_idxs = [records.columns.get_loc(col) for col in superheaders[superheader]]
-                        if not col_idxs:
-                            continue
-
-                        start_col = xl_col_to_name(min(col_idxs))  # Get the column letter using xlsxwriter utility
-                        end_col = xl_col_to_name(max(col_idxs))  # Get the column letter using xlsxwriter utility
-                        superheader_row = ExcelFormatter.get_header_row(has_subtotals=add_subtotals, has_superheaders=self.create_records_superheaders)
-
-                        logging.debug(f"Processing superheader: {superheader}\n\t{superheaders[superheader]}\n\tMerging Range: {start_col}{superheader_row}:{end_col}{superheader_row}")
-
-                        if start_col == end_col:
-                            worksheet.write_string(f"{start_col}{superheader_row}", superheader, merge_formats[i%len(merge_formats)])
-                        else:
-                            worksheet.merge_range(f"{start_col}{superheader_row}:{end_col}{superheader_row}", superheader, merge_formats[i%len(merge_formats)])
-                        i += 1
-        
-        start_row = ExcelFormatter.get_header_row(has_subtotals=add_subtotals, has_superheaders=self.create_records_superheaders)
-        records.to_excel(writer, sheet_name="Records", index=False, startrow=start_row)
-
-        workbook = writer.book
-        worksheet = writer.sheets["Records"]
-        if add_subtotals:
-            ExcelFormatter.add_subtotals(writer, "Records", records)
-            worksheet.freeze_panes(3 + [0, 1][self.create_records_superheaders], 0)
-        else:
-            worksheet.freeze_panes(1 + [0, 1][self.create_records_superheaders], 0)
-
-        ExcelFormatter.set_column_width(writer, "Records", records, col_width_pad=6, how="header")
-        ExcelFormatter.add_filter(writer, "Records", records, has_subtotals=add_subtotals, has_superheaders=self.create_records_superheaders)
-
         return records
     
     def records_field_descriptions(self, writer: Any, records_field_descriptions: Optional[pd.DataFrame]=None) -> pd.DataFrame:
@@ -2554,6 +2928,9 @@ class ModelToExcel:
             return None
         
         records = self.data_querier.query_records_df() if self.records_df is None else self.records_df
+        if self.external_records_df is not None:
+            records = pd.concat([records, self.external_records_df], ignore_index=True)
+
         temp = records.dropna(axis=1, how="all")
 
         dropped_columns = set()
@@ -2579,6 +2956,11 @@ class ModelToExcel:
         startcol=0
         if self.create_records_superheaders and self.records_df is not None:
             superheaders = getattr(self, "superheaders", None)
+            # TODO: add in the external_superheaders as well
+            external_superheaders = getattr(self, "external_superheaders", None)
+            if external_superheaders is not None:
+                superheaders = {key: [*value, *external_superheaders.get(key, [])] for key, value in superheaders.items()}
+                superheaders.update({key: value for key, value in external_superheaders.items() if key not in superheaders})
             if superheaders is None:
                 superheaders = DataTransformer.get_superheaders(self.records_df)
             
@@ -2869,6 +3251,7 @@ class ModelToExcel:
         self.excel_path.parent.mkdir(parents=True, exist_ok=True)
         with pd.ExcelWriter(self.excel_path, engine="xlsxwriter") as writer:
             workbook = writer.book
+            workbook.nan_inf_to_errors = True
 
             logging.info("Creating Cover Sheet...")
             self.cover_sheet(writer, self.cover_sheet_df)
@@ -2877,7 +3260,10 @@ class ModelToExcel:
             self.statistics(writer, self.statistics_df, self.model.is_binary)
 
             logging.info("Creating Records...")
-            df = self.records(writer, self.records_df, add_subtotals=self.add_subtotals, exclude_blank_columns=self.exclude_blank_columns, include_qc_columns=self.include_qc_columns, include_value_original=self.include_value_original)
+            df = self.records(writer, self.records_df, external=False, add_subtotals=self.add_subtotals, exclude_blank_columns=self.exclude_blank_columns, include_qc_columns=self.include_qc_columns, include_value_original=self.include_value_original)
+
+            logging.info("Creating External Records...")
+            df = self.records(writer, self.external_records_df, external=True, add_subtotals=self.add_subtotals, exclude_blank_columns=self.exclude_blank_columns, include_qc_columns=self.include_qc_columns, include_value_original=self.include_value_original)
 
             logging.info("Creating Records Field Descriptions...")
             df = self.records_field_descriptions(writer, self.records_field_descriptions_df)
@@ -2930,8 +3316,17 @@ class ModelToExcel:
                 ExcelFormatter.add_hyperlinks_to_sheet(writer, "Test Set Predictions", "Records", self.test_set_predictions_df, self.records_df, has_subtotals=self.add_subtotals, target_has_superheaders=self.create_records_superheaders)
             except Exception as e:
                 logging.error(f"Error adding hyperlinks: {e}")
+            if self.external_records_df is not None:
+                try:
+                    ExcelFormatter.add_hyperlinks_to_sheet(writer, "External Records", "External Predictions", self.external_records_df, self.external_predictions_df, has_subtotals=self.add_subtotals, target_has_superheaders=self.create_records_superheaders)
+                except Exception as e:
+                    logging.error(f"Error adding hyperlinks: {e}")
+                try:
+                    ExcelFormatter.add_hyperlinks_to_sheet(writer, "External Predictions", "External Records", self.external_predictions_df, self.external_records_df, has_subtotals=self.add_subtotals, target_has_superheaders=self.create_records_superheaders)
+                except Exception as e:
+                    logging.error(f"Error adding hyperlinks: {e}")
             
-            logging.info("Done creating detailed Excel!")
+            logging.info(f"Done creating detailed Excel! (model_id = {self.model.modelId})\n\tFile: {self.excel_path}")
 
 
 # ============================================================
@@ -2959,6 +3354,7 @@ def query_example() -> None:
     Creates ModelDataObjects from model_id, which automatically queries all necessary
     data from the database, then generates the Excel workbook.
     """
+    logging.info("Running query_example()")
     model_id = 1746
     file_path = os.path.join(PROJECT_ROOT, "data", "excel_summaries", f"{model_id}_summary.xlsx")
 
@@ -2973,6 +3369,7 @@ def local_example() -> None:
     Loads pre-computed model and data objects from a pickle file (local_model_data.pkl),
     then generates the Excel workbook using local data instead of querying database.
     """
+    logging.info("Running local_example()")
     try:
         with open("local_model_data.pkl", "rb") as f:
             stuff = pickle.load(f)
@@ -2996,6 +3393,7 @@ def test_model_details_pv() -> None:
     Demonstrates direct use of DataQuerier to retrieve model object and property values,
     then saves them to JSON and pickle files for inspection and testing.
     """
+    logging.info("Running test_model_details_pv()")
     engine = DataQuerier.getEngine()
     session = DataQuerier.getSession(engine)
     model_id = 1746
@@ -3022,6 +3420,7 @@ def test_model_details_gmd() -> None:
     Demonstrates retrieval of molecular descriptor values (GMD dataframes) for both
     training and external datasets, then saves them to pickle files for inspection.
     """
+    logging.info("Running test_model_details_gmd()")
     engine = DataQuerier.getEngine()
     session = DataQuerier.getSession(engine)
     dataset_name = "KOC v1 modeling"
@@ -3043,8 +3442,9 @@ def test_query_old_models() -> None:
     Creates ModelDataObjects from model_id's provided, which automatically queries all necessary
     data from the database, then generates the Excel workbook for each model.
     """
-    model_ids = list(range(1065, 1071))
-    # model_ids = [1070]
+    logging.info("Running test_query_old_models()")
+    # model_ids = list(range(1065, 1071))
+    model_ids = [1069]
     for model_id in model_ids:
         file_path = os.path.join(PROJECT_ROOT, "data", "excel_summaries", f"{model_id}_summary.xlsx")
         mdo = ModelDataObjects(model_id=model_id)
@@ -3058,7 +3458,8 @@ def test_query_binary_models() -> None:
     Creates ModelDataObjects from model_id's provided, which automatically queries all necessary
     data from the database, then generates the Excel workbook for each binary model.
     """
-    model_ids = [1567, 1568, 1569, 1570, 1571, 1577, 1578] # 1567, 1568, 1569, 1570, 1571, 1577, 1578
+    logging.info("Running test_query_binary_models()")
+    model_ids = [1567, 1568, 1569, 1570, 1571, 1577, 1578]
     for model_id in model_ids:
         file_path = os.path.join(PROJECT_ROOT, "data", "excel_summaries", f"{model_id}_summary.xlsx")
         mdo = ModelDataObjects(model_id=model_id)
@@ -3071,10 +3472,29 @@ def test_query_binary_models() -> None:
         mte.create_excel()
 
 
-if __name__ == "__main__":
-    query_example()
+def test_query_fish_models() -> None:
+    """Testing/debugging: Generate Excel report for fishtox models queried from the database.
+    
+    Creates ModelDataObjects from model_id's provided, which automatically queries all necessary
+    data from the database, then generates the Excel workbook for each fishtox model.
+    """
+    logging.info("Running test_query_fish_models()")
+    model_ids = list(range(1740, 1745))
+    for model_id in model_ids:
+        file_path = os.path.join(PROJECT_ROOT, "data", "excel_summaries", f"{model_id}_summary.xlsx")
+        mdo = ModelDataObjects(model_id=model_id)
+        mte = ModelToExcel(mdo, file_path)
+        mte.create_excel()
+
+
+def main():
+    # query_example()
     # local_example()
     # test_model_details_pv()
     # test_model_details_gmd()
-    # test_query_old_models()
+    test_query_old_models()
     # test_query_binary_models()
+    # test_query_fish_models()
+
+if __name__ == "__main__":
+    main()

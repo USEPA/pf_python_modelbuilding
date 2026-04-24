@@ -320,19 +320,11 @@ def run_biodeg_nite():
     Results.summarize_model_stats(dataset_name, append_to_models_folder=append_to_models_folder)
 
 
-def test_model_summary():
-    engine = getEngine()
-    session = getSession()
-    model_id = 1746
-    excel_path = "summary.xlsx"
-    test = ModelToExcel(engine, session, model_id, excel_path)
-    test.create_excel()
-
-
 def test_model_summary_local():
     dataset_name = "KOC v1 modeling"
     create_unique_excel = False
-    run_dataset(dataset_name=dataset_name, qsar_method='rf', feature_selection=False, create_detailed_excel=True, create_unique_excel=create_unique_excel)  # OK
+    append_to_models_folder = "_bob"
+    run_dataset(dataset_name=dataset_name, qsar_method='rf', feature_selection=False, create_detailed_excel=True, create_unique_excel=create_unique_excel, append_to_models_folder=append_to_models_folder)  # OK
 
 
 def test_load_model_with_external_set():
@@ -341,7 +333,7 @@ def test_load_model_with_external_set():
     # write_to_db = True
     dataset_name = "KOC v1 modeling"
     user = "murdock.weston"
-    append_to_models_folder = ""
+    append_to_models_folder = "_bob"
 
     # ad_measure_model = [pc.Applicability_Domain_TEST_Embedding_Euclidean, pc.Applicability_Domain_TEST_Fragment_Counts]
     ad_measure_model = [pc.Applicability_Domain_TEST_Embedding_Euclidean, pc.Applicability_Domain_TEST_Fragment_Counts]
@@ -350,7 +342,7 @@ def test_load_model_with_external_set():
     #             write_to_db=write_to_db, create_unique_excel=create_unique_excel, create_detailed_excel=False)  # OK
     
     run_dataset(dataset_name=dataset_name, qsar_method='gcm', feature_selection=False, ad_measure_model=ad_measure_model,
-                write_to_db=write_to_db, create_unique_excel=create_unique_excel, create_detailed_excel=True, user=user)  # OK
+                write_to_db=write_to_db, create_unique_excel=create_unique_excel, create_detailed_excel=True, user=user, append_to_models_folder=append_to_models_folder)  # OK
 
     # Models to upload:
     # for method in ['rf','xgb', 'reg','knn']:
@@ -365,7 +357,7 @@ def test_load_model_with_external_set():
     r.summarize_model_stats(dataset_name, append_to_models_folder=append_to_models_folder)
 
 
-if __name__ == '__main__':
+def main():
     
     # run_example()
     # run_Koc_knn_ga()
@@ -373,8 +365,8 @@ if __name__ == '__main__':
     # These 4 should be able to run for the gcm model
     # run_Koc()  # OK
     # run_fish_tox()  # Takes too long to run on my machine? (E.g. started a run at 1:55, errored out at 4:53 because the SQL connection closed automatically)
-    run_biodeg_rifm()  # OK
-    # run_pchem()  # OK
+    # run_biodeg_rifm()  # OK
+    run_pchem()  # OK
 
     # run_biodeg_nite()
     # test_create_model()
@@ -387,3 +379,6 @@ if __name__ == '__main__':
     # test_model_summary_local()
     # test_load_model_with_external_set()
 
+
+if __name__ == "__main__":
+    main()
