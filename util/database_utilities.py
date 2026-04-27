@@ -44,11 +44,11 @@ class DatabaseUtilities:
         # Build the engine once and reuse it
         connect_url = URL.create(
             drivername='postgresql+psycopg2',
-            username=os.getenv('DEV_QSAR_USER'),
-            password=os.getenv('DEV_QSAR_PASS'),
-            host=os.getenv('DEV_QSAR_HOST', 'localhost'),
-            port=int(os.getenv('DEV_QSAR_PORT', 5432)),  # ensure int
-            database=os.getenv('DEV_QSAR_DATABASE')
+            username=os.getenv('POSTGRES_USER'),
+            password=os.getenv('POSTGRES_PASSWORD'),
+            host=os.getenv('POSTGRES_HOST', 'localhost'),
+            port=int(os.getenv('POSTGRES_PORT', 5432)),  # ensure int
+            database=os.getenv('POSTGRES_DB')
         )
         self.engine = create_engine(connect_url, echo=False, pool_pre_ping=True, future=True)
         self.SessionLocal = sessionmaker(bind=self.engine, autoflush=False, autocommit=False, future=True)
@@ -343,11 +343,11 @@ class DatabaseUtilities:
 def getSession():
     connect_url = URL.create(
         drivername='postgresql+psycopg2',
-        username=os.getenv('DEV_QSAR_USER'),
-        password=os.getenv('DEV_QSAR_PASS'),
-        host=os.getenv('DEV_QSAR_HOST', 'localhost'),
-        port=os.getenv('DEV_QSAR_PORT', 5432),
-        database=os.getenv('DEV_QSAR_DATABASE')
+        username=os.getenv('POSTGRES_USER'),
+        password=os.getenv('POSTGRES_PASSWORD'),
+        host=os.getenv('POSTGRES_HOST', 'localhost'),
+        port=os.getenv('POSTGRES_PORT', 5432),
+        database=os.getenv('POSTGRES_DB')
     )
     # print(connect_url)
     engine = create_engine(connect_url, echo=False)
@@ -363,8 +363,7 @@ if __name__ == '__main__':
     # Searches upward from the current working directory for ".env.res_qsar"
     env_path = find_dotenv(".env.res_qsar", raise_error_if_not_found=True)    
     load_dotenv(env_path)
-    # print(os.getenv('DEV_QSAR_HOST'))
-        
+
     dl = DatabaseUtilities("qsar_models")
     
     # Get row in database using filter:

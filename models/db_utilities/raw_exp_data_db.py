@@ -458,8 +458,7 @@ if __name__ == '__main__':
     from dotenv import load_dotenv
     load_dotenv('../../personal.env')
       
-    # print(os.getenv('DEV_QSAR_DATABASE'))
-    from util.database_utilities import getSession  
+    from util.database_utilities import getSession
     session = getSession()
     dataset_name = 'KOC v1 modeling'
     property_name = "LogKoc"

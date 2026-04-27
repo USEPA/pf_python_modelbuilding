@@ -103,11 +103,7 @@ def calculate_ad_stats(session, model:Model):
 def updateStatsPredictModuleModels():
 
     try:
-
         session = getSession()
-        # print(dbl.session == None)
-        # import os
-        # print(os.getenv('DEV_QSAR_PASS'))
 
         mi = ModelInitializer()
 
