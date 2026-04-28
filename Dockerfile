@@ -1,6 +1,5 @@
 FROM --platform=linux/amd64 python:3.12-slim
 
-# Indigo renderer runtime deps reported missing:
 RUN apt-get update && apt-get -y upgrade && apt-get install -y --no-install-recommends \
     build-essential \
     libfreetype6 \
@@ -13,7 +12,6 @@ WORKDIR /app
 
 COPY requirements.txt .
 
-# Install Python deps
 RUN pip install -r requirements.txt
 
 COPY . .

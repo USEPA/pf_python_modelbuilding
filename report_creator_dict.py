@@ -150,6 +150,7 @@ class ReportCreator:
     class ChemicalIdentifiersSection:
         
         def create_chemical_identifiers_table(self, chemical):
+                chemical = chemical or {}
                 with table(border="0", width="100%"):
                     with tbody():
                         with tr(bgcolor="black"):
@@ -157,13 +158,18 @@ class ReportCreator:
                                 font("Chemical Identifiers", color="white")
                         with tr():
                             my_td = td()
-                            my_td += b("Preferred name:"), " " + chemical.get("name", "N/A"), br()
-                            my_td += b("DTXSID:"), " " + chemical.get("sid", "N/A"), br()
-                            my_td += b("DTXCID:"), " " + chemical.get("cid", "N/A"), br()
-                            my_td += b("CASRN:"), " " + chemical.get("casrn", "N/A"), br()
-            
-                            if "averageMass" in chemical:
-                                my_td += b("Molecular weight:"), " ", "{:.2f}".format(chemical.get("averageMass")), br()
+                            my_td += b("Preferred name:"), " " + fmt_val(chemical.get("name"), "N/A"), br()
+                            my_td += b("DTXSID:"), " " + fmt_val(chemical.get("sid"), "N/A"), br()
+                            my_td += b("DTXCID:"), " " + fmt_val(chemical.get("cid"), "N/A"), br()
+                            my_td += b("CASRN:"), " " + fmt_val(chemical.get("casrn"), "N/A"), br()
+
+                            average_mass = chemical.get("averageMass")
+                            if fmt_val(average_mass, ""):
+                                try:
+                                    mass_text = "{:.2f}".format(float(average_mass))
+                                except (TypeError, ValueError):
+                                    mass_text = fmt_val(average_mass, "N/A")
+                                my_td += b("Molecular weight:"), " " + mass_text, br()
                             else:
                                 my_td += b("Molecular weight:"), " N/A", br()        
     
@@ -839,16 +845,19 @@ table.compact td {
                 
                 image_src = resolve_report_image_src(chemical, width=150, height=150)
 
-                if chemical.get("sid", "N/A") != "N/A": 
-                    title = "Image for " + chemical["name"]
+                sid = fmt_val(chemical.get("sid"), "N/A")
+                chem_id = fmt_val(chemical.get("chemId"), "N/A")
+
+                if sid != "N/A": 
+                    title = "Image for " + fmt_val(chemical.get("name") or chem_id, "chemical")
                     if image_src:
                         td_tc += img(src=image_src, border="1", alt=title, title=title, width="150", height="150"), br()
-                    td_tc += a(chemical["chemId"], href=urlChemicalDetails + chemical["sid"], title=chemical["sid"] + ' on the Chemicals Dashboard', target="_blank")
+                    td_tc += a(chem_id, href=urlChemicalDetails + sid, title=sid + ' on the Chemicals Dashboard', target="_blank")
                 else:
-                    title = "Image for " + chemical["smiles"]
+                    title = "Image for " + fmt_val(chemical.get("smiles") or chem_id, "chemical")
                     if image_src:
                         td_tc += img(src=image_src, border="1", alt=title, title=title, width="150", height="150"), br()
-                    td_tc += chemical["chemId"]        
+                    td_tc += chem_id        
     
         def addMaeTable(self, td_tc, md, neighborsInSet):
                 
@@ -1007,7 +1016,7 @@ table.compact td {
                         if not image_src or image_src == "N/A":
                                 div("No structure image", style="border: 2px solid black; padding: 10px;")                        
                         else:
-                            title = "Structural image of " + chemical["chemId"]
+                            title = "Structural image of " + fmt_val(chemical.get("chemId"), "chemical")
                             img(src=image_src, alt=title, title=title,
                                 height=150, width=150, border="2")
                     
