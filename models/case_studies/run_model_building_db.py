@@ -107,7 +107,7 @@ class ParametersImportance:
     min_descriptor_count: int = 30
     max_descriptor_count: int = 40
     
-    descriptor_coefficient: float = 0.006
+    descriptor_coefficient: float = 0.006 # set to None for auto penalty value
     alpha = 0.7
 
     include_standardization_in_pmml: bool = False
@@ -193,8 +193,8 @@ class ParametersGeneticAlgorithm:
     num_optimizers: int = 100
     num_jobs: int = 4
     n_threads: Optional[int] = None
-    max_length: int = 24
-    max_features: int = 30
+    max_length: int = 24 # still use?
+    max_features: int = 25
 
     descriptor_coefficient: float = 0.006
     alpha: float = 0.7
@@ -1731,6 +1731,8 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         
         if dataset_name == 'KOC v1 modeling':
             dataset_name_ext = 'KOC v2 external'
+            # dataset_name_ext = 'Koc eChemPortal v1'
+        
         elif dataset_name == 'ECOTOX_2024_12_12_96HR_Fish_LC50_v3a modeling':
             dataset_name_ext = 'QSAR_Toolbox_96HR_Fish_LC50_v3 modeling'    
 
