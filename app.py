@@ -107,12 +107,10 @@ _metadata = None
 def get_metadata():
     global _metadata
     if _metadata is None:
-        _smiles = "C1CCCCC1"
-        modelResultsArray = collect_model_details_for_metadata(list(range(1065, 1071)), _smiles)
-
+        model_details_array = collect_model_details_for_metadata(list(range(1065, 1071)))
         _metadata = dict(
             version=get_version(),
-            endpoints=list(r['modelDetails'] for r in modelResultsArray)
+            endpoints=model_details_array
         )
 
     return _metadata

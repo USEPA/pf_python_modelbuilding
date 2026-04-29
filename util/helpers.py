@@ -452,9 +452,29 @@ def dedupe_smiles_preserve_order(smiles_list):
     return unique_smiles, index_map
 
 
-def collect_model_details_for_metadata(model_ids, smiles):
-    with ProcessPoolExecutor(max_workers=6, initializer=init_process_predictor) as executor:
-        return list(executor.map(predict_smiles_in_process, zip(model_ids, [smiles] * len(model_ids))))
+def collect_model_details_for_metadata(model_ids, smiles=None):
+    predictor = _get_request_predictor()
+    model_details_array = []
+
+    for model_id in model_ids:
+        try:
+            model_details, model_details_error = predictor.get_model_details_dict_for_model_id(model_id)
+        except Exception:
+            logging.exception("Failed to load modelDetails for metadata model_id=%s", model_id)
+            continue
+
+        if model_details_error:
+            logging.warning(
+                "Failed to load modelDetails for metadata model_id=%s: %s",
+                model_id,
+                model_details_error,
+            )
+            continue
+
+        if model_details is not None:
+            model_details_array.append(_coerce_json_safe(model_details))
+
+    return model_details_array
 
 
 def make_predictdb_post_response(body):
