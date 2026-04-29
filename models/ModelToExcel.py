@@ -19,11 +19,13 @@ from models.case_studies.run_model_building import runAD
 from models.ModelBuilder import Model
 from models.db_utilities.raw_exp_data_db import ExpDataGetter
 from models.db_utilities.dataset_utilities_db import getMappedDatapoints
+# from models.db_utilities.plot_db import upload_or_update_model_file_in_db  # TODO: This function doesn't exist on my branch?
 from StatsCalculator import calculate_continuous_statistics, calculate_binary_statistics, calculate_mean_exp_training
 from util import predict_constants as pc
 import applicability_domain.applicability_domain_utilities as adu
 from dataclasses import dataclass, field
 from pathlib import Path
+from dotenv import load_dotenv
 import warnings
 
 import logging
@@ -43,6 +45,7 @@ level_styles = {
 coloredlogs.install(level=logging_level, milliseconds=True, level_styles=level_styles,
                     fmt='%(asctime)s - %(name)s - %(levelname)s - %(message)s (%(filename)s:%(lineno)d)')
 
+load_dotenv("../../personal.env")
 PROJECT_ROOT = os.getenv("PROJECT_ROOT")
 
 pd.options.mode.chained_assignment = None  # default='warn'
@@ -224,40 +227,39 @@ class ExcelFormatter:
     
     @staticmethod
     def set_sig_figs(
+        writer: Any,
+        sheet_name: str,
         df: pd.DataFrame,
-        columns: list[str],
+        columns: Optional[list[str]] = None,
         sig_figs: int = 3,
-        in_place: bool = True
+        col_widths: Optional[list[int]] = None
         ) -> Optional[pd.DataFrame]:
         """Set numerical columns to have the desired number of significant figures.
         
         Args:
+            writer: pandas ExcelWriter object.
+            sheet_name: Name of the worksheet to format.
             df: DataFrame corresponding to the sheet (used to get column names and widths).
             columns: A list of columns to apply significant figures to. If None, all numerical columns are formatted.
             sig_figs: Number of significant figures for numerical columns. Defaults to 3.
-            in_place: Whether to perform the transformation in place on the provided DataFrame. Defaults to True.
         """
-        numerical_types = [np.float64, np.float32, float]
+        if columns is None:
+            numerical_types = [np.float64, np.float32, float]
+            columns = [col for col in df.columns if df[col].dtype in numerical_types]
 
         logging.debug(f"Columns:\n\t{df.columns.tolist()}\nTypes:\n\t{df.dtypes.to_dict()}")
 
-        if not in_place:
-            df = df.copy()
+        worksheet = writer.sheets[sheet_name]
+        workbook = writer.book
+
+        sig_fig_format = workbook.add_format({"num_format": "#,##0." + "0" * (sig_figs - 1)})
         
-        if columns is None:
-            for col in df.columns.tolist():
-                if df[col].dtype in numerical_types:
-                    df[col] = df[col].apply(lambda x: f"{x:.{sig_figs}g}").astype(float)
-                    logging.debug(f"Formatted column '{col}' with {sig_figs} significant figures:\n\t{df[col].iloc[:5].tolist()}")
-        else:
-            for col in columns:
-                if df[col].dtype in numerical_types:
-                    df[col] = df[col].apply(lambda x: f"{x:.{sig_figs}g}").astype(float)
-                    logging.debug(f"Formatted column '{col}' with {sig_figs} significant figures:\n\t{df[col].iloc[:5].tolist()}")
+        for col_idx in range(len(df.columns)):
+            col_name = df.columns[col_idx]
+            if col_name in columns:
+                col_width = col_widths[col_idx] if col_widths is not None else 10
+                worksheet.set_column(col_idx, col_idx, col_width, sig_fig_format)
         
-        if not in_place:
-            return df
-    
     @staticmethod
     def get_header_row(has_subtotals: bool = False, has_superheaders: bool = False) -> int:
         """Get the row number where column headers are located.
@@ -298,14 +300,17 @@ class ExcelFormatter:
             df: DataFrame whose columns will have subtotal formulas added.
         """
         ws = writer.sheets[sheet_name]
+        workbook = writer.book
         nrows, ncols = df.shape
+
+        subtotal_format = workbook.add_format({"num_format": "#,##0"})
         
         for col_idx in range(ncols):
             start_cell = xl_rowcol_to_cell(3, col_idx)
             end_cell = xl_rowcol_to_cell(nrows + 2, col_idx)
             range_str = f"{start_cell}:{end_cell}"
             formula = f"=SUBTOTAL(3,{range_str})"
-            ws.write_formula(0, col_idx, formula)
+            ws.write_formula(0, col_idx, formula, subtotal_format)
         
         logging.debug(f"Added SUBTOTAL formulas to {sheet_name} with {ncols} columns")
 
@@ -3025,8 +3030,6 @@ class ModelToExcel:
             return None
         
         start_row = ExcelFormatter.get_header_row(has_subtotals=add_subtotals)
-        if "Coefficient" in model_descriptors.columns and "Standard Error" in model_descriptors.columns:
-            ExcelFormatter.set_sig_figs(model_descriptors, sig_figs=3, columns=["Coefficient", "Standard Error"])
         model_descriptors.to_excel(writer, sheet_name="Model Descriptors", index=False, startrow=start_row)
 
         workbook = writer.book
@@ -3038,6 +3041,8 @@ class ModelToExcel:
             worksheet.freeze_panes(1, 0)
 
         col_widths = ExcelFormatter.set_column_width(writer, "Model Descriptors", model_descriptors, how="full")
+        if "Coefficient" in model_descriptors.columns and "Standard Error" in model_descriptors.columns:
+            ExcelFormatter.set_sig_figs(writer, "Model Descriptors", model_descriptors, columns=["Coefficient", "Standard Error"], sig_figs=3, col_widths=col_widths)
         ExcelFormatter.add_filter(writer, "Model Descriptors", model_descriptors, has_subtotals=add_subtotals)
 
         return model_descriptors
@@ -3062,7 +3067,6 @@ class ModelToExcel:
         
         start_row = ExcelFormatter.get_header_row(has_subtotals=add_subtotals)
         # format_cols = [col for col in model_descriptor_values.columns if col.startswith("Observed") or col.startswith("Predicted")]
-        ExcelFormatter.set_sig_figs(model_descriptor_values, sig_figs=3, columns=None)
         model_descriptor_values.to_excel(writer, sheet_name="Model Descriptor Values", index=False, startrow=start_row)
 
         workbook = writer.book
@@ -3074,6 +3078,7 @@ class ModelToExcel:
             worksheet.freeze_panes(1, 0)
 
         col_widths = ExcelFormatter.set_column_width(writer, "Model Descriptor Values", model_descriptor_values, min_col_width=7, col_width_pad=5, how="header")
+        ExcelFormatter.set_sig_figs(writer, "Model Descriptor Values", model_descriptor_values, columns=None, sig_figs=3, col_widths=col_widths)
         ExcelFormatter.add_filter(writer, "Model Descriptor Values", model_descriptor_values, has_subtotals=add_subtotals)
 
         return model_descriptor_values
@@ -3107,7 +3112,6 @@ class ModelToExcel:
             return None
         
         start_row = ExcelFormatter.get_header_row(has_subtotals=add_subtotals)
-        ExcelFormatter.set_sig_figs(training_cv_predictions, sig_figs=3, columns=["Exp", "Pred"])
         training_cv_predictions.to_excel(writer, sheet_name="Training CV Predictions", index=False, startrow=start_row)
 
         workbook = writer.book
@@ -3119,6 +3123,7 @@ class ModelToExcel:
             worksheet.freeze_panes(1, 0)
 
         col_widths = ExcelFormatter.set_column_width(writer, "Training CV Predictions", training_cv_predictions, min_col_width=min_col_width, col_width_pad=col_width_pad, how="header")
+        ExcelFormatter.set_sig_figs(writer, "Training CV Predictions", training_cv_predictions, columns=["Exp", "Pred", "Absolute Error"], sig_figs=3, col_widths=col_widths)
         ExcelFormatter.add_filter(writer, "Training CV Predictions", training_cv_predictions, has_subtotals=add_subtotals)
         
         ChartBuilder.add_plot(writer, workbook, "Training CV Predictions", "Training CV Predictions", training_cv_predictions, is_binary=self.model.is_binary, x_col=x_col, y_col=y_col, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, log_plot=self.log_plot, yx_offset_rows=yx_offset_rows, property_name=property_name, property_units=property_units, has_subtotals=add_subtotals)
@@ -3154,7 +3159,6 @@ class ModelToExcel:
             return None
         
         start_row = ExcelFormatter.get_header_row(has_subtotals=add_subtotals)
-        ExcelFormatter.set_sig_figs(test_set_predictions, sig_figs=3, columns=["Exp", "Pred"])
         test_set_predictions.to_excel(writer, sheet_name="Test Set Predictions", index=False, startrow=start_row)
 
         workbook = writer.book
@@ -3166,6 +3170,7 @@ class ModelToExcel:
             worksheet.freeze_panes(1, 0)
 
         col_widths = ExcelFormatter.set_column_width(writer, "Test Set Predictions", test_set_predictions, min_col_width=min_col_width, col_width_pad=col_width_pad, how="header")
+        ExcelFormatter.set_sig_figs(writer, "Test Set Predictions", test_set_predictions, columns=["Exp", "Pred", "Absolute Error"], sig_figs=3, col_widths=col_widths)
         ExcelFormatter.add_filter(writer, "Test Set Predictions", test_set_predictions, has_subtotals=add_subtotals)
 
         ChartBuilder.add_plot(writer, workbook, "Test Set Predictions", "Test Set Predictions", test_set_predictions, is_binary=self.model.is_binary, x_col=x_col, y_col=y_col, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, log_plot=self.log_plot, yx_offset_rows=yx_offset_rows, property_name=property_name, property_units=property_units, has_subtotals=add_subtotals)
@@ -3202,7 +3207,6 @@ class ModelToExcel:
             return None
         
         start_row = ExcelFormatter.get_header_row(has_subtotals=add_subtotals)
-        ExcelFormatter.set_sig_figs(external_predictions, sig_figs=3, columns=["Exp", "Pred"])
         external_predictions.to_excel(writer, sheet_name="External Predictions", index=False, startrow=start_row)
 
         workbook = writer.book
@@ -3214,6 +3218,7 @@ class ModelToExcel:
             worksheet.freeze_panes(1, 0)
 
         col_widths = ExcelFormatter.set_column_width(writer, "External Predictions", external_predictions, min_col_width=min_col_width, col_width_pad=col_width_pad, how="header")
+        ExcelFormatter.set_sig_figs(writer, "External Predictions", external_predictions, columns=["Exp", "Pred", "Absolute Error"], sig_figs=3, col_widths=col_widths)
         ExcelFormatter.add_filter(writer, "External Predictions", external_predictions, has_subtotals=add_subtotals)
         
         ChartBuilder.add_plot(writer, workbook, "External Predictions", "External Predictions", external_predictions, is_binary=self.model.is_binary, x_col=x_col, y_col=y_col, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, log_plot=self.log_plot, yx_offset_rows=yx_offset_rows, property_name=property_name, property_units=property_units, has_subtotals=add_subtotals)
@@ -3334,6 +3339,39 @@ class ModelToExcel:
 # TEST FUNCTIONS AND MISCELLANEOUS STUFF
 # ============================================================
 
+def update_excel_summaries(username: str, model_ids: Optional[list[int]] = None, upload_to_db: bool = False) -> None:
+    """Update Excel summaries for the specified models.
+
+    Args:
+        username: The username of the user updating the summaries.
+        model_ids: A list of model IDs for which to update summaries.
+        upload_to_db: Whether to upload the updated summaries to the database.
+    """
+    
+    if model_ids is None:
+        # TODO: Implement logic to fetch all relevant model IDs
+        pass
+    
+    session = DataQuerier.getSession(DataQuerier.getEngine())
+
+    for model_id in model_ids:
+        file_path = os.path.join(PROJECT_ROOT, "data", "excel_summaries", f"{model_id}_summary.xlsx")
+        mdo = ModelDataObjects(model_id=model_id)
+        mte = ModelToExcel(mdo, file_path)
+        mte.create_excel()
+
+        with open(file_path, "rb") as file:
+            file_bytes = file.read()
+            logging.info(f"Model #: {model_id}, Length of Summary: {len(file_bytes)}")
+        
+        if len(file_bytes) == 0:
+            logging.warning(f"Model {model_id} summary has 0 bytes")
+            continue
+        
+        if upload_to_db:
+            # TODO: This function doesn't exist on my branch?
+            upload_or_update_model_file_in_db(file_bytes, username, model_id, 2, session)
+
 def custom_encoder(obj: Any) -> Any:
     """Custom JSON encoder for model objects and dataframes.
     
@@ -3356,7 +3394,7 @@ def query_example() -> None:
     data from the database, then generates the Excel workbook.
     """
     logging.info("Running query_example()")
-    model_id = 1746
+    model_id = 1065
     file_path = os.path.join(PROJECT_ROOT, "data", "excel_summaries", f"{model_id}_summary.xlsx")
 
     mdo = ModelDataObjects(model_id=model_id)
@@ -3489,13 +3527,14 @@ def test_query_fish_models() -> None:
 
 
 def main():
-    # query_example()
+    # update_excel_summaries(username="weston.murdock", model_ids=[1065, 1066, 1067, 1068, 1069, 1070], upload_to_db=False)
+    query_example()
     # local_example()
     # test_model_details_pv()
     # test_model_details_gmd()
     # test_query_old_models()
     # test_query_binary_models()
-    test_query_fish_models()
+    # test_query_fish_models()
 
 if __name__ == "__main__":
     main()
