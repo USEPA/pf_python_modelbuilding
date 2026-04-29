@@ -55,9 +55,9 @@ def generateEmbedding(model, df_training, df_prediction, fraction_of_max_importa
     # print(train_features)
 
 
-    if model.regressor_name == 'rf':
-        model.hyperparameter_grid = {
-            "estimator__max_features": ["sqrt"]}  # just use a single set of hyperparameters to speed up
+    # if model.regressor_name == 'rf':
+    #     model.hyperparameter_grid = {
+    #         "estimator__max_features": ["sqrt"]}  # just use a single set of hyperparameters to speed up
 
     model.hyperparameters = model.get_single_parameters()
     model.model_obj.set_params(**model.hyperparameters)

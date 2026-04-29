@@ -169,17 +169,10 @@ def prediction_applicability_domain():
     """Generates applicability domain values"""
 
     obj = request.form
-
-    training_tsv = obj.get('training_tsv')  # Retrieves the training data as a TSV
-    test_tsv = obj.get('test_tsv')  # Retrieves the training data as a TSV
-
     applicability_domain = obj.get('applicability_domain')
 
-    if training_tsv is None:
-        training_tsv = request.files.get('training_tsv').read().decode('UTF-8')
-
-    if test_tsv is None:
-        test_tsv = request.files.get('test_tsv').read().decode('UTF-8')
+    test_tsv = _read_text_form_or_file("test_tsv")
+    training_tsv = _read_text_form_or_file("training_tsv")
 
     if obj.get('remove_log_p'):  # Sets boolean remove_log_p from string
         remove_log_p = obj.get('remove_log_p', '').lower() == 'true'

@@ -13,8 +13,6 @@ docker run -d \
   -p 8080:8080 \
 python_model_building:latest
 
-REM docker run -d --name python-model-building --env-file .env -p 8080:8080 python_model_building:latest
-
 docker restart python-model-building
 
 REM check for error:

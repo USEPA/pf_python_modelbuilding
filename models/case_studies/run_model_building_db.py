@@ -107,7 +107,7 @@ class ParametersImportance:
     min_descriptor_count: int = 30
     max_descriptor_count: int = 40
     
-    descriptor_coefficient: float = 0.006
+    descriptor_coefficient: float = 0.006 # set to None for auto penalty value
     alpha = 0.7
 
     include_standardization_in_pmml: bool = False
@@ -193,8 +193,8 @@ class ParametersGeneticAlgorithm:
     num_optimizers: int = 100
     num_jobs: int = 4
     n_threads: Optional[int] = None
-    max_length: int = 24
-    max_features: int = 30
+    max_length: int = 24 # still use?
+    max_features: int = 25
 
     descriptor_coefficient: float = 0.006
     alpha: float = 0.7
@@ -639,11 +639,11 @@ class ModelLoader():
         
         filePathOutHistogram = os.path.join(folder_path, "histogram.png")
         image_id = self.load_model_file(filePathOutHistogram, user, fk_model_id, 4)
-        image_id = logging.info(f"Histogram plot loaded to db with id: {image_id}")
+        logging.info(f"Histogram plot loaded to db with id: {image_id}")
             
         filePathOutExcelSummary = os.path.join(folder_path, "detailed_summary.xlsx")
         image_id = self.load_model_file(filePathOutExcelSummary, user, fk_model_id, 2)
-        image_id = logging.info(f"Excel summary loaded to db with id: {image_id}")
+        logging.info(f"Excel summary loaded to db with id: {image_id}")
         
         
         # TODO: created detailed spreadsheet and store in the database
@@ -1731,6 +1731,7 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         
         if dataset_name == 'KOC v1 modeling':
             dataset_name_ext = 'KOC v2 external'
+            # dataset_name_ext = 'Koc eChemPortal v1'
         elif dataset_name == 'ECOTOX_2024_12_12_96HR_Fish_LC50_v3a modeling':
             dataset_name_ext = 'QSAR_Toolbox_96HR_Fish_LC50_v3 modeling'    
 
@@ -1942,6 +1943,7 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         logging.info(f"training cross validation stats={json.dumps(cv_stats, indent=4)}")   
         logging.info(f"test set AD stats={json.dumps( results_dict['model_statistics']['test_stats_AD'] , indent=4)}")
 
+        
         logging.info("run_data_set completed\n")
 
         # model.modelStatistics = {**training_stats, **cv_stats, **test_stats, **results_dict['model_statistics']['test_stats_AD'], **ext_stats}
@@ -2002,10 +2004,11 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
             mdo = ModelDataObjects(model=model, df_pv=df_pv, df_gmd=df_dps, df_gmd_external=df_dps_ext)
             mte = ModelToExcel(mdo, detailed_summary_path)
             mte.create_excel()
-        
+            
         if write_to_db:
             ml.load_model(user, model, results_dict, df_pred_training, df_pred_test, df_pred_cv, folder_path, df_pred_external=df_pred_ext)
-    
+
+
     except Exception:
         # Print the exception traceback to standard error
         traceback.print_exc()
