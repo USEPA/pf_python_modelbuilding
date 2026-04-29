@@ -14,7 +14,7 @@ from models import make_test_plots as mtp
 import traceback
 from pathlib import Path
 
-def upload_image_bytes_to_db(file_bytes, username, fk_model_id, fk_file_type_id, session):
+def upload_or_update_model_file_in_db(file_bytes, username, fk_model_id, fk_file_type_id, session):
     """
     Insert or update a model file blob for (fk_model_id, fk_file_type_id).
     Requires a unique constraint or index on (fk_model_id, fk_file_type_id).
@@ -155,7 +155,7 @@ def createTrainingTestPlotsForReports(session, write_to_db=False, write_to_hardd
             )
 
             if write_to_db and bytes_scatter is not None:
-                upload_image_bytes_to_db(bytes_scatter, username, model.modelId, 3, session)
+                upload_or_update_model_file_in_db(bytes_scatter, username, model.modelId, 3, session)
 
             # Histogram path (same folder)
             if write_to_harddisk:
@@ -174,7 +174,7 @@ def createTrainingTestPlotsForReports(session, write_to_db=False, write_to_hardd
             )
 
             if write_to_db and bytes_histogram is not None:
-                upload_image_bytes_to_db(bytes_histogram, username, model.modelId, 4, session)
+                upload_or_update_model_file_in_db(bytes_histogram, username, model.modelId, 4, session)
 
     except Exception as ex:
         traceback.print_exc()

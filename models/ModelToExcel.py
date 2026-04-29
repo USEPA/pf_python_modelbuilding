@@ -19,7 +19,7 @@ from models.case_studies.run_model_building import runAD
 from models.ModelBuilder import Model
 from models.db_utilities.raw_exp_data_db import ExpDataGetter
 from models.db_utilities.dataset_utilities_db import getMappedDatapoints
-# from models.db_utilities.plot_db import upload_or_update_model_file_in_db  # TODO: This function doesn't exist on my branch?
+from models.db_utilities.plot_db import upload_or_update_model_file_in_db
 from StatsCalculator import calculate_continuous_statistics, calculate_binary_statistics, calculate_mean_exp_training
 from util import predict_constants as pc
 import applicability_domain.applicability_domain_utilities as adu
@@ -259,7 +259,7 @@ class ExcelFormatter:
             if col_name in columns:
                 col_width = col_widths[col_idx] if col_widths is not None else 10
                 worksheet.set_column(col_idx, col_idx, col_width, sig_fig_format)
-        
+
     @staticmethod
     def get_header_row(has_subtotals: bool = False, has_superheaders: bool = False) -> int:
         """Get the row number where column headers are located.
@@ -3369,7 +3369,6 @@ def update_excel_summaries(username: str, model_ids: Optional[list[int]] = None,
             continue
         
         if upload_to_db:
-            # TODO: This function doesn't exist on my branch?
             upload_or_update_model_file_in_db(file_bytes, username, model_id, 2, session)
 
 def custom_encoder(obj: Any) -> Any:
