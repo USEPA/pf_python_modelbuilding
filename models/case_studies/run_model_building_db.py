@@ -1737,6 +1737,7 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         if dataset_name_ext is not None:
             dataset_description_ext = du.get_dataset_details(session, dataset_name_ext).get('dataset_description')
             df_prediction_ext = du.get_instances_excluding(session, dataset_name_ext, dataset_name, descriptor_set_name)
+            df_external = df_prediction_ext.copy()
 
         
         # check_for_inchi_key_matches(df_training, df_prediction_ext)
@@ -1858,8 +1859,8 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
             model.df_dsstoxRecords_external = df_prediction_ext
             model.df_preds_external = df_pred_ext
 
-            model.df_external = du.get_external_instances(session, model)
-            model.num_external = model.df_external.shape[0] if model.df_external is not None else 0        
+            model.df_external = df_external
+            model.num_external = df_external.shape[0] if df_external is not None else 0        
             # model.num_external = df_prediction_ext.shape[0] if df_prediction_ext is not None else 0
 
             if run_AD:

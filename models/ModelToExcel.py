@@ -1181,6 +1181,7 @@ class DataQuerier:
                 model.df_dsstoxRecords_external = model.df_dsstoxRecords_external[~model.df_dsstoxRecords_external.canonicalSmiles.isin(model.df_dsstoxRecords.canonicalSmiles)]
                 model.df_external = model.df_external[~model.df_external.ID.isin(model.df_dsstoxRecords.canonicalSmiles)]
                 model.df_preds_external = model.df_preds_external[~model.df_preds_external.canon_qsar_smiles.isin(model.df_dsstoxRecords.canonicalSmiles)]
+                model.num_external = model.df_external.shape[0] if model.df_external is not None else 0
 
             self.model = model
             return model
@@ -3443,8 +3444,8 @@ def test_query_old_models() -> None:
     data from the database, then generates the Excel workbook for each model.
     """
     logging.info("Running test_query_old_models()")
-    # model_ids = list(range(1065, 1071))
-    model_ids = [1069]
+    model_ids = list(range(1065, 1071))
+    # model_ids = [1069]
     for model_id in model_ids:
         file_path = os.path.join(PROJECT_ROOT, "data", "excel_summaries", f"{model_id}_summary.xlsx")
         mdo = ModelDataObjects(model_id=model_id)
@@ -3492,9 +3493,9 @@ def main():
     # local_example()
     # test_model_details_pv()
     # test_model_details_gmd()
-    test_query_old_models()
+    # test_query_old_models()
     # test_query_binary_models()
-    # test_query_fish_models()
+    test_query_fish_models()
 
 if __name__ == "__main__":
     main()

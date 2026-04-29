@@ -172,14 +172,15 @@ def run_fish_tox():
         params = set_hyper_parameters(qsar_method=method, feature_selection=True, descriptor_set_name=descriptor_set_name, 
                             splitting_name=splitting_name, dataset_name=dataset_name, ad_measure=ad_measure_model)
         # params.descriptor_coefficient = 0.006
-        if method == 'rf':
-            params.hyperparameter_grid = {'estimator__max_features': ['sqrt', 'log2'],
-                                         'estimator__min_impurity_decrease': [10 ** x for x in range(-5, 0)],
-                                         'estimator__n_estimators': [10, 100, 250, 500]}
-        elif method=='xgb':
-            params.hyperparameter_grid = {'estimator__n_estimators': [50, 100], 'estimator__eta': [0.1, 0.2, 0.3],
-                                    'estimator__gamma': [0, 1, 10], 'estimator__max_depth': [3, 6, 9, 12],
-                                    'estimator__min_child_weight': [1, 3, 5], 'estimator__subsample': [0.5, 1]}
+        # Following lines take too long to run when the hyperparameter grid is too large
+        # if method == 'rf':
+        #     params.hyperparameter_grid = {'estimator__max_features': ['sqrt', 'log2'],
+        #                                  'estimator__min_impurity_decrease': [10 ** x for x in range(-5, 0)],
+        #                                  'estimator__n_estimators': [10, 100, 250, 500]}
+        # elif method=='xgb':
+        #     params.hyperparameter_grid = {'estimator__n_estimators': [50, 100], 'estimator__eta': [0.1, 0.2, 0.3],
+        #                             'estimator__gamma': [0, 1, 10], 'estimator__max_depth': [3, 6, 9, 12],
+        #                             'estimator__min_child_weight': [1, 3, 5], 'estimator__subsample': [0.5, 1]}
     
         # run_dataset(dataset_name=dataset_name, qsar_method=params.qsar_method, feature_selection=params.feature_selection,
         #     params = params, ad_measure_model=ad_measure_model,write_to_db=write_to_db, 
@@ -211,7 +212,28 @@ def run_fish_tox():
     
     
     Results.summarize_model_stats(dataset_name,append_to_models_folder=append_to_models_folder, continuous_stat_name='RMSE')
+
+
+def run_fish_tox_2():
+    dataset_name = 'ECOTOX_2024_12_12_96HR_Fish_LC50_v3a modeling'
+    descriptor_set_name = "WebTEST-default"
+    splitting_name = "RND_REPRESENTATIVE"
+
+    ad_measure_model = [pc.Applicability_Domain_TEST_Embedding_Euclidean, pc.Applicability_Domain_TEST_Fragment_Counts]
     
+    create_unique_excel = False
+    write_to_db = False
+    append_to_models_folder = "_bob"
+
+    for method in ["gcm", 'rf', 'xgb']:
+        run_dataset(dataset_name=dataset_name, qsar_method=method, feature_selection=False,
+            ad_measure_model=ad_measure_model, write_to_db=write_to_db, create_unique_excel=create_unique_excel,
+            create_detailed_excel=True, append_to_models_folder=append_to_models_folder)  
+        run_dataset(dataset_name=dataset_name, qsar_method=method, feature_selection=True,
+            ad_measure_model=ad_measure_model, write_to_db=write_to_db, create_unique_excel=create_unique_excel,
+            create_detailed_excel=True, append_to_models_folder=append_to_models_folder)
+        
+    Results.summarize_model_stats(dataset_name, append_to_models_folder=append_to_models_folder, continuous_stat_name="RMSE")
     
     
 def run_biodeg_rifm():
@@ -365,6 +387,7 @@ def main():
     # These 4 should be able to run for the gcm model
     # run_Koc()  # OK
     # run_fish_tox()  # Takes too long to run on my machine? (E.g. started a run at 1:55, errored out at 4:53 because the SQL connection closed automatically)
+    # run_fish_tox_2()  # OK
     # run_biodeg_rifm()  # OK
     run_pchem()  # OK
 
