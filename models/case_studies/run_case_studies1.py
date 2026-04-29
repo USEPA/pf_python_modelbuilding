@@ -24,7 +24,7 @@ def run_example():
 def run_Koc():
     create_unique_excel = False
     # write_to_db = True
-    write_to_db = True
+    write_to_db = False
     # write_to_db=True
     dataset_name = "KOC v1 modeling"
     descriptor_set_name = "WebTEST-default"

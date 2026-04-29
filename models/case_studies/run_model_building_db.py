@@ -639,11 +639,11 @@ class ModelLoader():
         
         filePathOutHistogram = os.path.join(folder_path, "histogram.png")
         image_id = self.load_model_file(filePathOutHistogram, user, fk_model_id, 4)
-        image_id = logging.info(f"Histogram plot loaded to db with id: {image_id}")
+        logging.info(f"Histogram plot loaded to db with id: {image_id}")
             
         filePathOutExcelSummary = os.path.join(folder_path, "detailed_summary.xlsx")
         image_id = self.load_model_file(filePathOutExcelSummary, user, fk_model_id, 2)
-        image_id = logging.info(f"Excel summary loaded to db with id: {image_id}")
+        logging.info(f"Excel summary loaded to db with id: {image_id}")
         
         
         # TODO: created detailed spreadsheet and store in the database
@@ -1942,8 +1942,6 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         logging.info(f"training cross validation stats={json.dumps(cv_stats, indent=4)}")   
         logging.info(f"test set AD stats={json.dumps( results_dict['model_statistics']['test_stats_AD'] , indent=4)}")
 
-        if write_to_db:
-            ml.load_model(user, model, results_dict, df_pred_training, df_pred_test, df_pred_cv, folder_path, df_pred_external=df_pred_ext)
         
         logging.info("run_data_set completed\n")
 
@@ -2005,7 +2003,11 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
             mdo = ModelDataObjects(model=model, df_pv=df_pv, df_gmd=df_dps, df_gmd_external=df_dps_ext)
             mte = ModelToExcel(mdo, detailed_summary_path)
             mte.create_excel()
-    
+            
+        if write_to_db:
+            ml.load_model(user, model, results_dict, df_pred_training, df_pred_test, df_pred_cv, folder_path, df_pred_external=df_pred_ext)
+
+
     except Exception:
         # Print the exception traceback to standard error
         traceback.print_exc()
