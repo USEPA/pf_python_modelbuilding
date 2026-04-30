@@ -4,6 +4,7 @@ from util.prediction_cache_key_utils import (
     build_prediction_cache_key,
     ensure_chemical_inchi_key,
     normalize_inchi_key,
+    standardized_chemical_changes_identity,
 )
 
 
@@ -58,6 +59,33 @@ class TestPredictionCacheKeyUtils(unittest.TestCase):
         )
 
         self.assertEqual(key, "LFQSCWFLJHTTHZ-UHFFFAOYSA-N-1065")
+
+    def test_standardized_chemical_changes_identity_uses_inchi_key_equivalence(self):
+        def smiles_to_inchi_key(smiles):
+            return {
+                "CC(O)=O": "QTBSBXVTEAMEQO-UHFFFAOYSA-N",
+                "CC(=O)O": "QTBSBXVTEAMEQO-UHFFFAOYSA-N",
+            }.get(smiles)
+
+        changed = standardized_chemical_changes_identity(
+            "CC(O)=O",
+            {"canonicalSmiles": "CC(=O)O"},
+            smiles_to_inchi_key,
+        )
+
+        self.assertFalse(changed)
+
+    def test_standardized_chemical_changes_identity_detects_different_inchi_key(self):
+        changed = standardized_chemical_changes_identity(
+            "CCO",
+            {
+                "canonicalSmiles": "CC(=O)O",
+                "inchiKey": "QTBSBXVTEAMEQO-UHFFFAOYSA-N",
+            },
+            lambda smiles: "LFQSCWFLJHTTHZ-UHFFFAOYSA-N",
+        )
+
+        self.assertTrue(changed)
 
 
 if __name__ == "__main__":

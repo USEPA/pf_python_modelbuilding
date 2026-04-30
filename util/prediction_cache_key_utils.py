@@ -44,6 +44,56 @@ def ensure_chemical_inchi_key(
     return chemical_with_inchi
 
 
+def _chemical_inchi_key(
+    chemical: Any,
+    smiles_to_inchi_key: Callable[[Any], str | None],
+) -> str | None:
+    if not isinstance(chemical, dict):
+        return None
+
+    inchi_key = normalize_inchi_key(chemical.get("inchiKey"))
+    if inchi_key is not None:
+        return inchi_key
+
+    for candidate_smiles in (
+        chemical.get("canonicalSmiles"),
+        chemical.get("smiles"),
+    ):
+        inchi_key = normalize_inchi_key(smiles_to_inchi_key(candidate_smiles))
+        if inchi_key is not None:
+            return inchi_key
+
+    return None
+
+
+def standardized_chemical_changes_identity(
+    input_smiles: Any,
+    standardized_chemical: Any,
+    smiles_to_inchi_key: Callable[[Any], str | None],
+) -> bool:
+    if not isinstance(standardized_chemical, dict):
+        return False
+
+    input_inchi_key = normalize_inchi_key(smiles_to_inchi_key(input_smiles))
+    standardized_inchi_key = _chemical_inchi_key(standardized_chemical, smiles_to_inchi_key)
+
+    if input_inchi_key and standardized_inchi_key:
+        return input_inchi_key != standardized_inchi_key
+
+    if input_inchi_key or standardized_inchi_key:
+        return True
+
+    original_smiles = str(input_smiles).strip() if isinstance(input_smiles, str) else ""
+    standardized_smiles = (
+        standardized_chemical.get("canonicalSmiles") or standardized_chemical.get("smiles")
+    )
+    standardized_smiles = (
+        standardized_smiles.strip() if isinstance(standardized_smiles, str) else ""
+    )
+
+    return bool(original_smiles and standardized_smiles and standardized_smiles != original_smiles)
+
+
 def build_prediction_cache_key(
     model_id: Any,
     smiles_to_inchi_key: Callable[[Any], str | None],

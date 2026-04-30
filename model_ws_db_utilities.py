@@ -47,6 +47,7 @@ from util.prediction_cache_key_utils import (
     build_prediction_cache_key,
     ensure_chemical_inchi_key,
     normalize_inchi_key,
+    standardized_chemical_changes_identity,
 )
 from util.chemical_image_utils import build_render_image_url, get_render_smiles
 
@@ -851,22 +852,12 @@ def _sanitize_api_chemical_identifiers(chemical):
     }
 
 
-def _normalize_smiles_text(value):
-    if not isinstance(value, str):
-        return ""
-    return value.strip()
-
-
-def _standardized_chemical_changes_smiles(input_smiles, standardized_chemical):
-    if not isinstance(standardized_chemical, dict):
-        return False
-
-    original_smiles = _normalize_smiles_text(input_smiles)
-    standardized_smiles = _normalize_smiles_text(
-        standardized_chemical.get("canonicalSmiles") or standardized_chemical.get("smiles")
+def _standardized_chemical_changes_identity(input_smiles, standardized_chemical):
+    return standardized_chemical_changes_identity(
+        input_smiles,
+        standardized_chemical,
+        _inchi_key_from_smiles_cached,
     )
-
-    return bool(original_smiles and standardized_smiles and standardized_smiles != original_smiles)
 
 
 def _build_input_chemical(smiles):
@@ -1217,7 +1208,7 @@ class ModelPredictor:
         if not isinstance(chemical, dict):
             return prediction
 
-        if not _standardized_chemical_changes_smiles(fallback_smiles, chemical):
+        if not _standardized_chemical_changes_identity(fallback_smiles, chemical):
             return prediction
 
         updated_prediction = dict(prediction)
@@ -2492,7 +2483,7 @@ class ModelPredictor:
             standardized_chemical = dict(chemical)
             standardized_chemicals.append(standardized_chemical)
 
-            if _standardized_chemical_changes_smiles(smiles_list[idx], standardized_chemical):
+            if _standardized_chemical_changes_identity(smiles_list[idx], standardized_chemical):
                 response_chemicals.append(_build_input_chemical(smiles_list[idx]))
                 standardized_chemicals_for_response.append(standardized_chemical)
             else:
