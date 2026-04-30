@@ -40,6 +40,14 @@ STANDARDIZED_BLOCK = "standardizedChemical"
 RESOLVER_SKIP_FIELDS = {"id", "imageSrc"}
 BLANK_STRINGS = {"", "N/A", "n/a", "null", "None", "none"}
 DEFAULT_RESOLVER_LOOKUP_API = "https://cim-dev.sciencedataexperts.com/api/resolver/lookup"
+SCRIPT_ENV_DEFAULTS = {
+    "MONGO_HOST": "192.168.1.3",
+    "MONGO_PORT": "27017",
+    "MONGO_USER": "root",
+    "MONGO_PASSWORD": "qqq123",
+    "MONGO_DATABASE": "predictor",
+    "MONGO_CACHE_ENABLED": "true",
+}
 
 
 class SimpleHttpResponse:
@@ -128,6 +136,9 @@ def get_env(*names: str, default=None):
         value = os.getenv(name)
         if value not in (None, ""):
             return value
+        value = SCRIPT_ENV_DEFAULTS.get(name)
+        if value not in (None, ""):
+            return value
     return default
 
 
@@ -149,6 +160,13 @@ def get_float_env(*names: str, default: float) -> float:
         return float(raw_value)
     except (TypeError, ValueError):
         return default
+
+
+def get_bool_env(*names: str, default: bool) -> bool:
+    raw_value = get_env(*names, default=str(default))
+    if isinstance(raw_value, bool):
+        return raw_value
+    return str(raw_value).strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
 def is_blank(value) -> bool:
@@ -516,9 +534,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Do not retry unresolved batch items with individual GET lookups.",
     )
 
+    parser.add_argument(
+        "--mongo-cache-enabled",
+        action=argparse.BooleanOptionalAction,
+        default=get_bool_env("MONGO_CACHE_ENABLED", default=True),
+        help="Enable Mongo response-cache access.",
+    )
     parser.add_argument("--mongo-host", default=get_env("MONGO_HOST", default="localhost"))
     parser.add_argument("--mongo-port", type=int, default=get_int_env("MONGO_PORT", default=27017))
-    parser.add_argument("--mongo-user", default=get_env("MONGO_USER"))
+    parser.add_argument("--mongo-user", default=get_env("MONGO_USER", default="root"))
     parser.add_argument("--mongo-password", default=get_env("MONGO_PASSWORD"))
     parser.add_argument("--mongo-auth-source", default=get_env("MONGO_AUTH_SOURCE", default="admin"))
     parser.add_argument("--mongo-database", default=get_env("MONGO_DATABASE", default="predictor"))
@@ -604,6 +628,9 @@ def build_mongo_query(args) -> dict:
 
 
 def run_backfill(args: argparse.Namespace) -> None:
+    if not args.mongo_cache_enabled:
+        raise SystemExit("Mongo cache is disabled via MONGO_CACHE_ENABLED/--no-mongo-cache-enabled.")
+
     _, collection = connect_mongo(args)
     query = build_mongo_query(args)
     projection = {
