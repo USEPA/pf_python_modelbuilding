@@ -24,6 +24,7 @@ from db.mongo_cache import (
     cache_predictions,
     get_cached_predictions,
 )
+from db import model_cache
 
 from util import predict_constants as pc
 
@@ -417,6 +418,50 @@ class ModelInitializer:
 
     @timer
     def initModel(self, model_id):
+        if model_cache.model_artifact_cache_enabled():
+            try:
+                cached_model = model_cache.read_model_snapshot(model_id)
+            except model_cache.ModelArtifactCacheUnavailableError as exc:
+                logging.warning("Predictor model artifact cache unavailable for model_id=%s: %s", model_id, exc)
+            else:
+                if cached_model is not None:
+                    cached_model.modelId = str(model_id)
+                    try:
+                        cached_model, compat_stats = refresh_legacy_serialized_model(
+                            cached_model,
+                            logger=logging.getLogger(__name__),
+                        )
+                        if compat_stats["xgboost_objects"]:
+                            logging.info(
+                                "Refreshed %s legacy XGBoost object(s) after loading model_id=%s from Mongo",
+                                compat_stats["xgboost_objects"],
+                                model_id,
+                            )
+                    except Exception:
+                        logging.exception(
+                            "Failed to refresh legacy serialized components for cached model_id=%s",
+                            model_id,
+                        )
+                    logging.info("Loaded model_id=%s from Mongo model artifact cache", model_id)
+                    return cached_model
+
+        if not model_cache.postgres_fallback_enabled():
+            logging.error("Model_id=%s not found in Mongo artifact cache and Postgres fallback is disabled", model_id)
+            return None
+
+        model = self._init_model_from_postgres(model_id)
+        if model is not None and model_cache.model_artifact_cache_enabled():
+            try:
+                model_cache.write_model_snapshot(model_id, model)
+                logging.info("Stored model_id=%s in Mongo model artifact cache", model_id)
+            except model_cache.ModelArtifactCacheUnavailableError as exc:
+                logging.warning("Could not store model_id=%s in Mongo model artifact cache: %s", model_id, exc)
+            except Exception:
+                logging.exception("Could not store model_id=%s in Mongo model artifact cache", model_id)
+        return model
+
+    @timer
+    def _init_model_from_postgres(self, model_id):
 
         session = getSession()
         try:
@@ -545,13 +590,24 @@ class ModelInitializer:
 
             # Note: in the data_points table, sometimes the qsar_dtxcid is pipe delimited pair of cids
             sql = """
-                SELECT dp.canon_qsar_smiles as "canonicalSmiles", dr.dtxsid as sid, dr.dtxcid as cid, dr.casrn, dr.preferred_name as "name" , dr.smiles, dr.indigo_inchi_key as "inchiKey"
-                    FROM qsar_datasets.datasets d
-                    JOIN qsar_datasets.data_points dp ON dp.fk_dataset_id = d.id
-                    LEFT JOIN qsar_models.dsstox_records dr ON dr.dtxcid = split_part(dp.qsar_dtxcid, '|', 1)
-                """                
+                SELECT
+                    dp.canon_qsar_smiles as "canonicalSmiles",
+                    dr.dtxsid as sid,
+                    coalesce(dr.dtxcid, split_part(dp.qsar_dtxcid, '|', 1)) as cid,
+                    dr.casrn,
+                    dr.preferred_name as "name",
+                    dr.smiles,
+                    dr.indigo_inchi_key as "inchiKey"
+                FROM qsar_datasets.datasets d
+                JOIN qsar_datasets.data_points dp
+                  ON dp.fk_dataset_id = d.id
+                LEFT JOIN qsar_models.dsstox_records dr
+                  ON dr.dtxcid = split_part(dp.qsar_dtxcid, '|', 1)
+                 AND dr.fk_dsstox_snapshot_id = :fk_dsstox_snapshot_id
+                WHERE d.name = :datasetName;
+                """
 
-            sql = text(sql + "\nWHERE d.name = :datasetName and dr.fk_dsstox_snapshot_id = :fk_dsstox_snapshot_id;")
+            sql = text(sql)
 
             # print(sql)
 
@@ -561,7 +617,15 @@ class ModelInitializer:
             # Convert result to DataFrame
             df = pd.DataFrame(result.fetchall(), columns=result.keys())
 
-            model.df_dsstoxRecords = df;
+            for row_index, row in df[df["sid"].isnull()].iterrows():
+                fallback_record = dict_missing_dsstox_records.get(row.get("cid"))
+                if fallback_record:
+                    df.at[row_index, "sid"] = fallback_record.get("sid")
+                    df.at[row_index, "casrn"] = fallback_record.get("casrn")
+                    df.at[row_index, "name"] = fallback_record.get("name")
+                    df.at[row_index, "smiles"] = fallback_record.get("smiles")
+
+            model.df_dsstoxRecords = df
             
             none_sid_smiles = df[df['sid'].isnull()]['canonicalSmiles']
 
