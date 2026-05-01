@@ -846,10 +846,12 @@ class ModelResults:
 def _sanitize_api_chemical_identifiers(chemical):
     if not isinstance(chemical, dict):
         return chemical
-    return {
-        key: (None if value == "N/A" else value)
-        for key, value in chemical.items()
-    }
+    sanitized = {}
+    for key, value in chemical.items():
+        if key == "imageSrc":
+            continue
+        sanitized[key] = None if value == "N/A" else value
+    return sanitized
 
 
 def _standardized_chemical_changes_identity(input_smiles, standardized_chemical):
@@ -1796,9 +1798,6 @@ class ModelPredictor:
 
     def _build_minimal_chemical(self, smiles):
         chemical = _build_input_chemical(smiles)
-
-        img_base64 = self.smiles_to_base64(smiles)
-        chemical["imageSrc"] = f'data:image/png;base64,{img_base64}' if img_base64 else "N/A"
         return self._ensure_chemical_inchi_key(chemical, fallback_smiles=smiles)
 
     def _prepare_chemical_for_report(self, chemical):

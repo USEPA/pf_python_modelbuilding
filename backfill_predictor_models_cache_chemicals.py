@@ -677,7 +677,8 @@ def run_backfill(args: argparse.Namespace) -> None:
                 f"{block_name}: {','.join(changed_fields)}"
                 for block_name, changed_fields in changes
             )
-            logging.info("Would update key=%s fields=%s", key, change_text)
+            log_action = "Updating" if args.apply else "Would update"
+            logging.info("%s key=%s fields=%s", log_action, key, change_text)
             operations.append(update_one({"_id": document["_id"]}, update))
 
         if args.apply and operations:

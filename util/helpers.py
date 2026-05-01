@@ -20,7 +20,11 @@ _THREAD_LOCAL = threading.local()
 
 def _coerce_json_safe(value):
     if isinstance(value, dict):
-        return {str(key): _coerce_json_safe(item) for key, item in value.items()}
+        return {
+            str(key): _coerce_json_safe(item)
+            for key, item in value.items()
+            if key != "imageSrc"
+        }
 
     if isinstance(value, list):
         return [_coerce_json_safe(item) for item in value]
@@ -83,12 +87,24 @@ def _to_obj_safe(x):
             return {"error": str(x)}
 
 
+def _strip_image_src(value):
+    if not isinstance(value, dict):
+        return value
+
+    return _coerce_json_safe(value)
+
+
 def _build_chemical_identifiers(value=None, fallback=""):
     if isinstance(value, dict):
         fallback_smiles = ""
         if isinstance(fallback, str) and fallback.strip():
             fallback_smiles = fallback.strip()
-        return _coerce_json_safe(ModelPredictor._ensure_chemical_inchi_key(value, fallback_smiles=fallback_smiles))
+        return _coerce_json_safe(
+            ModelPredictor._ensure_chemical_inchi_key(
+                _strip_image_src(value),
+                fallback_smiles=fallback_smiles,
+            )
+        )
 
     text_value = ""
     if isinstance(value, str) and value.strip():
@@ -260,7 +276,9 @@ def _format_prediction_for_response(prediction):
     formatted_prediction = {}
     for key, value in prediction.items():
         if key == "chemicalIdentifiers":
-            formatted_prediction["chemical"] = value
+            formatted_prediction["chemical"] = _strip_image_src(value)
+        elif key in {"chemical", "standardizedChemical"}:
+            formatted_prediction[key] = _strip_image_src(value)
         elif key == "modelResults":
             formatted_prediction["result"] = value
         else:

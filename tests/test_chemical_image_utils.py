@@ -10,11 +10,20 @@ from util.chemical_image_utils import (
 )
 
 try:
-    from model_ws_db_utilities import ModelPredictor
+    from model_ws_db_utilities import ModelPredictor, _sanitize_api_chemical_identifiers
     MODEL_PREDICTOR_IMPORT_ERROR = None
 except Exception as exc:
     ModelPredictor = None
+    _sanitize_api_chemical_identifiers = None
     MODEL_PREDICTOR_IMPORT_ERROR = exc
+
+try:
+    from util.helpers import _coerce_json_safe, _format_prediction_for_response
+    PREDICT_HELPERS_IMPORT_ERROR = None
+except Exception as exc:
+    _coerce_json_safe = None
+    _format_prediction_for_response = None
+    PREDICT_HELPERS_IMPORT_ERROR = exc
 
 
 class TestChemicalImageUtils(TestCase):
@@ -84,3 +93,55 @@ class TestChemicalImageUtils(TestCase):
             chemical["imageSrc"],
             build_render_image_url("C1CCCCC1", width=400, height=400),
         )
+
+    @skipIf(ModelPredictor is None, f"ModelPredictor unavailable: {MODEL_PREDICTOR_IMPORT_ERROR}")
+    def test_build_minimal_chemical_does_not_add_image_src(self):
+        predictor = ModelPredictor()
+
+        with patch.object(ModelPredictor, "smiles_to_base64", return_value="abc123") as smiles_to_base64:
+            chemical = predictor._build_minimal_chemical("C1CCCCC1")
+
+        smiles_to_base64.assert_not_called()
+        self.assertNotIn("imageSrc", chemical)
+
+    @skipIf(ModelPredictor is None, f"ModelPredictor unavailable: {MODEL_PREDICTOR_IMPORT_ERROR}")
+    def test_sanitize_api_chemical_identifiers_removes_image_src(self):
+        chemical = _sanitize_api_chemical_identifiers({
+            "chemId": "C1CCCCC1",
+            "imageSrc": "data:image/png;base64,abc123",
+            "name": "N/A",
+        })
+
+        self.assertNotIn("imageSrc", chemical)
+        self.assertIsNone(chemical["name"])
+
+    @skipIf(_format_prediction_for_response is None, f"predict helpers unavailable: {PREDICT_HELPERS_IMPORT_ERROR}")
+    def test_format_prediction_for_response_strips_chemical_image_src(self):
+        formatted = _format_prediction_for_response({
+            "chemicalIdentifiers": {
+                "chemId": "C1CCCCC1",
+                "imageSrc": "data:image/png;base64,abc123",
+            },
+            "standardizedChemical": {
+                "chemId": "DTXSID123",
+                "imageSrc": "https://example.org/render.png",
+            },
+            "modelResults": {"predictionError": None},
+        })
+
+        self.assertNotIn("imageSrc", formatted["chemical"])
+        self.assertNotIn("imageSrc", formatted["standardizedChemical"])
+        self.assertEqual(formatted["result"], {"predictionError": None})
+
+    @skipIf(_coerce_json_safe is None, f"predict helpers unavailable: {PREDICT_HELPERS_IMPORT_ERROR}")
+    def test_coerce_json_safe_strips_nested_image_src(self):
+        sanitized = _coerce_json_safe({
+            "result": {
+                "chemical": {"chemId": "C1CCCCC1", "imageSrc": "abc123"},
+                "nested": [{"imageSrc": "def456", "name": "kept"}],
+            },
+        })
+
+        self.assertNotIn("imageSrc", sanitized["result"]["chemical"])
+        self.assertNotIn("imageSrc", sanitized["result"]["nested"][0])
+        self.assertEqual(sanitized["result"]["nested"][0]["name"], "kept")
