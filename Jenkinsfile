@@ -50,7 +50,7 @@ pipeline {
 		}
 		failure {
 			emailext (
-				to: "tkachenko.valery@gmail.com, Williams.Antony@epa.gov",
+				to: "tkachenko.valery@gmail.com",
 				recipientProviders: [
 					[$class: 'RequesterRecipientProvider'],
 					[$class: 'CulpritsRecipientProvider']
