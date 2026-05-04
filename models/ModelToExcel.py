@@ -231,7 +231,7 @@ class ExcelFormatter:
         sheet_name: str,
         df: pd.DataFrame,
         columns: Optional[list[str]] = None,
-        sig_figs: int = 3,
+        sig_figs: Union[int, str] = 3,
         col_widths: Optional[list[int]] = None
         ) -> Optional[pd.DataFrame]:
         """Set numerical columns to have the desired number of significant figures.
@@ -252,8 +252,13 @@ class ExcelFormatter:
         worksheet = writer.sheets[sheet_name]
         workbook = writer.book
 
-        sig_fig_format = workbook.add_format({"num_format": "#,##0." + "0" * (sig_figs - 1)})
-        
+        if isinstance(sig_figs, str) and sig_figs == "scientific":
+            sig_fig_format = workbook.add_format({"num_format": "0.00E+00"})
+        elif isinstance(sig_figs, int):
+            sig_fig_format = workbook.add_format({"num_format": "#,##0." + "0" * (sig_figs - 1)})
+        else:
+            logging.error(f"Invalid sig_figs value: {sig_figs}. sig_figs must be a positive integer, or 'scientific'")
+
         for col_idx in range(len(df.columns)):
             col_name = df.columns[col_idx]
             if col_name in columns:
@@ -1342,84 +1347,6 @@ class DataQuerier:
 
         return self.experimental_parameters
 
-    @staticmethod
-    def generate_consensus_ad(df_predictions, stats_dict, ad_measure_final, is_binary=False, is_external=False):
-        # Build list of AD columns
-        colsAD = [f"AD_{ad.replace(' ', '_')}" for ad in ad_measure_final]
-
-        # Inside/outside consensus AD masks
-        mask_all_true = df_predictions[colsAD].eq(True).all(axis=1)
-        mask_outside = ~mask_all_true
-
-        # Coverage of consensus AD
-        total_rows = len(df_predictions)
-        coverage = (mask_all_true.sum() / total_rows) if total_rows > 0 else float('nan')
-
-        # Prepare subsets for consistency
-        df_inside = df_predictions.loc[mask_all_true, ['exp', 'pred']].copy()
-        df_outside = df_predictions.loc[mask_outside, ['exp', 'pred']].copy()
-        valid_inside = df_inside.dropna(subset=['exp', 'pred'])
-        valid_outside = df_outside.dropna(subset=['exp', 'pred'])
-
-        # Check if task is binary (all non-null exp ∈ {0,1})
-        # exp_nonnull = df_predictions['exp'].dropna()
-        # is_binary = exp_nonnull.isin([0, 1]).all()
-
-        def safe_div(n, d):
-            return n / d if d else float('nan')
-
-        ad_measure = " and ".join(ad_measure_final)
-
-        if is_binary:
-            # Balanced Accuracy path
-            cutoff = 0.5  # change if you have a project-wide threshold
-
-            stats_inside = calculate_binary_statistics(valid_inside, cutoff=cutoff, tag=pc.TAG_TEST)
-            stats_outside = calculate_binary_statistics(valid_outside, cutoff=cutoff, tag=pc.TAG_TEST)
-
-            ba_inside = stats_inside.get(pc.BALANCED_ACCURACY + pc.TAG_TEST, float('nan'))
-            ba_outside = stats_outside.get(pc.BALANCED_ACCURACY + pc.TAG_TEST, float('nan'))
-            ba_ratio = safe_div(ba_inside, ba_outside) 
-
-            # print('for consensus ad:')
-            # print('rows outside', df_outside.shape[0])
-            # print('stats_outside', stats_outside)
-
-            stats = {
-                "ad_measure": ad_measure,
-                "BA_Test_inside_AD": ba_inside,
-                "BA_Test_outside_AD": ba_outside,
-                "ba_ratio": ba_ratio,
-                "Coverage_Test": coverage
-            }
-        else:
-            # Continuous (MAE) path via calculate_continuous_statistics
-            # mean_exp_training not needed for MAE; pass NaN and only read MAE from the result
-            try:
-                stats_inside = calculate_continuous_statistics(df_inside, mean_exp_training=float('nan'), tag=pc.TAG_TEST)
-                mae_inside = stats_inside.get(pc.MAE + pc.TAG_TEST, float('nan'))
-            except Exception:
-                mae_inside = float('nan')
-
-            try:
-                stats_outside = calculate_continuous_statistics(df_outside, mean_exp_training=float('nan'), tag=pc.TAG_TEST)
-                mae_outside = stats_outside.get(pc.MAE + pc.TAG_TEST, float('nan'))
-                            
-            except Exception:
-                mae_outside = float('nan')
-
-            mae_ratio = safe_div(mae_outside, mae_inside)
-
-            stats = {
-                "ad_measure": ad_measure,
-                "MAE_Test_inside_AD": mae_inside,
-                "MAE_Test_outside_AD": mae_outside,
-                "mae_ratio": mae_ratio,
-                "Coverage_Test": coverage
-            }
-
-        stats_dict[f"{ad_measure}{'_External' if is_external else ''}"] = stats
-
     def query_cover_sheet_df(self) -> pd.DataFrame:
         """Query database for model summary information to populate the cover sheet.
         
@@ -1497,9 +1424,9 @@ class DataQuerier:
                         "RSQ_External": [model.modelStatistics.get("PearsonRSQ_External", float("nan"))],
                         "RMSE_External": [model.modelStatistics.get("RMSE_External", float("nan"))],
                         "MAE_External": [model.modelStatistics.get("MAE_External", float("nan"))],
-                        "MAE_Test_Inside_AD_External": [model.modelStatistics.get("MAE_Test_inside_AD_External", float("nan"))],
-                        "MAE_Test_Outside_AD_External": [model.modelStatistics.get("MAE_Test_outside_AD_External", float("nan"))],
-                        "Coverage_Test_External": [model.modelStatistics.get("Coverage_Test_External", float("nan"))]
+                        "MAE_External_Inside_AD": [model.modelStatistics.get("MAE_External_inside_AD", float("nan"))],
+                        "MAE_External_Outside_AD": [model.modelStatistics.get("MAE_External_outside_AD", float("nan"))],
+                        "Coverage_External": [model.modelStatistics.get("Coverage_External", float("nan"))]
                     })
                 else:
                     temp_dict = {}
@@ -1526,7 +1453,7 @@ class DataQuerier:
                             .rename(columns={'AD': colAD})
                         )
 
-                    DataQuerier.generate_consensus_ad(temp_df, temp_dict, ad_measures, is_binary=model.is_binary, is_external=True)
+                    adu.generate_consensus_ad(temp_df, temp_dict, ad_measures, is_binary=model.is_binary, is_external=True)
                     temp_dict = temp_dict.get(f"{model.applicabilityDomainName}_External", {})
                     temp_dict.update(calculate_continuous_statistics(temp_df, calculate_mean_exp_training(model.df_preds_training_cv.copy()), tag="_External"))
                     statistics_dict.update({
@@ -1534,9 +1461,9 @@ class DataQuerier:
                         "RSQ_External": [temp_dict.get("PearsonRSQ_External", float("nan"))],  # Need to handle next 3
                         "RMSE_External": [temp_dict.get("RMSE_External", float("nan"))],
                         "MAE_External": [temp_dict.get("MAE_External", float("nan"))],
-                        "MAE_Test_Inside_AD_External": [temp_dict.get("MAE_Test_inside_AD", float("nan"))],
-                        "MAE_Test_Outside_AD_External": [temp_dict.get("MAE_Test_outside_AD", float("nan"))],
-                        "Coverage_Test_External": [temp_dict.get("Coverage_Test", float("nan"))]
+                        "MAE_External_Inside_AD": [temp_dict.get("MAE_External_inside_AD", float("nan"))],
+                        "MAE_External_Outside_AD": [temp_dict.get("MAE_External_outside_AD", float("nan"))],
+                        "Coverage_External": [temp_dict.get("Coverage_External", float("nan"))]
                     })
         else:
             # TODO: Add code to automatically generate these statistics from the model dataframes if modelStatistics is unpopulated
@@ -1566,9 +1493,9 @@ class DataQuerier:
                         "BA_External": [model.modelStatistics.get("BA_External", float("nan"))],
                         "SN_External": [model.modelStatistics.get("SN_External", float("nan"))],
                         "SP_External": [model.modelStatistics.get("SP_External", float("nan"))],
-                        "BA_Test_Inside_AD_External": [model.modelStatistics.get("BA_Test_inside_AD_External", float("nan"))],
-                        "BA_Test_Outside_AD_External": [model.modelStatistics.get("BA_Test_outside_AD_External", float("nan"))],
-                        "Coverage_Test_External": [model.modelStatistics.get("Coverage_Test_External", float("nan"))]
+                        "BA_External_Inside_AD": [model.modelStatistics.get("BA_External_inside_AD", float("nan"))],
+                        "BA_External_Outside_AD": [model.modelStatistics.get("BA_External_outside_AD", float("nan"))],
+                        "Coverage_External": [model.modelStatistics.get("Coverage_External", float("nan"))]
                     })
                 else:
                     temp_dict = {}
@@ -1595,7 +1522,7 @@ class DataQuerier:
                             .rename(columns={'AD': colAD})
                         )
 
-                    DataQuerier.generate_consensus_ad(temp_df, temp_dict, ad_measures, is_binary=model.is_binary, is_external=True)
+                    adu.generate_consensus_ad(temp_df, temp_dict, ad_measures, is_binary=model.is_binary, is_external=True)
                     temp_dict = temp_dict.get(f"{model.applicabilityDomainName}_External", {})
                     temp_dict.update(calculate_binary_statistics(temp_df, 0.5, tag="_External"))
                     statistics_dict.update({
@@ -1603,9 +1530,9 @@ class DataQuerier:
                         "BA_External": [temp_dict.get("BA_External", float("nan"))],  # Need to handle next 3
                         "SN_External": [temp_dict.get("SN_External", float("nan"))],
                         "SP_External": [temp_dict.get("SP_External", float("nan"))],
-                        "BA_Test_Inside_AD_External": [temp_dict.get("BA_Test_inside_AD", float("nan"))],
-                        "BA_Test_Outside_AD_External": [temp_dict.get("BA_Test_outside_AD", float("nan"))],
-                        "Coverage_Test_External": [temp_dict.get("Coverage_Test", float("nan"))]
+                        "BA_External_Inside_AD": [temp_dict.get("BA_External_inside_AD", float("nan"))],
+                        "BA_External_Outside_AD": [temp_dict.get("BA_External_outside_AD", float("nan"))],
+                        "Coverage_External": [temp_dict.get("Coverage_External", float("nan"))]
                     })
         statistics = pd.DataFrame(statistics_dict).apply(lambda x: round(x, 2) if isinstance(x, float) else x)
 
@@ -2147,9 +2074,9 @@ class DataTransformer:
                 "RSQ_External": [results_dict["model_statistics"].get("ext_stats", {}).get("PearsonRSQ_External", float("nan"))],
                 "RMSE_External": [results_dict["model_statistics"].get("ext_stats", {}).get("RMSE_External", float("nan"))],
                 "MAE_External": [results_dict["model_statistics"].get("ext_stats", {}).get("MAE_External", float("nan"))],
-                "MAE_Test_Inside_AD_External": [results_dict["model_statistics"].get("ext_stats_AD", {}).get("MAE_Test_inside_AD_External", float("nan"))],
-                "MAE_Test_Outside_AD_External": [results_dict["model_statistics"].get("ext_stats_AD", {}).get("MAE_Test_outside_AD_External", float("nan"))],
-                "Coverage_Test_External": [results_dict["model_statistics"].get("ext_stats_AD", {}).get("Coverage_Test_External", float("nan"))]
+                "MAE_External_Inside_AD": [results_dict["model_statistics"].get("ext_stats_AD", {}).get("MAE_External_inside_AD", float("nan"))],
+                "MAE_External_Outside_AD": [results_dict["model_statistics"].get("ext_stats_AD", {}).get("MAE_External_outside_AD", float("nan"))],
+                "Coverage_External": [results_dict["model_statistics"].get("ext_stats_AD", {}).get("Coverage_External", float("nan"))]
             })
         else:
             statistics_df = {
@@ -2170,9 +2097,9 @@ class DataTransformer:
                 "SN_External": [results_dict["model_statistics"].get("ext_stats", {}).get("SN_External", float("nan"))],
                 "SP_External": [results_dict["model_statistics"].get("ext_stats", {}).get("SP_External", float("nan"))],
                 "BA_External": [results_dict["model_statistics"].get("ext_stats", {}).get("BA_External", float("nan"))],
-                "BA_Test_Inside_AD_External": [results_dict["model_statistics"].get("ext_stats_AD", {}).get("BA_Test_inside_AD_External", float("nan"))],
-                "BA_Test_Outside_AD_External": [results_dict["model_statistics"].get("ext_stats_AD", {}).get("BA_Test_outside_AD_External", float("nan"))],
-                "Coverage_Test_External": [results_dict["model_statistics"].get("ext_stats_AD", {}).get("Coverage_Test_External", float("nan"))]
+                "BA_External_Inside_AD": [results_dict["model_statistics"].get("ext_stats_AD", {}).get("BA_External_inside_AD", float("nan"))],
+                "BA_External_Outside_AD": [results_dict["model_statistics"].get("ext_stats_AD", {}).get("BA_External_outside_AD", float("nan"))],
+                "Coverage_External": [results_dict["model_statistics"].get("ext_stats_AD", {}).get("Coverage_External", float("nan"))]
             })
         statistics_df = pd.DataFrame(statistics_df).apply(lambda x: round(x, 2) if isinstance(x, float) else x)
         return statistics_df
@@ -2751,9 +2678,9 @@ class ModelToExcel:
                 worksheet.write_number("B11", statistics.at[0, "RMSE_External"], format_number)
                 worksheet.write_number("C11", statistics.at[0, "MAE_External"], format_number)
 
-                worksheet.write_number("D11", statistics.at[0, "MAE_Test_Inside_AD_External"], format_number)
-                worksheet.write_number("E11", statistics.at[0, "MAE_Test_Outside_AD_External"], format_number)
-                worksheet.write_number("F11", statistics.at[0, "Coverage_Test_External"], format_number)
+                worksheet.write_number("D11", statistics.at[0, "MAE_External_Inside_AD"], format_number)
+                worksheet.write_number("E11", statistics.at[0, "MAE_External_Outside_AD"], format_number)
+                worksheet.write_number("F11", statistics.at[0, "Coverage_External"], format_number)
 
             img_path = os.path.join(os.getenv("PROJECT_ROOT"), "resources", "continuous_equations.png")
         
@@ -2806,9 +2733,9 @@ class ModelToExcel:
                 worksheet.write_number("B11", statistics.at[0, "Specificity_External"], format_number)
                 worksheet.write_number("C11", statistics.at[0, "BA_External"], format_number)
 
-                worksheet.write_number("D11", statistics.at[0, "BA_Test_Inside_AD_External"], format_number)
-                worksheet.write_number("E11", statistics.at[0, "BA_Test_Outside_AD_External"], format_number)
-                worksheet.write_number("F11", statistics.at[0, "Coverage_Test_External"], format_number)
+                worksheet.write_number("D11", statistics.at[0, "BA_External_Inside_AD"], format_number)
+                worksheet.write_number("E11", statistics.at[0, "BA_External_Outside_AD"], format_number)
+                worksheet.write_number("F11", statistics.at[0, "Coverage_External"], format_number)
 
             img_path = os.path.join(os.getenv("PROJECT_ROOT"), "resources", "binary_equations.png")
 
@@ -2907,7 +2834,9 @@ class ModelToExcel:
             else:
                 worksheet.freeze_panes(1 + [0, 1][self.create_records_superheaders], 0)
 
-            ExcelFormatter.set_column_width(writer, sheet_name, records, col_width_pad=6, how="header")
+            col_widths = ExcelFormatter.set_column_width(writer, sheet_name, records, col_width_pad=6, how="header")
+            ExcelFormatter.set_sig_figs(writer, sheet_name, records, columns=["Mapped Molweight", "QSAR Property Value"], sig_figs=3, col_widths=col_widths)
+            ExcelFormatter.set_sig_figs(writer, sheet_name, records, columns=["Value Point Estimate", "Value Max", "Value Min"], sig_figs="scientific", col_widths=col_widths)
             ExcelFormatter.add_filter(writer, sheet_name, records, has_subtotals=add_subtotals, has_superheaders=self.create_records_superheaders)
 
             # Check if a UserWarning about hyperlinks was raised
@@ -3079,6 +3008,7 @@ class ModelToExcel:
 
         col_widths = ExcelFormatter.set_column_width(writer, "Model Descriptor Values", model_descriptor_values, min_col_width=7, col_width_pad=5, how="header")
         ExcelFormatter.set_sig_figs(writer, "Model Descriptor Values", model_descriptor_values, columns=None, sig_figs=3, col_widths=col_widths)
+        ExcelFormatter.set_sig_figs(writer, "Model Descriptor Values", model_descriptor_values, columns=model_descriptor_values.columns.tolist()[9:], sig_figs="scientific", col_widths=col_widths)
         ExcelFormatter.add_filter(writer, "Model Descriptor Values", model_descriptor_values, has_subtotals=add_subtotals)
 
         return model_descriptor_values
@@ -3123,7 +3053,7 @@ class ModelToExcel:
             worksheet.freeze_panes(1, 0)
 
         col_widths = ExcelFormatter.set_column_width(writer, "Training CV Predictions", training_cv_predictions, min_col_width=min_col_width, col_width_pad=col_width_pad, how="header")
-        ExcelFormatter.set_sig_figs(writer, "Training CV Predictions", training_cv_predictions, columns=["Exp", "Pred", "Absolute Error"], sig_figs=3, col_widths=col_widths)
+        ExcelFormatter.set_sig_figs(writer, "Training CV Predictions", training_cv_predictions, columns=["Exp", "Pred", "Absolute Error", "Mol Weight"], sig_figs=3, col_widths=col_widths)
         ExcelFormatter.add_filter(writer, "Training CV Predictions", training_cv_predictions, has_subtotals=add_subtotals)
         
         ChartBuilder.add_plot(writer, workbook, "Training CV Predictions", "Training CV Predictions", training_cv_predictions, is_binary=self.model.is_binary, x_col=x_col, y_col=y_col, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, log_plot=self.log_plot, yx_offset_rows=yx_offset_rows, property_name=property_name, property_units=property_units, has_subtotals=add_subtotals)
@@ -3170,7 +3100,7 @@ class ModelToExcel:
             worksheet.freeze_panes(1, 0)
 
         col_widths = ExcelFormatter.set_column_width(writer, "Test Set Predictions", test_set_predictions, min_col_width=min_col_width, col_width_pad=col_width_pad, how="header")
-        ExcelFormatter.set_sig_figs(writer, "Test Set Predictions", test_set_predictions, columns=["Exp", "Pred", "Absolute Error"], sig_figs=3, col_widths=col_widths)
+        ExcelFormatter.set_sig_figs(writer, "Test Set Predictions", test_set_predictions, columns=["Exp", "Pred", "Absolute Error", "Mol Weight"], sig_figs=3, col_widths=col_widths)
         ExcelFormatter.add_filter(writer, "Test Set Predictions", test_set_predictions, has_subtotals=add_subtotals)
 
         ChartBuilder.add_plot(writer, workbook, "Test Set Predictions", "Test Set Predictions", test_set_predictions, is_binary=self.model.is_binary, x_col=x_col, y_col=y_col, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, log_plot=self.log_plot, yx_offset_rows=yx_offset_rows, property_name=property_name, property_units=property_units, has_subtotals=add_subtotals)
@@ -3218,7 +3148,7 @@ class ModelToExcel:
             worksheet.freeze_panes(1, 0)
 
         col_widths = ExcelFormatter.set_column_width(writer, "External Predictions", external_predictions, min_col_width=min_col_width, col_width_pad=col_width_pad, how="header")
-        ExcelFormatter.set_sig_figs(writer, "External Predictions", external_predictions, columns=["Exp", "Pred", "Absolute Error"], sig_figs=3, col_widths=col_widths)
+        ExcelFormatter.set_sig_figs(writer, "External Predictions", external_predictions, columns=["Exp", "Pred", "Absolute Error", "Mol Weight"], sig_figs=3, col_widths=col_widths)
         ExcelFormatter.add_filter(writer, "External Predictions", external_predictions, has_subtotals=add_subtotals)
         
         ChartBuilder.add_plot(writer, workbook, "External Predictions", "External Predictions", external_predictions, is_binary=self.model.is_binary, x_col=x_col, y_col=y_col, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, log_plot=self.log_plot, yx_offset_rows=yx_offset_rows, property_name=property_name, property_units=property_units, has_subtotals=add_subtotals)

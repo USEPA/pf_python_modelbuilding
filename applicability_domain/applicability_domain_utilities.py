@@ -4,6 +4,7 @@ Created on 1/9/23
 """
 from models import df_utilities as dfu
 from applicability_domain import ApplicabilityDomain as adm
+from StatsCalculator import calculate_binary_statistics, calculate_continuous_statistics
 
 # strTESTApplicabilityDomainEmbeddingCosine = "TEST Cosine Similarity Embedding Descriptors"
 # strTESTApplicabilityDomainEmbeddingEuclidean = "TEST Euclidean Distance Embedding Descriptors"
@@ -129,3 +130,88 @@ def generate_applicability_domain_with_preselected_descriptors_api_call(training
     r = requests.post(url=url, data=data, timeout=999999)
     # print(r.text)
     return r.text
+
+
+def generate_consensus_ad(df_predictions, stats_dict, ad_measure_final, is_binary=False, is_external=False):
+    # Build list of AD columns
+    colsAD = [f"AD_{ad.replace(' ', '_')}" for ad in ad_measure_final]
+
+    # Inside/outside consensus AD masks
+    mask_all_true = df_predictions[colsAD].eq(True).all(axis=1)
+    mask_outside = ~mask_all_true
+
+    # Coverage of consensus AD
+    total_rows = len(df_predictions)
+    coverage = (mask_all_true.sum() / total_rows) if total_rows > 0 else float('nan')
+
+    # Prepare subsets for consistency
+    df_inside = df_predictions.loc[mask_all_true, ['exp', 'pred']].copy()
+    df_outside = df_predictions.loc[mask_outside, ['exp', 'pred']].copy()
+    valid_inside = df_inside.dropna(subset=['exp', 'pred'])
+    valid_outside = df_outside.dropna(subset=['exp', 'pred'])
+
+    # Check if task is binary (all non-null exp ∈ {0,1})
+    # exp_nonnull = df_predictions['exp'].dropna()
+    # is_binary = exp_nonnull.isin([0, 1]).all()
+
+    def safe_div(n, d):
+        return n / d if d else float('nan')
+
+    ad_measure = " and ".join(ad_measure_final)
+
+    if is_external:
+        tag = pc.TAG_EXTERNAL
+        stat_insert = "External"
+    else:
+        tag = pc.TAG_TEST
+        stat_insert = "Test"
+
+    if is_binary:
+        # Balanced Accuracy path
+        cutoff = 0.5  # change if you have a project-wide threshold
+
+        stats_inside = calculate_binary_statistics(valid_inside, cutoff=cutoff, tag=tag)
+        stats_outside = calculate_binary_statistics(valid_outside, cutoff=cutoff, tag=tag)
+
+        ba_inside = stats_inside.get(pc.BALANCED_ACCURACY + tag, float('nan'))
+        ba_outside = stats_outside.get(pc.BALANCED_ACCURACY + tag, float('nan'))
+        ba_ratio = safe_div(ba_inside, ba_outside) 
+
+        # print('for consensus ad:')
+        # print('rows outside', df_outside.shape[0])
+        # print('stats_outside', stats_outside)
+
+        stats = {
+            "ad_measure": ad_measure,
+            f"BA_{stat_insert}_inside_AD": ba_inside,
+            f"BA_{stat_insert}_outside_AD": ba_outside,
+            f"ba_ratio": ba_ratio,
+            f"Coverage_{stat_insert}": coverage
+        }
+    else:
+        # Continuous (MAE) path via calculate_continuous_statistics
+        # mean_exp_training not needed for MAE; pass NaN and only read MAE from the result
+        try:
+            stats_inside = calculate_continuous_statistics(df_inside, mean_exp_training=float('nan'), tag=tag)
+            mae_inside = stats_inside.get(pc.MAE + tag, float('nan'))
+        except Exception:
+            mae_inside = float('nan')
+
+        try:
+            stats_outside = calculate_continuous_statistics(df_outside, mean_exp_training=float('nan'), tag=tag)
+            mae_outside = stats_outside.get(pc.MAE + tag, float('nan'))
+                        
+        except Exception:
+            mae_outside = float('nan')
+
+        mae_ratio = safe_div(mae_outside, mae_inside)
+
+        stats = {
+            "ad_measure": ad_measure,
+            f"MAE_{stat_insert}_inside_AD": mae_inside,
+            f"MAE_{stat_insert}_outside_AD": mae_outside,
+            f"mae_ratio": mae_ratio,
+            f"Coverage_{stat_insert}": coverage
+        }
+
+    stats_dict[f"{ad_measure}{' External' if is_external else ''}"] = stats

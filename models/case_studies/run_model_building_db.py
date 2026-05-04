@@ -46,12 +46,11 @@ from models.ModelToExcel import ModelToExcel, ModelDataObjects
 
 from StatsCalculator import calculate_binary_statistics, calculate_continuous_statistics
 
-
 import models.db_utilities.dataset_utilities_db as du
 
 from utils import row_to_json
 
-from applicability_domain import applicability_domain_utilities as  adu
+from applicability_domain import applicability_domain_utilities as adu
 
 from model_ws_db_utilities import ModelInitializer
 
@@ -322,7 +321,7 @@ class ModelLoader():
         created_at = datetime.now()
         model_statistics_rows = []
         
-        dict_list = ["training_stats", "test_stats", "cv_stats", "test_stats_AD"]
+        dict_list = ["training_stats", "test_stats", "cv_stats", "test_stats_AD", "ext_stats", "ext_stats_AD"]
         
         for dict_name in dict_list: 
             self.add_model_statistics(
@@ -1374,7 +1373,13 @@ def set_hyper_parameters(qsar_method, feature_selection, descriptor_set_name, sp
         
 
 def runAD(df_training, df_prediction, params, embedding, df_predictions, ad_measure, stats_dict, is_binary=False, is_external=False):
-    
+    if is_external:
+        tag = pc.TAG_EXTERNAL
+        stat_insert = "External"
+    else:
+        tag = pc.TAG_TEST
+        stat_insert = "Test"
+
     df_ad_output, _ = adu.generate_applicability_domain_with_preselected_descriptors_from_dfs(
         train_df=df_training.copy(), test_df=df_prediction.copy(),
         remove_log_p=params.remove_log_p_descriptors,
@@ -1423,19 +1428,19 @@ def runAD(df_training, df_prediction, params, embedding, df_predictions, ad_meas
     if is_binary:
         cutoff = getattr(params, 'cutoff', getattr(params, 'classification_cutoff', 0.5))
 
-        stats_inside = calculate_binary_statistics(df_inside, cutoff=cutoff, tag=pc.TAG_TEST)
-        stats_outside = calculate_binary_statistics(df_outside, cutoff=cutoff, tag=pc.TAG_TEST)
+        stats_inside = calculate_binary_statistics(df_inside, cutoff=cutoff, tag=tag)
+        stats_outside = calculate_binary_statistics(df_outside, cutoff=cutoff, tag=tag)
         
-        ba_inside = stats_inside.get(pc.BALANCED_ACCURACY + pc.TAG_TEST, float('nan'))
-        ba_outside = stats_outside.get(pc.BALANCED_ACCURACY + pc.TAG_TEST, float('nan'))
+        ba_inside = stats_inside.get(pc.BALANCED_ACCURACY + tag, float('nan'))
+        ba_outside = stats_outside.get(pc.BALANCED_ACCURACY + tag, float('nan'))
         ba_ratio = safe_div(ba_inside, ba_outside)
 
         stats = {
             "ad_measure": ad_measure,
-            "BA_Test_inside_AD": ba_inside,
-            "BA_Test_outside_AD": ba_outside,
+            f"BA_{stat_insert}_inside_AD": ba_inside,
+            f"BA_{stat_insert}_outside_AD": ba_outside,
             "ba_ratio": ba_ratio,
-            "Coverage_Test": coverage_ad
+            f"Coverage_{stat_insert}": coverage_ad
         }
 
     else:
@@ -1444,14 +1449,14 @@ def runAD(df_training, df_prediction, params, embedding, df_predictions, ad_meas
 
         # calculate_continuous_statistics raises if no valid predictions; handle gracefully
         try:
-            stats_inside = calculate_continuous_statistics(df_inside, mean_exp_training=mean_exp_training, tag=pc.TAG_TEST)
-            mae_inside = stats_inside.get(pc.MAE + pc.TAG_TEST, float('nan'))
+            stats_inside = calculate_continuous_statistics(df_inside, mean_exp_training=mean_exp_training, tag=tag)
+            mae_inside = stats_inside.get(pc.MAE + tag, float('nan'))
         except Exception:
             mae_inside = float('nan')
 
         try:
-            stats_outside = calculate_continuous_statistics(df_outside, mean_exp_training=mean_exp_training, tag=pc.TAG_TEST)
-            mae_outside = stats_outside.get(pc.MAE + pc.TAG_TEST, float('nan'))
+            stats_outside = calculate_continuous_statistics(df_outside, mean_exp_training=mean_exp_training, tag=tag)
+            mae_outside = stats_outside.get(pc.MAE + tag, float('nan'))
         except Exception:
             mae_outside = float('nan')
 
@@ -1459,13 +1464,13 @@ def runAD(df_training, df_prediction, params, embedding, df_predictions, ad_meas
 
         stats = {
             "ad_measure": ad_measure,
-            "MAE_Test_inside_AD": mae_inside,
-            "MAE_Test_outside_AD": mae_outside,
-            "mae_ratio": mae_ratio,
-            "Coverage_Test": coverage_ad
+            f"MAE_{stat_insert}_inside_AD": mae_inside,
+            f"MAE_{stat_insert}_outside_AD": mae_outside,
+            f"mae_ratio": mae_ratio,
+            f"Coverage_{stat_insert}": coverage_ad
         }
 
-    stats_dict[f"{ad_measure}{'_External' if is_external else ''}"] = stats
+    stats_dict[f"{ad_measure}{' External' if is_external else ''}"] = stats
     return df_predictions
 
 
@@ -1502,83 +1507,6 @@ def runAD(df_training, df_prediction, params, embedding, df_predictions, ad_meas
 
 
 # from your_metrics_script import calculate_continuous_statistics, calculate_binary_statistics
-
-def generate_consensus_ad(df_predictions, stats_dict, ad_measure_final, is_binary=False, is_external=False):
-    # Build list of AD columns
-    colsAD = [f"AD_{ad.replace(' ', '_')}" for ad in ad_measure_final]
-
-    # Inside/outside consensus AD masks
-    mask_all_true = df_predictions[colsAD].eq(True).all(axis=1)
-    mask_outside = ~mask_all_true
-
-    # Coverage of consensus AD
-    total_rows = len(df_predictions)
-    coverage = (mask_all_true.sum() / total_rows) if total_rows > 0 else float('nan')
-
-    # Prepare subsets for consistency
-    df_inside = df_predictions.loc[mask_all_true, ['exp', 'pred']].copy()
-    df_outside = df_predictions.loc[mask_outside, ['exp', 'pred']].copy()
-    valid_inside = df_inside.dropna(subset=['exp', 'pred'])
-    valid_outside = df_outside.dropna(subset=['exp', 'pred'])
-
-    # Check if task is binary (all non-null exp ∈ {0,1})
-    # exp_nonnull = df_predictions['exp'].dropna()
-    # is_binary = exp_nonnull.isin([0, 1]).all()
-
-    def safe_div(n, d):
-        return n / d if d else float('nan')
-
-    ad_measure = " and ".join(ad_measure_final)
-
-    if is_binary:
-        # Balanced Accuracy path
-        cutoff = 0.5  # change if you have a project-wide threshold
-
-        stats_inside = calculate_binary_statistics(valid_inside, cutoff=cutoff, tag=pc.TAG_TEST)
-        stats_outside = calculate_binary_statistics(valid_outside, cutoff=cutoff, tag=pc.TAG_TEST)
-
-        ba_inside = stats_inside.get(pc.BALANCED_ACCURACY + pc.TAG_TEST, float('nan'))
-        ba_outside = stats_outside.get(pc.BALANCED_ACCURACY + pc.TAG_TEST, float('nan'))
-        ba_ratio = safe_div(ba_inside, ba_outside) 
-
-        # print('for consensus ad:')
-        # print('rows outside', df_outside.shape[0])
-        # print('stats_outside', stats_outside)
-
-        stats = {
-            "ad_measure": ad_measure,
-            "BA_Test_inside_AD": ba_inside,
-            "BA_Test_outside_AD": ba_outside,
-            "ba_ratio": ba_ratio,
-            "Coverage_Test": coverage
-        }
-    else:
-        # Continuous (MAE) path via calculate_continuous_statistics
-        # mean_exp_training not needed for MAE; pass NaN and only read MAE from the result
-        try:
-            stats_inside = calculate_continuous_statistics(df_inside, mean_exp_training=float('nan'), tag=pc.TAG_TEST)
-            mae_inside = stats_inside.get(pc.MAE + pc.TAG_TEST, float('nan'))
-        except Exception:
-            mae_inside = float('nan')
-
-        try:
-            stats_outside = calculate_continuous_statistics(df_outside, mean_exp_training=float('nan'), tag=pc.TAG_TEST)
-            mae_outside = stats_outside.get(pc.MAE + pc.TAG_TEST, float('nan'))
-                        
-        except Exception:
-            mae_outside = float('nan')
-
-        mae_ratio = safe_div(mae_outside, mae_inside)
-
-        stats = {
-            "ad_measure": ad_measure,
-            "MAE_Test_inside_AD": mae_inside,
-            "MAE_Test_outside_AD": mae_outside,
-            "mae_ratio": mae_ratio,
-            "Coverage_Test": coverage
-        }
-
-    stats_dict[f"{ad_measure}{'_External' if is_external else ''}"] = stats
 
 def add_log_p_martin_columns(df_training, df_prediction, cross_validate, df_cv_dict=None):
     """
@@ -1631,7 +1559,7 @@ def check_for_inchi_key_matches(df_training, df_prediction_ext):
 def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None, cross_validate=True,
                 run_AD=True, feature_selection=True, fs_previous_embedding=True, params=None,
                 descriptor_set_name="WebTEST-default", splitting_name="RND_REPRESENTATIVE",
-                ad_measure_model=None, add_LOGP_Martin=False, write_to_db=False, user="tmarti02", create_detailed_excel=True,
+                ad_measure_model=None, add_LOGP_Martin=False, write_to_db=False, user="tmarti02",
                 create_unique_excel=True, append_to_models_folder=""):
     # TODO: reg model using descriptors from XGB or RF model
     # TODO: gcm model that uses reg with fragment descriptors such that it deletes rows with less than 3 instances and the associated rows
@@ -1808,7 +1736,7 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
                 df_pred_test = runAD(df_training, df_prediction, params, model.embedding, df_pred_test, ad_measure, stats_dict, is_binary=is_binary, is_external=False)
     
             if len(ad_measure) > 1:
-                generate_consensus_ad(df_pred_test, stats_dict, ad_measure_model, is_binary=is_binary, is_external=False)
+                adu.generate_consensus_ad(df_pred_test, stats_dict, ad_measure_model, is_binary=is_binary, is_external=False)
     
             # print(json.dumps(stats_dict,indent=4))
 
@@ -1864,12 +1792,13 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
             model.num_external = df_external.shape[0] if df_external is not None else 0        
             # model.num_external = df_prediction_ext.shape[0] if df_prediction_ext is not None else 0
 
+            ext_stats_dict = {}
             if run_AD:
                 for ad_measure in ad_measures:
-                    df_pred_ext = runAD(df_training, df_prediction_ext, params, model.embedding, df_pred_ext, ad_measure, stats_dict, is_binary=is_binary, is_external=True)
+                    df_pred_ext = runAD(df_training, df_prediction_ext, params, model.embedding, df_pred_ext, ad_measure, ext_stats_dict, is_binary=is_binary, is_external=True)
         
                 if len(ad_measure) > 1:
-                    generate_consensus_ad(df_pred_ext, stats_dict, ad_measure_model, is_binary=is_binary, is_external=True)
+                    adu.generate_consensus_ad(df_pred_ext, ext_stats_dict, ad_measure_model, is_binary=is_binary, is_external=True)
         
         # Check what happens with ext_stats and how to add new things to the results_dict under the model_details
         results_dict = Results.create_results_dict(
@@ -1881,7 +1810,8 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
             test_stats=test_stats,
             cv_stats=cv_stats,
             ext_stats=ext_stats,
-            stats_dict=stats_dict
+            stats_dict=stats_dict,
+            ext_stats_dict=ext_stats_dict
             )
                 
         if model.embedding:
@@ -1923,19 +1853,20 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         
         # print(create_unique_excel)
         
-        folder_path = Results.save_results(
-            model=model,
-            results_dict=results_dict,
-            df_pred_test=df_pred_test,
-            df_pred_training=df_pred_training,
-            df_pred_cv=df_pred_cv,
-            df_pred_ext=df_pred_ext,
-            df_test_model=df_test_model,
-            df_pv=df_pv,
-            folder_embedding=folder_embedding,
-            create_unique_excel=create_unique_excel,
-            append_to_models_folder=append_to_models_folder
-        )
+        # Less detailed Excel reports
+        # folder_path = Results.save_results(
+        #     model=model,
+        #     results_dict=results_dict,
+        #     df_pred_test=df_pred_test,
+        #     df_pred_training=df_pred_training,
+        #     df_pred_cv=df_pred_cv,
+        #     df_pred_ext=df_pred_ext,
+        #     df_test_model=df_test_model,
+        #     df_pv=df_pv,
+        #     folder_embedding=folder_embedding,
+        #     create_unique_excel=create_unique_excel,
+        #     append_to_models_folder=append_to_models_folder
+        # )
 
         logging.info(f"test set stats={json.dumps(test_stats, indent=4)}")
         logging.info(f"external set stats={json.dumps(ext_stats, indent=4)}")
@@ -1951,8 +1882,18 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         # Safely extract AD stats (could be missing or None)
         ad_stats = (results_dict.get('model_statistics') or {}).get('test_stats_AD') or {}
         external_ad_stats = results_dict.get('model_statistics', {}).get('ext_stats_AD', {}) or {}
-        external_ad_stats = {key + "_External": value for key, value in external_ad_stats.items() if value is not None}
-        
+        external_ad_stat_key_mapping = {
+            "ad_measure": "ad_measure_external",
+            "MAE_External_inside_AD": "MAE_External_inside_AD",
+            "MAE_External_outside_AD": "MAE_External_outside_AD",
+            "mae_ratio": "mae_ratio_external",
+            "Coverage_External": "Coverage_External",
+            "BA_External_inside_AD": "BA_External_inside_AD",
+            "BA_External_outside_AD": "BA_External_outside_AD",
+            "ba_ratio": "ba_ratio_external"
+        }
+        external_ad_stats = {external_ad_stat_key_mapping.get(key, key): value for key, value in external_ad_stats.items()}
+
         # Merge; any None becomes {} so it won’t break
         model.modelStatistics = (
             (training_stats or {})
@@ -1993,18 +1934,36 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
             
         # logging.info(f"model description={json.dumps(json.loads(model.get_model_description()), indent=4)}")
 
-        if create_detailed_excel:
-            logging.info("Creating DataFrames for detailed Excel report...")
+        logging.info("Creating DataFrames for detailed Excel report...")
 
-            # with open("local_model_data.pkl", "wb") as f:
-            #     pickle.dump({"model": model, "df_pv": df_pv, "df_gmd": df_dps, "df_gmd_external": df_dps_ext}, f)
+        # with open("local_model_data.pkl", "wb") as f:
+        #     pickle.dump({"model": model, "df_pv": df_pv, "df_gmd": df_dps, "df_gmd_external": df_dps_ext}, f)
 
-            detailed_summary_path = os.path.join(folder_path, f"detailed_summary.xlsx")
-
-            mdo = ModelDataObjects(model=model, df_pv=df_pv, df_gmd=df_dps, df_gmd_external=df_dps_ext)
-            mte = ModelToExcel(mdo, detailed_summary_path)
-            mte.create_excel()
+        subfolder = params.qsar_method + "_" + params.descriptor_set_name + "_fs=" + str(params.feature_selection)
+    
+        if folder_embedding is not None:
+            subfolder = subfolder + "_" + folder_embedding
             
+        path_segments = [PROJECT_ROOT, "data", "models"+append_to_models_folder, params.dataset_name, subfolder]
+        
+        folder_path = os.path.join(*path_segments)
+
+        json_path = os.path.join(folder_path, "results.json")
+        with open(json_path, 'w') as json_file:
+            json.dump(results_dict, json_file, indent=4)
+
+        if create_unique_excel:
+            identifier = int(time.time() * 1000)  # time in ms as identifier
+            identifier = f"_{identifier}"
+        else:
+            identifier = ""
+        
+        detailed_summary_path = os.path.join(folder_path, f"detailed_summary{identifier}.xlsx")
+
+        mdo = ModelDataObjects(model=model, df_pv=df_pv, df_gmd=df_dps, df_gmd_external=df_dps_ext)
+        mte = ModelToExcel(mdo, detailed_summary_path)
+        mte.create_excel()
+        
         if write_to_db:
             ml.load_model(user, model, results_dict, df_pred_training, df_pred_test, df_pred_cv, folder_path, df_pred_external=df_pred_ext)
 
@@ -2093,7 +2052,7 @@ class Results:
     
     
     @staticmethod
-    def create_results_dict(ad_measure_model, df_training, params, model, training_stats, test_stats, cv_stats, ext_stats, stats_dict):
+    def create_results_dict(ad_measure_model, df_training, params, model, training_stats, test_stats, cv_stats, ext_stats, stats_dict, ext_stats_dict):
     
         results_dict = {"params":params.to_dict()}
         
@@ -2130,7 +2089,6 @@ class Results:
         ms = {}
         results_dict["model_statistics"] = ms
 
-
         if len(stats_dict) > 0:
             ms["test_stats_all_AD"] = stats_dict
 
@@ -2155,9 +2113,9 @@ class Results:
             ms["test_stats_all_AD"] = stats_dict
         
         if len(stats_dict) > 0 and ext_stats:
-            external_ad = str_ad_measure_final + "_External"
-            ms["ext_stats_AD"] = stats_dict[external_ad]
-            ms["ext_stats_all_AD"] = stats_dict
+            external_ad = str_ad_measure_final + " External"
+            ms["ext_stats_AD"] = ext_stats_dict[external_ad]
+            ms["ext_stats_all_AD"] = ext_stats_dict
         
         return results_dict
 
