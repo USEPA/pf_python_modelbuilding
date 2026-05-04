@@ -27,6 +27,7 @@ import pandas as pd
 from io import StringIO
 import math
 import time
+from pathlib import Path
 
 import pickle 
 import re
@@ -1648,8 +1649,10 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
     
         df_training, df_prediction = du.get_training_prediction_instances(session, dataset_name, descriptor_set_name, params.splitting_name)
         
-        # print(df_training.shape)
-        
+        if df_training is None or df_prediction is None:
+            logging.error("Failed to retrieve training or prediction dataframes from the database. Ending execution of run_dataset.")
+            return
+
         s = df_training.iloc[:, 1]
         is_binary = s.isin([0, 1]).all()
         # print('is_binary', is_binary)
@@ -1782,6 +1785,7 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         model.df_preds_test = df_pred_test
 
         # New Attributes
+        ext_stats_dict = {}
         if dataset_name_ext is not None:
             model.external_dataset_name = dataset_name_ext if dataset_name_ext else None
             model.external_dataset_description = dataset_description_ext
@@ -1792,7 +1796,6 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
             model.num_external = df_external.shape[0] if df_external is not None else 0        
             # model.num_external = df_prediction_ext.shape[0] if df_prediction_ext is not None else 0
 
-            ext_stats_dict = {}
             if run_AD:
                 for ad_measure in ad_measures:
                     df_pred_ext = runAD(df_training, df_prediction_ext, params, model.embedding, df_pred_ext, ad_measure, ext_stats_dict, is_binary=is_binary, is_external=True)
@@ -1948,6 +1951,9 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         
         folder_path = os.path.join(*path_segments)
 
+        folder_path_path = Path(folder_path)
+        folder_path_path.mkdir(parents=True, exist_ok=True)
+        
         json_path = os.path.join(folder_path, "results.json")
         with open(json_path, 'w') as json_file:
             json.dump(results_dict, json_file, indent=4)
@@ -2224,21 +2230,25 @@ class Results:
         metrics_in_rows = sorted(set(r["Metric"] for r in rows))
         if len(metrics_in_rows) == 1:
             stat = metrics_in_rows[0]
-            print(f"Run\t{stat}_Test\t{stat}_Training_CV\t{stat}_External\t#_variables")
+            # print(f"Run\t{stat}_Test\t{stat}_Training_CV\t{stat}_External\t#_variables")
+            print(f"{'Run':<40} {'Test':<10} {'Training_CV':<15} {'External':<10} {'#_variables':<15}")
             for r in rows:
-                print(f"{r['Run']}\t{fmt3(r.get(f'{stat}_Test'))}\t{fmt3(r.get(f'{stat}_Training_CV'))}\t"
-                      f"{fmt3(r.get(f'{stat}_External'))}\t{r.get('#_variables', 'N/A')}")
+                # print(f"{r['Run']}\t{fmt3(r.get(f'{stat}_Test'))}\t{fmt3(r.get(f'{stat}_Training_CV'))}\t"
+                #       f"{fmt3(r.get(f'{stat}_External'))}\t{r.get('#_variables', 'N/A')}")
+                print(f"{r['Run']:<40} {fmt3(r.get(f'{stat}_Test')):<10} {fmt3(r.get(f'{stat}_Training_CV')):<15} {fmt3(r.get(f'{stat}_External')):<10} {r.get('#_variables', 'N/A'):<15}")
             # Build homogeneous DataFrame (only the active metric’s columns)
             columns = ["Run", f"{stat}_Test", f"{stat}_Training_CV", f"{stat}_External", "#_variables", "Embedding"]
             df_stats = pd.DataFrame(rows).reindex(columns=columns)
         else:
             # Mixed: print generic header once, include Metric column
-            print("Run\tMetric\tTest\tTraining_CV\tExternal\t#_variables")
+            # print("Run\tMetric\tTest\tTraining_CV\tExternal\t#_variables")
+            print(f"{'Run':<40} {'Metric':<10} {'Test':<10} {'Training_CV':<15} {'External':<10} {'#_variables':<15}")
             for r in rows:
                 stat_row = r["Metric"]
-                print(f"{r['Run']}\t{stat_row}\t{fmt3(r.get(f'{stat_row}_Test'))}\t"
-                      f"{fmt3(r.get(f'{stat_row}_Training_CV'))}\t{fmt3(r.get(f'{stat_row}_External'))}\t"
-                      f"{r.get('#_variables', 'N/A')}")
+                # print(f"{r['Run']}\t{stat_row}\t{fmt3(r.get(f'{stat_row}_Test'))}\t"
+                #       f"{fmt3(r.get(f'{stat_row}_Training_CV'))}\t{fmt3(r.get(f'{stat_row}_External'))}\t"
+                #       f"{r.get('#_variables', 'N/A')}")
+                print(f"{r['Run']:<40} {stat_row:<10} {fmt3(r.get(f'{stat_row}_Test')):<10} {fmt3(r.get(f'{stat_row}_Training_CV')):<15} {fmt3(r.get(f'{stat_row}_External')):<10} {r.get('#_variables', 'N/A'):<15}")
             # Include both MAE_* and BA_* columns in DataFrame; fill whichever applies per row
             columns = [
                 "Run",
