@@ -4,7 +4,6 @@ import os
 import threading
 from urllib.parse import urljoin
 
-import httpx
 import requests
 from requests.adapters import HTTPAdapter
 from indigo import Indigo
@@ -577,4 +576,3 @@ class QsarSmilesAPI:
         else:
             # Handle the error appropriately
             return response.text,  response.status_code
-

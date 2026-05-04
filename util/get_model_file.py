@@ -6,7 +6,6 @@ Created on Feb 11, 2026
 import logging
 import mimetypes
 from db import model_cache
-from util.database_utilities import DatabaseUtilities
 
 cache = {}
 
@@ -43,6 +42,8 @@ def fetch_model_file_from_postgres(model_id: int, type_id: int):
     using (fk_model_id, fk_file_type_id).
     Returns (raw_bytes, file_name, mime_type).
     """
+    from util.database_utilities import DatabaseUtilities
+
     du = DatabaseUtilities("qsar_models")  # schema if needed
     table = "model_files"
 

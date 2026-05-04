@@ -49,6 +49,26 @@ class _FakeChunkCollection:
         )
 
 
+class _FakeDetailsCollection:
+    def __init__(self):
+        self.rows = {}
+        self.indexes = []
+
+    def create_index(self, keys, unique=False, name=None):
+        self.indexes.append((keys, unique, name))
+
+    def replace_one(self, filter_doc, replacement, upsert=False):
+        self.rows[filter_doc["key"]] = dict(replacement)
+
+    def find_one(self, filter_doc, projection=None):
+        row = self.rows.get(filter_doc["key"])
+        if row is None or row.get("schema_version") != filter_doc.get("schema_version"):
+            return None
+        if projection:
+            return {key: row[key] for key in projection if key in row and key != "_id"}
+        return dict(row)
+
+
 class ModelCacheTests(unittest.TestCase):
     def test_blob_round_trip_uses_chunks(self):
         chunk_collection = _FakeChunkCollection()
@@ -72,6 +92,32 @@ class ModelCacheTests(unittest.TestCase):
 
         self.assertEqual(restored, payload)
         self.assertGreater(metadata["chunk_count"], 1)
+
+    def test_model_details_round_trip_uses_lightweight_collection(self):
+        details_collection = _FakeDetailsCollection()
+
+        class _FakeClient:
+            def close(self):
+                pass
+
+        with patch.object(model_cache, "connect_mongo", return_value=(_FakeClient(), None, None, None)), patch.object(
+            model_cache,
+            "_get_model_details_collection",
+            return_value=details_collection,
+        ):
+            payload = {
+                "modelId": 1065,
+                "propertyName": "Water solubility",
+                "embedding": ("a", "b"),
+                "performance": {"train": {"R2": float("nan")}},
+            }
+
+            model_cache.write_model_details(1065, "/api/predictor_models/model/file/", payload)
+            restored = model_cache.read_model_details(1065, "/api/predictor_models/model/file/")
+
+        self.assertEqual(restored["modelId"], 1065)
+        self.assertEqual(restored["embedding"], ["a", "b"])
+        self.assertIsNone(restored["performance"]["train"]["R2"])
 
 
 if __name__ == "__main__":

@@ -9,8 +9,6 @@ import logging
 import math
 import time
 
-import pypmml
-
 from scipy import stats
 
 import pandas as pd
@@ -18,28 +16,15 @@ import pandas as pd
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
-from sklearn2pmml.pipeline import PMMLPipeline as PMMLPipeline
-
-import model_ws_utilities
 from models import df_utilities as DFU, df_utilities
 from sklearn.neighbors import KNeighborsRegressor, KNeighborsClassifier
 from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
-from lightgbm import LGBMRegressor, LGBMClassifier
 
 from utils import to_json_safe
 
 from sklearn.svm import SVC, SVR
 from sklearn.linear_model import LogisticRegression, LinearRegression, Lasso
 from xgboost import XGBRegressor, XGBClassifier
-
-from sklearn_pmml_model.ensemble import PMMLForestClassifier
-from sklearn_pmml_model.ensemble import PMMLForestRegressor
-from sklearn_pmml_model.ensemble import PMMLGradientBoostingClassifier
-from sklearn_pmml_model.ensemble import PMMLGradientBoostingRegressor
-from sklearn_pmml_model.svm import PMMLSVC
-from sklearn_pmml_model.svm import PMMLSVR
-from sklearn_pmml_model.neighbors import PMMLKNeighborsRegressor
-from sklearn_pmml_model.neighbors import PMMLKNeighborsClassifier
 
 from sklearn.model_selection import GridSearchCV, KFold, cross_val_score
 from sklearn.metrics import balanced_accuracy_score
@@ -63,6 +48,32 @@ importance_type = 'weight' #default, TODO make a passable parameter to app when 
 # importance_type ='total_cover'
 
 SEED=42
+
+
+def _is_pypmml_model(model_obj):
+    try:
+        import pypmml
+    except ImportError:
+        return False
+
+    return isinstance(model_obj, pypmml.Model)
+
+
+def _is_pmml_pipeline(model_obj):
+    try:
+        from sklearn2pmml.pipeline import PMMLPipeline
+    except ImportError:
+        return False
+
+    return isinstance(model_obj, PMMLPipeline)
+
+
+def _is_pipeline_or_pmml_model(model_obj):
+    return (
+        isinstance(model_obj, Pipeline)
+        or _is_pmml_pipeline(model_obj)
+        or 'PMML' in type(model_obj).__name__
+    )
 
 def model_registry_model_obj(regressor_name, is_categorical):
     '''
@@ -97,6 +108,8 @@ def model_registry_model_obj(regressor_name, is_categorical):
         else:
             return XGBRegressor(importance_type=importance_type, random_state=SEED)
     elif regressor_name == 'lgb':
+        from lightgbm import LGBMRegressor, LGBMClassifier
+
         if is_categorical:
             # return XGBClassifier()
             # return XGBClassifier(use_label_encoder=False, eval_metric='logloss')
@@ -406,6 +419,14 @@ class Model:
         
 
     def set_model_obj_pmml_for_prediction(self, pmml_file_path, qsar_method):
+        from sklearn_pmml_model.ensemble import PMMLForestClassifier
+        from sklearn_pmml_model.ensemble import PMMLForestRegressor
+        from sklearn_pmml_model.ensemble import PMMLGradientBoostingClassifier
+        from sklearn_pmml_model.ensemble import PMMLGradientBoostingRegressor
+        from sklearn_pmml_model.svm import PMMLSVC
+        from sklearn_pmml_model.svm import PMMLSVR
+        from sklearn_pmml_model.neighbors import PMMLKNeighborsRegressor
+        from sklearn_pmml_model.neighbors import PMMLKNeighborsClassifier
 
         # print(type(self.model_obj))
         # print(pmml_file_path)
@@ -861,7 +882,7 @@ class Model:
 
         def get_model_input(features):
             model_input = features
-            if isinstance(self.model_obj, (Pipeline, PMMLPipeline)):
+            if isinstance(self.model_obj, Pipeline) or _is_pmml_pipeline(self.model_obj):
                 pipeline_steps = getattr(self.model_obj, 'steps', None) or []
                 if pipeline_steps:
                     first_step = pipeline_steps[0][1]
@@ -902,7 +923,7 @@ class Model:
 
         if self.is_binary:
 
-            if isinstance(self.model_obj, pypmml.Model):
+            if _is_pypmml_model(self.model_obj):
                 predictions = self.model_obj.predict(pred_features)
                 predictions = np.array(predictions[predictions.columns[
                     1]])  # probability of score=1 (continuous value) # TODO this might not work directly with kNN
@@ -913,8 +934,7 @@ class Model:
                     score = balanced_accuracy_score(label_series, preds)
                 else:
                     score = None
-            elif isinstance(self.model_obj, Pipeline) or isinstance(self.model_obj, PMMLPipeline) or 'PMML' in type(
-                    self.model_obj).__name__:
+            elif _is_pipeline_or_pmml_model(self.model_obj):
                 predictions = self.model_obj.predict_proba(model_input)[:,
                               1]  # probability of score=1 (continuous value)
 
@@ -944,11 +964,10 @@ class Model:
             # print([predictions])
             # print(type(self.model_obj).__name__)
 
-            if isinstance(self.model_obj, pypmml.Model):
+            if _is_pypmml_model(self.model_obj):
                 predictions = np.array(
                     predictions[predictions.columns[0]])  # TODO this might not work directly with kNN
-            elif isinstance(self.model_obj, Pipeline) or isinstance(self.model_obj, PMMLPipeline) or 'PMML' in type(
-                    self.model_obj).__name__:
+            elif _is_pipeline_or_pmml_model(self.model_obj):
                 predictions = np.array(predictions)
             else:
                 print("Cant handle ", type(self.model_obj))
@@ -1236,6 +1255,8 @@ class ModelDescription:
 
 
 def runExamples():
+    import model_ws_utilities
+
     # %% Test Script
     # opera_path = r"C:\Users\ncharest\OneDrive - Environmental Protection Agency (EPA)\Profile\Documents\data_sets\OPERA_TEST_DataSetsBenchmark\DataSetsBenchmark\Water solubility OPERA\{filename}"
     # training_df = DFU.load_df_from_file(opera_path.format(filename=r"Water solubility OPERA T.E.S.T. 5.1 training.tsv"),

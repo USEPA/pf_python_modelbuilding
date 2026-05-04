@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import os
 import pickle
 import zlib
@@ -23,6 +24,7 @@ MODEL_CACHE_SCHEMA_VERSION = 1
 DEFAULT_MODEL_COLLECTION_NAME = "predictor_models_model_cache"
 DEFAULT_CHUNK_COLLECTION_NAME = "predictor_models_model_cache_chunks"
 DEFAULT_FILE_COLLECTION_NAME = "predictor_models_model_file_cache"
+DEFAULT_DETAILS_COLLECTION_NAME = "predictor_models_model_details_cache"
 DEFAULT_CHUNK_SIZE_BYTES = 8 * 1024 * 1024
 
 
@@ -88,6 +90,10 @@ def _file_key(model_id: int | str, type_id: int | str) -> str:
     return f"{int(model_id)}:{int(type_id)}"
 
 
+def _details_key(model_id: int | str, file_api: str | None) -> str:
+    return f"{int(model_id)}:{file_api or ''}"
+
+
 def _owner_key(kind: str, key: str) -> str:
     return f"{kind}:{key}"
 
@@ -127,17 +133,17 @@ def connect_mongo():
         serverSelectionTimeoutMS=_get_int_env(
             "PREDICTOR_MODEL_ARTIFACT_MONGO_SERVER_SELECTION_TIMEOUT_MS",
             "MONGO_SERVER_SELECTION_TIMEOUT_MS",
-            default=3000,
+            default=10000,
         ),
         connectTimeoutMS=_get_int_env(
             "PREDICTOR_MODEL_ARTIFACT_MONGO_CONNECT_TIMEOUT_MS",
             "MONGO_CONNECT_TIMEOUT_MS",
-            default=3000,
+            default=10000,
         ),
         socketTimeoutMS=_get_int_env(
             "PREDICTOR_MODEL_ARTIFACT_MONGO_SOCKET_TIMEOUT_MS",
             "MONGO_SOCKET_TIMEOUT_MS",
-            default=5000,
+            default=60000,
         ),
     )
     if mongo_user:
@@ -160,6 +166,16 @@ def connect_mongo():
     return client, model_collection, chunk_collection, file_collection
 
 
+def _get_database(client):
+    return client[_get_env("MONGO_DATABASE", default="predictor")]
+
+
+def _get_model_details_collection(client):
+    return _get_database(client)[
+        _get_env("PREDICTOR_MODEL_DETAILS_MONGO_COLLECTION", default=DEFAULT_DETAILS_COLLECTION_NAME)
+    ]
+
+
 def ensure_indexes(model_collection, chunk_collection, file_collection) -> None:
     if ASCENDING is None:
         return
@@ -176,6 +192,56 @@ def ensure_indexes(model_collection, chunk_collection, file_collection) -> None:
         unique=True,
         name="model_type_idx",
     )
+
+
+def ensure_model_details_indexes(details_collection) -> None:
+    if ASCENDING is None:
+        return
+    details_collection.create_index([("key", ASCENDING)], unique=True, name="key_idx")
+    details_collection.create_index(
+        [("model_id", ASCENDING), ("file_api", ASCENDING)],
+        unique=True,
+        name="model_file_api_idx",
+    )
+
+
+def _bson_safe(value):
+    if isinstance(value, dict):
+        return {str(key): _bson_safe(item) for key, item in value.items()}
+
+    if isinstance(value, list):
+        return [_bson_safe(item) for item in value]
+
+    if isinstance(value, tuple):
+        return [_bson_safe(item) for item in value]
+
+    if isinstance(value, set):
+        return [_bson_safe(item) for item in value]
+
+    item_method = getattr(value, "item", None)
+    if callable(item_method):
+        try:
+            scalar_value = item_method()
+        except Exception:
+            scalar_value = None
+        else:
+            if scalar_value is not value:
+                return _bson_safe(scalar_value)
+
+    tolist_method = getattr(value, "tolist", None)
+    if callable(tolist_method):
+        try:
+            list_value = tolist_method()
+        except Exception:
+            list_value = None
+        else:
+            if list_value is not value:
+                return _bson_safe(list_value)
+
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+
+    return value
 
 
 def _blob_metadata(payload: bytes) -> tuple[bytes, int, int, int]:
@@ -297,6 +363,60 @@ def read_model_snapshot(model_id: int | str):
             client.close()
 
 
+def write_model_details(model_id: int | str, file_api: str | None, payload: dict[str, Any]) -> None:
+    client = None
+    try:
+        client, _, _, _ = connect_mongo()
+        details_collection = _get_model_details_collection(client)
+        ensure_model_details_indexes(details_collection)
+        key = _details_key(model_id, file_api)
+        now = datetime.now(timezone.utc)
+        details_collection.replace_one(
+            {"key": key},
+            {
+                "key": key,
+                "schema_version": MODEL_CACHE_SCHEMA_VERSION,
+                "model_id": int(model_id),
+                "file_api": file_api or "",
+                "format": "bson",
+                "payload": _bson_safe(payload),
+                "updated_at": now,
+            },
+            upsert=True,
+        )
+    except PyMongoError as exc:
+        raise ModelArtifactCacheUnavailableError(f"Mongo model details cache unavailable: {exc}") from exc
+    finally:
+        if client is not None:
+            client.close()
+
+
+def read_model_details(model_id: int | str, file_api: str | None) -> dict[str, Any] | None:
+    client = None
+    try:
+        client, _, _, _ = connect_mongo()
+        details_collection = _get_model_details_collection(client)
+        document = details_collection.find_one(
+            {
+                "key": _details_key(model_id, file_api),
+                "schema_version": MODEL_CACHE_SCHEMA_VERSION,
+            },
+            {"_id": 0, "payload": 1},
+        )
+        if not document:
+            return None
+        payload = document.get("payload")
+        return _bson_safe(payload) if isinstance(payload, dict) else None
+    except PyMongoError as exc:
+        raise ModelArtifactCacheUnavailableError(f"Mongo model details cache unavailable: {exc}") from exc
+    except Exception as exc:
+        logging.warning("Could not restore modelDetails model_id=%s from Mongo cache: %s", model_id, exc)
+        return None
+    finally:
+        if client is not None:
+            client.close()
+
+
 def write_model_file(
     model_id: int | str,
     type_id: int | str,
@@ -376,7 +496,9 @@ __all__ = [
     "model_artifact_cache_enabled",
     "postgres_fallback_enabled",
     "read_model_file",
+    "read_model_details",
     "read_model_snapshot",
     "write_model_file",
+    "write_model_details",
     "write_model_snapshot",
 ]

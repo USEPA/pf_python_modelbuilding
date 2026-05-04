@@ -12,12 +12,6 @@ from indigo import Indigo
 from indigo.renderer import IndigoRenderer
 import base64
 
-from sqlalchemy import create_engine
-from sqlalchemy.engine import URL
-from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy import text, bindparam
-
 from API_Utilities import QsarSmilesAPI, DescriptorsAPI
 
 from db.mongo_cache import (
@@ -28,7 +22,7 @@ from db import model_cache
 
 from util import predict_constants as pc
 
-from model_ws_utilities import models
+from model_registry import models
 from models import df_utilities as dfu
 from models.ModelBuilder import Model
 
@@ -38,7 +32,6 @@ import pandas as pd
 
 from sklearn.preprocessing import StandardScaler
 from sklearn.neighbors import NearestNeighbors
-import model_ws_utilities as mwu
 import numpy as np
 
 from util.units_converter import UnitsConverter
@@ -96,6 +89,25 @@ lock = threading.Lock()
 _engine_lock = threading.Lock()
 _engine = None
 _session_factory = None
+_sqlalchemy_text = None
+SQLAlchemyError = Exception
+
+
+def _load_sqlalchemy_error_type():
+    global SQLAlchemyError
+    if SQLAlchemyError is Exception:
+        from sqlalchemy.exc import SQLAlchemyError as sqlalchemy_error
+        SQLAlchemyError = sqlalchemy_error
+    return SQLAlchemyError
+
+
+def text(*args, **kwargs):
+    global _sqlalchemy_text
+    if _sqlalchemy_text is None:
+        from sqlalchemy import text as sqlalchemy_text
+        _sqlalchemy_text = sqlalchemy_text
+        _load_sqlalchemy_error_type()
+    return _sqlalchemy_text(*args, **kwargs)
 
 
 def _reset_runtime_state_after_fork():
@@ -163,17 +175,23 @@ def _inchi_key_from_smiles_cached(smiles_string):
 
 
 def getEngine():
-    global _engine, _session_factory
+    global _engine, _session_factory, SQLAlchemyError
 
     if _engine is None:
         with _engine_lock:
             if _engine is None:
+                from sqlalchemy import create_engine
+                from sqlalchemy.engine import URL
+                from sqlalchemy.exc import SQLAlchemyError as sqlalchemy_error
+                from sqlalchemy.orm import sessionmaker
+
+                SQLAlchemyError = sqlalchemy_error
                 connect_url = URL.create(
                     drivername='postgresql+psycopg2',
                     username=os.getenv('POSTGRES_USER'),
                     password=os.getenv('POSTGRES_PASSWORD'),
                     host=os.getenv('POSTGRES_HOST', 'localhost'),
-        port=int(os.getenv('POSTGRES_PORT', 5432)),
+                    port=int(os.getenv('POSTGRES_PORT', 5432)),
                     database=os.getenv('POSTGRES_DB')
                 )
 
@@ -1814,8 +1832,48 @@ class ModelPredictor:
     def get_model_details_dict_for_model_id(self, model_id, fileAPI=None):
         fileAPI = fileAPI or os.getenv("FILE_API_SERVER", pc.URL_LOCAL_FILE_API)
 
+        cached_model_details = self._read_model_details_cache(model_id, fileAPI)
+        if cached_model_details is not None:
+            return cached_model_details, None
+
         _, model_details_dict, model_error = self._resolve_model_context(model_id, fileAPI)
         return model_details_dict, model_error
+
+    @staticmethod
+    def _read_model_details_cache(model_id, fileAPI):
+        if not model_cache.model_artifact_cache_enabled():
+            return None
+
+        try:
+            cached_model_details = model_cache.read_model_details(model_id, fileAPI)
+        except model_cache.ModelArtifactCacheUnavailableError as exc:
+            logging.warning(
+                "Predictor model details cache unavailable for model_id=%s: %s",
+                model_id,
+                exc,
+            )
+            return None
+
+        if cached_model_details is not None:
+            logging.info("Loaded modelDetails model_id=%s from Mongo model details cache", model_id)
+        return cached_model_details
+
+    @staticmethod
+    def _write_model_details_cache(model_id, fileAPI, model_details_dict):
+        if not model_cache.model_artifact_cache_enabled() or not model_details_dict:
+            return
+
+        try:
+            model_cache.write_model_details(model_id, fileAPI, model_details_dict)
+            logging.info("Stored modelDetails model_id=%s in Mongo model details cache", model_id)
+        except model_cache.ModelArtifactCacheUnavailableError as exc:
+            logging.warning(
+                "Could not store modelDetails model_id=%s in Mongo model details cache: %s",
+                model_id,
+                exc,
+            )
+        except Exception:
+            logging.exception("Could not store modelDetails model_id=%s in Mongo model details cache", model_id)
 
     def _get_model_details_dict(self, model, fileAPI):
         cache = getattr(model, "_model_details_cache", None)
@@ -1836,6 +1894,7 @@ class ModelPredictor:
 
         payload = dict(modelDetails.__dict__)
         model._model_details_cache = {"file_api": fileAPI, "payload": payload}
+        self._write_model_details_cache(model.modelId, fileAPI, payload)
         return payload
 
     @staticmethod
@@ -2689,11 +2748,17 @@ class ModelPredictor:
             missing_smiles.append(smiles_list[idx])
             missing_cache_keys.append(cache_key)
 
+        model = None
         model_details_dict = None
-        if missing_indices or include_model_details:
-            fileAPI = os.getenv("FILE_API_SERVER", pc.URL_LOCAL_FILE_API)
+        fileAPI = os.getenv("FILE_API_SERVER", pc.URL_LOCAL_FILE_API)
 
-            model, model_details_dict, model_error = self._resolve_model_context(model_id, fileAPI)
+        if include_model_details:
+            model_details_dict = self._read_model_details_cache(model_id, fileAPI)
+
+        if missing_indices or (include_model_details and model_details_dict is None):
+            model, resolved_model_details_dict, model_error = self._resolve_model_context(model_id, fileAPI)
+            if model_details_dict is None:
+                model_details_dict = resolved_model_details_dict
             if model is None:
                 for idx, smiles in zip(missing_indices, missing_smiles):
                     results[idx] = self._build_prediction_error_report(smiles, None, model_error)
@@ -2852,6 +2917,12 @@ class ModelPredictor:
 
         row_as_dict = {"canonicalSmiles": qsarSmiles}
         mi = ModelInitializer()
+
+        if not model_cache.postgres_fallback_enabled():
+            row_as_dict["name"] = qsarSmiles
+            with _MISSING_NEIGHBOR_DSS_TOX_LOCK:
+                _MISSING_NEIGHBOR_DSS_TOX_CACHE[cache_key] = dict(row_as_dict)
+            return dict(row_as_dict)
 
         try:
             session = getSession()
@@ -3214,6 +3285,8 @@ class ModelPredictor:
                     file.write(smiles + "\terror descriptors")
 
                     continue
+
+                import model_ws_utilities as mwu
 
                 pred_results = json.loads(mwu.call_do_predictions_from_df(df_prediction, model))
                 pred_value = pred_results[0]['pred']
