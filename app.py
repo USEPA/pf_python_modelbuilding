@@ -10,11 +10,11 @@ import io
 import logging
 import os
 
-os.environ["PREDICTOR_MODEL_ARTIFACT_CACHE_ENABLED"] = "true"
-os.environ["MODEL_ARTIFACT_CACHE_ENABLED"] = "true"
-os.environ["PREDICTOR_MODEL_POSTGRES_FALLBACK_ENABLED"] = "false"
-os.environ["MODEL_POSTGRES_FALLBACK_ENABLED"] = "false"
-os.environ["MONGO_CACHE_ENABLED"] = "true"
+os.environ.setdefault("PREDICTOR_MODEL_ARTIFACT_CACHE_ENABLED", "true")
+os.environ.setdefault("MODEL_ARTIFACT_CACHE_ENABLED", "true")
+os.environ.setdefault("PREDICTOR_MODEL_POSTGRES_FALLBACK_ENABLED", "false")
+os.environ.setdefault("MODEL_POSTGRES_FALLBACK_ENABLED", "false")
+os.environ.setdefault("MONGO_CACHE_ENABLED", "true")
 
 import coloredlogs
 import connexion
@@ -113,11 +113,21 @@ _metadata = None
 def get_metadata():
     global _metadata
     if _metadata is None:
-        model_details_array = collect_model_details_for_metadata(list(range(1065, 1071)))
-        _metadata = dict(
+        model_ids = list(range(1065, 1071))
+        model_details_array = collect_model_details_for_metadata(model_ids)
+        metadata = dict(
             version=get_version(),
             endpoints=model_details_array
         )
+        if len(model_details_array) == len(model_ids):
+            _metadata = metadata
+        else:
+            logging.warning(
+                "Metadata endpoints incomplete; not caching response expected=%s actual=%s",
+                len(model_ids),
+                len(model_details_array),
+            )
+        return metadata
 
     return _metadata
 
