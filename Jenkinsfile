@@ -1,9 +1,11 @@
 pipeline {
 	agent any
 	environment {
-		DOCKER_REGISTRY = 'docker.sciencedataexperts.com'
 		IMAGE_TAG = 'latest'
 	}
+	options {
+        withFolderProperties()
+    }
 
 	stages {
 		stage('Setup Environment') {
@@ -32,8 +34,8 @@ pipeline {
 
 		stage('Deploy') {
 			steps {
-				withKubeConfig([credentialsId: 'k8s', serverUrl: 'https://k8s.sciencedataexperts.com:6443']) {
-					sh "kubectl rollout restart deployment predictor-models -n models-dev"
+				withKubeConfig([credentialsId: 'k8s', serverUrl: "$K8S_API"]) {
+					sh "kubectl rollout restart deployment predictor-models -n $K8S_NAMESPACE"
 				}
 			}
 		}
