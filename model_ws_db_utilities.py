@@ -12,12 +12,6 @@ from indigo import Indigo
 from indigo.renderer import IndigoRenderer
 import base64
 
-from sqlalchemy import create_engine
-from sqlalchemy.engine import URL
-from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy import text, bindparam
-
 from API_Utilities import QsarSmilesAPI, DescriptorsAPI
 
 from db.mongo_cache import (
@@ -96,6 +90,25 @@ lock = threading.Lock()
 _engine_lock = threading.Lock()
 _engine = None
 _session_factory = None
+_sqlalchemy_text = None
+SQLAlchemyError = Exception
+
+
+def _load_sqlalchemy_error_type():
+    global SQLAlchemyError
+    if SQLAlchemyError is Exception:
+        from sqlalchemy.exc import SQLAlchemyError as sqlalchemy_error
+        SQLAlchemyError = sqlalchemy_error
+    return SQLAlchemyError
+
+
+def text(*args, **kwargs):
+    global _sqlalchemy_text
+    if _sqlalchemy_text is None:
+        from sqlalchemy import text as sqlalchemy_text
+        _sqlalchemy_text = sqlalchemy_text
+        _load_sqlalchemy_error_type()
+    return _sqlalchemy_text(*args, **kwargs)
 
 
 def _reset_runtime_state_after_fork():
@@ -163,17 +176,23 @@ def _inchi_key_from_smiles_cached(smiles_string):
 
 
 def getEngine():
-    global _engine, _session_factory
+    global _engine, _session_factory, SQLAlchemyError
 
     if _engine is None:
         with _engine_lock:
             if _engine is None:
+                from sqlalchemy import create_engine
+                from sqlalchemy.engine import URL
+                from sqlalchemy.exc import SQLAlchemyError as sqlalchemy_error
+                from sqlalchemy.orm import sessionmaker
+
+                SQLAlchemyError = sqlalchemy_error
                 connect_url = URL.create(
                     drivername='postgresql+psycopg2',
                     username=os.getenv('POSTGRES_USER'),
                     password=os.getenv('POSTGRES_PASSWORD'),
                     host=os.getenv('POSTGRES_HOST', 'localhost'),
-        port=int(os.getenv('POSTGRES_PORT', 5432)),
+                    port=int(os.getenv('POSTGRES_PORT', 5432)),
                     database=os.getenv('POSTGRES_DB')
                 )
 
@@ -2852,6 +2871,12 @@ class ModelPredictor:
 
         row_as_dict = {"canonicalSmiles": qsarSmiles}
         mi = ModelInitializer()
+
+        if not model_cache.postgres_fallback_enabled():
+            row_as_dict["name"] = qsarSmiles
+            with _MISSING_NEIGHBOR_DSS_TOX_LOCK:
+                _MISSING_NEIGHBOR_DSS_TOX_CACHE[cache_key] = dict(row_as_dict)
+            return dict(row_as_dict)
 
         try:
             session = getSession()

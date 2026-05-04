@@ -10,7 +10,6 @@ numpy==1.26.4
 openpyxl
 pandas==2.3.3
 pillow==12.1.1
-psycopg2-binary==2.9.11
 pymongo==4.15.5
 pymysql==1.1.2
 pypmml==0.9.17
@@ -21,7 +20,6 @@ scipy==1.13.1
 sklearn-genetic-opt==0.12.0
 sklearn-pmml-model==1.0.7
 sklearn2pmml==0.125.0
-SQLAlchemy==2.0.45
 starlette==0.50.0
 uvicorn==0.38.0
 xgboost==2.1.1

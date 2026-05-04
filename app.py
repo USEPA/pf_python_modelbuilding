@@ -10,6 +10,12 @@ import io
 import logging
 import os
 
+os.environ["PREDICTOR_MODEL_ARTIFACT_CACHE_ENABLED"] = "true"
+os.environ["MODEL_ARTIFACT_CACHE_ENABLED"] = "true"
+os.environ["PREDICTOR_MODEL_POSTGRES_FALLBACK_ENABLED"] = "false"
+os.environ["MODEL_POSTGRES_FALLBACK_ENABLED"] = "false"
+os.environ["MONGO_CACHE_ENABLED"] = "true"
+
 import coloredlogs
 import connexion
 from connexion.middleware import MiddlewarePosition
