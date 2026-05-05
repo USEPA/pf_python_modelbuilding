@@ -2145,7 +2145,7 @@ class Results:
     def summarize_model_stats(
         dataset_name,
         excel_name="model_stats.xlsx",
-        sheet_name="stats",
+        sheet_name="Statistics",
         col_width_pad=4,
         min_col_width=5,
         append_to_models_folder="",
@@ -2186,7 +2186,7 @@ class Results:
                 return "N/A"
     
         # Collect rows (don’t print yet so we can decide header once)
-        for json_path in Path(folder).glob("*/results.json"):
+        for json_path in Path(folder).glob("*/results*.json"):
             try:
                 with json_path.open("r", encoding="utf-8") as f:
                     results = json.load(f)

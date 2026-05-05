@@ -387,6 +387,12 @@ def run_rifm_rf_models():
 
     for i in range(0, 10):
         for descriptor_coefficient in [0.001, 0.006, 0.01, None]:
+            # Jump to correct point in run
+            if i < 4:
+                continue
+            if i == 4 and descriptor_coefficient is not None:
+                continue
+            
             params = ParametersImportance(qsar_method=qsar_method, feature_selection=feature_selection, hyperparameter_grid=grid,
                                             descriptor_set_name=descriptor_set_name, dataset_name=dataset_name,
                                             splitting_name=splitting_name, ad_measure=ad_measure_model)
@@ -401,11 +407,15 @@ def run_rifm_rf_models():
             params.max_descriptor_count = (i+1)*10
             params.descriptor_coefficient = descriptor_coefficient
 
+            logging.info(f"Running iteration {i}:\n\tmin_descriptor_count: {params.min_descriptor_count},\n\tmax_descriptor_count: {params.max_descriptor_count},\n\tdescriptor_coefficient: {params.descriptor_coefficient}")
+
             run_dataset(dataset_name=dataset_name, qsar_method=qsar_method, feature_selection=feature_selection, ad_measure_model=ad_measure_model,
                         write_to_db=write_to_db, unique_identifier=unique_identifier,
                         append_to_models_folder=append_to_models_folder,
                         params=params)  # OK
     
+    r = Results()
+    r.summarize_model_stats(dataset_name, append_to_models_folder=append_to_models_folder)
 
 def main():
     
