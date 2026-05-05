@@ -1561,7 +1561,7 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
                 run_AD=True, feature_selection=True, fs_previous_embedding=True, params=None,
                 descriptor_set_name="WebTEST-default", splitting_name="RND_REPRESENTATIVE",
                 ad_measure_model=None, add_LOGP_Martin=False, write_to_db=False, user="tmarti02",
-                create_unique_excel=True, append_to_models_folder=""):
+                unique_identifier=None, append_to_models_folder=""):
     # TODO: reg model using descriptors from XGB or RF model
     # TODO: gcm model that uses reg with fragment descriptors such that it deletes rows with less than 3 instances and the associated rows
     # TODO does add the LOGP predicted from my LOGP model improve the results?
@@ -1953,19 +1953,35 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
 
         folder_path_path = Path(folder_path)
         folder_path_path.mkdir(parents=True, exist_ok=True)
-        
-        json_path = os.path.join(folder_path, "results.json")
-        with open(json_path, 'w') as json_file:
-            json.dump(results_dict, json_file, indent=4)
 
-        if create_unique_excel:
+        # Fuzzy matching on excel_identifier
+        if "stat" in unique_identifier:
+            if "ext" in unique_identifier:
+                unique_identifier = "external_stat"
+            elif "test" in unique_identifier:
+                unique_identifier = "test_stat"
+
+        # Prepare the unique identifier based on the method specified
+        if unique_identifier == "time":
             identifier = int(time.time() * 1000)  # time in ms as identifier
             identifier = f"_{identifier}"
+        elif unique_identifier == "external_stat" and ext_stats is not None and not ext_stats.empty:
+            identifier = f"{"RMSE" if ext_stats.get("RMSE_External") else "BA"}_external_{ext_stats.get("RMSE_External", ext_stats.get("BA_External", "")):.3f}"
+        elif unique_identifier == "test_stat" or (unique_identifier == "external_stat" and (ext_stats is None or ext_stats.empty)):
+            identifier = f"{"RMSE" if test_stats.get("RMSE_Test") else "BA"}_test_{test_stats.get("RMSE_Test", test_stats.get("BA_Test", "")):.3f}"
         else:
-            identifier = ""
+            identifier = None
         
-        detailed_summary_path = os.path.join(folder_path, f"detailed_summary{identifier}.xlsx")
-
+        if identifier is None:
+            json_path = os.path.join(folder_path, "results.json")
+            detailed_summary_path = os.path.join(folder_path, f"detailed_summary.xlsx")
+        else:
+            json_path = os.path.join(folder_path, f"results_{identifier}.json")
+            detailed_summary_path = os.path.join(folder_path, f"detailed_summary_{identifier}.xlsx")
+        
+        with open(json_path, 'w') as json_file:
+            json.dump(results_dict, json_file, indent=4)
+        
         mdo = ModelDataObjects(model=model, df_pv=df_pv, df_gmd=df_dps, df_gmd_external=df_dps_ext)
         mte = ModelToExcel(mdo, detailed_summary_path)
         mte.create_excel()
@@ -1984,7 +2000,7 @@ class Results:
 
     @staticmethod
     def save_results(model, results_dict, df_pred_test, df_pred_training, df_pred_cv=None, df_pred_ext=None, df_test_model=None, df_pv=None,
-                     folder_embedding=None, create_unique_excel=True, append_to_models_folder=""):
+                     folder_embedding=None, excel_identifier=None, append_to_models_folder=""):
         params = results_dict["params"]
         
         # print (json.dumps(params))
@@ -2014,7 +2030,7 @@ class Results:
         
         os.makedirs(folder_path, exist_ok=True)
         
-        identifier = int(time.time() * 1000)  # time in ms as identifier
+        # identifier = int(time.time() * 1000)  # time in ms as identifier
         
         # prediction_csv_path = os.path.join(folder_path, f"predictions_{identifier}.csv")    
         prediction_csv_path = os.path.join(folder_path, f"test set predictions.csv")
@@ -2027,8 +2043,8 @@ class Results:
 
         # print(create_unique_excel)
         
-        if create_unique_excel:
-            prediction_excel_path = os.path.join(folder_path, f"predictions_{identifier}.xlsx")
+        if excel_identifier:
+            prediction_excel_path = os.path.join(folder_path, f"predictions_{excel_identifier}.xlsx")
         else:
             prediction_excel_path = os.path.join(folder_path, f"predictions.xlsx")
         
