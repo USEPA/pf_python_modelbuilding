@@ -3,6 +3,8 @@ import unittest
 from util.prediction_cache_key_utils import (
     build_prediction_cache_key,
     ensure_chemical_inchi_key,
+    inchi_key_connectivity_block,
+    inchi_keys_match_connectivity,
     normalize_inchi_key,
     standardized_chemical_changes_identity,
 )
@@ -19,6 +21,20 @@ class TestPredictionCacheKeyUtils(unittest.TestCase):
         self.assertIsNone(normalize_inchi_key("not-an-inchikey"))
         self.assertIsNone(normalize_inchi_key("N/A"))
         self.assertIsNone(normalize_inchi_key(None))
+
+    def test_inchi_key_connectivity_block_returns_first_block(self):
+        self.assertEqual(
+            inchi_key_connectivity_block("ZWBAMYVPMDSJGQ-PKSOQXRJNA-N"),
+            "ZWBAMYVPMDSJGQ",
+        )
+
+    def test_inchi_keys_match_connectivity_ignores_fixed_h_difference(self):
+        self.assertTrue(
+            inchi_keys_match_connectivity(
+                "ZWBAMYVPMDSJGQ-UHFFFAOYSA-N",
+                "ZWBAMYVPMDSJGQ-PKSOQXRJNA-N",
+            )
+        )
 
     def test_ensure_chemical_inchi_key_prefers_canonical_smiles(self):
         def smiles_to_inchi_key(smiles):
@@ -86,6 +102,18 @@ class TestPredictionCacheKeyUtils(unittest.TestCase):
         )
 
         self.assertTrue(changed)
+
+    def test_standardized_chemical_changes_identity_allows_same_connectivity_block(self):
+        changed = standardized_chemical_changes_identity(
+            "OC(C(C(C(C(C(C(F)(F)F)(F)F)(F)F)(F)F)(F)F)(F)F)=O",
+            {
+                "canonicalSmiles": "OC(=O)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)F",
+                "inchiKey": "ZWBAMYVPMDSJGQ-PKSOQXRJNA-N",
+            },
+            lambda smiles: "ZWBAMYVPMDSJGQ-UHFFFAOYSA-N",
+        )
+
+        self.assertFalse(changed)
 
 
 if __name__ == "__main__":

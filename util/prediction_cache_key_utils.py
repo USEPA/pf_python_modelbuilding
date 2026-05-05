@@ -19,6 +19,19 @@ def normalize_inchi_key(value: Any) -> str | None:
     return inchi_key
 
 
+def inchi_key_connectivity_block(value: Any) -> str | None:
+    inchi_key = normalize_inchi_key(value)
+    if inchi_key is None:
+        return None
+    return inchi_key.split("-", 1)[0]
+
+
+def inchi_keys_match_connectivity(left: Any, right: Any) -> bool:
+    left_block = inchi_key_connectivity_block(left)
+    right_block = inchi_key_connectivity_block(right)
+    return bool(left_block and right_block and left_block == right_block)
+
+
 def ensure_chemical_inchi_key(
     chemical: Any,
     smiles_to_inchi_key: Callable[[Any], str | None],
@@ -78,7 +91,7 @@ def standardized_chemical_changes_identity(
     standardized_inchi_key = _chemical_inchi_key(standardized_chemical, smiles_to_inchi_key)
 
     if input_inchi_key and standardized_inchi_key:
-        return input_inchi_key != standardized_inchi_key
+        return not inchi_keys_match_connectivity(input_inchi_key, standardized_inchi_key)
 
     if input_inchi_key or standardized_inchi_key:
         return True
