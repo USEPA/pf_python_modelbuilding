@@ -13,6 +13,7 @@ import argparse
 import logging
 import os
 import sys
+import time
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -177,7 +178,22 @@ def parse_args() -> argparse.Namespace:
         "--mongo-socket-timeout-ms",
         type=int,
         default=None,
-        help="Override Mongo socketTimeoutMS for this backfill run. Defaults to BACKFILL_MONGO_SOCKET_TIMEOUT_MS or 300000.",
+        help=(
+            "Override Mongo socketTimeoutMS for this backfill run. Use 0 to disable. "
+            "Defaults to BACKFILL_MONGO_SOCKET_TIMEOUT_MS or PyMongo's no-timeout default."
+        ),
+    )
+    parser.add_argument(
+        "--mongo-cursor-retries",
+        type=int,
+        default=3,
+        help="Retry a Mongo scan page this many times after a cursor read failure.",
+    )
+    parser.add_argument(
+        "--mongo-cursor-retry-sleep",
+        type=float,
+        default=5.0,
+        help="Seconds to sleep between Mongo scan page retries.",
     )
     parser.add_argument(
         "--progress-every",
@@ -219,19 +235,18 @@ def configure_logging(level_name: str) -> None:
 
 def build_mongo_client(args: argparse.Namespace) -> MongoClient:
     timeout_ms = _env_int("MONGO_SERVER_SELECTION_TIMEOUT_MS", 5000)
-    socket_timeout_ms = args.mongo_socket_timeout_ms
-    if socket_timeout_ms is None:
-        socket_timeout_ms = _env_int("BACKFILL_MONGO_SOCKET_TIMEOUT_MS", 300000)
+    socket_timeout_ms = resolve_mongo_socket_timeout_ms(args)
     app_name = os.getenv("MONGO_APP_NAME", "predictor_models_cache_identifier_backfill")
 
     if args.mongo_uri:
-        return MongoClient(
-            args.mongo_uri,
-            appname=app_name,
-            serverSelectionTimeoutMS=timeout_ms,
-            connectTimeoutMS=_env_int("MONGO_CONNECT_TIMEOUT_MS", timeout_ms),
-            socketTimeoutMS=socket_timeout_ms,
-        )
+        client_kwargs = {
+            "appname": app_name,
+            "serverSelectionTimeoutMS": timeout_ms,
+            "connectTimeoutMS": _env_int("MONGO_CONNECT_TIMEOUT_MS", timeout_ms),
+        }
+        if socket_timeout_ms is not None:
+            client_kwargs["socketTimeoutMS"] = socket_timeout_ms
+        return MongoClient(args.mongo_uri, **client_kwargs)
 
     client_kwargs = {
         "host": os.getenv("MONGO_HOST", "localhost"),
@@ -240,8 +255,9 @@ def build_mongo_client(args: argparse.Namespace) -> MongoClient:
         "appname": app_name,
         "serverSelectionTimeoutMS": timeout_ms,
         "connectTimeoutMS": _env_int("MONGO_CONNECT_TIMEOUT_MS", timeout_ms),
-        "socketTimeoutMS": socket_timeout_ms,
     }
+    if socket_timeout_ms is not None:
+        client_kwargs["socketTimeoutMS"] = socket_timeout_ms
 
     username = os.getenv("MONGO_USER", "root")
     password = os.getenv("MONGO_PASSWORD")
@@ -251,6 +267,21 @@ def build_mongo_client(args: argparse.Namespace) -> MongoClient:
         client_kwargs["password"] = password
 
     return MongoClient(**client_kwargs)
+
+
+def resolve_mongo_socket_timeout_ms(args: argparse.Namespace) -> int | None:
+    socket_timeout_ms = args.mongo_socket_timeout_ms
+    if socket_timeout_ms is None:
+        raw_value = os.getenv("BACKFILL_MONGO_SOCKET_TIMEOUT_MS")
+        if raw_value is None:
+            return None
+        socket_timeout_ms = int(raw_value)
+
+    if socket_timeout_ms < 0:
+        raise ValueError("--mongo-socket-timeout-ms cannot be negative")
+    if socket_timeout_ms == 0:
+        return None
+    return socket_timeout_ms
 
 
 def _smiles_exists_clause() -> dict[str, Any]:
@@ -300,6 +331,16 @@ def build_scan_query(query_mode: str, match_mode: str) -> dict[str, Any]:
     if query_mode == "server":
         return build_candidate_query(match_mode)
     return {}
+
+
+def build_resume_scan_query(query: dict[str, Any], last_seen_id: Any | None) -> dict[str, Any]:
+    if last_seen_id is None:
+        return query
+
+    resume_clause = {"_id": {"$gt": last_seen_id}}
+    if not query:
+        return resume_clause
+    return {"$and": [query, resume_clause]}
 
 
 def _clean_text(value: Any) -> str | None:
@@ -371,6 +412,8 @@ def iter_candidate_batches(
     query_mode: str,
     cursor_batch_size: int,
     progress_every: int,
+    cursor_retries: int,
+    cursor_retry_sleep: float,
     stats: BackfillStats,
 ):
     query = build_scan_query(query_mode, match_mode)
@@ -381,42 +424,71 @@ def iter_candidate_batches(
     }
     for field in IDENTIFIER_FIELDS:
         projection[f"prediction.chemicalIdentifiers.{field}"] = 1
-    cursor = collection.find(
-        query,
-        projection=projection,
-        no_cursor_timeout=True,
-    ).batch_size(cursor_batch_size)
-    if query_mode == "server" and limit is not None:
-        cursor = cursor.limit(limit)
 
-    batch = []
-    try:
-        for doc in cursor:
-            stats.scanned_documents += 1
-            if progress_every > 0 and stats.scanned_documents % progress_every == 0:
-                LOGGER.info(
-                    "Scan progress: scanned_documents=%s candidates=%s",
-                    stats.scanned_documents,
-                    stats.candidates + len(batch),
+    candidate_buffer = []
+    last_seen_id = None
+    selected_candidates = 0
+    limit_reached = False
+
+    while not limit_reached:
+        page_doc_count = 0
+        retries_remaining = cursor_retries
+
+        while True:
+            cursor = collection.find(
+                build_resume_scan_query(query, last_seen_id),
+                projection=projection,
+            ).sort("_id", 1).limit(cursor_batch_size).batch_size(cursor_batch_size)
+            page_doc_count = 0
+            try:
+                for doc in cursor:
+                    page_doc_count += 1
+                    last_seen_id = doc["_id"]
+                    stats.scanned_documents += 1
+                    if progress_every > 0 and stats.scanned_documents % progress_every == 0:
+                        LOGGER.info(
+                            "Scan progress: scanned_documents=%s candidates=%s",
+                            stats.scanned_documents,
+                            selected_candidates,
+                        )
+
+                    candidate = _candidate_from_doc(doc, match_mode)
+                    if candidate is None:
+                        continue
+
+                    candidate_buffer.append(candidate)
+                    selected_candidates += 1
+                    if limit is not None and selected_candidates >= limit:
+                        limit_reached = True
+                        break
+
+                break
+            except PyMongoError as exc:
+                if retries_remaining <= 0:
+                    raise
+
+                retries_remaining -= 1
+                LOGGER.warning(
+                    "Mongo cursor read failed; retrying scan page from last_seen_id=%s "
+                    "retries_remaining=%s error=%s",
+                    last_seen_id,
+                    retries_remaining,
+                    exc,
                 )
+                if cursor_retry_sleep > 0:
+                    time.sleep(cursor_retry_sleep)
+            finally:
+                cursor.close()
 
-            candidate = _candidate_from_doc(doc, match_mode)
-            if candidate is None:
-                continue
+        while len(candidate_buffer) >= batch_size:
+            yield candidate_buffer[:batch_size]
+            candidate_buffer = candidate_buffer[batch_size:]
 
-            batch.append(candidate)
-            if limit is not None and query_mode == "client" and stats.candidates + len(batch) >= limit:
-                yield batch
-                return
+        if page_doc_count < cursor_batch_size:
+            break
 
-            if len(batch) >= batch_size:
-                yield batch
-                batch = []
-
-        if batch:
-            yield batch
-    finally:
-        cursor.close()
+    if candidate_buffer:
+        yield candidate_buffer
 
 
 def build_resolver_payload(smiles_values: list[str]) -> dict[str, Any]:
@@ -740,6 +812,8 @@ def backfill(collection, args: argparse.Namespace) -> BackfillStats:
         query_mode=args.query_mode,
         cursor_batch_size=args.mongo_cursor_batch_size,
         progress_every=args.progress_every,
+        cursor_retries=args.mongo_cursor_retries,
+        cursor_retry_sleep=args.mongo_cursor_retry_sleep,
         stats=stats,
     ):
         stats.candidates += len(candidate_batch)
@@ -774,19 +848,26 @@ def main() -> int:
     if args.mongo_cursor_batch_size <= 0:
         LOGGER.error("--mongo-cursor-batch-size must be positive")
         return 2
-    if args.mongo_socket_timeout_ms is not None and args.mongo_socket_timeout_ms <= 0:
-        LOGGER.error("--mongo-socket-timeout-ms must be positive when provided")
+    if args.mongo_socket_timeout_ms is not None and args.mongo_socket_timeout_ms < 0:
+        LOGGER.error("--mongo-socket-timeout-ms cannot be negative")
+        return 2
+    if args.mongo_cursor_retries < 0:
+        LOGGER.error("--mongo-cursor-retries cannot be negative")
+        return 2
+    if args.mongo_cursor_retry_sleep < 0:
+        LOGGER.error("--mongo-cursor-retry-sleep cannot be negative")
         return 2
     if args.progress_every < 0:
         LOGGER.error("--progress-every cannot be negative")
         return 2
 
-    if not args.skip_env_file:
-        load_env(args.env_file)
-    resolve_args_from_env(args)
-
-    client = build_mongo_client(args)
+    client = None
     try:
+        if not args.skip_env_file:
+            load_env(args.env_file)
+        resolve_args_from_env(args)
+
+        client = build_mongo_client(args)
         client.admin.command("ping")
         collection = client[args.database][args.collection]
         LOGGER.info(
@@ -806,7 +887,8 @@ def main() -> int:
         LOGGER.exception("Backfill failed")
         return 1
     finally:
-        client.close()
+        if client is not None:
+            client.close()
 
     LOGGER.info(
         "Backfill complete: scanned_documents=%s candidates=%s resolver_batches=%s "
