@@ -73,6 +73,48 @@ class TestBackfillCacheChemicalIdentifiers(unittest.TestCase):
         self.assertEqual(candidate.smiles, "CCC")
         self.assertEqual(candidate.missing_fields, backfill.IDENTIFIER_FIELDS)
 
+    def test_candidate_from_doc_honors_all_null_mode(self):
+        doc = {
+            "_id": "doc-1",
+            "prediction": {
+                "chemicalIdentifiers": {
+                    "smiles": "CCC",
+                    "cid": "DTXCID006386",
+                    "sid": None,
+                    "casrn": None,
+                    "name": None,
+                    "inchi": None,
+                    "inchiKey": None,
+                }
+            },
+        }
+
+        self.assertIsNone(backfill._candidate_from_doc(doc, "all-null"))
+
+    def test_candidate_from_doc_honors_any_null_mode(self):
+        doc = {
+            "_id": "doc-1",
+            "prediction": {
+                "chemicalIdentifiers": {
+                    "smiles": "CCC",
+                    "cid": "DTXCID006386",
+                    "sid": None,
+                    "casrn": "74-98-6",
+                    "name": "Propane",
+                    "inchi": "InChI=1S/C3H8/c1-3-2/h3H2,1-2H3",
+                    "inchiKey": "ATUOYWHBWRKTHZ-UHFFFAOYSA-N",
+                }
+            },
+        }
+
+        candidate = backfill._candidate_from_doc(doc, "any-null")
+
+        self.assertEqual(candidate.missing_fields, ("sid",))
+
+    def test_build_scan_query_defaults_to_lightweight_client_scan(self):
+        self.assertEqual(backfill.build_scan_query("client", "all-null"), {})
+        self.assertIn("$and", backfill.build_scan_query("server", "all-null"))
+
     def test_parse_resolver_payload_accepts_positional_chemical_list(self):
         payload = {
             "chemicals": [

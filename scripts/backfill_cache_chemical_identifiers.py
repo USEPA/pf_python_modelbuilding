@@ -51,6 +51,7 @@ class CacheCandidate:
 
 @dataclass
 class BackfillStats:
+    scanned_documents: int = 0
     candidates: int = 0
     resolver_batches: int = 0
     resolver_hits: int = 0
@@ -158,6 +159,33 @@ def parse_args() -> argparse.Namespace:
         help="Resolver request timeout in seconds.",
     )
     parser.add_argument(
+        "--query-mode",
+        choices=("client", "server"),
+        default="client",
+        help=(
+            "client scans Mongo with a lightweight projection and filters in Python; "
+            "server uses a Mongo predicate for the null fields."
+        ),
+    )
+    parser.add_argument(
+        "--mongo-cursor-batch-size",
+        type=int,
+        default=1000,
+        help="Number of Mongo documents fetched per cursor batch.",
+    )
+    parser.add_argument(
+        "--mongo-socket-timeout-ms",
+        type=int,
+        default=None,
+        help="Override Mongo socketTimeoutMS for this backfill run. Defaults to BACKFILL_MONGO_SOCKET_TIMEOUT_MS or 300000.",
+    )
+    parser.add_argument(
+        "--progress-every",
+        type=int,
+        default=10000,
+        help="Log scan progress after this many Mongo documents. Use 0 to disable.",
+    )
+    parser.add_argument(
         "--write",
         action="store_true",
         help="Persist updates to Mongo. Default is dry-run.",
@@ -191,6 +219,9 @@ def configure_logging(level_name: str) -> None:
 
 def build_mongo_client(args: argparse.Namespace) -> MongoClient:
     timeout_ms = _env_int("MONGO_SERVER_SELECTION_TIMEOUT_MS", 5000)
+    socket_timeout_ms = args.mongo_socket_timeout_ms
+    if socket_timeout_ms is None:
+        socket_timeout_ms = _env_int("BACKFILL_MONGO_SOCKET_TIMEOUT_MS", 300000)
     app_name = os.getenv("MONGO_APP_NAME", "predictor_models_cache_identifier_backfill")
 
     if args.mongo_uri:
@@ -199,7 +230,7 @@ def build_mongo_client(args: argparse.Namespace) -> MongoClient:
             appname=app_name,
             serverSelectionTimeoutMS=timeout_ms,
             connectTimeoutMS=_env_int("MONGO_CONNECT_TIMEOUT_MS", timeout_ms),
-            socketTimeoutMS=_env_int("MONGO_SOCKET_TIMEOUT_MS", 30000),
+            socketTimeoutMS=socket_timeout_ms,
         )
 
     client_kwargs = {
@@ -209,7 +240,7 @@ def build_mongo_client(args: argparse.Namespace) -> MongoClient:
         "appname": app_name,
         "serverSelectionTimeoutMS": timeout_ms,
         "connectTimeoutMS": _env_int("MONGO_CONNECT_TIMEOUT_MS", timeout_ms),
-        "socketTimeoutMS": _env_int("MONGO_SOCKET_TIMEOUT_MS", 30000),
+        "socketTimeoutMS": socket_timeout_ms,
     }
 
     username = os.getenv("MONGO_USER", "root")
@@ -243,7 +274,11 @@ def _smiles_exists_clause() -> dict[str, Any]:
 
 def build_candidate_query(match_mode: str) -> dict[str, Any]:
     null_field_conditions = [
-        {f"prediction.chemicalIdentifiers.{field}": None}
+        {
+            f"prediction.chemicalIdentifiers.{field}": {
+                "$in": [None, "", "N/A"],
+            }
+        }
         for field in IDENTIFIER_FIELDS
     ]
     null_match_clause = (
@@ -259,6 +294,12 @@ def build_candidate_query(match_mode: str) -> dict[str, Any]:
             null_match_clause,
         ],
     }
+
+
+def build_scan_query(query_mode: str, match_mode: str) -> dict[str, Any]:
+    if query_mode == "server":
+        return build_candidate_query(match_mode)
+    return {}
 
 
 def _clean_text(value: Any) -> str | None:
@@ -279,13 +320,26 @@ def _is_missing_identifier_value(value: Any) -> bool:
     return False
 
 
-def _candidate_from_doc(doc: dict[str, Any]) -> CacheCandidate | None:
+def _chemical_matches_mode(chemical: dict[str, Any], match_mode: str) -> bool:
+    missing_flags = [
+        _is_missing_identifier_value(chemical.get(field))
+        for field in IDENTIFIER_FIELDS
+    ]
+    if match_mode == "any-null":
+        return any(missing_flags)
+    return all(missing_flags)
+
+
+def _candidate_from_doc(doc: dict[str, Any], match_mode: str = "all-null") -> CacheCandidate | None:
     prediction = doc.get("prediction")
     if not isinstance(prediction, dict):
         return None
 
     chemical = prediction.get("chemicalIdentifiers")
     if not isinstance(chemical, dict):
+        return None
+
+    if not _chemical_matches_mode(chemical, match_mode):
         return None
 
     smiles = _clean_text(chemical.get("smiles")) or _clean_text(chemical.get("canonicalSmiles"))
@@ -308,8 +362,18 @@ def _candidate_from_doc(doc: dict[str, Any]) -> CacheCandidate | None:
     )
 
 
-def iter_candidate_batches(collection, *, batch_size: int, limit: int | None, match_mode: str):
-    query = build_candidate_query(match_mode)
+def iter_candidate_batches(
+    collection,
+    *,
+    batch_size: int,
+    limit: int | None,
+    match_mode: str,
+    query_mode: str,
+    cursor_batch_size: int,
+    progress_every: int,
+    stats: BackfillStats,
+):
+    query = build_scan_query(query_mode, match_mode)
     projection = {
         "key": 1,
         "prediction.chemicalIdentifiers.smiles": 1,
@@ -317,24 +381,42 @@ def iter_candidate_batches(collection, *, batch_size: int, limit: int | None, ma
     }
     for field in IDENTIFIER_FIELDS:
         projection[f"prediction.chemicalIdentifiers.{field}"] = 1
-    cursor = collection.find(query, projection=projection).batch_size(batch_size)
-    if limit is not None:
+    cursor = collection.find(
+        query,
+        projection=projection,
+        no_cursor_timeout=True,
+    ).batch_size(cursor_batch_size)
+    if query_mode == "server" and limit is not None:
         cursor = cursor.limit(limit)
 
     batch = []
-    for doc in cursor:
-        candidate = _candidate_from_doc(doc)
-        if candidate is None:
-            yield None
-            continue
+    try:
+        for doc in cursor:
+            stats.scanned_documents += 1
+            if progress_every > 0 and stats.scanned_documents % progress_every == 0:
+                LOGGER.info(
+                    "Scan progress: scanned_documents=%s candidates=%s",
+                    stats.scanned_documents,
+                    stats.candidates + len(batch),
+                )
 
-        batch.append(candidate)
-        if len(batch) >= batch_size:
+            candidate = _candidate_from_doc(doc, match_mode)
+            if candidate is None:
+                continue
+
+            batch.append(candidate)
+            if limit is not None and query_mode == "client" and stats.candidates + len(batch) >= limit:
+                yield batch
+                return
+
+            if len(batch) >= batch_size:
+                yield batch
+                batch = []
+
+        if batch:
             yield batch
-            batch = []
-
-    if batch:
-        yield batch
+    finally:
+        cursor.close()
 
 
 def build_resolver_payload(smiles_values: list[str]) -> dict[str, Any]:
@@ -655,15 +737,16 @@ def backfill(collection, args: argparse.Namespace) -> BackfillStats:
         batch_size=args.batch_size,
         limit=args.limit,
         match_mode=args.match_mode,
+        query_mode=args.query_mode,
+        cursor_batch_size=args.mongo_cursor_batch_size,
+        progress_every=args.progress_every,
+        stats=stats,
     ):
-        if candidate_batch is None:
-            stats.skipped_without_smiles += 1
-            continue
-
         stats.candidates += len(candidate_batch)
         LOGGER.info(
-            "Processing candidate batch: records=%s first_key=%s",
+            "Processing candidate batch: records=%s scanned_documents=%s first_key=%s",
             len(candidate_batch),
+            stats.scanned_documents,
             candidate_batch[0].key,
         )
         process_batch(
@@ -688,6 +771,15 @@ def main() -> int:
     if args.limit is not None and args.limit <= 0:
         LOGGER.error("--limit must be positive when provided")
         return 2
+    if args.mongo_cursor_batch_size <= 0:
+        LOGGER.error("--mongo-cursor-batch-size must be positive")
+        return 2
+    if args.mongo_socket_timeout_ms is not None and args.mongo_socket_timeout_ms <= 0:
+        LOGGER.error("--mongo-socket-timeout-ms must be positive when provided")
+        return 2
+    if args.progress_every < 0:
+        LOGGER.error("--progress-every cannot be negative")
+        return 2
 
     if not args.skip_env_file:
         load_env(args.env_file)
@@ -699,11 +791,13 @@ def main() -> int:
         collection = client[args.database][args.collection]
         LOGGER.info(
             "Starting chemicalIdentifiers backfill: database=%s collection=%s "
-            "batch_size=%s mode=%s write=%s resolver=%s",
+            "batch_size=%s cursor_batch_size=%s mode=%s query_mode=%s write=%s resolver=%s",
             args.database,
             args.collection,
             args.batch_size,
+            args.mongo_cursor_batch_size,
             args.match_mode,
+            args.query_mode,
             args.write,
             args.resolver_url,
         )
@@ -715,9 +809,10 @@ def main() -> int:
         client.close()
 
     LOGGER.info(
-        "Backfill complete: candidates=%s resolver_batches=%s resolver_hits=%s planned_updates=%s "
-        "matched_updates=%s modified_updates=%s skipped_without_smiles=%s "
+        "Backfill complete: scanned_documents=%s candidates=%s resolver_batches=%s "
+        "resolver_hits=%s planned_updates=%s matched_updates=%s modified_updates=%s skipped_without_smiles=%s "
         "skipped_without_resolver_match=%s skipped_without_update_fields=%s",
+        stats.scanned_documents,
         stats.candidates,
         stats.resolver_batches,
         stats.resolver_hits,
