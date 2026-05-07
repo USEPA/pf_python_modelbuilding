@@ -13,7 +13,6 @@ import os
 import traceback
 import json
 from sklearn2pmml.pipeline import PMMLPipeline as PMMLPipeline
-from sklearn.model_selection import KFold
 from model_ws_db_utilities import ModelInitializer
 from models.case_studies.run_model_building import runAD
 from models.ModelBuilder import Model
@@ -1647,13 +1646,7 @@ class DataQuerier:
         training = pd.merge(model.df_training, df_gmd, left_on="ID", right_on="canon_qsar_smiles", how="left")
         training = pd.merge(training, df_preds_training_cv, left_on="ID", right_on="id", how="left")
 
-        kfold_splitter = KFold(n_splits=5, shuffle=True, random_state=42)
-        fold_col = np.zeros(len(model.df_training), dtype=int)
-        for fold_index, (train_index, val_index) in enumerate(kfold_splitter.split(model.df_training)):
-            fold_col[val_index] = fold_index + 1
-
-        training["Fold"] = fold_col
-        training["Set"] = training.Fold.apply(lambda x: f"Training CV, Fold {x}")
+        training["Set"] = training.cv_fold_x.apply(lambda x: f"Training CV, Fold {x}")
 
         df_preds_test = model.df_preds_test.rename(columns={"canon_qsar_smiles": "id"})
 
@@ -1717,14 +1710,6 @@ class DataQuerier:
         model = self.query_model()
         df_gmd = self.query_df_gmd(external=False)
 
-        try:
-            kfold_splitter = KFold(n_splits=5, shuffle=True, random_state=42)
-            fold_col = np.zeros(len(model.df_preds_training_cv), dtype=int)
-            for fold_index, (train_index, val_index) in enumerate(kfold_splitter.split(model.df_preds_training_cv)):
-                fold_col[val_index] = fold_index + 1
-        except:
-            fold_col = np.zeros(len(model.df_preds_training_cv), dtype=int)
-
         df_preds_training_cv = model.df_preds_training_cv.rename(columns={"canon_qsar_smiles": "id"})
 
         temp = pd.merge(df_preds_training_cv, df_gmd, left_on="id", right_on="canon_qsar_smiles", how="left")
@@ -1735,7 +1720,7 @@ class DataQuerier:
             "Exp": temp["exp"],
             "Pred": temp["pred"],
             "Absolute Error": abs(temp["exp"] - temp["pred"]),
-            "CV Fold": fold_col,
+            "CV Fold": temp["cv_fold_x"],
             "DTXCID": temp["dtxcid"],
             "DTXSID": temp["dtxsid"],
             "CASRN": temp["casrn"],
@@ -2292,7 +2277,7 @@ class DataTransformer:
         test["Set"] = "Test"
 
         training = df_pred_cv.loc[:, columns]
-        training["Set"] = df_pred_cv.cv_fold.apply(lambda x: f"Training CV, Fold {x + 1}")
+        training["Set"] = df_pred_cv.cv_fold.apply(lambda x: f"Training CV, Fold {x}")
 
         full = pd.concat([test, training], ignore_index=True)
         full["canon_qsar_smiles"] = full["canon_qsar_smiles"].astype(str)

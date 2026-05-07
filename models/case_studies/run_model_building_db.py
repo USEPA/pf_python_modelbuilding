@@ -1679,7 +1679,7 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
     
         df_cv_dict = None 
         
-        if cross_validate: #TODO we should probably always run these calculations 
+        if cross_validate: #TODO we should probably always run these calculations
             df_cv_dict = du.get_training_cv_instances(session, dataset_name, descriptor_set_name)
             X, y, cv, feature_cols  = du.make_cv_for_base_training(df_training, df_cv_dict, "ID", "Property") # get cv for use in RFE and SFS so that will use CV folds as the final stat reported as RMSE_CV_TRAINING
         
@@ -1751,6 +1751,39 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         logging.debug(row_to_json(df_pred_test))
         # print(df_pred_test.head())
 
+        # New Attributes
+        ext_stats_dict = {}
+        if dataset_name_ext is not None:
+            model.external_dataset_name = dataset_name_ext if dataset_name_ext else None
+            model.external_dataset_description = dataset_description_ext
+            model.df_dsstoxRecords_external = df_prediction_ext
+            model.df_preds_external = df_pred_ext
+
+            model.df_external = df_external
+            model.num_external = df_external.shape[0] if df_external is not None else 0        
+            # model.num_external = df_prediction_ext.shape[0] if df_prediction_ext is not None else 0
+
+            if run_AD:
+                for ad_measure in ad_measures:
+                    df_pred_ext = runAD(df_training, df_prediction_ext, params, model.embedding, df_pred_ext, ad_measure, ext_stats_dict, is_binary=is_binary, is_external=True)
+        
+                if len(ad_measure) > 1:
+                    adu.generate_consensus_ad(df_pred_ext, ext_stats_dict, ad_measure_model, is_binary=is_binary, is_external=True)
+        
+        if cross_validate:
+            # Add CV fold information to df_training
+            cv_fold_data = []
+            for fold_num, fold_dict in sorted(df_cv_dict.items()):
+                pred_df = fold_dict.get("pred")
+                if pred_df is not None and not pred_df.empty:
+                    for idx, row in pred_df.iterrows():
+                        cv_fold_data.append({"ID": row["ID"], "cv_fold": fold_num})
+            
+            if cv_fold_data:
+                df_cv_folds = pd.DataFrame(cv_fold_data)
+                df_training = df_training.merge(df_cv_folds, on="ID", how="left")
+                df_pred_cv = df_pred_cv.merge(df_cv_folds, left_on="id", right_on="ID", how="left")
+
         # ******************************************************************************************************
         # ---- Save results ----
         # create results file:
@@ -1784,24 +1817,6 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         model.df_preds_training_cv = df_pred_cv
         model.df_preds_test = df_pred_test
 
-        # New Attributes
-        ext_stats_dict = {}
-        if dataset_name_ext is not None:
-            model.external_dataset_name = dataset_name_ext if dataset_name_ext else None
-            model.external_dataset_description = dataset_description_ext
-            model.df_dsstoxRecords_external = df_prediction_ext
-            model.df_preds_external = df_pred_ext
-
-            model.df_external = df_external
-            model.num_external = df_external.shape[0] if df_external is not None else 0        
-            # model.num_external = df_prediction_ext.shape[0] if df_prediction_ext is not None else 0
-
-            if run_AD:
-                for ad_measure in ad_measures:
-                    df_pred_ext = runAD(df_training, df_prediction_ext, params, model.embedding, df_pred_ext, ad_measure, ext_stats_dict, is_binary=is_binary, is_external=True)
-        
-                if len(ad_measure) > 1:
-                    adu.generate_consensus_ad(df_pred_ext, ext_stats_dict, ad_measure_model, is_binary=is_binary, is_external=True)
         
         # Check what happens with ext_stats and how to add new things to the results_dict under the model_details
         results_dict = Results.create_results_dict(
@@ -1954,12 +1969,13 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         folder_path_path = Path(folder_path)
         folder_path_path.mkdir(parents=True, exist_ok=True)
 
-        # Fuzzy matching on excel_identifier
-        if "stat" in unique_identifier:
-            if "ext" in unique_identifier:
-                unique_identifier = "external_stat"
-            elif "test" in unique_identifier:
-                unique_identifier = "test_stat"
+        if unique_identifier is not None:
+            # Fuzzy matching on excel_identifier
+            if "stat" in unique_identifier:
+                if "ext" in unique_identifier:
+                    unique_identifier = "external_stat"
+                elif "test" in unique_identifier:
+                    unique_identifier = "test_stat"
 
         # Prepare the unique identifier based on the method specified
         if unique_identifier == "time":
