@@ -1,13 +1,21 @@
 .git
+.dockerignore
 .idea
 .venv
+.env
 __pycache__
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.DS_Store
 Additional Classes
 tests
-.env
 .gitignore
 Dockerfile
 Jenkinsfile
 make requirements.bat
 run docker.bat
 app_flask.py
+dockerbuild.txt
