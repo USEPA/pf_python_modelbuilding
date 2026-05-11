@@ -1708,7 +1708,7 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
                 
             if params.run_sfs:
                 # run_sfs(model, df_training, params.n_features_to_select)
-                run_sfs(model, df_training) #iterative
+                run_sfs(model, df_training, cv=cv) #iterative
                 logging.info(f"After SFS, {len(model.embedding)} descriptors: {model.embedding}")
     
             # redo model and predictions:
