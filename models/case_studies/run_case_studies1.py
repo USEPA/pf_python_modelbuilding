@@ -388,9 +388,9 @@ def run_rifm_rf_models():
     for i in range(0, 10):
         for descriptor_coefficient in [0.001, 0.006, 0.01, None]:
             # Jump to correct point in run
-            if i < 4:
+            if i < 7:
                 continue
-            if i == 4 and descriptor_coefficient is not None:
+            if i == 7 and descriptor_coefficient is not None:
                 continue
             
             params = ParametersImportance(qsar_method=qsar_method, feature_selection=feature_selection, hyperparameter_grid=grid,
@@ -419,7 +419,7 @@ def run_rifm_rf_models():
 
 def main():
     
-    # run_example()
+    run_example()
     # run_Koc_knn_ga()
         
     # run_Koc()
@@ -444,7 +444,7 @@ def main():
     # test_model_summary()
     # test_model_summary_local()
     # test_load_model_with_external_set()
-    run_rifm_rf_models()
+    # run_rifm_rf_models()
 
 
 if __name__ == "__main__":
