@@ -15,6 +15,10 @@ from model_ws_db_utilities import getEngine, getSession
 from models.ModelToExcel import ModelToExcel
 import logging
 import json
+import pandas as pd
+from sqlalchemy import text
+import os
+from pathlib import Path
 
 def run_example():
     dataset_name = "KOC v1 modeling"
@@ -199,40 +203,207 @@ def run_biodeg_rifm():
     
     # dataset_name = 'exp_prop_RBIODEG_RIFM_BY_DTXSID' 
     dataset_name = 'exp_prop_RBIODEG_RIFM_CHEMREG' # automapped one
+    
     write_to_db = False
     create_unique_excel = False
     create_detailed_excel = True
     ad_measure_model = [pc.Applicability_Domain_TEST_Embedding_Euclidean, pc.Applicability_Domain_TEST_Fragment_Counts]
-
-
+    descriptor_set_name = "WebTEST-default"
+    splitting_name = "RND_REPRESENTATIVE"  
     append_to_models_folder=""
-    run_dataset(dataset_name=dataset_name, qsar_method='gcm', feature_selection=False, ad_measure_model=ad_measure_model,
-                write_to_db=write_to_db, create_unique_excel=create_unique_excel, create_detailed_excel=create_detailed_excel,
-                append_to_models_folder=append_to_models_folder)  # OK
+    
+    # run_dataset(dataset_name=dataset_name, qsar_method='gcm', feature_selection=False, ad_measure_model=ad_measure_model,
+    #             write_to_db=write_to_db, create_unique_excel=create_unique_excel, create_detailed_excel=create_detailed_excel,
+    #             append_to_models_folder=append_to_models_folder)  # OK
 
-    # Models to upload:
-    # for method in ['rf','xgb']:
-    # for method in ['reg','knn']:
-        # run_dataset(dataset_name=dataset_name, qsar_method=method, feature_selection=True, 
-                    # ad_measure_model=ad_measure_model,write_to_db=write_to_db, create_unique_excel=create_unique_excel, create_detailed_excel=create_detailed_excel)  # OK
-
-
-    # for method in ['rf','xgb', 'knn']:
-    #     run_dataset(dataset_name=dataset_name, qsar_method=method, feature_selection=False, 
-    #                 ad_measure_model=ad_measure_model,write_to_db=write_to_db, create_unique_excel=create_unique_excel, create_detailed_excel=False)  # OK
-                
-        
-    # for method in ['rf','xgb','knn','reg']:
-    #     params = set_hyper_parameters(qsar_method=method, feature_selection=True, descriptor_set_name="WebTEST-default", 
-    #                                 splitting_name="RND_REPRESENTATIVE", dataset_name=dataset_name, ad_measure=ad_measure_model)
+    for method in ['rf', 'xgb']:        
+        # run_dataset(dataset_name=dataset_name, qsar_method=method, feature_selection=False,
+        #     ad_measure_model=ad_measure_model, write_to_db=write_to_db, create_unique_excel=create_unique_excel,
+        #     create_detailed_excel=True, append_to_models_folder=append_to_models_folder)  
+    
+        run_dataset(dataset_name=dataset_name, qsar_method=method, feature_selection=True,
+            ad_measure_model=ad_measure_model, write_to_db=write_to_db, create_unique_excel=create_unique_excel,
+            create_detailed_excel=True, append_to_models_folder=append_to_models_folder)  
     #
-    #     params.run_rfe = False
-    #     run_dataset(dataset_name=dataset_name, qsar_method=params.qsar_method, feature_selection=params.feature_selection, params = params, 
-    #                 ad_measure_model=ad_measure_model,write_to_db=write_to_db, create_unique_excel=create_unique_excel,create_detailed_excel=False)  # OK
+    #     params = set_hyper_parameters(qsar_method=method, feature_selection=True, descriptor_set_name=descriptor_set_name, 
+    #                                   splitting_name=splitting_name, dataset_name=dataset_name, ad_measure=ad_measure_model)
+    #     # params.max_features = 12
+    #     # params.max_features = 25
+    #     params.descriptor_coefficient = 0.001
+    #     run_dataset(dataset_name=dataset_name, qsar_method=params.qsar_method, feature_selection=params.feature_selection,
+    #         params = params, ad_measure_model=ad_measure_model,write_to_db=write_to_db, 
+    #         create_detailed_excel=True, create_unique_excel=create_unique_excel, 
+    #         append_to_models_folder=append_to_models_folder) 
+
+    
+    
+    # for method in ['reg','knn']:
+    #     params = set_hyper_parameters(qsar_method=method, feature_selection=True, descriptor_set_name=descriptor_set_name, 
+    #                                   splitting_name=splitting_name, dataset_name=dataset_name, ad_measure=ad_measure_model)
+    #     # params.max_features = 12
+    #     params.max_features = 25
+    #     params.descriptor_coefficient = 0.006
+    #     run_dataset(dataset_name=dataset_name, qsar_method=params.qsar_method, feature_selection=params.feature_selection,
+    #         params = params, ad_measure_model=ad_measure_model,write_to_db=write_to_db, 
+    #         create_detailed_excel=True, create_unique_excel=create_unique_excel, 
+    #         append_to_models_folder=append_to_models_folder) 
+
     
     
     Results.summarize_model_stats(dataset_name, append_to_models_folder=append_to_models_folder)
 
+
+def fetch_test_set_qsar_smiles(session, dataset_name, outer_splitting_name ='RND_REPRESENTATIVE', descriptor_set_name='WebTEST-default'):
+    
+    """
+    Only includes rows present in the given descriptor set.
+    """
+    sql = text("""
+        SELECT dp.canon_qsar_smiles
+        FROM qsar_datasets.datasets d
+        JOIN qsar_datasets.data_points dp ON dp.fk_dataset_id = d.id
+        JOIN qsar_descriptors.descriptor_values dv ON dp.canon_qsar_smiles = dv.canon_qsar_smiles
+        JOIN qsar_descriptors.descriptor_sets ds ON ds.id = dv.fk_descriptor_set_id
+        JOIN qsar_datasets.data_points_in_splittings dpis ON dpis.fk_data_point_id = dp.id
+        JOIN qsar_datasets.splittings s ON s.id = dpis.fk_splitting_id
+        WHERE d.name = :datasetName
+          AND ds.name = :descriptorSetName
+          AND s.name = :outerSplittingName and dpis.split_num=1
+        ORDER BY dp.id
+    """)
+    rows = session.execute(
+        sql,
+        {
+            "datasetName": dataset_name,
+            "descriptorSetName": descriptor_set_name,
+            "outerSplittingName": outer_splitting_name,
+        },
+    ).fetchall()
+
+    if not rows:
+        raise ValueError(
+            f"No rows found for dataset='{dataset_name}', descriptorSet='{descriptor_set_name}', "
+            f"outerSplitting='{outer_splitting_name}'."
+        )
+
+    smiles_list = [r[0] for r in rows]
+    return pd.DataFrame({"canon_qsar_smiles": smiles_list})
+
+def calculate_stats_for_subset(dataset_name, dataset_name_subset, append_to_models_folder, run_folder):
+    import os
+    from StatsCalculator import calculate_binary_statistics
+    
+    PROJECT_ROOT = os.getenv("PROJECT_ROOT")
+    path_segments = [PROJECT_ROOT, "data", "models" + append_to_models_folder, dataset_name, run_folder, "test set predictions.csv"]
+    output_csv_path = os.path.join(*path_segments)
+    df_pred = pd.read_csv(output_csv_path)
+    session = getSession()
+    
+    df_smiles_test_set_rifm = fetch_test_set_qsar_smiles(session, dataset_name_subset)
+    
+    df_pred_in_rifm_test = df_pred.merge(
+        df_smiles_test_set_rifm[["canon_qsar_smiles"]].drop_duplicates(), 
+        on="canon_qsar_smiles", 
+        how="inner")
+    test_stats = calculate_binary_statistics(df_pred_in_rifm_test, 0.5, "_Test")
+    
+    print(run_folder)
+    print('RIFM test chemical stats', json.dumps(test_stats,indent=4))
+    # print(df_pred_in_rifm_test.shape[0])
+    
+    df_fragrances_list = getQsarSmilesFromFragranceSpreadsheet()
+    df_fragrances_list_only = df_fragrances_list[~df_fragrances_list['canon_qsar_smiles'].isin(df_smiles_test_set_rifm['canon_qsar_smiles'])]
+    
+    df_pred_fragrances = df_pred.merge(
+        df_fragrances_list_only[["canon_qsar_smiles"]].drop_duplicates(), 
+        on="canon_qsar_smiles", 
+        how="inner")
+    test_stats = calculate_binary_statistics(df_pred_fragrances, 0.5, "_Test")
+    print('Fragrances test chemical stats', json.dumps(test_stats,indent=4))
+    # print(df_pred_fragrances.shape[0])
+    print('')
+
+
+def run_biodeg_301F():
+    
+    dataset_name = 'exp_prop_RBIODEG_301F v1 modeling' # automapped one
+    write_to_db = False
+    create_unique_excel = False
+    create_detailed_excel = True
+    ad_measure_model = [pc.Applicability_Domain_TEST_Embedding_Euclidean, pc.Applicability_Domain_TEST_Fragment_Counts]
+    descriptor_set_name = "WebTEST-default"
+    splitting_name = "RND_REPRESENTATIVE"  
+
+    append_to_models_folder=""
+    # run_dataset(dataset_name=dataset_name, qsar_method='gcm', feature_selection=False, ad_measure_model=ad_measure_model,
+    #             write_to_db=write_to_db, create_unique_excel=create_unique_excel, create_detailed_excel=create_detailed_excel,
+    #             append_to_models_folder=append_to_models_folder)  # OK
+
+    
+    # print(df_pred_in_rifm_test)
+    # print(smiles_test_set_rifm)
+
+    # for method in ['rf', 'xgb']:        
+    #     run_dataset(dataset_name=dataset_name, qsar_method=method, feature_selection=False,
+    #         ad_measure_model=ad_measure_model, write_to_db=write_to_db, create_unique_excel=create_unique_excel,
+    #         create_detailed_excel=True, append_to_models_folder=append_to_models_folder)  
+    #
+        # run_dataset(dataset_name=dataset_name, qsar_method=method, feature_selection=True,
+        #     ad_measure_model=ad_measure_model, write_to_db=write_to_db, create_unique_excel=create_unique_excel,
+        #     create_detailed_excel=True, append_to_models_folder=append_to_models_folder)  
+        
+        # params = set_hyper_parameters(qsar_method=method, feature_selection=True, descriptor_set_name=descriptor_set_name, 
+        #                               splitting_name=splitting_name, dataset_name=dataset_name, ad_measure=ad_measure_model)
+        # # params.max_features = 12
+        # # params.max_features = 25
+        
+        # params.descriptor_coefficient = 0.001
+        # run_dataset(dataset_name=dataset_name, qsar_method=params.qsar_method, feature_selection=params.feature_selection,
+        #     params = params, ad_measure_model=ad_measure_model,write_to_db=write_to_db, 
+        #     create_detailed_excel=True, create_unique_excel=create_unique_excel, 
+        #     append_to_models_folder=append_to_models_folder) 
+
+    # for method in ['reg','knn']:
+    #     params = set_hyper_parameters(qsar_method=method, feature_selection=True, descriptor_set_name=descriptor_set_name, 
+    #                                   splitting_name=splitting_name, dataset_name=dataset_name, ad_measure=ad_measure_model)
+    #     # params.max_features = 12
+    #     params.max_features = 25
+    #     params.descriptor_coefficient = 0.006
+    #     run_dataset(dataset_name=dataset_name, qsar_method=params.qsar_method, feature_selection=params.feature_selection,
+    #         params = params, ad_measure_model=ad_measure_model,write_to_db=write_to_db, 
+    #         create_detailed_excel=True, create_unique_excel=create_unique_excel, 
+    #         append_to_models_folder=append_to_models_folder) 
+
+        
+    # Results.summarize_model_stats(dataset_name, append_to_models_folder=append_to_models_folder)
+    
+    
+    dataset_name_subset='exp_prop_RBIODEG_RIFM_CHEMREG'
+    # run_folder='xgb_WebTEST-default_fs=False'
+    # run_folder="gcm_WebTEST-default_fs=False"
+    # run_folder='rf_WebTEST-default_fs=False'
+    # run_folder='rf_WebTEST-default_fs=True'
+    # run_folder='xgb_WebTEST-default_fs=True'
+    # calculate_stats_for_subset(dataset_name, dataset_name_subset, append_to_models_folder, run_folder)
+    
+    folder = Path(os.getenv("PROJECT_ROOT")) / "data" / "models" / dataset_name
+    
+    for entry in folder.iterdir():
+        if entry.is_dir():
+            # entry is already a Path pointing to the subfolder
+            print("Subfolder:", entry.name)
+            calculate_stats_for_subset(dataset_name, dataset_name_subset, append_to_models_folder, entry.name)
+    
+    
+    #TODO get stats for tony fragrance compounds that arent in RIFM dataset
+    
+def getQsarSmilesFromFragranceSpreadsheet():
+    excel_path = Path(os.getenv("PROJECT_ROOT")) / "data" / "models" / "exp_prop_RBIODEG_301F v1 modeling" / "DSSTox_FRAGRANCEBB_20260413_qsar_ready.xlsx"
+    df=pd.read_excel(excel_path)
+    df = df.rename(columns={'Structure_qsar_ready': 'canon_qsar_smiles'})
+    unique_df = df[['canon_qsar_smiles']].dropna().drop_duplicates().reset_index(drop=True)
+    # print(unique_df)
+    return unique_df
 
 def run_pchem():
     
@@ -346,9 +517,12 @@ def main():
     # run_example()
     # run_Koc_knn_ga()
         
-    run_Koc()
+    # run_Koc()
     # run_fish_tox()
+    
     # run_biodeg_rifm()
+    run_biodeg_301F()
+    
     # run_pchem()
     
     # These 4 should be able to run for the gcm model

@@ -104,8 +104,12 @@ class ParametersImportance:
     run_rfe: bool = True
     run_sfs: bool = True
     n_features_to_select = 'auto' #not used
+
     min_descriptor_count: int = 30
     max_descriptor_count: int = 40
+    
+    # min_descriptor_count: int = 20
+    # max_descriptor_count: int = 30
     
     descriptor_coefficient: float = 0.006 # set to None for auto penalty value
     alpha = 0.7
@@ -1637,6 +1641,9 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
     # TODO: gcm model that uses reg with fragment descriptors such that it deletes rows with less than 3 instances and the associated rows
     # TODO does add the LOGP predicted from my LOGP model improve the results?
     splitting_name = "RND_REPRESENTATIVE"
+    
+    # print(dataset_name)
+    
     try:
         engine = getEngine()
         session = getSession()
@@ -2445,18 +2452,6 @@ class Results:
     
         return html_path
 
-def update_tester_page():
-    from dotenv import load_dotenv
-    load_dotenv()
-    ml=ModelLoader(getSession())
-    PROJECT_ROOT = os.getenv("PROJECT_ROOT")
-    file_path= os.path.join(PROJECT_ROOT, "resources","test_api2.html")
-
-    # ml.load_model_file(file_path, "tmarti02", 1670, 5)
-    ml.update_model_file(file_path, "tmarti02", 1670, 5)
-
-if __name__ == '__main__':
-    update_tester_page()
     # pass
 
     

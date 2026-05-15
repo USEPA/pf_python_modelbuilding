@@ -10,8 +10,8 @@ load_dotenv('../../personal.env')
 PROJECT_ROOT = os.getenv("PROJECT_ROOT")
 
 from models.ModelToExcel import ModelDataObjects, ModelToExcel
-from models.db_utilities.plot_db import upload_or_update_model_file_in_db, getSession
-
+from models.db_utilities.plot_db import getSession
+from models.db_utilities.model_files import upload_or_update_model_file_in_db
 
 def update_excel_summaries():
     
