@@ -295,12 +295,12 @@ class DatabaseUtilities:
         # We don't manually commit at the end; the context manager (or outer tx) handles it.
         try:
             if self.session.in_transaction():
-                print("session_in_transaction")
+                # print("session_in_transaction")
                 # Execute within the existing transaction doesnt auto-commits on success- need to force it but can cause issues
                 for batch in self.chunked(records, chunk_size):
                     self.create_many(table=table, records=batch, commit=False)
             else:
-                print("not session_in_transaction")
+                # print("not session_in_transaction")
                 # Manage our own transaction; it auto-commits on success.
                 with self.session.begin():
                     for batch in self.chunked(records, chunk_size):

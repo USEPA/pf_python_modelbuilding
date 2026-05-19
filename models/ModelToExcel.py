@@ -1720,7 +1720,7 @@ class DataQuerier:
             "Exp": temp["exp"],
             "Pred": temp["pred"],
             "Absolute Error": abs(temp["exp"] - temp["pred"]),
-            "CV Fold": temp["cv_fold_x"],
+            "CV Fold": temp["cv_fold"],
             "DTXCID": temp["dtxcid"],
             "DTXSID": temp["dtxsid"],
             "CASRN": temp["casrn"],
@@ -2714,8 +2714,8 @@ class ModelToExcel:
                 worksheet.write_rich_string("E10", "BA", format_sub, "External", " Outside AD", format_center)
                 worksheet.write_string("F10", "Fraction Inside AD", format_center)
 
-                worksheet.write_number("A11", statistics.at[0, "Sensitivity_External"], format_number)
-                worksheet.write_number("B11", statistics.at[0, "Specificity_External"], format_number)
+                worksheet.write_number("A11", statistics.at[0, "SN_External"], format_number)
+                worksheet.write_number("B11", statistics.at[0, "SP_External"], format_number)
                 worksheet.write_number("C11", statistics.at[0, "BA_External"], format_number)
 
                 worksheet.write_number("D11", statistics.at[0, "BA_External_Inside_AD"], format_number)
