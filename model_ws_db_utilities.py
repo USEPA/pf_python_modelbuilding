@@ -1044,24 +1044,43 @@ class ModelPredictor:
         md.performance = {}
 
         md.performance["train"] = {}
-        set_metric(md.performance["train"], "R2", "PearsonRSQ_Training", "R2_Training")
-        set_metric(md.performance["train"], "RMSE", "RMSE_Training")
-        set_metric(md.performance["train"], "MAE", "MAE_Training")
-
         md.performance["fiveFoldICV"] = {}
-        set_metric(md.performance["fiveFoldICV"], "R2", "PearsonRSQ_CV_Training", "PearsonRSQ_CV")
-        set_metric(md.performance["fiveFoldICV"], "RMSE", "RMSE_CV_Training", "RMSE_CV", "RMSE_CV_Train")
-        set_metric(md.performance["fiveFoldICV"], "MAE", "MAE_CV_Training", "MAE_CV")
-
         md.performance["external"] = {}
-        set_metric(md.performance["external"], "R2", "PearsonRSQ_Test", "R2_Test")
-        set_metric(md.performance["external"], "RMSE", "RMSE_Test")
-        set_metric(md.performance["external"], "MAE", "MAE_Test")
-
         md.performance["externalAD"] = {}
-        set_metric(md.performance["externalAD"], "MAE_inside_AD", "MAE_Test_inside_AD")
-        set_metric(md.performance["externalAD"], "MAE_outside_AD", "MAE_Test_outside_AD")
-        set_metric(md.performance["externalAD"], "Fraction_inside_AD", "Coverage_Test")
+        
+        if md.propertyIsBinary:
+            set_metric(md.performance["train"], "BA", "BA_Training")
+            set_metric(md.performance["train"], "SN", "SN_Training")
+            set_metric(md.performance["train"], "SP", "SP_Training")
+            
+            set_metric(md.performance["fiveFoldICV"], "BA", "BA_CV_Training")
+            set_metric(md.performance["fiveFoldICV"], "SN", "SN_CV_Training")
+            set_metric(md.performance["fiveFoldICV"], "SP", "SP_CV_Training")
+            
+            set_metric(md.performance["external"], "BA", "BA_Test")
+            set_metric(md.performance["external"], "SN", "SN_Test")
+            set_metric(md.performance["external"], "SP", "SP_Test")
+    
+            set_metric(md.performance["externalAD"], "BA_inside_AD", "BA_Test_inside_AD")
+            set_metric(md.performance["externalAD"], "BA_outside_AD", "BA_Test_outside_AD")
+            set_metric(md.performance["externalAD"], "Fraction_inside_AD", "Coverage_Test")
+
+        else:
+            set_metric(md.performance["train"], "R2", "PearsonRSQ_Training", "R2_Training")
+            set_metric(md.performance["train"], "RMSE", "RMSE_Training")
+            set_metric(md.performance["train"], "MAE", "MAE_Training")
+            
+            set_metric(md.performance["fiveFoldICV"], "R2", "PearsonRSQ_CV_Training", "PearsonRSQ_CV")
+            set_metric(md.performance["fiveFoldICV"], "RMSE", "RMSE_CV_Training", "RMSE_CV", "RMSE_CV_Train")
+            set_metric(md.performance["fiveFoldICV"], "MAE", "MAE_CV_Training", "MAE_CV")
+        
+            set_metric(md.performance["external"], "R2", "PearsonRSQ_Test", "R2_Test")
+            set_metric(md.performance["external"], "RMSE", "RMSE_Test")
+            set_metric(md.performance["external"], "MAE", "MAE_Test")
+    
+            set_metric(md.performance["externalAD"], "MAE_inside_AD", "MAE_Test_inside_AD")
+            set_metric(md.performance["externalAD"], "MAE_outside_AD", "MAE_Test_outside_AD")
+            set_metric(md.performance["externalAD"], "Fraction_inside_AD", "Coverage_Test")
 
         md.modelStatistics = None
     
@@ -1213,19 +1232,43 @@ class ModelPredictor:
         self.addDistances(neighborsTest, distances_test)
                 
         df_neighborsTest = pd.DataFrame(neighborsTest)
-        stats_test = stats.calculate_continuous_statistics(df_neighborsTest, 0, pc.TAG_TEST)
-        neighborsTestMAE = stats_test[pc.MAE + pc.TAG_TEST]
-                    
         df_neighborsTraining = pd.DataFrame(neighborsTraining)
-        stats_training = stats.calculate_continuous_statistics(df_neighborsTraining, 0, pc.TAG_TRAINING)
-        neighborsTrainingMAE = stats_training[pc.MAE + pc.TAG_TRAINING]
         
-        neighborResultsPrediction = {"set": "Test", "neighbors":neighborsTest, "MAE":neighborsTestMAE,
-                                                "unitNeighbor":modelResults.unitsModel,
-                                                "title": "Nearest Neighbors from Test Set (External Predictions)"}
-        neighborResultsTraining = {"set": "Training", "neighbors":neighborsTraining, "MAE":neighborsTrainingMAE,
-                                              "unitNeighbor":modelResults.unitsModel,
-                                              "title": "Nearest Neighbors from Training Set (Cross Validation Predictions)"}
+        if model.is_binary:
+
+            stats_test = stats.calculate_binary_statistics(df_neighborsTest, 0, pc.TAG_TEST)
+            neighborsTestBA = stats_test[pc.BALANCED_ACCURACY + pc.TAG_TEST]
+            neighborsTestSN = stats_test[pc.SENSITIVITY + pc.TAG_TEST]
+            neighborsTestSP = stats_test[pc.SPECIFICITY + pc.TAG_TEST]
+                        
+            stats_training = stats.calculate_binary_statistics(df_neighborsTraining, 0, pc.TAG_TRAINING)
+            neighborsTrainingBA = stats_training[pc.BALANCED_ACCURACY + pc.TAG_TRAINING]
+            neighborsTrainingSN = stats_training[pc.SENSITIVITY + pc.TAG_TRAINING]
+            neighborsTrainingSP = stats_training[pc.SPECIFICITY + pc.TAG_TRAINING]
+            
+            neighborResultsPrediction = {"set": "Test", "neighbors":neighborsTest, 
+                                         "BA":neighborsTestBA, "SN":neighborsTestSN, "SP":neighborsTestSP,
+                                         "unitNeighbor":modelResults.unitsModel,
+                                         "title": "Nearest Neighbors from Test Set (External Predictions)"}
+            
+            neighborResultsTraining = {"set": "Training", "neighbors":neighborsTraining, 
+                                       "BA":neighborsTrainingBA, "SN":neighborsTrainingSN, "SP":neighborsTrainingSP,
+                                       "unitNeighbor":modelResults.unitsModel,
+                                       "title": "Nearest Neighbors from Training Set (Cross Validation Predictions)"}
+
+        else:
+            stats_test = stats.calculate_continuous_statistics(df_neighborsTest, 0, pc.TAG_TEST)
+            neighborsTestMAE = stats_test[pc.MAE + pc.TAG_TEST]
+                        
+            stats_training = stats.calculate_continuous_statistics(df_neighborsTraining, 0, pc.TAG_TRAINING)
+            neighborsTrainingMAE = stats_training[pc.MAE + pc.TAG_TRAINING]
+            
+            neighborResultsPrediction = {"set": "Test", "neighbors":neighborsTest, "MAE":neighborsTestMAE,
+                                                    "unitNeighbor":modelResults.unitsModel,
+                                                    "title": "Nearest Neighbors from Test Set (External Predictions)"}
+            neighborResultsTraining = {"set": "Training", "neighbors":neighborsTraining, "MAE":neighborsTrainingMAE,
+                                                  "unitNeighbor":modelResults.unitsModel,
+                                                  "title": "Nearest Neighbors from Training Set (Cross Validation Predictions)"}
         
         return neighborResultsTraining, neighborResultsPrediction
         
