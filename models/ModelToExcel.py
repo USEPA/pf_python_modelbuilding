@@ -13,17 +13,18 @@ import os
 import traceback
 import json
 from sklearn2pmml.pipeline import PMMLPipeline as PMMLPipeline
-from sklearn.model_selection import KFold
 from model_ws_db_utilities import ModelInitializer
 from models.case_studies.run_model_building import runAD
 from models.ModelBuilder import Model
 from models.db_utilities.raw_exp_data_db import ExpDataGetter
 from models.db_utilities.dataset_utilities_db import getMappedDatapoints
+from models.db_utilities.plot_db import upload_or_update_model_file_in_db
 from StatsCalculator import calculate_continuous_statistics, calculate_binary_statistics, calculate_mean_exp_training
 from util import predict_constants as pc
 import applicability_domain.applicability_domain_utilities as adu
 from dataclasses import dataclass, field
 from pathlib import Path
+from dotenv import load_dotenv
 import warnings
 
 import logging
@@ -43,6 +44,7 @@ level_styles = {
 coloredlogs.install(level=logging_level, milliseconds=True, level_styles=level_styles,
                     fmt='%(asctime)s - %(name)s - %(levelname)s - %(message)s (%(filename)s:%(lineno)d)')
 
+load_dotenv("../../personal.env")
 PROJECT_ROOT = os.getenv("PROJECT_ROOT")
 
 pd.options.mode.chained_assignment = None  # default='warn'
@@ -224,40 +226,44 @@ class ExcelFormatter:
     
     @staticmethod
     def set_sig_figs(
+        writer: Any,
+        sheet_name: str,
         df: pd.DataFrame,
-        columns: list[str],
-        sig_figs: int = 3,
-        in_place: bool = True
+        columns: Optional[list[str]] = None,
+        sig_figs: Union[int, str] = 3,
+        col_widths: Optional[list[int]] = None
         ) -> Optional[pd.DataFrame]:
         """Set numerical columns to have the desired number of significant figures.
         
         Args:
+            writer: pandas ExcelWriter object.
+            sheet_name: Name of the worksheet to format.
             df: DataFrame corresponding to the sheet (used to get column names and widths).
             columns: A list of columns to apply significant figures to. If None, all numerical columns are formatted.
             sig_figs: Number of significant figures for numerical columns. Defaults to 3.
-            in_place: Whether to perform the transformation in place on the provided DataFrame. Defaults to True.
         """
-        numerical_types = [np.float64, np.float32, float]
+        if columns is None:
+            numerical_types = [np.float64, np.float32, float]
+            columns = [col for col in df.columns if df[col].dtype in numerical_types]
 
         logging.debug(f"Columns:\n\t{df.columns.tolist()}\nTypes:\n\t{df.dtypes.to_dict()}")
 
-        if not in_place:
-            df = df.copy()
-        
-        if columns is None:
-            for col in df.columns.tolist():
-                if df[col].dtype in numerical_types:
-                    df[col] = df[col].apply(lambda x: f"{x:.{sig_figs}g}").astype(float)
-                    logging.debug(f"Formatted column '{col}' with {sig_figs} significant figures:\n\t{df[col].iloc[:5].tolist()}")
+        worksheet = writer.sheets[sheet_name]
+        workbook = writer.book
+
+        if isinstance(sig_figs, str) and sig_figs == "scientific":
+            sig_fig_format = workbook.add_format({"num_format": "0.00E+00"})
+        elif isinstance(sig_figs, int):
+            sig_fig_format = workbook.add_format({"num_format": "#,##0." + "0" * (sig_figs - 1)})
         else:
-            for col in columns:
-                if df[col].dtype in numerical_types:
-                    df[col] = df[col].apply(lambda x: f"{x:.{sig_figs}g}").astype(float)
-                    logging.debug(f"Formatted column '{col}' with {sig_figs} significant figures:\n\t{df[col].iloc[:5].tolist()}")
-        
-        if not in_place:
-            return df
-    
+            logging.error(f"Invalid sig_figs value: {sig_figs}. sig_figs must be a positive integer, or 'scientific'")
+
+        for col_idx in range(len(df.columns)):
+            col_name = df.columns[col_idx]
+            if col_name in columns:
+                col_width = col_widths[col_idx] if col_widths is not None else 10
+                worksheet.set_column(col_idx, col_idx, col_width, sig_fig_format)
+
     @staticmethod
     def get_header_row(has_subtotals: bool = False, has_superheaders: bool = False) -> int:
         """Get the row number where column headers are located.
@@ -298,14 +304,17 @@ class ExcelFormatter:
             df: DataFrame whose columns will have subtotal formulas added.
         """
         ws = writer.sheets[sheet_name]
+        workbook = writer.book
         nrows, ncols = df.shape
+
+        subtotal_format = workbook.add_format({"num_format": "#,##0"})
         
         for col_idx in range(ncols):
             start_cell = xl_rowcol_to_cell(3, col_idx)
             end_cell = xl_rowcol_to_cell(nrows + 2, col_idx)
             range_str = f"{start_cell}:{end_cell}"
             formula = f"=SUBTOTAL(3,{range_str})"
-            ws.write_formula(0, col_idx, formula)
+            ws.write_formula(0, col_idx, formula, subtotal_format)
         
         logging.debug(f"Added SUBTOTAL formulas to {sheet_name} with {ncols} columns")
 
@@ -1181,6 +1190,7 @@ class DataQuerier:
                 model.df_dsstoxRecords_external = model.df_dsstoxRecords_external[~model.df_dsstoxRecords_external.canonicalSmiles.isin(model.df_dsstoxRecords.canonicalSmiles)]
                 model.df_external = model.df_external[~model.df_external.ID.isin(model.df_dsstoxRecords.canonicalSmiles)]
                 model.df_preds_external = model.df_preds_external[~model.df_preds_external.canon_qsar_smiles.isin(model.df_dsstoxRecords.canonicalSmiles)]
+                model.num_external = model.df_external.shape[0] if model.df_external is not None else 0
 
             self.model = model
             return model
@@ -1336,84 +1346,6 @@ class DataQuerier:
 
         return self.experimental_parameters
 
-    @staticmethod
-    def generate_consensus_ad(df_predictions, stats_dict, ad_measure_final, is_binary=False, is_external=False):
-        # Build list of AD columns
-        colsAD = [f"AD_{ad.replace(' ', '_')}" for ad in ad_measure_final]
-
-        # Inside/outside consensus AD masks
-        mask_all_true = df_predictions[colsAD].eq(True).all(axis=1)
-        mask_outside = ~mask_all_true
-
-        # Coverage of consensus AD
-        total_rows = len(df_predictions)
-        coverage = (mask_all_true.sum() / total_rows) if total_rows > 0 else float('nan')
-
-        # Prepare subsets for consistency
-        df_inside = df_predictions.loc[mask_all_true, ['exp', 'pred']].copy()
-        df_outside = df_predictions.loc[mask_outside, ['exp', 'pred']].copy()
-        valid_inside = df_inside.dropna(subset=['exp', 'pred'])
-        valid_outside = df_outside.dropna(subset=['exp', 'pred'])
-
-        # Check if task is binary (all non-null exp ∈ {0,1})
-        # exp_nonnull = df_predictions['exp'].dropna()
-        # is_binary = exp_nonnull.isin([0, 1]).all()
-
-        def safe_div(n, d):
-            return n / d if d else float('nan')
-
-        ad_measure = " and ".join(ad_measure_final)
-
-        if is_binary:
-            # Balanced Accuracy path
-            cutoff = 0.5  # change if you have a project-wide threshold
-
-            stats_inside = calculate_binary_statistics(valid_inside, cutoff=cutoff, tag=pc.TAG_TEST)
-            stats_outside = calculate_binary_statistics(valid_outside, cutoff=cutoff, tag=pc.TAG_TEST)
-
-            ba_inside = stats_inside.get(pc.BALANCED_ACCURACY + pc.TAG_TEST, float('nan'))
-            ba_outside = stats_outside.get(pc.BALANCED_ACCURACY + pc.TAG_TEST, float('nan'))
-            ba_ratio = safe_div(ba_inside, ba_outside) 
-
-            # print('for consensus ad:')
-            # print('rows outside', df_outside.shape[0])
-            # print('stats_outside', stats_outside)
-
-            stats = {
-                "ad_measure": ad_measure,
-                "BA_Test_inside_AD": ba_inside,
-                "BA_Test_outside_AD": ba_outside,
-                "ba_ratio": ba_ratio,
-                "Coverage_Test": coverage
-            }
-        else:
-            # Continuous (MAE) path via calculate_continuous_statistics
-            # mean_exp_training not needed for MAE; pass NaN and only read MAE from the result
-            try:
-                stats_inside = calculate_continuous_statistics(df_inside, mean_exp_training=float('nan'), tag=pc.TAG_TEST)
-                mae_inside = stats_inside.get(pc.MAE + pc.TAG_TEST, float('nan'))
-            except Exception:
-                mae_inside = float('nan')
-
-            try:
-                stats_outside = calculate_continuous_statistics(df_outside, mean_exp_training=float('nan'), tag=pc.TAG_TEST)
-                mae_outside = stats_outside.get(pc.MAE + pc.TAG_TEST, float('nan'))
-                            
-            except Exception:
-                mae_outside = float('nan')
-
-            mae_ratio = safe_div(mae_outside, mae_inside)
-
-            stats = {
-                "ad_measure": ad_measure,
-                "MAE_Test_inside_AD": mae_inside,
-                "MAE_Test_outside_AD": mae_outside,
-                "mae_ratio": mae_ratio,
-                "Coverage_Test": coverage
-            }
-
-        stats_dict[f"{ad_measure}{'_External' if is_external else ''}"] = stats
-
     def query_cover_sheet_df(self) -> pd.DataFrame:
         """Query database for model summary information to populate the cover sheet.
         
@@ -1491,9 +1423,9 @@ class DataQuerier:
                         "RSQ_External": [model.modelStatistics.get("PearsonRSQ_External", float("nan"))],
                         "RMSE_External": [model.modelStatistics.get("RMSE_External", float("nan"))],
                         "MAE_External": [model.modelStatistics.get("MAE_External", float("nan"))],
-                        "MAE_Test_Inside_AD_External": [model.modelStatistics.get("MAE_Test_inside_AD_External", float("nan"))],
-                        "MAE_Test_Outside_AD_External": [model.modelStatistics.get("MAE_Test_outside_AD_External", float("nan"))],
-                        "Coverage_Test_External": [model.modelStatistics.get("Coverage_Test_External", float("nan"))]
+                        "MAE_External_Inside_AD": [model.modelStatistics.get("MAE_External_inside_AD", float("nan"))],
+                        "MAE_External_Outside_AD": [model.modelStatistics.get("MAE_External_outside_AD", float("nan"))],
+                        "Coverage_External": [model.modelStatistics.get("Coverage_External", float("nan"))]
                     })
                 else:
                     temp_dict = {}
@@ -1520,7 +1452,7 @@ class DataQuerier:
                             .rename(columns={'AD': colAD})
                         )
 
-                    DataQuerier.generate_consensus_ad(temp_df, temp_dict, ad_measures, is_binary=model.is_binary, is_external=True)
+                    adu.generate_consensus_ad(temp_df, temp_dict, ad_measures, is_binary=model.is_binary, is_external=True)
                     temp_dict = temp_dict.get(f"{model.applicabilityDomainName}_External", {})
                     temp_dict.update(calculate_continuous_statistics(temp_df, calculate_mean_exp_training(model.df_preds_training_cv.copy()), tag="_External"))
                     statistics_dict.update({
@@ -1528,9 +1460,9 @@ class DataQuerier:
                         "RSQ_External": [temp_dict.get("PearsonRSQ_External", float("nan"))],  # Need to handle next 3
                         "RMSE_External": [temp_dict.get("RMSE_External", float("nan"))],
                         "MAE_External": [temp_dict.get("MAE_External", float("nan"))],
-                        "MAE_Test_Inside_AD_External": [temp_dict.get("MAE_Test_inside_AD", float("nan"))],
-                        "MAE_Test_Outside_AD_External": [temp_dict.get("MAE_Test_outside_AD", float("nan"))],
-                        "Coverage_Test_External": [temp_dict.get("Coverage_Test", float("nan"))]
+                        "MAE_External_Inside_AD": [temp_dict.get("MAE_External_inside_AD", float("nan"))],
+                        "MAE_External_Outside_AD": [temp_dict.get("MAE_External_outside_AD", float("nan"))],
+                        "Coverage_External": [temp_dict.get("Coverage_External", float("nan"))]
                     })
         else:
             # TODO: Add code to automatically generate these statistics from the model dataframes if modelStatistics is unpopulated
@@ -1560,9 +1492,9 @@ class DataQuerier:
                         "BA_External": [model.modelStatistics.get("BA_External", float("nan"))],
                         "SN_External": [model.modelStatistics.get("SN_External", float("nan"))],
                         "SP_External": [model.modelStatistics.get("SP_External", float("nan"))],
-                        "BA_Test_Inside_AD_External": [model.modelStatistics.get("BA_Test_inside_AD_External", float("nan"))],
-                        "BA_Test_Outside_AD_External": [model.modelStatistics.get("BA_Test_outside_AD_External", float("nan"))],
-                        "Coverage_Test_External": [model.modelStatistics.get("Coverage_Test_External", float("nan"))]
+                        "BA_External_Inside_AD": [model.modelStatistics.get("BA_External_inside_AD", float("nan"))],
+                        "BA_External_Outside_AD": [model.modelStatistics.get("BA_External_outside_AD", float("nan"))],
+                        "Coverage_External": [model.modelStatistics.get("Coverage_External", float("nan"))]
                     })
                 else:
                     temp_dict = {}
@@ -1589,7 +1521,7 @@ class DataQuerier:
                             .rename(columns={'AD': colAD})
                         )
 
-                    DataQuerier.generate_consensus_ad(temp_df, temp_dict, ad_measures, is_binary=model.is_binary, is_external=True)
+                    adu.generate_consensus_ad(temp_df, temp_dict, ad_measures, is_binary=model.is_binary, is_external=True)
                     temp_dict = temp_dict.get(f"{model.applicabilityDomainName}_External", {})
                     temp_dict.update(calculate_binary_statistics(temp_df, 0.5, tag="_External"))
                     statistics_dict.update({
@@ -1597,9 +1529,9 @@ class DataQuerier:
                         "BA_External": [temp_dict.get("BA_External", float("nan"))],  # Need to handle next 3
                         "SN_External": [temp_dict.get("SN_External", float("nan"))],
                         "SP_External": [temp_dict.get("SP_External", float("nan"))],
-                        "BA_Test_Inside_AD_External": [temp_dict.get("BA_Test_inside_AD", float("nan"))],
-                        "BA_Test_Outside_AD_External": [temp_dict.get("BA_Test_outside_AD", float("nan"))],
-                        "Coverage_Test_External": [temp_dict.get("Coverage_Test", float("nan"))]
+                        "BA_External_Inside_AD": [temp_dict.get("BA_External_inside_AD", float("nan"))],
+                        "BA_External_Outside_AD": [temp_dict.get("BA_External_outside_AD", float("nan"))],
+                        "Coverage_External": [temp_dict.get("Coverage_External", float("nan"))]
                     })
         statistics = pd.DataFrame(statistics_dict).apply(lambda x: round(x, 2) if isinstance(x, float) else x)
 
@@ -1714,13 +1646,7 @@ class DataQuerier:
         training = pd.merge(model.df_training, df_gmd, left_on="ID", right_on="canon_qsar_smiles", how="left")
         training = pd.merge(training, df_preds_training_cv, left_on="ID", right_on="id", how="left")
 
-        kfold_splitter = KFold(n_splits=5, shuffle=True, random_state=42)
-        fold_col = np.zeros(len(model.df_training), dtype=int)
-        for fold_index, (train_index, val_index) in enumerate(kfold_splitter.split(model.df_training)):
-            fold_col[val_index] = fold_index + 1
-
-        training["Fold"] = fold_col
-        training["Set"] = training.Fold.apply(lambda x: f"Training CV, Fold {x}")
+        training["Set"] = training.cv_fold_x.apply(lambda x: f"Training CV, Fold {x}")
 
         df_preds_test = model.df_preds_test.rename(columns={"canon_qsar_smiles": "id"})
 
@@ -1784,14 +1710,6 @@ class DataQuerier:
         model = self.query_model()
         df_gmd = self.query_df_gmd(external=False)
 
-        try:
-            kfold_splitter = KFold(n_splits=5, shuffle=True, random_state=42)
-            fold_col = np.zeros(len(model.df_preds_training_cv), dtype=int)
-            for fold_index, (train_index, val_index) in enumerate(kfold_splitter.split(model.df_preds_training_cv)):
-                fold_col[val_index] = fold_index + 1
-        except:
-            fold_col = np.zeros(len(model.df_preds_training_cv), dtype=int)
-
         df_preds_training_cv = model.df_preds_training_cv.rename(columns={"canon_qsar_smiles": "id"})
 
         temp = pd.merge(df_preds_training_cv, df_gmd, left_on="id", right_on="canon_qsar_smiles", how="left")
@@ -1802,7 +1720,7 @@ class DataQuerier:
             "Exp": temp["exp"],
             "Pred": temp["pred"],
             "Absolute Error": abs(temp["exp"] - temp["pred"]),
-            "CV Fold": fold_col,
+            "CV Fold": temp["cv_fold_x"],
             "DTXCID": temp["dtxcid"],
             "DTXSID": temp["dtxsid"],
             "CASRN": temp["casrn"],
@@ -2141,9 +2059,9 @@ class DataTransformer:
                 "RSQ_External": [results_dict["model_statistics"].get("ext_stats", {}).get("PearsonRSQ_External", float("nan"))],
                 "RMSE_External": [results_dict["model_statistics"].get("ext_stats", {}).get("RMSE_External", float("nan"))],
                 "MAE_External": [results_dict["model_statistics"].get("ext_stats", {}).get("MAE_External", float("nan"))],
-                "MAE_Test_Inside_AD_External": [results_dict["model_statistics"].get("ext_stats_AD", {}).get("MAE_Test_inside_AD_External", float("nan"))],
-                "MAE_Test_Outside_AD_External": [results_dict["model_statistics"].get("ext_stats_AD", {}).get("MAE_Test_outside_AD_External", float("nan"))],
-                "Coverage_Test_External": [results_dict["model_statistics"].get("ext_stats_AD", {}).get("Coverage_Test_External", float("nan"))]
+                "MAE_External_Inside_AD": [results_dict["model_statistics"].get("ext_stats_AD", {}).get("MAE_External_inside_AD", float("nan"))],
+                "MAE_External_Outside_AD": [results_dict["model_statistics"].get("ext_stats_AD", {}).get("MAE_External_outside_AD", float("nan"))],
+                "Coverage_External": [results_dict["model_statistics"].get("ext_stats_AD", {}).get("Coverage_External", float("nan"))]
             })
         else:
             statistics_df = {
@@ -2164,9 +2082,9 @@ class DataTransformer:
                 "SN_External": [results_dict["model_statistics"].get("ext_stats", {}).get("SN_External", float("nan"))],
                 "SP_External": [results_dict["model_statistics"].get("ext_stats", {}).get("SP_External", float("nan"))],
                 "BA_External": [results_dict["model_statistics"].get("ext_stats", {}).get("BA_External", float("nan"))],
-                "BA_Test_Inside_AD_External": [results_dict["model_statistics"].get("ext_stats_AD", {}).get("BA_Test_inside_AD_External", float("nan"))],
-                "BA_Test_Outside_AD_External": [results_dict["model_statistics"].get("ext_stats_AD", {}).get("BA_Test_outside_AD_External", float("nan"))],
-                "Coverage_Test_External": [results_dict["model_statistics"].get("ext_stats_AD", {}).get("Coverage_Test_External", float("nan"))]
+                "BA_External_Inside_AD": [results_dict["model_statistics"].get("ext_stats_AD", {}).get("BA_External_inside_AD", float("nan"))],
+                "BA_External_Outside_AD": [results_dict["model_statistics"].get("ext_stats_AD", {}).get("BA_External_outside_AD", float("nan"))],
+                "Coverage_External": [results_dict["model_statistics"].get("ext_stats_AD", {}).get("Coverage_External", float("nan"))]
             })
         statistics_df = pd.DataFrame(statistics_df).apply(lambda x: round(x, 2) if isinstance(x, float) else x)
         return statistics_df
@@ -2359,7 +2277,7 @@ class DataTransformer:
         test["Set"] = "Test"
 
         training = df_pred_cv.loc[:, columns]
-        training["Set"] = df_pred_cv.cv_fold.apply(lambda x: f"Training CV, Fold {x + 1}")
+        training["Set"] = df_pred_cv.cv_fold.apply(lambda x: f"Training CV, Fold {x}")
 
         full = pd.concat([test, training], ignore_index=True)
         full["canon_qsar_smiles"] = full["canon_qsar_smiles"].astype(str)
@@ -2745,9 +2663,9 @@ class ModelToExcel:
                 worksheet.write_number("B11", statistics.at[0, "RMSE_External"], format_number)
                 worksheet.write_number("C11", statistics.at[0, "MAE_External"], format_number)
 
-                worksheet.write_number("D11", statistics.at[0, "MAE_Test_Inside_AD_External"], format_number)
-                worksheet.write_number("E11", statistics.at[0, "MAE_Test_Outside_AD_External"], format_number)
-                worksheet.write_number("F11", statistics.at[0, "Coverage_Test_External"], format_number)
+                worksheet.write_number("D11", statistics.at[0, "MAE_External_Inside_AD"], format_number)
+                worksheet.write_number("E11", statistics.at[0, "MAE_External_Outside_AD"], format_number)
+                worksheet.write_number("F11", statistics.at[0, "Coverage_External"], format_number)
 
             img_path = os.path.join(os.getenv("PROJECT_ROOT"), "resources", "continuous_equations.png")
         
@@ -2800,9 +2718,9 @@ class ModelToExcel:
                 worksheet.write_number("B11", statistics.at[0, "Specificity_External"], format_number)
                 worksheet.write_number("C11", statistics.at[0, "BA_External"], format_number)
 
-                worksheet.write_number("D11", statistics.at[0, "BA_Test_Inside_AD_External"], format_number)
-                worksheet.write_number("E11", statistics.at[0, "BA_Test_Outside_AD_External"], format_number)
-                worksheet.write_number("F11", statistics.at[0, "Coverage_Test_External"], format_number)
+                worksheet.write_number("D11", statistics.at[0, "BA_External_Inside_AD"], format_number)
+                worksheet.write_number("E11", statistics.at[0, "BA_External_Outside_AD"], format_number)
+                worksheet.write_number("F11", statistics.at[0, "Coverage_External"], format_number)
 
             img_path = os.path.join(os.getenv("PROJECT_ROOT"), "resources", "binary_equations.png")
 
@@ -2901,7 +2819,9 @@ class ModelToExcel:
             else:
                 worksheet.freeze_panes(1 + [0, 1][self.create_records_superheaders], 0)
 
-            ExcelFormatter.set_column_width(writer, sheet_name, records, col_width_pad=6, how="header")
+            col_widths = ExcelFormatter.set_column_width(writer, sheet_name, records, col_width_pad=6, how="header")
+            ExcelFormatter.set_sig_figs(writer, sheet_name, records, columns=["Mapped Molweight", "QSAR Property Value"], sig_figs=3, col_widths=col_widths)
+            ExcelFormatter.set_sig_figs(writer, sheet_name, records, columns=["Value Point Estimate", "Value Max", "Value Min"], sig_figs="scientific", col_widths=col_widths)
             ExcelFormatter.add_filter(writer, sheet_name, records, has_subtotals=add_subtotals, has_superheaders=self.create_records_superheaders)
 
             # Check if a UserWarning about hyperlinks was raised
@@ -3024,8 +2944,6 @@ class ModelToExcel:
             return None
         
         start_row = ExcelFormatter.get_header_row(has_subtotals=add_subtotals)
-        if "Coefficient" in model_descriptors.columns and "Standard Error" in model_descriptors.columns:
-            ExcelFormatter.set_sig_figs(model_descriptors, sig_figs=3, columns=["Coefficient", "Standard Error"])
         model_descriptors.to_excel(writer, sheet_name="Model Descriptors", index=False, startrow=start_row)
 
         workbook = writer.book
@@ -3037,6 +2955,8 @@ class ModelToExcel:
             worksheet.freeze_panes(1, 0)
 
         col_widths = ExcelFormatter.set_column_width(writer, "Model Descriptors", model_descriptors, how="full")
+        if "Coefficient" in model_descriptors.columns and "Standard Error" in model_descriptors.columns:
+            ExcelFormatter.set_sig_figs(writer, "Model Descriptors", model_descriptors, columns=["Coefficient", "Standard Error"], sig_figs=3, col_widths=col_widths)
         ExcelFormatter.add_filter(writer, "Model Descriptors", model_descriptors, has_subtotals=add_subtotals)
 
         return model_descriptors
@@ -3061,7 +2981,6 @@ class ModelToExcel:
         
         start_row = ExcelFormatter.get_header_row(has_subtotals=add_subtotals)
         # format_cols = [col for col in model_descriptor_values.columns if col.startswith("Observed") or col.startswith("Predicted")]
-        ExcelFormatter.set_sig_figs(model_descriptor_values, sig_figs=3, columns=None)
         model_descriptor_values.to_excel(writer, sheet_name="Model Descriptor Values", index=False, startrow=start_row)
 
         workbook = writer.book
@@ -3073,6 +2992,8 @@ class ModelToExcel:
             worksheet.freeze_panes(1, 0)
 
         col_widths = ExcelFormatter.set_column_width(writer, "Model Descriptor Values", model_descriptor_values, min_col_width=7, col_width_pad=5, how="header")
+        ExcelFormatter.set_sig_figs(writer, "Model Descriptor Values", model_descriptor_values, columns=None, sig_figs=3, col_widths=col_widths)
+        ExcelFormatter.set_sig_figs(writer, "Model Descriptor Values", model_descriptor_values, columns=model_descriptor_values.columns.tolist()[9:], sig_figs="scientific", col_widths=col_widths)
         ExcelFormatter.add_filter(writer, "Model Descriptor Values", model_descriptor_values, has_subtotals=add_subtotals)
 
         return model_descriptor_values
@@ -3106,7 +3027,6 @@ class ModelToExcel:
             return None
         
         start_row = ExcelFormatter.get_header_row(has_subtotals=add_subtotals)
-        ExcelFormatter.set_sig_figs(training_cv_predictions, sig_figs=3, columns=["Exp", "Pred"])
         training_cv_predictions.to_excel(writer, sheet_name="Training CV Predictions", index=False, startrow=start_row)
 
         workbook = writer.book
@@ -3118,6 +3038,7 @@ class ModelToExcel:
             worksheet.freeze_panes(1, 0)
 
         col_widths = ExcelFormatter.set_column_width(writer, "Training CV Predictions", training_cv_predictions, min_col_width=min_col_width, col_width_pad=col_width_pad, how="header")
+        ExcelFormatter.set_sig_figs(writer, "Training CV Predictions", training_cv_predictions, columns=["Exp", "Pred", "Absolute Error", "Mol Weight"], sig_figs=3, col_widths=col_widths)
         ExcelFormatter.add_filter(writer, "Training CV Predictions", training_cv_predictions, has_subtotals=add_subtotals)
         
         ChartBuilder.add_plot(writer, workbook, "Training CV Predictions", "Training CV Predictions", training_cv_predictions, is_binary=self.model.is_binary, x_col=x_col, y_col=y_col, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, log_plot=self.log_plot, yx_offset_rows=yx_offset_rows, property_name=property_name, property_units=property_units, has_subtotals=add_subtotals)
@@ -3153,7 +3074,6 @@ class ModelToExcel:
             return None
         
         start_row = ExcelFormatter.get_header_row(has_subtotals=add_subtotals)
-        ExcelFormatter.set_sig_figs(test_set_predictions, sig_figs=3, columns=["Exp", "Pred"])
         test_set_predictions.to_excel(writer, sheet_name="Test Set Predictions", index=False, startrow=start_row)
 
         workbook = writer.book
@@ -3165,6 +3085,7 @@ class ModelToExcel:
             worksheet.freeze_panes(1, 0)
 
         col_widths = ExcelFormatter.set_column_width(writer, "Test Set Predictions", test_set_predictions, min_col_width=min_col_width, col_width_pad=col_width_pad, how="header")
+        ExcelFormatter.set_sig_figs(writer, "Test Set Predictions", test_set_predictions, columns=["Exp", "Pred", "Absolute Error", "Mol Weight"], sig_figs=3, col_widths=col_widths)
         ExcelFormatter.add_filter(writer, "Test Set Predictions", test_set_predictions, has_subtotals=add_subtotals)
 
         ChartBuilder.add_plot(writer, workbook, "Test Set Predictions", "Test Set Predictions", test_set_predictions, is_binary=self.model.is_binary, x_col=x_col, y_col=y_col, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, log_plot=self.log_plot, yx_offset_rows=yx_offset_rows, property_name=property_name, property_units=property_units, has_subtotals=add_subtotals)
@@ -3201,7 +3122,6 @@ class ModelToExcel:
             return None
         
         start_row = ExcelFormatter.get_header_row(has_subtotals=add_subtotals)
-        ExcelFormatter.set_sig_figs(external_predictions, sig_figs=3, columns=["Exp", "Pred"])
         external_predictions.to_excel(writer, sheet_name="External Predictions", index=False, startrow=start_row)
 
         workbook = writer.book
@@ -3213,6 +3133,7 @@ class ModelToExcel:
             worksheet.freeze_panes(1, 0)
 
         col_widths = ExcelFormatter.set_column_width(writer, "External Predictions", external_predictions, min_col_width=min_col_width, col_width_pad=col_width_pad, how="header")
+        ExcelFormatter.set_sig_figs(writer, "External Predictions", external_predictions, columns=["Exp", "Pred", "Absolute Error", "Mol Weight"], sig_figs=3, col_widths=col_widths)
         ExcelFormatter.add_filter(writer, "External Predictions", external_predictions, has_subtotals=add_subtotals)
         
         ChartBuilder.add_plot(writer, workbook, "External Predictions", "External Predictions", external_predictions, is_binary=self.model.is_binary, x_col=x_col, y_col=y_col, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, log_plot=self.log_plot, yx_offset_rows=yx_offset_rows, property_name=property_name, property_units=property_units, has_subtotals=add_subtotals)
@@ -3333,6 +3254,38 @@ class ModelToExcel:
 # TEST FUNCTIONS AND MISCELLANEOUS STUFF
 # ============================================================
 
+def update_excel_summaries(username: str, model_ids: Optional[list[int]] = None, upload_to_db: bool = False) -> None:
+    """Update Excel summaries for the specified models.
+
+    Args:
+        username: The username of the user updating the summaries.
+        model_ids: A list of model IDs for which to update summaries.
+        upload_to_db: Whether to upload the updated summaries to the database.
+    """
+    
+    if model_ids is None:
+        # TODO: Implement logic to fetch all relevant model IDs
+        pass
+    
+    session = DataQuerier.getSession(DataQuerier.getEngine())
+
+    for model_id in model_ids:
+        file_path = os.path.join(PROJECT_ROOT, "data", "excel_summaries", f"{model_id}_summary.xlsx")
+        mdo = ModelDataObjects(model_id=model_id)
+        mte = ModelToExcel(mdo, file_path)
+        mte.create_excel()
+
+        with open(file_path, "rb") as file:
+            file_bytes = file.read()
+            logging.info(f"Model #: {model_id}, Length of Summary: {len(file_bytes)}")
+        
+        if len(file_bytes) == 0:
+            logging.warning(f"Model {model_id} summary has 0 bytes")
+            continue
+        
+        if upload_to_db:
+            upload_or_update_model_file_in_db(file_bytes, username, model_id, 2, session)
+
 def custom_encoder(obj: Any) -> Any:
     """Custom JSON encoder for model objects and dataframes.
     
@@ -3355,7 +3308,7 @@ def query_example() -> None:
     data from the database, then generates the Excel workbook.
     """
     logging.info("Running query_example()")
-    model_id = 1746
+    model_id = 1065
     file_path = os.path.join(PROJECT_ROOT, "data", "excel_summaries", f"{model_id}_summary.xlsx")
 
     mdo = ModelDataObjects(model_id=model_id)
@@ -3443,8 +3396,8 @@ def test_query_old_models() -> None:
     data from the database, then generates the Excel workbook for each model.
     """
     logging.info("Running test_query_old_models()")
-    # model_ids = list(range(1065, 1071))
-    model_ids = [1069]
+    model_ids = list(range(1065, 1071))
+    # model_ids = [1069]
     for model_id in model_ids:
         file_path = os.path.join(PROJECT_ROOT, "data", "excel_summaries", f"{model_id}_summary.xlsx")
         mdo = ModelDataObjects(model_id=model_id)
@@ -3488,11 +3441,12 @@ def test_query_fish_models() -> None:
 
 
 def main():
-    # query_example()
+    # update_excel_summaries(username="weston.murdock", model_ids=[1065, 1066, 1067, 1068, 1069, 1070], upload_to_db=False)
+    query_example()
     # local_example()
     # test_model_details_pv()
     # test_model_details_gmd()
-    test_query_old_models()
+    # test_query_old_models()
     # test_query_binary_models()
     # test_query_fish_models()
 

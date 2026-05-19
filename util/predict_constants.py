@@ -316,12 +316,14 @@ POS_CONCORDANCE: Final[str] = "PosConcordance"
 NEG_CONCORDANCE: Final[str] = "NegConcordance"
 PEARSON_RSQ: Final[str] = "PearsonRSQ"
 
+TAG_EXTERNAL: Final[str] = "_External"
 TAG_TEST: Final[str] = "_Test"
 TAG_TRAINING: Final[str] = "_Training"
 TAG_CV: Final[str] = "_CV"
 
 R2_TEST: Final[str] = R2 + TAG_TEST
 Q2_TEST: Final[str] = Q2 + TAG_TEST
+Q2_EXTERNAL: Final[str] = Q2 + TAG_EXTERNAL
 
 Q2_F3_TEST: Final[str] = "Q2_F3" + TAG_TEST
 MAE_TEST: Final[str] = MAE + TAG_TEST

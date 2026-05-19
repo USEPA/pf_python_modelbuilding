@@ -73,6 +73,8 @@ def calculate_continuous_statistics(df: pd.DataFrame, mean_exp_training: float, 
         model_statistic_values[pc.Q2_TEST] = coeff_det
     elif tag == pc.TAG_TRAINING:
         model_statistic_values[pc.R2_TRAINING] = coeff_det
+    elif tag == pc.TAG_EXTERNAL:
+        model_statistic_values[pc.Q2_EXTERNAL] = coeff_det
 
     return model_statistic_values
 

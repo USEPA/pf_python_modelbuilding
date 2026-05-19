@@ -193,7 +193,7 @@ class ModelInitializer:
 
     def get_cv_predictions(self, session, model: Model):
         sql = text("""
-            SELECT dp.canon_qsar_smiles, dp.qsar_property_value, p.qsar_predicted_value
+            SELECT dp.canon_qsar_smiles, dp.qsar_property_value, p.qsar_predicted_value, s.id
             FROM qsar_datasets.datasets d
             JOIN qsar_datasets.data_points dp ON d.id = dp.fk_dataset_id
             JOIN qsar_datasets.data_points_in_splittings dpis ON dp.id = dpis.fk_data_point_id
@@ -205,7 +205,8 @@ class ModelInitializer:
 
         try:
             results = session.execute(sql, {'model_id': model.modelId})
-            df = pd.DataFrame(results, columns=["id", "exp", "pred"])
+            df = pd.DataFrame(results, columns=["id", "exp", "pred", "cv_fold"])
+            df.cv_fold = df.cv_fold.apply(lambda x: x - 1)
             return df
 
         except SQLAlchemyError as ex:
@@ -543,10 +544,11 @@ class ModelInitializer:
 
         instance_header = f"ID\tProperty\t{model.headersTsv}\r\n"
         sql = text("""
-            SELECT dp.canon_qsar_smiles, dp.qsar_property_value, dv.values_tsv, dpis.split_num
+            SELECT dp.canon_qsar_smiles, dp.qsar_property_value, dv.values_tsv, dpis.split_num, s.id as fold_id
             FROM qsar_datasets.data_points dp
             JOIN qsar_descriptors.descriptor_values dv ON dp.canon_qsar_smiles = dv.canon_qsar_smiles
             JOIN qsar_datasets.data_points_in_splittings dpis ON dpis.fk_data_point_id = dp.id
+            JOIN qsar_datasets.splittings s ON dpis.fk_splitting_id = s.id
             WHERE dp.fk_dataset_id = :datasetId
             AND dv.fk_descriptor_set_id = :descriptorSetId
             AND dpis.fk_splitting_id = :splittingId
@@ -555,6 +557,9 @@ class ModelInitializer:
 
         sb_training = [instance_header]
         sb_prediction = [instance_header]
+        
+        training_fold_data = []
+        # prediction_fold_data = []
 
         counter_train = 0
         counter_prediction = 0
@@ -564,7 +569,7 @@ class ModelInitializer:
                                             'splittingId': model.splittingId})
 
             for row in results:
-                chemical_id, qsar_property_value, descriptors, split_num = row
+                chemical_id, qsar_property_value, descriptors, split_num, fold_id = row
                 instance = ModelInitializer.generate_instance(chemical_id, qsar_property_value, descriptors)
 
                 if instance is None:
@@ -573,14 +578,25 @@ class ModelInitializer:
 
                 if split_num == 0:
                     sb_training.append(instance)
+                    training_fold_data.append((chemical_id, fold_id - 1))
                     counter_train += 1
 
                 elif split_num == 1:
                     sb_prediction.append(instance)
+                    # prediction_fold_data.append((chemical_id, fold_id))
                     counter_prediction += 1
 
             model.df_training = dfu.load_df(''.join(sb_training))
             model.df_prediction = dfu.load_df(''.join(sb_prediction))
+            
+            # Add fold information as separate columns (won't break TSV format since it's added post-load)
+            if training_fold_data:
+                df_training_folds = pd.DataFrame(training_fold_data, columns=['ID', 'cv_fold'])
+                model.df_training = model.df_training.merge(df_training_folds, on='ID', how='left')
+            
+            # if prediction_fold_data:
+            #     df_prediction_folds = pd.DataFrame(prediction_fold_data, columns=['ID', 'cv_fold_id'])
+            #     model.df_prediction = model.df_prediction.merge(df_prediction_folds, on='ID', how='left')
 
             model.num_training = model.df_training.shape[0]
             model.num_prediction = model.df_prediction.shape[0]
