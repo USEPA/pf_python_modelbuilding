@@ -895,26 +895,44 @@ class Model:
         # print('is_categorical', self.is_binary)
 
         if self.is_binary:
-
+        
             if isinstance(self.model_obj, pypmml.Model):
                 predictions = self.model_obj.predict(pred_features)
-                predictions = np.array(predictions[predictions.columns[
-                    1]])  # probability of score=1 (continuous value) # TODO this might not work directly with kNN
-                preds = np.rint(predictions)  # convert to integer to allow BA calculation to work
-                # print(preds)
-                score = balanced_accuracy_score(pred_labels, preds)
-            elif isinstance(self.model_obj, Pipeline) or isinstance(self.model_obj, PMMLPipeline) or 'PMML' in type(
-                    self.model_obj).__name__:
-                predictions = self.model_obj.predict_proba(pred_features)[:,
-                              1]  # probability of score=1 (continuous value)
+                # Probability of class 1
+                predictions = np.asarray(predictions[predictions.columns[1]], dtype=float)
+                # Threshold at 0.5: >=0.5 -> 1, else 0
+                preds = np.rint(predictions)
 
-                # preds = self.model_obj.predict(pred_features) # generate integer values to allow BA calculation to work
-                preds = np.rint(
-                    predictions)  # convert to integer to allow BA calculation to work (faster than running predict)
-                # print(preds)
-                score = balanced_accuracy_score(pred_labels, preds)
+                y_true = pd.to_numeric(pd.Series(pred_labels), errors='coerce')
+                mask = ~y_true.isna()
+                if mask.sum() == 0:
+                    # No valid labels; you’re likely running inference only
+                    logging.debug("No true labels available; skipping balanced_accuracy_score.")
+                    score = None
+                else:
+                    y_pred = np.asarray(preds, dtype=int)
+                    score = balanced_accuracy_score(y_true[mask].astype(int), y_pred[mask])
+        
+            elif isinstance(self.model_obj, Pipeline) or isinstance(self.model_obj, PMMLPipeline) or 'PMML' in type(self.model_obj).__name__:
+                # Probability of class 1
+                predictions = self.model_obj.predict_proba(pred_features)[:, 1]
+                # Threshold at 0.5
+                preds = np.rint(predictions)
+
+                y_true = pd.to_numeric(pd.Series(pred_labels), errors='coerce')
+                mask = ~y_true.isna()
+                if mask.sum() == 0:
+                    # No valid labels; you’re likely running inference only
+                    logging.debug("No true labels available; skipping balanced_accuracy_score.")
+                    score = None
+                else:
+                    y_pred = np.asarray(preds, dtype=int)
+                    score = balanced_accuracy_score(y_true[mask].astype(int), y_pred[mask])
+
+        
             else:
                 print("Cant handle ", type(self.model_obj))
+                
 
             logging.debug(r'Balanced Accuracy for Test data = {score}'.format(score=score))
 

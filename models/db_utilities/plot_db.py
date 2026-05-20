@@ -7,47 +7,14 @@ Created on Feb 27, 2026
 from util.database_utilities import getSession
 import os
 from sqlalchemy import text
-from datetime import datetime    
+
 import webbrowser
 from model_ws_db_utilities import ModelInitializer
 from models import make_test_plots as mtp 
 import traceback
 from pathlib import Path
 
-def upload_or_update_model_file_in_db(file_bytes, username, fk_model_id, fk_file_type_id, session):
-    """
-    Insert or update a model file blob for (fk_model_id, fk_file_type_id).
-    Requires a unique constraint or index on (fk_model_id, fk_file_type_id).
-    """
-    try:
-        now = datetime.now()
-
-        upsert_query = text("""
-            INSERT INTO qsar_models.model_files
-                (created_at, created_by, file, updated_at, updated_by, fk_file_type_id, fk_model_id)
-            VALUES
-                (:now, :username, :file, :now, :username, :fk_file_type_id, :fk_model_id)
-            ON CONFLICT (fk_model_id, fk_file_type_id)
-            DO UPDATE SET
-                file       = EXCLUDED.file,
-                updated_at = EXCLUDED.updated_at,
-                updated_by = EXCLUDED.updated_by
-        """)
-
-        params = {
-            'now': now,
-            'username': username,
-            'file': file_bytes,
-            'fk_file_type_id': fk_file_type_id,
-            'fk_model_id': fk_model_id
-        }
-
-        session.execute(upsert_query, params)
-        session.commit()
-
-    except Exception as e:
-        session.rollback()
-        print(f"An error occurred: {e}")
+from models.db_utilities.model_files import upload_or_update_model_file_in_db
         
 def display_image_from_db(fk_model_id, fk_file_type_id, session):
     try:
@@ -181,6 +148,11 @@ def createTrainingTestPlotsForReports(session, write_to_db=False, write_to_hardd
         print(f"Exception occurred: {ex}")
     finally:
         session.close()
+        
+        
+    
+
+
 
 if __name__ == '__main__':
 

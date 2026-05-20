@@ -595,7 +595,7 @@ def perform_sequential_feature_selection(model, df_training, cv=5, n_features_to
 def perform_iterative_sequential_feature_selection(
     model,
     df_training,
-    cv=5,
+    cv=5, # can be PredefinedSplit sklearn object
     n_min=2,
     n_max=20,#increase if dont hit minima in objective function
     step=1,

@@ -71,12 +71,12 @@ def createAnalogTile(analog, i, md, align):
 def get_formatted_value(format_as_integer: bool, dvalue: float, nsig: int):
     # TODO: could move to ReportCreator but then would get confusing in terms of self and super()
     
-    if dvalue is None:
+    if dvalue is None or math.isnan(dvalue):
         return "N/A"
 
     try:
         if format_as_integer:
-            return format(dvalue, ".0f")
+            return format(dvalue, ".2f")
 
         # If dvalue is outside the range for scientific notation
         if dvalue != 0 and (abs(dvalue) < 0.01 or abs(dvalue) > 1e3):
@@ -226,7 +226,16 @@ class ReportCreator:
                             my_td += b(span(mr["predictionError"], style="color:red")), br()
                             
                         else:
-                            my_td += b("Predicted value:"), " " + str_pred_model_units + " " + md["unitsModel"]
+                            
+                            if md["propertyIsBinary"]:
+                                binary = int(mr["predictionValueUnitsModel"] >= 0.5)
+                                my_td+=(b("Predicted value:"))
+                                my_td+=(f" {str_pred_model_units} \u2794 {binary} {md['unitsModel']}")
+
+                            else:
+                                my_td += b("Predicted value:"), " " + str_pred_model_units + " " + md["unitsModel"]
+                                
+                                
                             if md["unitsDisplay"] != md["unitsModel"]:
                                 str_pred_display_units = get_formatted_value(md["propertyIsBinary"], mr["predictionValueUnitsDisplay"], 3)
                                 my_td += " = " + str_pred_display_units + " " + md["unitsDisplay"], br()
@@ -363,8 +372,11 @@ class ReportCreator:
                         with td(colspan="3"):
                             font("Model performance", color="white")
                     with tr():
-                        with td(align="center"): 
-                            img(src=md["imgSrcPlotScatter"], alt="Scatter plot for " + md["modelName"], height=400)
+                        
+                        if not md['propertyIsBinary']:                        
+                            with td(align="center"): 
+                                img(src=md["imgSrcPlotScatter"], alt="Scatter plot for " + md["modelName"], height=400)
+
                         with td(align="center"): 
                             img(src=md["imgSrcPlotHistogram"], alt="Histogram plot for " + md["modelName"], height=400)
                         with td(align="left"):
@@ -386,7 +398,7 @@ class ReportCreator:
                 # ms = md["modelStatistics"]
                 
                 ms = md["performance"]
-            
+                
                 with table(border=1, cellpadding="0", cellspacing="0", width="100%"):
                     caption("Model Training Set Statistics")
             
@@ -399,21 +411,38 @@ class ReportCreator:
                         with tr():
                             
                             for _ in range(2):
-                                td(["R", sup("2")], align="center")
-                                td("RMSE", align="center")
-                                td("MAE", align="center")
+                                
+                                if md['propertyIsBinary']:
+                                    td(["BA"], align="center")
+                                    td("SN", align="center")
+                                    td("SP", align="center")
+                                else:
+                                    td(["R", sup("2")], align="center")
+                                    td("RMSE", align="center")
+                                    td("MAE", align="center")
                                             
                         with tr():
                             # Training set stats
                             
-                            td(format2(ms["train"]["R2"]), align="center")
-                            td(format2(ms["train"]["RMSE"]), align="center")
-                            td(format2(ms["train"]["MAE"]), align="center")
-            
-                            # CV stats
-                            td(format2(ms["fiveFoldICV"]["R2"]), align="center")
-                            td(format2(ms["fiveFoldICV"]["RMSE"]), align="center")
-                            td(format2(ms["fiveFoldICV"]["MAE"]), align="center")
+                            if md['propertyIsBinary']:
+                                td(format2(ms["train"]["BA"]), align="center")
+                                td(format2(ms["train"]["SN"]), align="center")
+                                td(format2(ms["train"]["SP"]), align="center")
+                
+                                # CV stats
+                                td(format2(ms["fiveFoldICV"]["BA"]), align="center")
+                                td(format2(ms["fiveFoldICV"]["SN"]), align="center")
+                                td(format2(ms["fiveFoldICV"]["SP"]), align="center")
+    
+                            else:
+                                td(format2(ms["train"]["R2"]), align="center")
+                                td(format2(ms["train"]["RMSE"]), align="center")
+                                td(format2(ms["train"]["MAE"]), align="center")
+                
+                                # CV stats
+                                td(format2(ms["fiveFoldICV"]["R2"]), align="center")
+                                td(format2(ms["fiveFoldICV"]["RMSE"]), align="center")
+                                td(format2(ms["fiveFoldICV"]["MAE"]), align="center")
     
         
 
@@ -527,24 +556,44 @@ class ReportCreator:
                     with tr():
                         # Header row for metrics
         
-                        td(["R", sup("2")], align="center")
-                        td("RMSE", align="center")
-                        td("MAE", align="center")
-        
-                        td("MAE Test inside AD", align="center")
-                        td("MAE Test outside AD", align="center")
-                        td("Fraction Inside AD", align="center")
+                        if md['propertyIsBinary']:
+                            td("BA", align="center")
+                            td("SN", align="center")
+                            td("SP", align="center")
+            
+                            td("BA Test inside AD", align="center")
+                            td("BA Test outside AD", align="center")
+                            td("Fraction Inside AD", align="center")
+
+                        else:
+                            td(["R", sup("2")], align="center")
+                            td("RMSE", align="center")
+                            td("MAE", align="center")
+            
+                            td("MAE Test inside AD", align="center")
+                            td("MAE Test outside AD", align="center")
+                            td("Fraction Inside AD", align="center")
         
                     with tr():
-        
-                        td(format2(ms["external"]["R2"]), align="center")
-                        td(format2(ms["external"]["RMSE"]), align="center")
-                        td(format2(ms["external"]["MAE"]), align="center")
-
-                        # AD stats
-                        td(format2(ms["externalAD"]["MAE_inside_AD"]), align="center")
-                        td(format2(ms["externalAD"]["MAE_outside_AD"]), align="center")
-                        td(format2(ms["externalAD"]["Fraction_inside_AD"]), align="center")    
+                        
+                        if md['propertyIsBinary']:
+                            td(format2(ms["external"]["BA"]), align="center")
+                            td(format2(ms["external"]["SN"]), align="center")
+                            td(format2(ms["external"]["SP"]), align="center")
+    
+                            # AD stats
+                            td(format2(ms["externalAD"]["BA_inside_AD"]), align="center")
+                            td(format2(ms["externalAD"]["BA_outside_AD"]), align="center")
+                            td(format2(ms["externalAD"]["Fraction_inside_AD"]), align="center")    
+                        else:
+                            td(format2(ms["external"]["R2"]), align="center")
+                            td(format2(ms["external"]["RMSE"]), align="center")
+                            td(format2(ms["external"]["MAE"]), align="center")
+    
+                            # AD stats
+                            td(format2(ms["externalAD"]["MAE_inside_AD"]), align="center")
+                            td(format2(ms["externalAD"]["MAE_outside_AD"]), align="center")
+                            td(format2(ms["externalAD"]["Fraction_inside_AD"]), align="center")    
     
     class RawExpDataSection:
         
@@ -799,11 +848,15 @@ table.compact td {
                             font(neighborsInSet["title"], color="white")
                     with tr(): 
                         
-                        with td(valign="top"):
+                        with td(valign="top", style="padding: 12px 16px;"):
                             br(), br()                  
-                            plotTitle = "Nearest neighbors from " + nset
-                            plot_base64 = self.generateScatterPlot(neighborsInSet["neighbors"], md["unitsModel"], plotTitle, "Exp. vs Pred.")        
-                            img(src=f'data:image/png;base64,{plot_base64}', alt='Plot of experimental vs. predicted for ' + nset + " set", height="400")
+                            
+                            if md['propertyIsBinary']:
+                                self.build_confusion_matrix_html(neighborsInSet, 0.5)
+                            else:
+                                plotTitle = "Nearest neighbors from " + nset
+                                plot_base64 = self.generateScatterPlot(neighborsInSet["neighbors"], md["unitsModel"], plotTitle, "Exp. vs Pred.")        
+                                img(src=f'data:image/png;base64,{plot_base64}', alt='Plot of experimental vs. predicted for ' + nset + " set", height="400")
                         
                         td_tc = td(valign="top")
                         self.createTestChemicalTile(td_tc, chemical, md, mr, "center")
@@ -812,6 +865,103 @@ table.compact td {
                         with td():
                             self.addNeighborTileTable(report, neighborsInSet["neighbors"])    
                                 
+        
+        def compute_confusion_counts(self, neighbors: list, pred_threshold: float = 0.5):
+            """
+            Compute TP, FN, FP, TN for binary labels.
+            - Prediction is positive if pred >= pred_threshold, else negative.
+            - Actual is positive if exp == 1, else negative.
+            """
+            TP = FN = FP = TN = 0
+        
+            for n in neighbors:
+                if 'exp' not in n or 'pred' not in n:
+                    continue
+        
+                actual_pos = (float(n['exp']) == 1.0)
+                predicted_pos = (float(n['pred']) >= pred_threshold)
+        
+                if actual_pos and predicted_pos:
+                    TP += 1
+                elif actual_pos and not predicted_pos:
+                    FN += 1
+                elif not actual_pos and predicted_pos:
+                    FP += 1
+                else:
+                    TN += 1
+        
+            return TP, FN, FP, TN
+        
+        def build_confusion_matrix_html(self, neighbors_in_set: dict, pred_threshold: float = 0.5) -> str:
+            # Inline styles (no head modifications)
+            table_style = "border-collapse: collapse; margin-top: 1rem;"
+            base_cell = "border:1px solid #ccc; padding:0.6rem 0.8rem; text-align:center;"
+            th_cell = base_cell + " background:#f6f6f6; font-weight:bold;"
+            row_header = base_cell + " text-align:left; background:#f9fafb; font-weight:bold;"
+            pos_cell = base_cell + " background:#e7f7ec;"
+            neg_cell = base_cell + " background:#fbeaea;"
+        
+            # title_text = neighbors_in_set.get('title', 'Binary Confusion Matrix')
+            neighbors = neighbors_in_set.get('neighbors', [])
+            
+            TP, FN, FP, TN = self.compute_confusion_counts(neighbors, pred_threshold=pred_threshold)
+                
+            def fmt(x):
+                return f"{x:.3f}" if x is not None else "N/A"
+        
+            # Build document without touching doc.head
+            # h2(title_text)
+            # p(f"Set: {neighbors_in_set.get('set', 'N/A')} | Threshold (pred ≥ x is Positive): {pred_threshold}")
+    
+            # Confusion matrix table (rows = Actual, columns = Predicted)
+            with table(style=table_style):
+                caption("Binary Confusion Matrix for Neighbors")
+                with thead():
+                    with tr():
+                        th("", style=th_cell)  # top-left empty
+                        th("Predicted Positive", style=th_cell)
+                        th("Predicted Negative", style=th_cell)
+                with tbody():
+                    with tr():
+                        th("Actual Positive", style=row_header)
+                        td(str(TP), style=pos_cell)
+                        td(str(FN), style=neg_cell)
+                    with tr():
+                        th("Actual Negative", style=row_header)
+                        td(str(FP), style=neg_cell)
+                        td(str(TN), style=pos_cell)
+    
+
+            # Dont need following because have "Results for neighbors compared with entire set" table    
+            # Derived metrics
+            # total = TP + FN + FP + TN
+            # precision = (TP / (TP + FP)) if (TP + FP) else None
+            # recall = (TP / (TP + FN)) if (TP + FN) else None  # sensitivity
+            # specificity = (TN / (TN + FP)) if (TN + FP) else None
+            # accuracy = (TP + TN) / total if total else None
+            # balanced_accuracy = ((recall or 0) + (specificity or 0)) / 2 if (recall is not None and specificity is not None) else None
+
+            # Metrics summary
+            # with table(style=table_style):
+            #     caption("Metrics")
+            #     with thead():
+            #         with tr():
+            #             th("Accuracy", style=th_cell)
+            #             th("Precision", style=th_cell)
+            #             th("Recall (Sensitivity)", style=th_cell)
+            #             th("Specificity", style=th_cell)
+            #             th("Balanced Accuracy", style=th_cell)
+            #             th("Total", style=th_cell)
+            #     with tbody():
+            #         with tr():
+            #             td(fmt(accuracy), style=base_cell)
+            #             td(fmt(precision), style=base_cell)
+            #             td(fmt(recall), style=base_cell)
+            #             td(fmt(specificity), style=base_cell)
+            #             td(fmt(balanced_accuracy), style=base_cell)
+            #             td(str(total), style=base_cell)
+        
+        
         def createTestChemicalTile(self, td_tc, chemical, md, mr, align):
                 
                 td_tc += br(), br()
@@ -854,23 +1004,50 @@ table.compact td {
                             
                         with tbody():
                             
-                            with tr(style="background-color: #d3d3d3"):
-                                th("Chemicals")
-                                th("MAE*")
-                            
-                            with tr():
-                                td("Analogs from set")
-                                td(get_formatted_value(False, neighborsInSet["MAE"], 3))
-            
-                            with tr():
-                                td("Entire set")
+                            if md['propertyIsBinary']:
                                 
-                                if "train" in neighborsInSet["set"].lower():
-                                    td(get_formatted_value(False, md["performance"]["fiveFoldICV"]["MAE"], 3))    
-                                else:
-                                    td(get_formatted_value(False, md["performance"]["external"]["MAE"], 3))
-                
-                    p('* Mean absolute error in ' + md["unitsModel"])
+                                with tr(style="background-color: #d3d3d3"):
+                                    th("Chemicals")
+                                    th("BA*")
+                                    th("SN")
+                                    th("SP")
+                                with tr():
+                                    td("Analogs from set")
+                                    td(get_formatted_value(False, neighborsInSet["BA"], 3))
+                                    td(get_formatted_value(False, neighborsInSet["SN"], 3))
+                                    td(get_formatted_value(False, neighborsInSet["SP"], 3))
+                                
+                                with tr():
+                                    td("Entire set")
+                                    if "train" in neighborsInSet["set"].lower():
+                                        td(get_formatted_value(False, md["performance"]["fiveFoldICV"]["BA"], 3))    
+                                        td(get_formatted_value(False, md["performance"]["fiveFoldICV"]["SN"], 3))
+                                        td(get_formatted_value(False, md["performance"]["fiveFoldICV"]["SP"], 3))
+                                    else:
+                                        td(get_formatted_value(False, md["performance"]["external"]["BA"], 3))
+                                        td(get_formatted_value(False, md["performance"]["external"]["SN"], 3))
+                                        td(get_formatted_value(False, md["performance"]["external"]["SP"], 3))
+                                
+                            else:
+                            
+                                with tr(style="background-color: #d3d3d3"):
+                                    th("Chemicals")
+                                    th("MAE*")
+                                with tr():
+                                    td("Analogs from set")
+                                    td(get_formatted_value(False, neighborsInSet["MAE"], 3))
+                                with tr():
+                                    td("Entire set")
+                                    if "train" in neighborsInSet["set"].lower():
+                                        td(get_formatted_value(False, md["performance"]["fiveFoldICV"]["MAE"], 3))    
+                                    else:
+                                        td(get_formatted_value(False, md["performance"]["external"]["MAE"], 3))
+                                        
+                                                                    
+                    if md['propertyIsBinary']:
+                        p('* BA=Balanced accuracy, SN=Sensitivity, SP=Specificity')
+                    else:
+                        p('* Mean absolute error in ' + md["unitsModel"])
                     
         def addNeighborTileTable(self, report, neighbors):
                 
@@ -1059,6 +1236,8 @@ table.compact td {
                             with tr():
                                 with td():
                                     nrs.write_neighbors(report, report["neighborResultsPrediction"])
+                                    # print(json.dumps(report["neighborResultsPrediction"],indent=4))
+                                    
 
                         if report["neighborResultsTraining"]:
                                     
