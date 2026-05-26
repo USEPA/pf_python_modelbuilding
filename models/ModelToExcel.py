@@ -1469,8 +1469,8 @@ class DataQuerier:
                     )
 
                 adu.generate_consensus_ad(temp_df, temp_dict, ad_measures, is_binary=model.is_binary, is_external=True)
-                temp_dict = temp_dict.get(f"{model.applicabilityDomainName}_External", {})
-                temp_dict.update(calculate_continuous_statistics(temp_df, calculate_mean_exp_training(model.df_preds_training_cv.copy()), tag="_External"))
+                temp_dict = temp_dict.get(f"{model.applicabilityDomainName} External", {})
+                temp_dict.update(calculate_continuous_statistics(temp_df, calculate_mean_exp_training(model.df_preds_training_cv.copy()), tag="_External", ad_measure_final=model.applicabilityDomainName.split(" and ")))
                 statistics_dict.update({
                     "nExternal": [getattr(model, "num_external", float("nan"))],
                     "RSQ_External": [temp_dict.get("PearsonRSQ_External", float("nan"))],  # Need to handle next 3
@@ -1541,8 +1541,8 @@ class DataQuerier:
                     )
 
                 adu.generate_consensus_ad(temp_df, temp_dict, ad_measures, is_binary=model.is_binary, is_external=True)
-                temp_dict = temp_dict.get(f"{model.applicabilityDomainName}_External", {})
-                temp_dict.update(calculate_binary_statistics(temp_df, 0.5, tag="_External"))
+                temp_dict = temp_dict.get(f"{model.applicabilityDomainName} External", {})
+                temp_dict.update(calculate_binary_statistics(temp_df, 0.5, tag="_External", ad_measure_final=model.applicabilityDomainName.split(" and ")))
                 statistics_dict.update({
                     "nExternal": [getattr(model, "num_external", float("nan"))],
                     "BA_External": [temp_dict.get("BA_External", float("nan"))],  # Need to handle next 3
@@ -3445,7 +3445,7 @@ def query_example() -> None:
     data from the database, then generates the Excel workbook.
     """
     logging.info("Running query_example()")
-    model_id = 1065
+    model_id = 1753
     try:
         file_path = os.path.join(PROJECT_ROOT, "data", "excel_summaries", f"{model_id}_summary.xlsx")
 
@@ -3595,9 +3595,9 @@ def main():
     # local_example()
     # test_model_details_pv()
     # test_model_details_gmd()
-    test_query_old_models()
-    test_query_binary_models()
-    test_query_fish_models()
+    # test_query_old_models()
+    # test_query_binary_models()
+    # test_query_fish_models()
 
 if __name__ == "__main__":
     main()
