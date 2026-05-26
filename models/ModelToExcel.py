@@ -1397,142 +1397,14 @@ class DataQuerier:
 
         model = self.query_model()
 
+        if getattr(model, "modelStatistics", None) is None:
+            model.modelStatistics = DataTransformer.get_modelStatistics(model)
+
         if not model.is_binary:
-            # TODO: Add code to automatically generate these statistics from the model dataframes if modelStatistics is unpopulated
-            statistics_dict = {
-                "nTraining": [model.num_training],
-                "nTest": [model.num_prediction],
-                "RSQ_Training": [model.modelStatistics.get("PearsonRSQ_Training", float("nan"))],
-                "RMSE_Training": [model.modelStatistics.get("RMSE_Training", float("nan"))],
-                "MAE_Training": [model.modelStatistics.get("MAE_Training", float("nan"))],
-                "RSQ_CV_Training": [model.modelStatistics.get("PearsonRSQ_CV_Training", float("nan"))],
-                "RMSE_CV_Training": [model.modelStatistics.get("RMSE_CV_Training", float("nan"))],
-                "MAE_CV_Training": [model.modelStatistics.get("MAE_CV_Training", float("nan"))],
-                "RSQ_Test": [model.modelStatistics.get("PearsonRSQ_Test", float("nan"))],
-                "RMSE_Test": [model.modelStatistics.get("RMSE_Test", float("nan"))],
-                "MAE_Test": [model.modelStatistics.get("MAE_Test", float("nan"))],
-                "Q2_Test": [model.modelStatistics.get("Q2_Test", float("nan"))],
-                "MAE_Test_Inside_AD": [model.modelStatistics.get("MAE_Test_inside_AD", float("nan"))],
-                "MAE_Test_Outside_AD": [model.modelStatistics.get("MAE_Test_outside_AD", float("nan"))],
-                "Coverage_Test": [model.modelStatistics.get("Coverage_Test", float("nan"))]
-            }
-            if getattr(model, "external_dataset_name", False):
-                if model.modelStatistics.get("PearsonRSQ_External", False):
-                    statistics_dict.update({
-                        "nExternal": [getattr(model, "num_external", float("nan"))],
-                        "RSQ_External": [model.modelStatistics.get("PearsonRSQ_External", float("nan"))],
-                        "RMSE_External": [model.modelStatistics.get("RMSE_External", float("nan"))],
-                        "MAE_External": [model.modelStatistics.get("MAE_External", float("nan"))],
-                        "MAE_External_Inside_AD": [model.modelStatistics.get("MAE_External_inside_AD", float("nan"))],
-                        "MAE_External_Outside_AD": [model.modelStatistics.get("MAE_External_outside_AD", float("nan"))],
-                        "Coverage_External": [model.modelStatistics.get("Coverage_External", float("nan"))]
-                    })
-                else:
-                    temp_dict = {}
-                    temp_df = model.df_preds_external.copy()
-                    ad_measures = model.applicabilityDomainName.split(" and ")
-                    for ad_measure in ad_measures:
-                        df_ad_output, _ = adu.generate_applicability_domain_with_preselected_descriptors_from_dfs(
-                            train_df=model.df_training.copy(), test_df=model.df_external.copy(),
-                            remove_log_p=model.remove_log_p_descriptors,
-                            embedding=model.embedding, applicability_domain=ad_measure,
-                            filterColumnsInBothSets=False,
-                            returnTrainingAD=False
-                        )
-                                                
-                        colAD = "AD_" + ad_measure.replace(" ", "_")
-                        
-                        # Append AD flag to predictions
-                        temp_df = (
-                            temp_df
-                            .merge(
-                                df_ad_output.rename(columns={'idTest': 'id'})[['id', 'AD']],
-                                on='id', how='left'
-                            )
-                            .rename(columns={'AD': colAD})
-                        )
-
-                    adu.generate_consensus_ad(temp_df, temp_dict, ad_measures, is_binary=model.is_binary, is_external=True)
-                    temp_dict = temp_dict.get(f"{model.applicabilityDomainName}_External", {})
-                    temp_dict.update(calculate_continuous_statistics(temp_df, calculate_mean_exp_training(model.df_preds_training_cv.copy()), tag="_External"))
-                    statistics_dict.update({
-                        "nExternal": [getattr(model, "num_external", float("nan"))],
-                        "RSQ_External": [temp_dict.get("PearsonRSQ_External", float("nan"))],  # Need to handle next 3
-                        "RMSE_External": [temp_dict.get("RMSE_External", float("nan"))],
-                        "MAE_External": [temp_dict.get("MAE_External", float("nan"))],
-                        "MAE_External_Inside_AD": [temp_dict.get("MAE_External_inside_AD", float("nan"))],
-                        "MAE_External_Outside_AD": [temp_dict.get("MAE_External_outside_AD", float("nan"))],
-                        "Coverage_External": [temp_dict.get("Coverage_External", float("nan"))]
-                    })
+            statistics_dict = self.query_continuous_stats_dict(model)
         else:
-            # TODO: Add code to automatically generate these statistics from the model dataframes if modelStatistics is unpopulated
-            statistics_dict = {
-                "nTraining": [model.num_training],
-                "nTest": [model.num_prediction],
-                "Concordance_Training": [model.modelStatistics.get("Concordance_Training", float("nan"))],
-                "BA_Training": [model.modelStatistics.get("BA_Training", float("nan"))],
-                "SN_Training": [model.modelStatistics.get("SN_Training", float("nan"))],
-                "SP_Training": [model.modelStatistics.get("SP_Training", float("nan"))],
-                "Concordance_CV_Training": [model.modelStatistics.get("Concordance_CV_Training", float("nan"))],
-                "BA_CV_Training": [model.modelStatistics.get("BA_CV_Training", float("nan"))],
-                "SN_CV_Training": [model.modelStatistics.get("SN_CV_Training", float("nan"))],
-                "SP_CV_Training": [model.modelStatistics.get("SP_CV_Training", float("nan"))],
-                "Concordance_Test": [model.modelStatistics.get("Concordance_Test", float("nan"))],
-                "BA_Test": [model.modelStatistics.get("BA_Test", float("nan"))],
-                "SN_Test": [model.modelStatistics.get("SN_Test", float("nan"))],
-                "SP_Test": [model.modelStatistics.get("SP_Test", float("nan"))],
-                "BA_Test_Inside_AD": [model.modelStatistics.get("BA_Test_inside_AD", float("nan"))],
-                "BA_Test_Outside_AD": [model.modelStatistics.get("BA_Test_outside_AD", float("nan"))],
-                "Coverage_Test": [model.modelStatistics.get("Coverage_Test", float("nan"))]
-            }
-            if getattr(model, "external_dataset_name", False):
-                if model.modelStatistics.get("BA_External", False):
-                    statistics_dict.update({
-                        "nExternal": [getattr(model, "num_external", float("nan"))],
-                        "BA_External": [model.modelStatistics.get("BA_External", float("nan"))],
-                        "SN_External": [model.modelStatistics.get("SN_External", float("nan"))],
-                        "SP_External": [model.modelStatistics.get("SP_External", float("nan"))],
-                        "BA_External_Inside_AD": [model.modelStatistics.get("BA_External_inside_AD", float("nan"))],
-                        "BA_External_Outside_AD": [model.modelStatistics.get("BA_External_outside_AD", float("nan"))],
-                        "Coverage_External": [model.modelStatistics.get("Coverage_External", float("nan"))]
-                    })
-                else:
-                    temp_dict = {}
-                    temp_df = model.df_preds_external.copy()
-                    ad_measures = model.applicabilityDomainName.split(" and ")
-                    for ad_measure in ad_measures:
-                        df_ad_output, _ = adu.generate_applicability_domain_with_preselected_descriptors_from_dfs(
-                            train_df=model.df_training.copy(), test_df=model.df_external.copy(),
-                            remove_log_p=model.remove_log_p_descriptors,
-                            embedding=model.embedding, applicability_domain=ad_measure,
-                            filterColumnsInBothSets=False,
-                            returnTrainingAD=False
-                        )
-                                                
-                        colAD = "AD_" + ad_measure.replace(" ", "_")
-                        
-                        # Append AD flag to predictions
-                        temp_df = (
-                            temp_df
-                            .merge(
-                                df_ad_output.rename(columns={'idTest': 'id'})[['id', 'AD']],
-                                on='id', how='left'
-                            )
-                            .rename(columns={'AD': colAD})
-                        )
-
-                    adu.generate_consensus_ad(temp_df, temp_dict, ad_measures, is_binary=model.is_binary, is_external=True)
-                    temp_dict = temp_dict.get(f"{model.applicabilityDomainName}_External", {})
-                    temp_dict.update(calculate_binary_statistics(temp_df, 0.5, tag="_External"))
-                    statistics_dict.update({
-                        "nExternal": [getattr(model, "num_external", float("nan"))],
-                        "BA_External": [temp_dict.get("BA_External", float("nan"))],  # Need to handle next 3
-                        "SN_External": [temp_dict.get("SN_External", float("nan"))],
-                        "SP_External": [temp_dict.get("SP_External", float("nan"))],
-                        "BA_External_Inside_AD": [temp_dict.get("BA_External_inside_AD", float("nan"))],
-                        "BA_External_Outside_AD": [temp_dict.get("BA_External_outside_AD", float("nan"))],
-                        "Coverage_External": [temp_dict.get("Coverage_External", float("nan"))]
-                    })
+            statistics_dict = self.query_binary_stats_dict(model)
+        
         statistics = pd.DataFrame(statistics_dict).apply(lambda x: round(x, 2) if isinstance(x, float) else x)
 
         # self.statistics_df = statistics
@@ -1540,6 +1412,148 @@ class DataQuerier:
         logging.info(f"Finished building Statistics from Model (model_id = {self.model_id})")
 
         return statistics
+
+    def query_continuous_stats_dict(self, model: Model) -> dict:
+        # TODO: Add code to automatically generate these statistics from the model dataframes if modelStatistics is unpopulated
+        statistics_dict = {
+            "nTraining": [model.num_training],
+            "nTest": [model.num_prediction],
+            "RSQ_Training": [model.modelStatistics.get("PearsonRSQ_Training", float("nan"))],
+            "RMSE_Training": [model.modelStatistics.get("RMSE_Training", float("nan"))],
+            "MAE_Training": [model.modelStatistics.get("MAE_Training", float("nan"))],
+            "RSQ_CV_Training": [model.modelStatistics.get("PearsonRSQ_CV_Training", float("nan"))],
+            "RMSE_CV_Training": [model.modelStatistics.get("RMSE_CV_Training", float("nan"))],
+            "MAE_CV_Training": [model.modelStatistics.get("MAE_CV_Training", float("nan"))],
+            "RSQ_Test": [model.modelStatistics.get("PearsonRSQ_Test", float("nan"))],
+            "RMSE_Test": [model.modelStatistics.get("RMSE_Test", float("nan"))],
+            "MAE_Test": [model.modelStatistics.get("MAE_Test", float("nan"))],
+            "Q2_Test": [model.modelStatistics.get("Q2_Test", float("nan"))],
+            "MAE_Test_Inside_AD": [model.modelStatistics.get("MAE_Test_inside_AD", float("nan"))],
+            "MAE_Test_Outside_AD": [model.modelStatistics.get("MAE_Test_outside_AD", float("nan"))],
+            "Coverage_Test": [model.modelStatistics.get("Coverage_Test", float("nan"))]
+        }
+        if getattr(model, "external_dataset_name", False):
+            if model.modelStatistics.get("PearsonRSQ_External", False):
+                statistics_dict.update({
+                    "nExternal": [getattr(model, "num_external", float("nan"))],
+                    "RSQ_External": [model.modelStatistics.get("PearsonRSQ_External", float("nan"))],
+                    "RMSE_External": [model.modelStatistics.get("RMSE_External", float("nan"))],
+                    "MAE_External": [model.modelStatistics.get("MAE_External", float("nan"))],
+                    "MAE_External_Inside_AD": [model.modelStatistics.get("MAE_External_inside_AD", float("nan"))],
+                    "MAE_External_Outside_AD": [model.modelStatistics.get("MAE_External_outside_AD", float("nan"))],
+                    "Coverage_External": [model.modelStatistics.get("Coverage_External", float("nan"))]
+                })
+            else:
+                temp_dict = {}
+                temp_df = model.df_preds_external.copy()
+                ad_measures = model.applicabilityDomainName.split(" and ")
+                for ad_measure in ad_measures:
+                    df_ad_output, _ = adu.generate_applicability_domain_with_preselected_descriptors_from_dfs(
+                        train_df=model.df_training.copy(), test_df=model.df_external.copy(),
+                        remove_log_p=model.remove_log_p_descriptors,
+                        embedding=model.embedding, applicability_domain=ad_measure,
+                        filterColumnsInBothSets=False,
+                        returnTrainingAD=False
+                    )
+                                            
+                    colAD = "AD_" + ad_measure.replace(" ", "_")
+                    
+                    # Append AD flag to predictions
+                    temp_df = (
+                        temp_df
+                        .merge(
+                            df_ad_output.rename(columns={'idTest': 'id'})[['id', 'AD']],
+                            on='id', how='left'
+                        )
+                        .rename(columns={'AD': colAD})
+                    )
+
+                adu.generate_consensus_ad(temp_df, temp_dict, ad_measures, is_binary=model.is_binary, is_external=True)
+                temp_dict = temp_dict.get(f"{model.applicabilityDomainName}_External", {})
+                temp_dict.update(calculate_continuous_statistics(temp_df, calculate_mean_exp_training(model.df_preds_training_cv.copy()), tag="_External"))
+                statistics_dict.update({
+                    "nExternal": [getattr(model, "num_external", float("nan"))],
+                    "RSQ_External": [temp_dict.get("PearsonRSQ_External", float("nan"))],  # Need to handle next 3
+                    "RMSE_External": [temp_dict.get("RMSE_External", float("nan"))],
+                    "MAE_External": [temp_dict.get("MAE_External", float("nan"))],
+                    "MAE_External_Inside_AD": [temp_dict.get("MAE_External_inside_AD", float("nan"))],
+                    "MAE_External_Outside_AD": [temp_dict.get("MAE_External_outside_AD", float("nan"))],
+                    "Coverage_External": [temp_dict.get("Coverage_External", float("nan"))]
+                })
+        
+        return statistics_dict
+
+    def query_binary_stats_dict(self, model: Model) -> dict:
+        # TODO: Add code to automatically generate these statistics from the model dataframes if modelStatistics is unpopulated
+        statistics_dict = {
+            "nTraining": [model.num_training],
+            "nTest": [model.num_prediction],
+            "Concordance_Training": [model.modelStatistics.get("Concordance_Training", float("nan"))],
+            "BA_Training": [model.modelStatistics.get("BA_Training", float("nan"))],
+            "SN_Training": [model.modelStatistics.get("SN_Training", float("nan"))],
+            "SP_Training": [model.modelStatistics.get("SP_Training", float("nan"))],
+            "Concordance_CV_Training": [model.modelStatistics.get("Concordance_CV_Training", float("nan"))],
+            "BA_CV_Training": [model.modelStatistics.get("BA_CV_Training", float("nan"))],
+            "SN_CV_Training": [model.modelStatistics.get("SN_CV_Training", float("nan"))],
+            "SP_CV_Training": [model.modelStatistics.get("SP_CV_Training", float("nan"))],
+            "Concordance_Test": [model.modelStatistics.get("Concordance_Test", float("nan"))],
+            "BA_Test": [model.modelStatistics.get("BA_Test", float("nan"))],
+            "SN_Test": [model.modelStatistics.get("SN_Test", float("nan"))],
+            "SP_Test": [model.modelStatistics.get("SP_Test", float("nan"))],
+            "BA_Test_Inside_AD": [model.modelStatistics.get("BA_Test_inside_AD", float("nan"))],
+            "BA_Test_Outside_AD": [model.modelStatistics.get("BA_Test_outside_AD", float("nan"))],
+            "Coverage_Test": [model.modelStatistics.get("Coverage_Test", float("nan"))]
+        }
+        if getattr(model, "external_dataset_name", False):
+            if model.modelStatistics.get("BA_External", False):
+                statistics_dict.update({
+                    "nExternal": [getattr(model, "num_external", float("nan"))],
+                    "BA_External": [model.modelStatistics.get("BA_External", float("nan"))],
+                    "SN_External": [model.modelStatistics.get("SN_External", float("nan"))],
+                    "SP_External": [model.modelStatistics.get("SP_External", float("nan"))],
+                    "BA_External_Inside_AD": [model.modelStatistics.get("BA_External_inside_AD", float("nan"))],
+                    "BA_External_Outside_AD": [model.modelStatistics.get("BA_External_outside_AD", float("nan"))],
+                    "Coverage_External": [model.modelStatistics.get("Coverage_External", float("nan"))]
+                })
+            else:
+                temp_dict = {}
+                temp_df = model.df_preds_external.copy()
+                ad_measures = model.applicabilityDomainName.split(" and ")
+                for ad_measure in ad_measures:
+                    df_ad_output, _ = adu.generate_applicability_domain_with_preselected_descriptors_from_dfs(
+                        train_df=model.df_training.copy(), test_df=model.df_external.copy(),
+                        remove_log_p=model.remove_log_p_descriptors,
+                        embedding=model.embedding, applicability_domain=ad_measure,
+                        filterColumnsInBothSets=False,
+                        returnTrainingAD=False
+                    )
+                                            
+                    colAD = "AD_" + ad_measure.replace(" ", "_")
+                    
+                    # Append AD flag to predictions
+                    temp_df = (
+                        temp_df
+                        .merge(
+                            df_ad_output.rename(columns={'idTest': 'id'})[['id', 'AD']],
+                            on='id', how='left'
+                        )
+                        .rename(columns={'AD': colAD})
+                    )
+
+                adu.generate_consensus_ad(temp_df, temp_dict, ad_measures, is_binary=model.is_binary, is_external=True)
+                temp_dict = temp_dict.get(f"{model.applicabilityDomainName}_External", {})
+                temp_dict.update(calculate_binary_statistics(temp_df, 0.5, tag="_External"))
+                statistics_dict.update({
+                    "nExternal": [getattr(model, "num_external", float("nan"))],
+                    "BA_External": [temp_dict.get("BA_External", float("nan"))],  # Need to handle next 3
+                    "SN_External": [temp_dict.get("SN_External", float("nan"))],
+                    "SP_External": [temp_dict.get("SP_External", float("nan"))],
+                    "BA_External_Inside_AD": [temp_dict.get("BA_External_inside_AD", float("nan"))],
+                    "BA_External_Outside_AD": [temp_dict.get("BA_External_outside_AD", float("nan"))],
+                    "Coverage_External": [temp_dict.get("Coverage_External", float("nan"))]
+                })
+            
+        return statistics_dict
     
     def query_records_df(self) -> pd.DataFrame:
         """Query database for detailed experimental records.
@@ -2088,6 +2102,128 @@ class DataTransformer:
             })
         statistics_df = pd.DataFrame(statistics_df).apply(lambda x: round(x, 2) if isinstance(x, float) else x)
         return statistics_df
+    
+    @staticmethod
+    def get_modelStatistics(model: Model) -> dict:
+        # TODO: Fix entirely and get working, then test
+        try:
+            is_binary = model.is_binary
+            df_predictions_test = model.df_preds_test
+            df_predictions_training = model.df_preds_training_cv
+            df_training = model.df_training
+            df_predictions_all = model.df_preds_training_cv
+            df_prediction_ext = model.df_preds_external
+            ad_measure_model = model.applicabilityDomainName
+            run_AD = True if ad_measure_model else False
+            ad_measures = ad_measure_model.split(" and ") if ad_measure_model else None
+            df_prediction = model.df_prediction
+            dataset_name_ext = model.external_dataset_name
+            params = model.get_single_parameters()
+        except Exception as e:
+            logging.error("Error occurred while fetching model statistics.")
+            logging.error(e)
+            return
+
+        # training_stats and test_stats (from Results.???)
+        if is_binary:
+            test_stats = calculate_binary_statistics(df_predictions_test, 0.5, "_Test")
+            training_stats = calculate_binary_statistics(df_predictions_training, 0.5, "_Training")
+        else:
+            mean_exp_training = df_training["Property"].mean()
+            test_stats = calculate_continuous_statistics(df_predictions_test, mean_exp_training, "_Test")        
+            training_stats = calculate_continuous_statistics(df_predictions_training, mean_exp_training, "_Training")
+
+        # cv_stats (from ModelBuilder.crossvalidate)
+        if is_binary:
+            cv_stats = calculate_binary_statistics(df_predictions_all, 0.5, "_CV_Training")
+        else:
+            mean_exp_training = df_predictions_all["exp"].mean()
+            cv_stats = calculate_continuous_statistics(df_predictions_all, mean_exp_training, "_CV_Training")
+        
+        # ext_stats (from ModelBuilder.predict)
+        if is_binary:
+            ext_stats = calculate_binary_statistics(df_prediction_ext, 0.5, "_External")
+        else:
+            mean_exp_training = df_prediction_ext["exp"].mean()
+            ext_stats = calculate_continuous_statistics(df_prediction_ext, mean_exp_training, "_External")
+
+        # stats_dict
+        stats_dict = {}
+        if run_AD:
+            for ad_measure in ad_measures:
+                df_pred_test = runAD(df_training, df_prediction, params, model.embedding, df_pred_test, ad_measure, stats_dict, is_binary=is_binary, is_external=False)
+    
+            if len(ad_measure) > 1:
+                adu.generate_consensus_ad(df_pred_test, stats_dict, ad_measure_model, is_binary=is_binary, is_external=False)
+
+        # ext_stats_dict
+        ext_stats_dict = {}
+        if dataset_name_ext is not None:
+            if run_AD:
+                for ad_measure in ad_measures:
+                    df_pred_ext = runAD(df_training, df_prediction_ext, params, model.embedding, df_pred_ext, ad_measure, ext_stats_dict, is_binary=is_binary, is_external=True)
+        
+                if len(ad_measure) > 1:
+                    adu.generate_consensus_ad(df_pred_ext, ext_stats_dict, ad_measure_model, is_binary=is_binary, is_external=True)
+
+        # results_dict
+        results_dict = {}
+        ms = {}
+        results_dict["model_statistics"] = ms
+
+        if len(stats_dict) > 0:
+            ms["test_stats_all_AD"] = stats_dict
+
+        training_stats.pop("Coverage_Training")
+        ms["training_stats"] = training_stats
+        
+        if cv_stats:
+            cv_stats.pop("Coverage_CV_Training")
+            ms["cv_stats"] = cv_stats
+
+        if ext_stats:
+            # print('ext_stats', json.dumps(ext_stats))
+            ext_stats.pop("Coverage_External")
+            ms["ext_stats"] = ext_stats
+
+        test_stats.pop("Coverage_Test")
+        ms["test_stats"] = test_stats
+
+        if len(stats_dict) > 0:
+            str_ad_measure_final = " and ".join(ad_measure_model)                        
+            ms["test_stats_AD"] = stats_dict[str_ad_measure_final]
+            ms["test_stats_all_AD"] = stats_dict
+        
+        if len(stats_dict) > 0 and ext_stats:
+            external_ad = str_ad_measure_final + " External"
+            ms["ext_stats_AD"] = ext_stats_dict[external_ad]
+            ms["ext_stats_all_AD"] = ext_stats_dict
+
+        # ad_stats and external_ad_stats
+        ad_stats = (results_dict.get('model_statistics') or {}).get('test_stats_AD') or {}
+        external_ad_stats = results_dict.get('model_statistics', {}).get('ext_stats_AD', {}) or {}
+        external_ad_stat_key_mapping = {
+            "ad_measure": "ad_measure_external",
+            "MAE_External_inside_AD": "MAE_External_inside_AD",
+            "MAE_External_outside_AD": "MAE_External_outside_AD",
+            "mae_ratio": "mae_ratio_external",
+            "Coverage_External": "Coverage_External",
+            "BA_External_inside_AD": "BA_External_inside_AD",
+            "BA_External_outside_AD": "BA_External_outside_AD",
+            "ba_ratio": "ba_ratio_external"
+        }
+        external_ad_stats = {external_ad_stat_key_mapping.get(key, key): value for key, value in external_ad_stats.items()}
+
+        modelStatistics = (
+            (training_stats or {})
+            | (cv_stats or {})
+            | (test_stats or {})
+            | ad_stats
+            | (ext_stats or {})
+            | external_ad_stats
+        )
+
+        return modelStatistics
 
     @staticmethod
     def get_records_df(df_pv: pd.DataFrame) -> pd.DataFrame:
@@ -3286,6 +3422,7 @@ def update_excel_summaries(username: str, model_ids: Optional[list[int]] = None,
         if upload_to_db:
             upload_or_update_model_file_in_db(file_bytes, username, model_id, 2, session)
 
+
 def custom_encoder(obj: Any) -> Any:
     """Custom JSON encoder for model objects and dataframes.
     
@@ -3309,11 +3446,14 @@ def query_example() -> None:
     """
     logging.info("Running query_example()")
     model_id = 1065
-    file_path = os.path.join(PROJECT_ROOT, "data", "excel_summaries", f"{model_id}_summary.xlsx")
+    try:
+        file_path = os.path.join(PROJECT_ROOT, "data", "excel_summaries", f"{model_id}_summary.xlsx")
 
-    mdo = ModelDataObjects(model_id=model_id)
-    mte = ModelToExcel(mdo, file_path)
-    mte.create_excel()
+        mdo = ModelDataObjects(model_id=model_id)
+        mte = ModelToExcel(mdo, file_path)
+        mte.create_excel()
+    except Exception as e:
+        logging.error(f"Error occurred while processing model_id {model_id}: {e}")
 
 
 def local_example() -> None:
@@ -3399,10 +3539,13 @@ def test_query_old_models() -> None:
     model_ids = list(range(1065, 1071))
     # model_ids = [1069]
     for model_id in model_ids:
-        file_path = os.path.join(PROJECT_ROOT, "data", "excel_summaries", f"{model_id}_summary.xlsx")
-        mdo = ModelDataObjects(model_id=model_id)
-        mte = ModelToExcel(mdo, file_path)
-        mte.create_excel()
+        try:
+            file_path = os.path.join(PROJECT_ROOT, "data", "excel_summaries", f"{model_id}_summary.xlsx")
+            mdo = ModelDataObjects(model_id=model_id)
+            mte = ModelToExcel(mdo, file_path)
+            mte.create_excel()
+        except Exception as e:
+            logging.error(f"Error occurred while processing model_id {model_id}: {e}")
 
 
 def test_query_binary_models() -> None:
@@ -3414,15 +3557,18 @@ def test_query_binary_models() -> None:
     logging.info("Running test_query_binary_models()")
     model_ids = [1567, 1568, 1569, 1570, 1571, 1577, 1578]
     for model_id in model_ids:
-        file_path = os.path.join(PROJECT_ROOT, "data", "excel_summaries", f"{model_id}_summary.xlsx")
-        mdo = ModelDataObjects(model_id=model_id)
+        try:
+            file_path = os.path.join(PROJECT_ROOT, "data", "excel_summaries", f"{model_id}_summary.xlsx")
+            mdo = ModelDataObjects(model_id=model_id)
 
-        model = mdo.model
-        with open("test_binary_model.pkl", "wb") as f:
-            f.write(pickle.dumps(model))
+            model = mdo.model
+            with open("test_binary_model.pkl", "wb") as f:
+                f.write(pickle.dumps(model))
 
-        mte = ModelToExcel(mdo, file_path)
-        mte.create_excel()
+            mte = ModelToExcel(mdo, file_path)
+            mte.create_excel()
+        except Exception as e:
+            logging.error(f"Error occurred while processing model_id {model_id}: {e}")
 
 
 def test_query_fish_models() -> None:
@@ -3434,10 +3580,13 @@ def test_query_fish_models() -> None:
     logging.info("Running test_query_fish_models()")
     model_ids = list(range(1740, 1745))
     for model_id in model_ids:
-        file_path = os.path.join(PROJECT_ROOT, "data", "excel_summaries", f"{model_id}_summary.xlsx")
-        mdo = ModelDataObjects(model_id=model_id)
-        mte = ModelToExcel(mdo, file_path)
-        mte.create_excel()
+        try:
+            file_path = os.path.join(PROJECT_ROOT, "data", "excel_summaries", f"{model_id}_summary.xlsx")
+            mdo = ModelDataObjects(model_id=model_id)
+            mte = ModelToExcel(mdo, file_path)
+            mte.create_excel()
+        except Exception as e:
+            logging.error(f"Error occurred while processing model_id {model_id}: {e}")
 
 
 def main():
@@ -3446,9 +3595,9 @@ def main():
     # local_example()
     # test_model_details_pv()
     # test_model_details_gmd()
-    # test_query_old_models()
-    # test_query_binary_models()
-    # test_query_fish_models()
+    test_query_old_models()
+    test_query_binary_models()
+    test_query_fish_models()
 
 if __name__ == "__main__":
     main()
