@@ -12,7 +12,7 @@ from models.case_studies.run_model_building_db import run_dataset, ParametersGen
 
 from util import predict_constants as pc
 from model_ws_db_utilities import getEngine, getSession
-from models.ModelToExcel import ModelToExcel
+from models.ModelToExcel import ModelDataObjects, ModelToExcel
 import logging
 import json
 import pandas as pd
@@ -26,6 +26,9 @@ import models.db_utilities.dataset_utilities_db as du
 from model_ws_utilities import call_do_predictions_from_df
 from io import StringIO
 from StatsCalculator import calculate_binary_statistics, calculate_continuous_statistics
+
+load_dotenv("../../personal.env")
+PROJECT_ROOT = os.getenv("PROJECT_ROOT")
 
 def run_example():
     write_to_db = False
@@ -684,9 +687,9 @@ def run_rifm_rf_models():
     for i in range(0, 10):
         for descriptor_coefficient in [0.001, 0.006, 0.01, None]:
             # Jump to correct point in run
-            if i < 4:
+            if i < 7:
                 continue
-            if i == 4 and descriptor_coefficient is not None:
+            if i == 7 and descriptor_coefficient is not None:
                 continue
             
             params = ParametersImportance(qsar_method=qsar_method, feature_selection=feature_selection, hyperparameter_grid=grid,
@@ -713,6 +716,71 @@ def run_rifm_rf_models():
     r = Results()
     r.summarize_model_stats(dataset_name, append_to_models_folder=append_to_models_folder)
 
+
+def full_test_mte():
+    # Need to test local and database models
+    # Need to test binary and continuous models
+    # Need to test models with and without an external set
+
+    write_to_db = False
+    append_to_models_folder = "_mte_testing"
+    ad_measure_model = [pc.Applicability_Domain_TEST_Embedding_Euclidean, pc.Applicability_Domain_TEST_Fragment_Counts]
+
+    # LOCAL/BINARY/NO EXTERNAL
+    dataset_name = "exp_prop_RBIODEG_301F v1 modeling"
+    run_dataset(dataset_name=dataset_name, qsar_method='gcm', feature_selection=False,
+                ad_measure_model=ad_measure_model, write_to_db=write_to_db,
+                append_to_models_folder=append_to_models_folder)  # OK
+
+    # LOCAL/BINARY/EXTERNAL
+    dataset_name = "exp_prop_RBIODEG_RIFM_CHEMREG"
+    run_dataset(dataset_name=dataset_name, qsar_method='gcm', feature_selection=False,
+                ad_measure_model=ad_measure_model, write_to_db=write_to_db,
+                append_to_models_folder=append_to_models_folder)  # OK
+
+    # LOCAL/CONTINUOUS/NO EXTERNAL
+    dataset_name = "HLC v1 modeling"
+    run_dataset(dataset_name=dataset_name, qsar_method='gcm', feature_selection=False,
+                ad_measure_model=ad_measure_model, write_to_db=write_to_db,
+                append_to_models_folder=append_to_models_folder)  # OK
+
+    # LOCAL/CONTINUOUS/EXTERNAL
+    dataset_name = "KOC v1 modeling"    
+    run_dataset(dataset_name=dataset_name, qsar_method='gcm', feature_selection=False,
+                ad_measure_model=ad_measure_model, write_to_db=write_to_db,
+                append_to_models_folder=append_to_models_folder)  # OK
+    
+    # DATABASE/BINARY/NO EXTERNAL
+    # Model id no longer exists in database
+    # model_id = 1567
+    # file_path = os.path.join(PROJECT_ROOT, "data", f"models{append_to_models_folder}", "database_models", f"continuous_no_external.xlsx")
+    # mdo = ModelDataObjects(model_id=model_id)
+    # mte = ModelToExcel(mdo, file_path)
+    # mte.create_excel()
+
+    # DATABASE/BINARY/EXTERNAL
+    model_id = 1831
+    file_path = os.path.join(PROJECT_ROOT, "data", f"models{append_to_models_folder}", "database_models", f"binary_external.xlsx")
+    mdo = ModelDataObjects(model_id=model_id)
+    mte = ModelToExcel(mdo, file_path)
+    mte.create_excel()
+
+    # DATABASE/CONTINUOUS/NO EXTERNAL
+    model_id = 1065
+    file_path = os.path.join(PROJECT_ROOT, "data", f"models{append_to_models_folder}", "database_models", f"continuous_no_external.xlsx")
+    mdo = ModelDataObjects(model_id=model_id)
+    mte = ModelToExcel(mdo, file_path)
+    mte.create_excel()
+
+    # DATABASE/CONTINUOUS/EXTERNAL
+    # No model id present in database yet
+    # model_id = 1567
+    # file_path = os.path.join(PROJECT_ROOT, "data", f"models{append_to_models_folder}", "database_models", f"continuous_no_external.xlsx")
+    # mdo = ModelDataObjects(model_id=model_id)
+    # mte = ModelToExcel(mdo, file_path)
+    # mte.create_excel()
+
+
 def main():
     
     # run_example()
@@ -730,8 +798,7 @@ def main():
     run_continuous_model_on_test_set()
     
     # run_RIFM_model_on_ECHA_test_set()
-    
-     
+         
     
     # run_pchem()
     
@@ -750,7 +817,9 @@ def main():
     # test_model_summary_local()
     # test_load_model_with_external_set()
     # run_rifm_rf_models()
-    
-    
+
+    # full_test_mte()
+
+
 if __name__ == "__main__":
     main()
