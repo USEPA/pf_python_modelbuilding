@@ -138,7 +138,7 @@ KmHL: Final[str] = "Fish biotransformation half-life (Km)"  # OPERA
 LOG_BCF_FISH_WHOLEBODY: Final[str] = "LogBCF_Fish_WholeBody"  # should just be Fish whole body bioconcentration factor
 
 # Additional OPERA properties:
-RBIODEG: Final[str] = "Ready biodegradability"  # OPERA (binary)
+RBIODEG: Final[str] = "Ready Binary Biodegradability"  # OPERA (binary)
 FUB: Final[str] = "Fraction unbound in human plasma"  # OPERA
 RT: Final[str] = "Liquid chromatography retention time"  # OPERA
 CLINT: Final[str] = "Human hepatic intrinsic clearance"  # OPERA
