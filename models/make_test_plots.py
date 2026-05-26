@@ -70,6 +70,10 @@ def getBin2(expsTrain,expsTest, property_name, unit_name):
         # bins = range(minVal,maxVal, )
         bins = np.linspace(minVal, maxVal, int((maxVal - minVal) / 10)+1)
 
+
+    elif property_name == 'Percentage Biodegradation':
+        bins = np.linspace(0, 100, 11)
+
     elif property_name == 'Thermal Conductivity':
         maxVal = round(maxVal, -2) + 25
         minVal = round(minVal, -2) - 25
@@ -229,13 +233,16 @@ def generateHistogram2(fileOutHistogram, property_name, unit_name, mpsTraining, 
         ax.set_xticks([0, 1])
 
     # Legend placement rules preserved
-    if property_name in ('Vapor Pressure', 'In Vitro Intrinsic Hepatic Clearance', 'Ready Binary Biodegradability') \
-       or (property_name == 'Oral Rat LD50' and '-log' not in unit_name) \
-       or (property_name == 'Water Solubility' and '-log' not in unit_name) \
-       or property_name == 'Atmos. Hydroxylation Rate':
-        ax.legend(loc="upper left")
-    else:
-        ax.legend(loc="upper right")
+    # if property_name in ('Vapor Pressure', 'In Vitro Intrinsic Hepatic Clearance', 'Ready Binary Biodegradability') \
+    #    or (property_name == 'Oral Rat LD50' and '-log' not in unit_name) \
+    #    or (property_name == 'Water Solubility' and '-log' not in unit_name) \
+    #    or property_name == 'Atmos. Hydroxylation Rate':
+    #     ax.legend(loc="upper left")
+    # else:
+    #     ax.legend(loc="upper right")
+        
+    ax.legend(loc="best")
+        
 
     # Auto-fit title font size (do this after legend/layout changes)
     title_text = f"Histogram of {property_name} Datasets"
