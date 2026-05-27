@@ -23,6 +23,7 @@ from models.ModelBuilder import Model
 from models.db_utilities.raw_exp_data_db import ExpDataGetter
 from models.db_utilities.dataset_utilities_db import getMappedDatapoints
 from models.db_utilities.plot_db import upload_or_update_model_file_in_db
+from models.db_utilities.model_statistics_db import update_statistic_value
 from StatsCalculator import calculate_continuous_statistics, calculate_binary_statistics, calculate_mean_exp_training
 from util import predict_constants as pc
 import applicability_domain.applicability_domain_utilities as adu
@@ -1059,6 +1060,14 @@ class DataQuerier:
         session = Session()
         return session
     
+    @staticmethod
+    def get_current_user_id():
+        user_id = os.getenv("USER_ID")
+        if user_id is None:
+            logging.warning("USER_ID environment variable is not set, falling back to default (tmarti02)")
+            user_id = "tmarti02"
+        return user_id
+
     def query_model(self) -> Optional[Model]:
         """Query the database for the model object.
         
@@ -1297,7 +1306,7 @@ class DataQuerier:
             statistics_dict = self.query_continuous_stats_dict(model)
         else:
             statistics_dict = self.query_binary_stats_dict(model)
-        
+
         statistics = pd.DataFrame(statistics_dict).apply(lambda x: round(x, 2) if isinstance(x, float) else x)
 
         logging.info(f"Finished building Statistics from Model (model_id = {self.model_id})")
@@ -1309,29 +1318,29 @@ class DataQuerier:
         statistics_dict = {
             "nTraining": [model.num_training],
             "nTest": [model.num_prediction],
-            "RSQ_Training": [model.modelStatistics.get("PearsonRSQ_Training", float("nan"))],
+            "PearsonRSQ_Training": [model.modelStatistics.get("PearsonRSQ_Training", float("nan"))],
             "RMSE_Training": [model.modelStatistics.get("RMSE_Training", float("nan"))],
             "MAE_Training": [model.modelStatistics.get("MAE_Training", float("nan"))],
-            "RSQ_CV_Training": [model.modelStatistics.get("PearsonRSQ_CV_Training", float("nan"))],
+            "PearsonRSQ_CV_Training": [model.modelStatistics.get("PearsonRSQ_CV_Training", float("nan"))],
             "RMSE_CV_Training": [model.modelStatistics.get("RMSE_CV_Training", float("nan"))],
             "MAE_CV_Training": [model.modelStatistics.get("MAE_CV_Training", float("nan"))],
-            "RSQ_Test": [model.modelStatistics.get("PearsonRSQ_Test", float("nan"))],
+            "PearsonRSQ_Test": [model.modelStatistics.get("PearsonRSQ_Test", float("nan"))],
             "RMSE_Test": [model.modelStatistics.get("RMSE_Test", float("nan"))],
             "MAE_Test": [model.modelStatistics.get("MAE_Test", float("nan"))],
             "Q2_Test": [model.modelStatistics.get("Q2_Test", float("nan"))],
-            "MAE_Test_Inside_AD": [model.modelStatistics.get("MAE_Test_inside_AD", float("nan"))],
-            "MAE_Test_Outside_AD": [model.modelStatistics.get("MAE_Test_outside_AD", float("nan"))],
+            "MAE_Test_inside_AD": [model.modelStatistics.get("MAE_Test_inside_AD", float("nan"))],
+            "MAE_Test_outside_AD": [model.modelStatistics.get("MAE_Test_outside_AD", float("nan"))],
             "Coverage_Test": [model.modelStatistics.get("Coverage_Test", float("nan"))]
         }
         if getattr(model, "external_dataset_name", False):
             if model.modelStatistics.get("PearsonRSQ_External", False):
                 statistics_dict.update({
                     "nExternal": [getattr(model, "num_external", float("nan"))],
-                    "RSQ_External": [model.modelStatistics.get("PearsonRSQ_External", float("nan"))],
+                    "PearsonRSQ_External": [model.modelStatistics.get("PearsonRSQ_External", float("nan"))],
                     "RMSE_External": [model.modelStatistics.get("RMSE_External", float("nan"))],
                     "MAE_External": [model.modelStatistics.get("MAE_External", float("nan"))],
-                    "MAE_External_Inside_AD": [model.modelStatistics.get("MAE_External_inside_AD", float("nan"))],
-                    "MAE_External_Outside_AD": [model.modelStatistics.get("MAE_External_outside_AD", float("nan"))],
+                    "MAE_External_inside_AD": [model.modelStatistics.get("MAE_External_inside_AD", float("nan"))],
+                    "MAE_External_outside_AD": [model.modelStatistics.get("MAE_External_outside_AD", float("nan"))],
                     "Coverage_External": [model.modelStatistics.get("Coverage_External", float("nan"))]
                 })
             else:
@@ -1364,11 +1373,11 @@ class DataQuerier:
                 temp_dict.update(calculate_continuous_statistics(temp_df, calculate_mean_exp_training(model.df_preds_training_cv.copy()), tag="_External", ad_measure_final=model.applicabilityDomainName.split(" and ")))
                 statistics_dict.update({
                     "nExternal": [getattr(model, "num_external", float("nan"))],
-                    "RSQ_External": [temp_dict.get("PearsonRSQ_External", float("nan"))],  # Need to handle next 3
+                    "PearsonRSQ_External": [temp_dict.get("PearsonRSQ_External", float("nan"))],  # Need to handle next 3
                     "RMSE_External": [temp_dict.get("RMSE_External", float("nan"))],
                     "MAE_External": [temp_dict.get("MAE_External", float("nan"))],
-                    "MAE_External_Inside_AD": [temp_dict.get("MAE_External_inside_AD", float("nan"))],
-                    "MAE_External_Outside_AD": [temp_dict.get("MAE_External_outside_AD", float("nan"))],
+                    "MAE_External_inside_AD": [temp_dict.get("MAE_External_inside_AD", float("nan"))],
+                    "MAE_External_outside_AD": [temp_dict.get("MAE_External_outside_AD", float("nan"))],
                     "Coverage_External": [temp_dict.get("Coverage_External", float("nan"))]
                 })
         
@@ -1391,8 +1400,8 @@ class DataQuerier:
             "BA_Test": [model.modelStatistics.get("BA_Test", float("nan"))],
             "SN_Test": [model.modelStatistics.get("SN_Test", float("nan"))],
             "SP_Test": [model.modelStatistics.get("SP_Test", float("nan"))],
-            "BA_Test_Inside_AD": [model.modelStatistics.get("BA_Test_inside_AD", float("nan"))],
-            "BA_Test_Outside_AD": [model.modelStatistics.get("BA_Test_outside_AD", float("nan"))],
+            "BA_Test_inside_AD": [model.modelStatistics.get("BA_Test_inside_AD", float("nan"))],
+            "BA_Test_outside_AD": [model.modelStatistics.get("BA_Test_outside_AD", float("nan"))],
             "Coverage_Test": [model.modelStatistics.get("Coverage_Test", float("nan"))]
         }
         if getattr(model, "external_dataset_name", False):
@@ -1402,8 +1411,8 @@ class DataQuerier:
                     "BA_External": [model.modelStatistics.get("BA_External", float("nan"))],
                     "SN_External": [model.modelStatistics.get("SN_External", float("nan"))],
                     "SP_External": [model.modelStatistics.get("SP_External", float("nan"))],
-                    "BA_External_Inside_AD": [model.modelStatistics.get("BA_External_inside_AD", float("nan"))],
-                    "BA_External_Outside_AD": [model.modelStatistics.get("BA_External_outside_AD", float("nan"))],
+                    "BA_External_inside_AD": [model.modelStatistics.get("BA_External_inside_AD", float("nan"))],
+                    "BA_External_outside_AD": [model.modelStatistics.get("BA_External_outside_AD", float("nan"))],
                     "Coverage_External": [model.modelStatistics.get("Coverage_External", float("nan"))]
                 })
             else:
@@ -1439,8 +1448,8 @@ class DataQuerier:
                     "BA_External": [temp_dict.get("BA_External", float("nan"))],  # Need to handle next 3
                     "SN_External": [temp_dict.get("SN_External", float("nan"))],
                     "SP_External": [temp_dict.get("SP_External", float("nan"))],
-                    "BA_External_Inside_AD": [temp_dict.get("BA_External_inside_AD", float("nan"))],
-                    "BA_External_Outside_AD": [temp_dict.get("BA_External_outside_AD", float("nan"))],
+                    "BA_External_inside_AD": [temp_dict.get("BA_External_inside_AD", float("nan"))],
+                    "BA_External_outside_AD": [temp_dict.get("BA_External_outside_AD", float("nan"))],
                     "Coverage_External": [temp_dict.get("Coverage_External", float("nan"))]
                 })
             
@@ -1945,27 +1954,27 @@ class DataTransformer:
             statistics_df = {
                 "nTraining": [results_dict["model_details"].get("numTraining", float("nan"))],
                 "nTest": [results_dict["model_details"].get("numPrediction", float("nan"))],
-                "RSQ_Training": [results_dict["model_statistics"].get("training_stats", {}).get("PearsonRSQ_Training", float("nan"))],
+                "PearsonRSQ_Training": [results_dict["model_statistics"].get("training_stats", {}).get("PearsonRSQ_Training", float("nan"))],
                 "RMSE_Training": [results_dict["model_statistics"].get("training_stats", {}).get("RMSE_Training", float("nan"))],
                 "MAE_Training": [results_dict["model_statistics"].get("training_stats", {}).get("MAE_Training", float("nan"))],
-                "RSQ_CV_Training": [results_dict["model_statistics"].get("cv_stats", {}).get("PearsonRSQ_CV_Training", float("nan"))],
+                "PearsonRSQ_CV_Training": [results_dict["model_statistics"].get("cv_stats", {}).get("PearsonRSQ_CV_Training", float("nan"))],
                 "RMSE_CV_Training": [results_dict["model_statistics"].get("cv_stats", {}).get("RMSE_CV_Training", float("nan"))],
                 "MAE_CV_Training": [results_dict["model_statistics"].get("cv_stats", {}).get("MAE_CV_Training", float("nan"))],
-                "RSQ_Test": [results_dict["model_statistics"].get("test_stats", {}).get("PearsonRSQ_Test", float("nan"))],
+                "PearsonRSQ_Test": [results_dict["model_statistics"].get("test_stats", {}).get("PearsonRSQ_Test", float("nan"))],
                 "RMSE_Test": [results_dict["model_statistics"].get("test_stats", {}).get("RMSE_Test", float("nan"))],
                 "MAE_Test": [results_dict["model_statistics"].get("test_stats", {}).get("MAE_Test", float("nan"))],
                 "Q2_Test": [results_dict["model_statistics"].get("test_stats", {}).get("Q2_Test", float("nan"))],
-                "MAE_Test_Inside_AD": [results_dict["model_statistics"].get("test_stats_AD", {}).get("MAE_Test_inside_AD", float("nan"))],
-                "MAE_Test_Outside_AD": [results_dict["model_statistics"].get("test_stats_AD", {}).get("MAE_Test_outside_AD", float("nan"))],
+                "MAE_Test_inside_AD": [results_dict["model_statistics"].get("test_stats_AD", {}).get("MAE_Test_inside_AD", float("nan"))],
+                "MAE_Test_outside_AD": [results_dict["model_statistics"].get("test_stats_AD", {}).get("MAE_Test_outside_AD", float("nan"))],
                 "Coverage_Test": [results_dict["model_statistics"].get("test_stats_AD", {}).get("Coverage_Test", float("nan"))],
             }
             statistics_df.update({
                 "nExternal": [results_dict["model_details"].get("num_external", float("nan"))],
-                "RSQ_External": [results_dict["model_statistics"].get("ext_stats", {}).get("PearsonRSQ_External", float("nan"))],
+                "PearsonRSQ_External": [results_dict["model_statistics"].get("ext_stats", {}).get("PearsonRSQ_External", float("nan"))],
                 "RMSE_External": [results_dict["model_statistics"].get("ext_stats", {}).get("RMSE_External", float("nan"))],
                 "MAE_External": [results_dict["model_statistics"].get("ext_stats", {}).get("MAE_External", float("nan"))],
-                "MAE_External_Inside_AD": [results_dict["model_statistics"].get("ext_stats_AD", {}).get("MAE_External_inside_AD", float("nan"))],
-                "MAE_External_Outside_AD": [results_dict["model_statistics"].get("ext_stats_AD", {}).get("MAE_External_outside_AD", float("nan"))],
+                "MAE_External_inside_AD": [results_dict["model_statistics"].get("ext_stats_AD", {}).get("MAE_External_inside_AD", float("nan"))],
+                "MAE_External_outside_AD": [results_dict["model_statistics"].get("ext_stats_AD", {}).get("MAE_External_outside_AD", float("nan"))],
                 "Coverage_External": [results_dict["model_statistics"].get("ext_stats_AD", {}).get("Coverage_External", float("nan"))]
             })
         else:
@@ -1978,8 +1987,8 @@ class DataTransformer:
                 "BA_CV_Training": [results_dict["model_statistics"].get("cv_stats", {}).get("BA_CV_Training", float("nan"))],
                 "Concordance_Test": [results_dict["model_statistics"].get("test_stats", {}).get("Concordance_Test", float("nan"))],
                 "BA_Test": [results_dict["model_statistics"].get("test_stats", {}).get("BA_Test", float("nan"))],
-                "BA_Test_Inside_AD": [results_dict["model_statistics"].get("test_stats_AD", {}).get("BA_Test_inside_AD", float("nan"))],
-                "BA_Test_Outside_AD": [results_dict["model_statistics"].get("test_stats_AD", {}).get("BA_Test_outside_AD", float("nan"))],
+                "BA_Test_inside_AD": [results_dict["model_statistics"].get("test_stats_AD", {}).get("BA_Test_inside_AD", float("nan"))],
+                "BA_Test_outside_AD": [results_dict["model_statistics"].get("test_stats_AD", {}).get("BA_Test_outside_AD", float("nan"))],
                 "Coverage_Test": [results_dict["model_statistics"].get("test_stats_AD", {}).get("Coverage_Test", float("nan"))],
             }
             statistics_df.update({
@@ -1987,8 +1996,8 @@ class DataTransformer:
                 "SN_External": [results_dict["model_statistics"].get("ext_stats", {}).get("SN_External", float("nan"))],
                 "SP_External": [results_dict["model_statistics"].get("ext_stats", {}).get("SP_External", float("nan"))],
                 "BA_External": [results_dict["model_statistics"].get("ext_stats", {}).get("BA_External", float("nan"))],
-                "BA_External_Inside_AD": [results_dict["model_statistics"].get("ext_stats_AD", {}).get("BA_External_inside_AD", float("nan"))],
-                "BA_External_Outside_AD": [results_dict["model_statistics"].get("ext_stats_AD", {}).get("BA_External_outside_AD", float("nan"))],
+                "BA_External_inside_AD": [results_dict["model_statistics"].get("ext_stats_AD", {}).get("BA_External_inside_AD", float("nan"))],
+                "BA_External_outside_AD": [results_dict["model_statistics"].get("ext_stats_AD", {}).get("BA_External_outside_AD", float("nan"))],
                 "Coverage_External": [results_dict["model_statistics"].get("ext_stats_AD", {}).get("Coverage_External", float("nan"))]
             })
         statistics_df = pd.DataFrame(statistics_df).apply(lambda x: round(x, 2) if isinstance(x, float) else x)
@@ -2662,20 +2671,20 @@ class ModelToExcel:
             worksheet.write_string("F6", "Fraction Inside AD", format_center)
 
             # Write statistics
-            worksheet.write_number("A3", statistics.at[0, "RSQ_Training"], format_number)
+            worksheet.write_number("A3", statistics.at[0, "PearsonRSQ_Training"], format_number)
             worksheet.write_number("B3", statistics.at[0, "RMSE_Training"], format_number)
             worksheet.write_number("C3", statistics.at[0, "MAE_Training"], format_number)
 
-            worksheet.write_number("D3", statistics.at[0, "RSQ_CV_Training"], format_number)
+            worksheet.write_number("D3", statistics.at[0, "PearsonRSQ_CV_Training"], format_number)
             worksheet.write_number("E3", statistics.at[0, "RMSE_CV_Training"], format_number)
             worksheet.write_number("F3", statistics.at[0, "MAE_CV_Training"], format_number)
 
-            worksheet.write_number("A7", statistics.at[0, "RSQ_Test"], format_number)
+            worksheet.write_number("A7", statistics.at[0, "PearsonRSQ_Test"], format_number)
             worksheet.write_number("B7", statistics.at[0, "RMSE_Test"], format_number)
             worksheet.write_number("C7", statistics.at[0, "MAE_Test"], format_number)
 
-            worksheet.write_number("D7", statistics.at[0, "MAE_Test_Inside_AD"], format_number)
-            worksheet.write_number("E7", statistics.at[0, "MAE_Test_Outside_AD"], format_number)
+            worksheet.write_number("D7", statistics.at[0, "MAE_Test_inside_AD"], format_number)
+            worksheet.write_number("E7", statistics.at[0, "MAE_Test_outside_AD"], format_number)
             worksheet.write_number("F7", statistics.at[0, "Coverage_Test"], format_number)
 
             if has_external:
@@ -2687,12 +2696,12 @@ class ModelToExcel:
                 worksheet.write_rich_string("E10", "MAE", format_sub, "External", " Outside AD", format_center)
                 worksheet.write_string("F10", "Fraction Inside AD", format_center)
 
-                worksheet.write_number("A11", statistics.at[0, "RSQ_External"], format_number)
+                worksheet.write_number("A11", statistics.at[0, "PearsonRSQ_External"], format_number)
                 worksheet.write_number("B11", statistics.at[0, "RMSE_External"], format_number)
                 worksheet.write_number("C11", statistics.at[0, "MAE_External"], format_number)
 
-                worksheet.write_number("D11", statistics.at[0, "MAE_External_Inside_AD"], format_number)
-                worksheet.write_number("E11", statistics.at[0, "MAE_External_Outside_AD"], format_number)
+                worksheet.write_number("D11", statistics.at[0, "MAE_External_inside_AD"], format_number)
+                worksheet.write_number("E11", statistics.at[0, "MAE_External_outside_AD"], format_number)
                 worksheet.write_number("F11", statistics.at[0, "Coverage_External"], format_number)
 
             img_path = os.path.join(os.getenv("PROJECT_ROOT"), "resources", "continuous_equations.png")
@@ -2729,8 +2738,8 @@ class ModelToExcel:
             worksheet.write_number("B7", statistics.at[0, "SP_Test"], format_number)
             worksheet.write_number("C7", statistics.at[0, "BA_Test"], format_number)
 
-            worksheet.write_number("D7", statistics.at[0, "BA_Test_Inside_AD"], format_number)
-            worksheet.write_number("E7", statistics.at[0, "BA_Test_Outside_AD"], format_number)
+            worksheet.write_number("D7", statistics.at[0, "BA_Test_inside_AD"], format_number)
+            worksheet.write_number("E7", statistics.at[0, "BA_Test_outside_AD"], format_number)
             worksheet.write_number("F7", statistics.at[0, "Coverage_Test"], format_number)
 
             if has_external:
@@ -2746,8 +2755,8 @@ class ModelToExcel:
                 worksheet.write_number("B11", statistics.at[0, "SP_External"], format_number)
                 worksheet.write_number("C11", statistics.at[0, "BA_External"], format_number)
 
-                worksheet.write_number("D11", statistics.at[0, "BA_External_Inside_AD"], format_number)
-                worksheet.write_number("E11", statistics.at[0, "BA_External_Outside_AD"], format_number)
+                worksheet.write_number("D11", statistics.at[0, "BA_External_inside_AD"], format_number)
+                worksheet.write_number("E11", statistics.at[0, "BA_External_outside_AD"], format_number)
                 worksheet.write_number("F11", statistics.at[0, "Coverage_External"], format_number)
 
             img_path = os.path.join(os.getenv("PROJECT_ROOT"), "resources", "binary_equations.png")
@@ -3276,6 +3285,27 @@ class ModelToExcel:
                     logging.error(f"Error adding hyperlinks: {e}")
             
             logging.info(f"Done creating detailed Excel! (model_id = {self.model.modelId})\n\tFile: {self.excel_path}")
+
+    def update_statistics(self, upload_to_db: bool = False, session: Optional[Session] = None, user_id: Optional[str] = None) -> dict[dict[str, float]]:
+        """
+        Update the statistics for the model and optionally upload to the database.
+        """
+        if upload_to_db:
+            if session is None:
+                session = DataQuerier.getSession(DataQuerier.getEngine())
+            if user_id is None:
+                user_id = DataQuerier.get_current_user_id()
+
+        stats_df = self.statistics_df
+        stats = {}
+        for stat in stats_df:
+            if stat not in ["nTraining", "nTest", "nExternal"]:
+                old_value, new_value = update_statistic_value(session, self.model.modelId, stat, stats_df.at[0, stat], user_id, upload_to_db)
+                stats[stat] = {"old": old_value, "new": new_value}
+        
+        logging.info(f"Updated statistics for model {self.model.modelId}:\n{json.dumps(stats, indent=4)}")
+        
+        return stats
 
 
 # ============================================================
