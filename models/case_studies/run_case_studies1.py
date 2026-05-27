@@ -790,13 +790,12 @@ def full_test_mte():
     mte = ModelToExcel(mdo, file_path)
     mte.create_excel()
 
-    # DATABASE/CONTINUOUS/EXTERNAL
-    # No model id present in database yet
-    # model_id = 1567
-    # file_path = os.path.join(PROJECT_ROOT, "data", f"models{append_to_models_folder}", "database_models", f"continuous_no_external.xlsx")
-    # mdo = ModelDataObjects(model_id=model_id)
-    # mte = ModelToExcel(mdo, file_path)
-    # mte.create_excel()
+    # DATABASE/CONTINUOUS/EXTERNAL (external stats not saved in database)
+    model_id = 1753
+    file_path = os.path.join(PROJECT_ROOT, "data", f"models{append_to_models_folder}", "database_models", f"continuous_no_external.xlsx")
+    mdo = ModelDataObjects(model_id=model_id)
+    mte = ModelToExcel(mdo, file_path)
+    mte.create_excel()
 
 
 def main():

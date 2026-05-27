@@ -1,6 +1,6 @@
 import pandas as pd
 import math
-from typing import Dict
+from typing import Dict, Optional
 
 # class StatsConstants:
 #     COVERAGE = "Coverage"
@@ -20,6 +20,14 @@ from typing import Dict
 from util import predict_constants as pc
 
 
+# Safe divisions (match Java behavior but avoid ZeroDivisionError)
+def safe_div(n, d):
+    try:
+        return n / d if d else float('nan')
+    except ZeroDivisionError:
+        return float('nan')
+
+
 def calculate_mean_exp_training(df_training: pd.DataFrame):
     # Filter out rows where 'exp' or 'pred' are NaN
     valid_df = df_training.dropna(subset=['exp', 'pred'])
@@ -28,11 +36,10 @@ def calculate_mean_exp_training(df_training: pd.DataFrame):
     return valid_df['exp'].mean()
 
 
-def calculate_continuous_statistics(df: pd.DataFrame, mean_exp_training: float, tag: str) -> Dict[str, float]:
-
+def calculate_continuous_statistics(df: pd.DataFrame, mean_exp_training: float, tag: str, ad_measure_final: Optional[str] = None) -> Dict[str, float]:
     # Filter out rows where 'exp' or 'pred' are NaN
     valid_df = df.dropna(subset=['exp', 'pred'])
-
+    
     # Total counts
     count_total = len(df.dropna(subset=['exp']))
     count_predicted = len(valid_df)
@@ -55,12 +62,26 @@ def calculate_continuous_statistics(df: pd.DataFrame, mean_exp_training: float, 
     # Calculate sums for coefficient of determination
     ss = ((valid_df['exp'] - valid_df['pred']) ** 2).sum()
     ss_total = ((valid_df['exp'] - mean_exp_training) ** 2).sum()
-
+    
     # Calculate statistics
-    coverage = count_predicted / count_total
-    pearson_rsq = (term_xy ** 2) / (term_xx * term_yy) if term_xx != 0 and term_yy != 0 else float('nan')
+    if ad_measure_final is None:
+        coverage = safe_div(count_predicted, count_total)
+    else:
+        # Build list of AD columns
+        colsAD = [f"AD_{ad.replace(' ', '_')}" for ad in ad_measure_final]
+
+        # Inside/outside consensus AD masks
+        mask_all_true = valid_df[colsAD].eq(True).all(axis=1)
+        mask_outside = ~mask_all_true
+
+        # Coverage of consensus AD
+        total_rows = len(valid_df)
+        coverage = safe_div(mask_all_true.sum(), total_rows)
+    
+    pearson_rsq = safe_div(term_xy ** 2, term_xx * term_yy)
     coeff_det = 1 - ss / ss_total if ss_total != 0 else float('nan')
-    rmse = math.sqrt(ss / count_predicted)
+    coeff_det = 1 - safe_div(ss, ss_total)
+    rmse = math.sqrt(safe_div(ss, count_predicted))
 
     model_statistic_values = {
         pc.COVERAGE + tag: coverage,
@@ -79,7 +100,7 @@ def calculate_continuous_statistics(df: pd.DataFrame, mean_exp_training: float, 
     return model_statistic_values
 
 
-def calculate_binary_statistics(df: pd.DataFrame, cutoff: float, tag: str) -> Dict[str, float]:
+def calculate_binary_statistics(df: pd.DataFrame, cutoff: float, tag: str, ad_measure_final: Optional[str] = None) -> Dict[str, float]:
     # Keep only rows with a known expected label
     valid = df.dropna(subset=['exp'])
     count_total = len(valid)
@@ -116,11 +137,21 @@ def calculate_binary_statistics(df: pd.DataFrame, cutoff: float, tag: str) -> Di
     tn = int((neg_mask & (pred_bin == 0)).sum())
     count_true = tp + tn
 
-    # Safe divisions (match Java behavior but avoid ZeroDivisionError)
-    def safe_div(n, d):
-        return n / d if d else float('nan')
+    # Calculate statistics
+    if ad_measure_final is None:
+        coverage = safe_div(count_predicted, count_total)
+    else:
+        # Build list of AD columns
+        colsAD = [f"AD_{ad.replace(' ', '_')}" for ad in ad_measure_final]
 
-    coverage = safe_div(count_predicted, count_total)
+        # Inside/outside consensus AD masks
+        mask_all_true = valid[colsAD].eq(True).all(axis=1)
+        mask_outside = ~mask_all_true
+
+        # Coverage of consensus AD
+        total_rows = len(valid)
+        coverage = safe_div(mask_all_true.sum(), total_rows)
+    
     concordance = safe_div(count_true, count_predicted)
     sensitivity = safe_div(tp, count_positive)
     specificity = safe_div(tn, count_negative)

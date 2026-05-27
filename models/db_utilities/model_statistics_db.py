@@ -9,6 +9,7 @@ from model_ws_db_utilities import ModelInitializer, ModelPredictor
 from models.ModelBuilder import  Model
 import util.predict_constants as pc
 import json
+from typing import Optional
 
 from sqlalchemy import text
 from datetime import datetime
@@ -204,7 +205,7 @@ def create_statistics(session):
     
 
 
-def update_statistic_value(session, model_id: int, statistic_name: str, new_statistic_value: float, user_id: str):
+def update_statistic_value(session, model_id: int, statistic_name: str, new_statistic_value: float, user_id: str, upload_to_db: Optional[bool]=True):
     try:
         # Query to find the statistic ID
         statistic_id_result = session.execute(
@@ -220,7 +221,7 @@ def update_statistic_value(session, model_id: int, statistic_name: str, new_stat
         # Query to check if the statistic already exists for the model
         existing_statistic_result = session.execute(
             text("""
-                SELECT 1 FROM qsar_models.model_statistics
+                SELECT ms.statistic_value FROM qsar_models.model_statistics as ms
                 WHERE fk_model_id = :model_id AND fk_statistic_id = :statistic_id
             """),
             {"model_id": model_id, "statistic_id": statistic_id}
@@ -231,50 +232,62 @@ def update_statistic_value(session, model_id: int, statistic_name: str, new_stat
         #
         # if True:
         #     return
+        if upload_to_db:
+            if existing_statistic_result is None:
+                # Insert if not exists
+                session.execute(
+                    text("""
+                        INSERT INTO qsar_models.model_statistics (
+                            fk_model_id, fk_statistic_id, statistic_value, created_at, updated_at, created_by, updated_by
+                        ) VALUES (
+                            :model_id, :statistic_id, :statistic_value, :created_at, :updated_at, :created_by, :updated_by
+                        )
+                    """),
+                    {
+                        "model_id": model_id,
+                        "statistic_id": statistic_id,
+                        "statistic_value": new_statistic_value,
+                        "created_at": datetime.now(),
+                        "updated_at": datetime.now(),
+                        "created_by": user_id,
+                        "updated_by": user_id
+                    }
+                )
+                old_statistic_value = None
+            elif existing_statistic_result[0] != new_statistic_value:
+                # Update if exists
+                session.execute(
+                    text("""
+                        UPDATE qsar_models.model_statistics
+                        SET statistic_value = :statistic_value,
+                            updated_at = :updated_at,
+                            updated_by = :updated_by
+                        WHERE fk_model_id = :model_id AND fk_statistic_id = :statistic_id
+                    """),
+                    {
+                        "model_id": model_id,
+                        "statistic_id": statistic_id,
+                        "statistic_value": new_statistic_value,
+                        "updated_at": datetime.now(),
+                        "updated_by": user_id
+                    }
+                )
+                old_statistic_value = existing_statistic_result[0]
+            else:
+                old_statistic_value = existing_statistic_result[0]
 
-        if existing_statistic_result is None:
-            # Insert if not exists
-            session.execute(
-                text("""
-                    INSERT INTO qsar_models.model_statistics (
-                        fk_model_id, fk_statistic_id, statistic_value, created_at, updated_at, created_by, updated_by
-                    ) VALUES (
-                        :model_id, :statistic_id, :statistic_value, :created_at, :updated_at, :created_by, :updated_by
-                    )
-                """),
-                {
-                    "model_id": model_id,
-                    "statistic_id": statistic_id,
-                    "statistic_value": new_statistic_value,
-                    "created_at": datetime.now(),
-                    "updated_at": datetime.now(),
-                    "created_by": user_id,
-                    "updated_by": user_id
-                }
-            )
+            # Commit the transaction
+            session.commit()
         else:
-            # Update if exists
-            session.execute(
-                text("""
-                    UPDATE qsar_models.model_statistics
-                    SET statistic_value = :statistic_value,
-                        updated_at = :updated_at,
-                        updated_by = :updated_by
-                    WHERE fk_model_id = :model_id AND fk_statistic_id = :statistic_id
-                """),
-                {
-                    "model_id": model_id,
-                    "statistic_id": statistic_id,
-                    "statistic_value": new_statistic_value,
-                    "updated_at": datetime.now(),
-                    "updated_by": user_id
-                }
-            )
+            if existing_statistic_result is not None:
+                old_statistic_value = existing_statistic_result[0]
+            else:
+                old_statistic_value = None
 
-        # Commit the transaction
-        session.commit()
+        return old_statistic_value, new_statistic_value
+    
     except Exception as e:
-        e.with_traceback()
+        traceback.print_exc()
         session.rollback()
         raise e
 
