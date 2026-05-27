@@ -245,8 +245,8 @@ def run_biodeg_rifm():
     
     dataset_name = 'exp_prop_RBIODEG_RIFM_CHEMREG' # automapped one
     
-    write_to_db = True
-    # write_to_db = False
+    # write_to_db = True
+    write_to_db = False
     
     unique_identifier = None
     ad_measure_model = [pc.Applicability_Domain_TEST_Embedding_Euclidean, pc.Applicability_Domain_TEST_Fragment_Counts]
@@ -257,8 +257,8 @@ def run_biodeg_rifm():
     # append_to_models_folder = ""
     append_to_models_folder = "_0.001"
 
-    # run_dataset(dataset_name=dataset_name, qsar_method='gcm', feature_selection=False,
-    #             ad_measure_model=ad_measure_model, write_to_db=write_to_db, unique_identifier=unique_identifier, append_to_models_folder=append_to_models_folder)  # OK
+    model = run_dataset(dataset_name=dataset_name, qsar_method='gcm', feature_selection=False,
+                ad_measure_model=ad_measure_model, write_to_db=write_to_db, unique_identifier=unique_identifier, append_to_models_folder=append_to_models_folder)  # OK
     
     for method in ['rf', 'xgb']:        
         model = run_dataset(dataset_name=dataset_name, qsar_method=method, feature_selection=False, 
@@ -272,7 +272,7 @@ def run_biodeg_rifm():
         run_dataset(dataset_name=dataset_name, qsar_method=params.qsar_method, feature_selection=params.feature_selection,
             params = params, ad_measure_model=ad_measure_model, write_to_db=write_to_db, 
             unique_identifier=unique_identifier, append_to_models_folder=append_to_models_folder) 
-
+    
     Results.summarize_model_stats(dataset_name, append_to_models_folder=append_to_models_folder)
     
     #TODO determine how RIFM only models work for test set of ECHA+RIFM set
@@ -316,7 +316,24 @@ def run_RIFM_model_on_ECHA_test_set():
         test_stats = calculate_binary_statistics(df_predictions_test, 0.5, "_Test")
         print(f"{run}\t{test_stats['BA_Test']:.3f}")
     
+def lookAtModelCoefficients():
+    
+    # model_id = 1847
+    model_id = 1763
+    
+    from model_ws_db_utilities import ModelInitializer
+    
+    mi = ModelInitializer()
+    model=mi.initModel(model_id)
+    
+    y = model.df_training[model.df_training.columns[1]]
+    X = model.df_training[model.embedding]
 
+    modelCoefficients = json.loads(model.getOriginalRegressionCoefficients2(X, y))
+    
+    print(json.dumps(modelCoefficients, indent=4))
+    
+    
 
 def run_continuous_model_on_test_set():
     
@@ -517,7 +534,8 @@ def calculate_stats_for_subset(dataset_name, df_smiles_subset, append_to_models_
 def run_biodeg_301F():
     
     dataset_name = 'exp_prop_RBIODEG_301F v1 modeling' # automapped one
-    write_to_db = True
+    # write_to_db = True
+    write_to_db = False
     ad_measure_model = [pc.Applicability_Domain_TEST_Embedding_Euclidean, pc.Applicability_Domain_TEST_Fragment_Counts]
     descriptor_set_name = "WebTEST-default"
     splitting_name = "RND_REPRESENTATIVE"
@@ -540,8 +558,8 @@ def run_biodeg_301F():
         run_dataset(dataset_name=dataset_name, qsar_method=params.qsar_method, feature_selection=params.feature_selection,
             params = params, ad_measure_model=ad_measure_model, write_to_db=write_to_db, 
             unique_identifier=unique_identifier, append_to_models_folder=append_to_models_folder) 
-
-        
+    
+    
     Results.summarize_model_stats(dataset_name, append_to_models_folder=append_to_models_folder)
     
     dataset_name_subset='exp_prop_RBIODEG_RIFM_CHEMREG'
@@ -791,11 +809,13 @@ def main():
     
     # run_biodeg_nite()
     
-    # run_biodeg_rifm()
-    # run_biodeg_301F()
+    run_biodeg_rifm()
+    run_biodeg_301F()
     # run_percentage_biodegradation()
     
-    run_continuous_model_on_test_set()
+    # run_continuous_model_on_test_set()
+    
+    # lookAtModelCoefficients()
     
     # run_RIFM_model_on_ECHA_test_set()
          
