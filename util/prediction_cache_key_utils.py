@@ -32,6 +32,17 @@ def inchi_keys_match_connectivity(left: Any, right: Any) -> bool:
     return bool(left_block and right_block and left_block == right_block)
 
 
+def prediction_cache_key_inchi_key(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+
+    parts = value.strip().split("-", 3)
+    if len(parts) < 4:
+        return None
+
+    return normalize_inchi_key("-".join(parts[:3]))
+
+
 def ensure_chemical_inchi_key(
     chemical: Any,
     smiles_to_inchi_key: Callable[[Any], str | None],
@@ -77,6 +88,25 @@ def _chemical_inchi_key(
             return inchi_key
 
     return None
+
+
+def prediction_chemical_conflicts_with_cache_key(
+    cache_key: Any,
+    prediction: Any,
+    smiles_to_inchi_key: Callable[[Any], str | None],
+) -> bool:
+    key_inchi_key = prediction_cache_key_inchi_key(cache_key)
+    if key_inchi_key is None or not isinstance(prediction, dict):
+        return False
+
+    chemical_inchi_key = _chemical_inchi_key(
+        prediction.get("chemicalIdentifiers"),
+        smiles_to_inchi_key,
+    )
+    if chemical_inchi_key is None:
+        return False
+
+    return not inchi_keys_match_connectivity(key_inchi_key, chemical_inchi_key)
 
 
 def standardized_chemical_changes_identity(

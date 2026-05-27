@@ -6,6 +6,8 @@ from util.prediction_cache_key_utils import (
     inchi_key_connectivity_block,
     inchi_keys_match_connectivity,
     normalize_inchi_key,
+    prediction_cache_key_inchi_key,
+    prediction_chemical_conflicts_with_cache_key,
     standardized_chemical_changes_identity,
 )
 
@@ -75,6 +77,43 @@ class TestPredictionCacheKeyUtils(unittest.TestCase):
         )
 
         self.assertEqual(key, "LFQSCWFLJHTTHZ-UHFFFAOYSA-N-1065")
+
+    def test_prediction_cache_key_inchi_key_extracts_inchi_key_prefix(self):
+        self.assertEqual(
+            prediction_cache_key_inchi_key("LFQSCWFLJHTTHZ-UHFFFAOYSA-N-1065"),
+            "LFQSCWFLJHTTHZ-UHFFFAOYSA-N",
+        )
+
+    def test_prediction_cache_key_inchi_key_rejects_non_cache_key(self):
+        self.assertIsNone(prediction_cache_key_inchi_key("not-a-cache-key"))
+
+    def test_prediction_chemical_conflicts_with_cache_key_detects_mismatch(self):
+        conflicts = prediction_chemical_conflicts_with_cache_key(
+            "WOZVHXUHUFLZGK-UHFFFAOYSA-N-1066",
+            {
+                "chemicalIdentifiers": {
+                    "inchiKey": "FXHOOIRPVKKKFG-UHFFFAOYNA-N",
+                    "canonicalSmiles": "CC(=O)N(C)C",
+                }
+            },
+            lambda smiles: None,
+        )
+
+        self.assertTrue(conflicts)
+
+    def test_prediction_chemical_conflicts_with_cache_key_allows_same_connectivity(self):
+        conflicts = prediction_chemical_conflicts_with_cache_key(
+            "WOZVHXUHUFLZGK-UHFFFAOYSA-N-1066",
+            {
+                "chemicalIdentifiers": {
+                    "inchiKey": "WOZVHXUHUFLZGK-UHFFFAOYNA-N",
+                    "canonicalSmiles": "COC(=O)C1C=CC(=CC=1)C(=O)OC",
+                }
+            },
+            lambda smiles: None,
+        )
+
+        self.assertFalse(conflicts)
 
     def test_standardized_chemical_changes_identity_uses_inchi_key_equivalence(self):
         def smiles_to_inchi_key(smiles):

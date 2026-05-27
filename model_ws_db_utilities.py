@@ -40,7 +40,9 @@ from util.serialization_compat import refresh_legacy_serialized_model
 from util.prediction_cache_key_utils import (
     build_prediction_cache_key,
     ensure_chemical_inchi_key,
+    inchi_keys_match_connectivity,
     normalize_inchi_key,
+    prediction_chemical_conflicts_with_cache_key,
     standardized_chemical_changes_identity,
 )
 from util.chemical_image_utils import build_render_image_url, get_render_smiles
@@ -1281,6 +1283,14 @@ class ModelPredictor:
         prediction_obj = self._prediction_from_cached_value(prediction)
         return self._ensure_cached_prediction_uses_input_chemical(prediction_obj, fallback_smiles)
 
+    @classmethod
+    def _cached_prediction_conflicts_with_cache_key(cls, cache_key, prediction):
+        return prediction_chemical_conflicts_with_cache_key(
+            cache_key,
+            prediction,
+            cls._get_inchi_key_from_smiles,
+        )
+
     def _ensure_cached_prediction_uses_input_chemical(self, prediction, fallback_smiles):
         if not isinstance(prediction, dict) or not fallback_smiles:
             return prediction
@@ -1447,36 +1457,71 @@ class ModelPredictor:
             len(chemicals) == len(smiles_list)
             and all(isinstance(chemical, dict) and "canonicalSmiles" in chemical for chemical in chemicals)
         ):
-            normalized_results = []
-            missing_canonical_count = 0
-            mixture_count = 0
-
-            for smiles, chemical in zip(smiles_list, chemicals):
-                canonical_smiles = chemical.get("canonicalSmiles")
-                if not canonical_smiles:
-                    missing_canonical_count += 1
-                    normalized_results.append((f"{smiles} failed standardization", 400))
+            positional_mismatch_reasons = []
+            for index, (smiles, chemical) in enumerate(zip(smiles_list, chemicals)):
+                response_match_keys = self._get_standardization_response_match_keys(chemical)
+                expected_id = str(index)
+                if response_match_keys:
+                    if not any(response_key == expected_id for _, response_key in response_match_keys):
+                        positional_mismatch_reasons.append(
+                            f"index={index} expected_id={expected_id} response_keys={response_match_keys}"
+                        )
                     continue
 
-                if model.omitSalts and "." in canonical_smiles:
-                    mixture_count += 1
-                    normalized_results.append((f"{smiles}: model can't run mixtures", 400))
-                    continue
+                input_inchi_key = self._get_inchi_key_from_smiles(smiles)
+                chemical_with_inchi = self._ensure_chemical_inchi_key(
+                    chemical,
+                    fallback_smiles=chemical.get("chemId"),
+                )
+                chemical_inchi_key = self._normalize_inchi_key(chemical_with_inchi.get("inchiKey"))
+                if (
+                    input_inchi_key
+                    and chemical_inchi_key
+                    and not inchi_keys_match_connectivity(input_inchi_key, chemical_inchi_key)
+                ):
+                    positional_mismatch_reasons.append(
+                        f"index={index} input_inchi={input_inchi_key} response_inchi={chemical_inchi_key}"
+                    )
 
-                normalized_results.append((chemical, 200))
+            if positional_mismatch_reasons:
+                logging.warning(
+                    "Standardization response length matched request but positional mapping was unsafe; "
+                    "retrying id/fallback matching; workflow=%s batch_size=%s reasons=%s",
+                    model.qsarReadyRuleSet,
+                    len(smiles_list),
+                    positional_mismatch_reasons[:10],
+                )
+            else:
+                normalized_results = []
+                missing_canonical_count = 0
+                mixture_count = 0
 
-            if missing_canonical_count or mixture_count:
-                diagnostic_parts = [
-                    f"direct_response_len={len(chemicals)} expected_len={len(smiles_list)}",
-                ]
-                if missing_canonical_count:
-                    diagnostic_parts.append(f"missing_canonicalSmiles={missing_canonical_count}")
-                if mixture_count:
-                    diagnostic_parts.append(f"mixture_groups={mixture_count}")
-                diagnostic_parts.append(f"preview={self._preview_log_value(chemicals)}")
-                return normalized_results, " ".join(diagnostic_parts), None, []
+                for smiles, chemical in zip(smiles_list, chemicals):
+                    canonical_smiles = chemical.get("canonicalSmiles")
+                    if not canonical_smiles:
+                        missing_canonical_count += 1
+                        normalized_results.append((f"{smiles} failed standardization", 400))
+                        continue
 
-            return normalized_results, None, None, []
+                    if model.omitSalts and "." in canonical_smiles:
+                        mixture_count += 1
+                        normalized_results.append((f"{smiles}: model can't run mixtures", 400))
+                        continue
+
+                    normalized_results.append((chemical, 200))
+
+                if missing_canonical_count or mixture_count:
+                    diagnostic_parts = [
+                        f"direct_response_len={len(chemicals)} expected_len={len(smiles_list)}",
+                    ]
+                    if missing_canonical_count:
+                        diagnostic_parts.append(f"missing_canonicalSmiles={missing_canonical_count}")
+                    if mixture_count:
+                        diagnostic_parts.append(f"mixture_groups={mixture_count}")
+                    diagnostic_parts.append(f"preview={self._preview_log_value(chemicals)}")
+                    return normalized_results, " ".join(diagnostic_parts), None, []
+
+                return normalized_results, None, None, []
 
         expected_id_map = self._build_standardization_expected_id_map(smiles_list)
         expected_ids = [str(index) for index, _ in enumerate(smiles_list)]
@@ -2741,8 +2786,20 @@ class ModelPredictor:
         for idx, cache_key in enumerate(cache_keys):
             prediction = cached_predictions.get(cache_key) if cache_key is not None else None
             if prediction is not None:
-                results[idx] = self._prediction_from_cached_value_for_smiles(prediction, smiles_list[idx])
-                continue
+                prediction_obj = self._prediction_from_cached_value(prediction)
+                if cache_key is not None and self._cached_prediction_conflicts_with_cache_key(cache_key, prediction_obj):
+                    logging.warning(
+                        "Ignoring cached prediction whose chemicalIdentifiers conflict with cache key; "
+                        "key=%s smiles=%s",
+                        cache_key,
+                        smiles_list[idx],
+                    )
+                else:
+                    results[idx] = self._ensure_cached_prediction_uses_input_chemical(
+                        prediction_obj,
+                        smiles_list[idx],
+                    )
+                    continue
 
             missing_indices.append(idx)
             missing_smiles.append(smiles_list[idx])
