@@ -23,7 +23,9 @@ class _DummyResponse:
 
     def raise_for_status(self):
         if self.status_code >= 400:
-            raise Exception(f"HTTP {self.status_code}")
+            error = requests_stub.RequestException(f"HTTP {self.status_code}")
+            error.response = self
+            raise error
 
     def json(self):
         return self.payload
@@ -50,13 +52,34 @@ class _DummySession:
 
 if "requests" not in sys.modules:
     requests_stub = types.ModuleType("requests")
-    requests_stub.RequestException = Exception
+    class _DummyRequestException(Exception):
+        pass
+
+    class _DummyTimeout(_DummyRequestException):
+        pass
+
+    requests_stub.RequestException = _DummyRequestException
+    requests_stub.Timeout = _DummyTimeout
     requests_stub.Session = _DummySession
     sys.modules["requests"] = requests_stub
+else:
+    requests_stub = sys.modules["requests"]
+
+if not hasattr(requests_stub, "RequestException"):
+    class _DummyRequestException(Exception):
+        pass
+
+    requests_stub.RequestException = _DummyRequestException
+if not hasattr(requests_stub, "Timeout"):
+    class _DummyTimeout(requests_stub.RequestException):
+        pass
+
+    requests_stub.Timeout = _DummyTimeout
 
 if "requests.exceptions" not in sys.modules:
     requests_exceptions_stub = types.ModuleType("requests.exceptions")
-    requests_exceptions_stub.RequestException = Exception
+    requests_exceptions_stub.RequestException = requests_stub.RequestException
+    requests_exceptions_stub.Timeout = requests_stub.Timeout
     sys.modules["requests.exceptions"] = requests_exceptions_stub
 
 
@@ -230,6 +253,7 @@ class TestCleanupPredictionCacheIdentityMismatches(unittest.TestCase):
             "1066",
             ["CCC", "CCO"],
             10,
+            10,
             stats,
         )
 
@@ -240,6 +264,48 @@ class TestCleanupPredictionCacheIdentityMismatches(unittest.TestCase):
             session.posts[0]["json"],
             {"model_id": 1066, "smiles": ["CCC", "CCO"]},
         )
+
+    def test_gateway_timeout_failure_does_not_split_below_threshold(self):
+        stats = cleanup.CleanupStats()
+        session = _DummySession([_DummyResponse({}, status_code=504)])
+
+        success_count = cleanup.predict_smiles_with_fallback(
+            session,
+            "https://example.test/api/predictor_models/predict",
+            "1068",
+            ["CCC", "CCO"],
+            10,
+            10,
+            stats,
+        )
+
+        self.assertEqual(success_count, 0)
+        self.assertEqual(len(session.posts), 1)
+        self.assertEqual(stats.prediction_failures, 2)
+
+    def test_gateway_timeout_failure_splits_above_threshold(self):
+        stats = cleanup.CleanupStats()
+        session = _DummySession(
+            [
+                _DummyResponse({}, status_code=504),
+                _DummyResponse({"results": [{"chemical": {"smiles": "CCC"}}]}),
+                _DummyResponse({"results": [{"chemical": {"smiles": "CCO"}}]}),
+            ]
+        )
+
+        success_count = cleanup.predict_smiles_with_fallback(
+            session,
+            "https://example.test/api/predictor_models/predict",
+            "1068",
+            ["CCC", "CCO"],
+            10,
+            1,
+            stats,
+        )
+
+        self.assertEqual(success_count, 2)
+        self.assertEqual(len(session.posts), 3)
+        self.assertEqual(stats.recomputed_predictions, 2)
 
 
 if __name__ == "__main__":

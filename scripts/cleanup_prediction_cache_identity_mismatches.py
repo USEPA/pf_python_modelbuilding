@@ -26,7 +26,7 @@ from typing import Any
 import requests
 from pymongo import DeleteOne, MongoClient
 from pymongo.errors import PyMongoError
-from requests import RequestException
+from requests import RequestException, Timeout
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -53,6 +53,7 @@ DEFAULT_PROGRESS_EVERY = 25000
 DEFAULT_PREDICTION_BATCH_SIZE = 25
 DEFAULT_RESOLVER_LOOKUP_API = "https://cim-dev.sciencedataexperts.com/api/resolver/lookup"
 DEFAULT_PREDICT_API = "https://cim-dev.sciencedataexperts.com/api/predictor_models/predict"
+DEFAULT_PREDICTION_GATEWAY_SPLIT_THRESHOLD = 10
 KEY_RE = re.compile(r"^([A-Z]{14}-[A-Z]{10}-[A-Z])-(.+)$")
 LOGGER = logging.getLogger("prediction_cache_identity_cleanup")
 
@@ -203,6 +204,17 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=DEFAULT_PREDICTION_BATCH_SIZE,
         help="Number of SMILES per prediction API POST batch in --repair-mode recompute.",
+    )
+    parser.add_argument(
+        "--prediction-gateway-split-threshold",
+        type=int,
+        default=DEFAULT_PREDICTION_GATEWAY_SPLIT_THRESHOLD,
+        help=(
+            "For prediction API timeout/502/503/504 failures, split batches only while "
+            "the failing batch is larger than this size. Smaller failing batches are "
+            "counted as failures without retrying each SMILES individually. Use 1 to "
+            "split gateway failures down to singles."
+        ),
     )
     parser.add_argument(
         "--resolver-timeout",
@@ -832,12 +844,43 @@ def _predict_batch_once(
     return len(smiles_values)
 
 
+def _http_status_from_exception(exc: BaseException) -> int | None:
+    response = getattr(exc, "response", None)
+    status_code = getattr(response, "status_code", None)
+    if isinstance(status_code, int):
+        return status_code
+    return None
+
+
+def _is_gateway_or_timeout_prediction_failure(exc: BaseException) -> bool:
+    if isinstance(exc, Timeout):
+        return True
+
+    status_code = _http_status_from_exception(exc)
+    return status_code in {502, 503, 504}
+
+
+def _should_split_prediction_failure(
+    exc: BaseException,
+    batch_size: int,
+    gateway_split_threshold: int,
+) -> bool:
+    if batch_size <= 1:
+        return False
+
+    if _is_gateway_or_timeout_prediction_failure(exc):
+        return batch_size > gateway_split_threshold
+
+    return True
+
+
 def predict_smiles_with_fallback(
     session: requests.Session,
     predict_url: str,
     model_id: str,
     smiles_values: list[str],
     timeout: float,
+    gateway_split_threshold: int,
     stats: CleanupStats,
 ) -> int:
     if not smiles_values:
@@ -851,12 +894,16 @@ def predict_smiles_with_fallback(
         stats.prediction_failures += max(0, len(smiles_values) - success_count)
         return success_count
     except (RequestException, ValueError) as exc:
-        if len(smiles_values) == 1:
-            stats.prediction_failures += 1
+        if not _should_split_prediction_failure(exc, len(smiles_values), gateway_split_threshold):
+            stats.prediction_failures += len(smiles_values)
             LOGGER.warning(
-                "Prediction recompute failed for one SMILES; model_id=%s smiles=%s error=%s",
+                "Prediction recompute failed without further splitting; model_id=%s batch_size=%s "
+                "gateway_or_timeout=%s threshold=%s first_smiles=%s error=%s",
                 model_id,
-                smiles_values[0],
+                len(smiles_values),
+                _is_gateway_or_timeout_prediction_failure(exc),
+                gateway_split_threshold,
+                smiles_values[0] if smiles_values else None,
                 exc,
             )
             return 0
@@ -876,6 +923,7 @@ def predict_smiles_with_fallback(
             model_id,
             smiles_values[:midpoint],
             timeout,
+            gateway_split_threshold,
             stats,
         ) + predict_smiles_with_fallback(
             session,
@@ -883,6 +931,7 @@ def predict_smiles_with_fallback(
             model_id,
             smiles_values[midpoint:],
             timeout,
+            gateway_split_threshold,
             stats,
         )
 
@@ -919,6 +968,13 @@ def resolve_recompute_smiles(
 
         smiles_by_key[candidate.key] = smiles
 
+    LOGGER.info(
+        "Resolved recompute SMILES: candidates=%s unique_inchi_keys=%s resolved_inchi_keys=%s resolved_cache_keys=%s",
+        len(candidates),
+        len(unique_inchi_keys),
+        len(resolved_by_inchi_key),
+        len(smiles_by_key),
+    )
     return smiles_by_key
 
 
@@ -935,16 +991,40 @@ def recompute_deleted_candidates(
         if smiles:
             smiles_by_model_id[candidate.model_id].append(smiles)
 
+    if not smiles_by_model_id:
+        LOGGER.info("No prediction recompute requests to send for this deleted batch")
+        return
+
     for model_id, smiles_values in sorted(smiles_by_model_id.items()):
         unique_smiles = _ordered_unique(smiles_values)
+        LOGGER.info(
+            "Recomputing predictions for model_id=%s unique_smiles=%s prediction_batch_size=%s",
+            model_id,
+            len(unique_smiles),
+            args.prediction_batch_size,
+        )
+        batch_number = 0
         for smiles_batch in _chunk_sequence(unique_smiles, args.prediction_batch_size):
-            predict_smiles_with_fallback(
+            batch_number += 1
+            failures_before = stats.prediction_failures
+            success_count = predict_smiles_with_fallback(
                 session,
                 args.predict_url,
                 model_id,
                 smiles_batch,
                 args.predict_timeout,
+                args.prediction_gateway_split_threshold,
                 stats,
+            )
+            LOGGER.info(
+                "Prediction recompute batch complete: model_id=%s batch=%s requested=%s "
+                "recomputed=%s failures=%s cumulative_recomputed=%s",
+                model_id,
+                batch_number,
+                len(smiles_batch),
+                success_count,
+                stats.prediction_failures - failures_before,
+                stats.recomputed_predictions,
             )
 
 
@@ -987,8 +1067,30 @@ def process_batch(
     if args.repair_mode != "recompute":
         return
 
+    resolver_batches_before = stats.resolver_batches
+    resolver_hits_before = stats.resolver_hits
+    prediction_batches_before = stats.prediction_batches
+    prediction_requests_before = stats.prediction_requests
+    recomputed_before = stats.recomputed_predictions
+    prediction_failures_before = stats.prediction_failures
+    skipped_resolver_before = stats.skipped_without_resolver_match
+
     smiles_by_key = resolve_recompute_smiles(session, candidates, args, stats)
     recompute_deleted_candidates(session, candidates, smiles_by_key, args, stats)
+    LOGGER.info(
+        "Deleted batch recompute summary: candidates=%s resolved_cache_keys=%s "
+        "resolver_batches=%s resolver_hits=%s prediction_batches=%s prediction_requests=%s "
+        "recomputed=%s prediction_failures=%s skipped_without_resolver_match=%s",
+        len(candidates),
+        len(smiles_by_key),
+        stats.resolver_batches - resolver_batches_before,
+        stats.resolver_hits - resolver_hits_before,
+        stats.prediction_batches - prediction_batches_before,
+        stats.prediction_requests - prediction_requests_before,
+        stats.recomputed_predictions - recomputed_before,
+        stats.prediction_failures - prediction_failures_before,
+        stats.skipped_without_resolver_match - skipped_resolver_before,
+    )
 
 
 def cleanup(collection, args: argparse.Namespace) -> CleanupStats:
@@ -1023,6 +1125,8 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("--sample-size cannot be negative")
     if args.prediction_batch_size <= 0:
         raise ValueError("--prediction-batch-size must be positive")
+    if args.prediction_gateway_split_threshold <= 0:
+        raise ValueError("--prediction-gateway-split-threshold must be positive")
     if args.resolver_timeout is not None and args.resolver_timeout <= 0:
         raise ValueError("--resolver-timeout must be positive")
     if args.predict_timeout is not None and args.predict_timeout <= 0:
