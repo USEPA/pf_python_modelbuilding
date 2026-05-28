@@ -245,8 +245,8 @@ def run_biodeg_rifm():
     
     dataset_name = 'exp_prop_RBIODEG_RIFM_CHEMREG' # automapped one
     
-    # write_to_db = True
-    write_to_db = False
+    write_to_db = True
+    # write_to_db = False
     
     unique_identifier = None
     ad_measure_model = [pc.Applicability_Domain_TEST_Embedding_Euclidean, pc.Applicability_Domain_TEST_Fragment_Counts]
@@ -260,18 +260,18 @@ def run_biodeg_rifm():
     model = run_dataset(dataset_name=dataset_name, qsar_method='gcm', feature_selection=False,
                 ad_measure_model=ad_measure_model, write_to_db=write_to_db, unique_identifier=unique_identifier, append_to_models_folder=append_to_models_folder)  # OK
     
-    for method in ['rf', 'xgb']:        
-        model = run_dataset(dataset_name=dataset_name, qsar_method=method, feature_selection=False, 
-                    ad_measure_model=ad_measure_model, write_to_db=write_to_db, unique_identifier=unique_identifier, append_to_models_folder=append_to_models_folder)  # OK
+    # for method in ['rf', 'xgb']:        
+    #     model = run_dataset(dataset_name=dataset_name, qsar_method=method, feature_selection=False, 
+    #                 ad_measure_model=ad_measure_model, write_to_db=write_to_db, unique_identifier=unique_identifier, append_to_models_folder=append_to_models_folder)  # OK
     
     # for method in ['rf']:
-    for method in ['rf', 'xgb', 'reg','knn']:
-        params = set_hyper_parameters(qsar_method=method, feature_selection=True, descriptor_set_name=descriptor_set_name, 
-                                      splitting_name=splitting_name, dataset_name=dataset_name, ad_measure=ad_measure_model)
-        params.descriptor_coefficient = 0.001
-        run_dataset(dataset_name=dataset_name, qsar_method=params.qsar_method, feature_selection=params.feature_selection,
-            params = params, ad_measure_model=ad_measure_model, write_to_db=write_to_db, 
-            unique_identifier=unique_identifier, append_to_models_folder=append_to_models_folder) 
+    # for method in ['rf', 'xgb', 'reg','knn']:
+    #     params = set_hyper_parameters(qsar_method=method, feature_selection=True, descriptor_set_name=descriptor_set_name, 
+    #                                   splitting_name=splitting_name, dataset_name=dataset_name, ad_measure=ad_measure_model)
+    #     params.descriptor_coefficient = 0.001
+    #     run_dataset(dataset_name=dataset_name, qsar_method=params.qsar_method, feature_selection=params.feature_selection,
+    #         params = params, ad_measure_model=ad_measure_model, write_to_db=write_to_db, 
+    #         unique_identifier=unique_identifier, append_to_models_folder=append_to_models_folder) 
     
     Results.summarize_model_stats(dataset_name, append_to_models_folder=append_to_models_folder)
     
@@ -318,8 +318,11 @@ def run_RIFM_model_on_ECHA_test_set():
     
 def lookAtModelCoefficients():
     
-    # model_id = 1847
-    model_id = 1763
+    # model_id = 1847 #GCM RBIODEG ECHA+RIFM
+    # model_id = 1843   #REG RBIODEG ECHA+RIFM
+    # model_id = 1763 #GCM KOC
+    
+    model_id = 1877  #GCM RBIODEG RIFM, redone
     
     from model_ws_db_utilities import ModelInitializer
     
@@ -332,6 +335,39 @@ def lookAtModelCoefficients():
     modelCoefficients = json.loads(model.getOriginalRegressionCoefficients2(X, y))
     
     print(json.dumps(modelCoefficients, indent=4))
+
+
+
+def testCoefficientFromScratch():
+
+    from sklearn.datasets import make_classification
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.pipeline import Pipeline
+    from models.ModelBuilder import Model
+    
+    X, y = make_classification(n_samples=500, n_features=5, random_state=0)
+    df = pd.DataFrame(X, columns=[f"x{i}" for i in range(X.shape[1])])
+    
+    pipe = Pipeline([
+        ("scaler", StandardScaler()),
+        # ("clf", LogisticRegression(max_iter=1000))
+        # ("clf", LogisticRegression(penalty="l2", solver="liblinear", random_state=0))
+        ("clf", LogisticRegression(solver='liblinear', max_iter=1000, dual=False))        
+    ]).fit(df, y)
+    
+    
+    # pipe = Pipeline([
+    #     ("scaler", StandardScaler()),
+    #     ("clf", LogisticRegression(random_state=0))  # doesnt give std_errors
+    # ]).fit(df, y)
+        
+    
+    self_like = type("T", (), {})()
+    self_like.get_model = lambda: pipe
+    self_like.embedding = list(df.columns)
+    
+    print(Model.getOriginalRegressionCoefficients2(self_like, df, y))
     
     
 
@@ -808,13 +844,14 @@ def main():
     
     # run_biodeg_nite()
     
-    run_biodeg_rifm()
-    run_biodeg_301F()
+    # run_biodeg_rifm()
+    # run_biodeg_301F()
     # run_percentage_biodegradation()
     
     # run_continuous_model_on_test_set()
     
-    # lookAtModelCoefficients()
+    lookAtModelCoefficients()
+    # testCoefficientFromScratch()
     
     # run_RIFM_model_on_ECHA_test_set()
          
