@@ -45,6 +45,7 @@ from util.prediction_cache_key_utils import (  # noqa: E402
 
 DEFAULT_BATCH_SIZE = 1000
 DEFAULT_CURSOR_BATCH_SIZE = 5000
+DEFAULT_PROGRESS_EVERY = 25000
 KEY_RE = re.compile(r"^([A-Z]{14}-[A-Z]{10}-[A-Z])-(.+)$")
 LOGGER = logging.getLogger("prediction_cache_identity_cleanup")
 
@@ -194,7 +195,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--progress-every",
         type=int,
-        default=100000,
+        default=DEFAULT_PROGRESS_EVERY,
         help="Log scan progress after this many Mongo documents. Use 0 to disable.",
     )
     parser.add_argument(
@@ -308,11 +309,11 @@ def build_scan_query(args: argparse.Namespace) -> dict[str, Any]:
     return {"$and": clauses}
 
 
-def build_resume_scan_query(query: dict[str, Any], last_seen_id: Any | None) -> dict[str, Any]:
-    if last_seen_id is None:
+def build_resume_scan_query(query: dict[str, Any], last_seen_key: str | None) -> dict[str, Any]:
+    if last_seen_key is None:
         return query
 
-    resume_clause = {"_id": {"$gt": last_seen_id}}
+    resume_clause = {"key": {"$gt": last_seen_key}}
     if not query:
         return resume_clause
     return {"$and": [query, resume_clause]}
@@ -396,7 +397,7 @@ def iter_mismatch_batches(
     model_ids = {str(model_id) for model_id in args.model_id}
 
     candidate_buffer = []
-    last_seen_id = None
+    last_seen_key = None
     selected_candidates = 0
     limit_reached = False
 
@@ -404,22 +405,28 @@ def iter_mismatch_batches(
         retries_remaining = args.mongo_cursor_retries
 
         while True:
-            cursor = collection.find(
-                build_resume_scan_query(query, last_seen_id),
-                projection=projection,
-            ).sort("_id", 1).limit(args.mongo_cursor_batch_size).batch_size(args.mongo_cursor_batch_size)
+            cursor = (
+                collection.find(
+                    build_resume_scan_query(query, last_seen_key),
+                    projection=projection,
+                )
+                .sort("key", 1)
+                .hint("key_idx")
+                .limit(args.mongo_cursor_batch_size)
+                .batch_size(args.mongo_cursor_batch_size)
+            )
             page_doc_count = 0
             try:
                 for doc in cursor:
                     page_doc_count += 1
-                    last_seen_id = doc["_id"]
+                    last_seen_key = doc.get("key")
                     stats.scanned_documents += 1
                     if args.progress_every > 0 and stats.scanned_documents % args.progress_every == 0:
                         LOGGER.info(
-                            "Scan progress: scanned_documents=%s candidates=%s last_seen_id=%s",
+                            "Scan progress: scanned_documents=%s candidates=%s last_seen_key=%s",
                             stats.scanned_documents,
                             selected_candidates,
-                            last_seen_id,
+                            last_seen_key,
                         )
 
                     candidate = mismatch_from_doc(
@@ -444,9 +451,9 @@ def iter_mismatch_batches(
 
                 retries_remaining -= 1
                 LOGGER.warning(
-                    "Mongo cursor read failed; retrying scan page from last_seen_id=%s "
+                    "Mongo cursor read failed; retrying scan page from last_seen_key=%s "
                     "retries_remaining=%s error=%s",
-                    last_seen_id,
+                    last_seen_key,
                     retries_remaining,
                     exc,
                 )
