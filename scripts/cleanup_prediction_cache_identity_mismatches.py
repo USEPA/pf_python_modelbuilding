@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
-Find or delete predictor_models_cache records whose cache-key InChIKey does not
-match prediction.chemicalIdentifiers.inchiKey.
+Find, delete, or recompute predictor_models_cache records whose cache-key
+InChIKey does not match prediction.chemicalIdentifiers.inchiKey.
 
 These records are unsafe because the cache key belongs to one chemical while the
-stored prediction payload belongs to another. Deleting them is usually the right
-repair: the next API request recomputes the prediction and overwrites the cache.
+stored prediction payload belongs to another. Deleting them is the lazy repair:
+the next API request recomputes the prediction and overwrites the cache.
+Recompute mode does that cache warm-up immediately in prediction API batches.
 """
 
 from __future__ import annotations
@@ -17,12 +18,15 @@ import os
 import re
 import sys
 import time
+from collections import defaultdict
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+import requests
 from pymongo import DeleteOne, MongoClient
 from pymongo.errors import PyMongoError
+from requests import RequestException
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -46,6 +50,9 @@ from util.prediction_cache_key_utils import (  # noqa: E402
 DEFAULT_BATCH_SIZE = 1000
 DEFAULT_CURSOR_BATCH_SIZE = 5000
 DEFAULT_PROGRESS_EVERY = 25000
+DEFAULT_PREDICTION_BATCH_SIZE = 25
+DEFAULT_RESOLVER_LOOKUP_API = "https://cim-dev.sciencedataexperts.com/api/resolver/lookup"
+DEFAULT_PREDICT_API = "https://cim-dev.sciencedataexperts.com/api/predictor_models/predict"
 KEY_RE = re.compile(r"^([A-Z]{14}-[A-Z]{10}-[A-Z])-(.+)$")
 LOGGER = logging.getLogger("prediction_cache_identity_cleanup")
 
@@ -70,8 +77,15 @@ class CleanupStats:
     candidates: int = 0
     planned_deletes: int = 0
     deleted_documents: int = 0
+    resolver_batches: int = 0
+    resolver_hits: int = 0
+    prediction_batches: int = 0
+    prediction_requests: int = 0
+    prediction_failures: int = 0
+    recomputed_predictions: int = 0
     skipped_missing_key_inchi: int = 0
     skipped_missing_chemical_inchi: int = 0
+    skipped_without_resolver_match: int = 0
 
 
 def _load_env_file_without_dotenv(env_file: Path) -> None:
@@ -163,7 +177,44 @@ def parse_args() -> argparse.Namespace:
         "--batch-size",
         type=int,
         default=DEFAULT_BATCH_SIZE,
-        help="Number of delete operations per Mongo bulk_write batch.",
+        help="Number of mismatched cache records to process per Mongo/write batch.",
+    )
+    parser.add_argument(
+        "--repair-mode",
+        choices=("delete", "recompute"),
+        default="delete",
+        help=(
+            "delete removes poisoned records only; recompute removes them and then "
+            "warms the cache by calling the prediction API in batches."
+        ),
+    )
+    parser.add_argument(
+        "--resolver-url",
+        default=None,
+        help="CIM resolver lookup endpoint used by --repair-mode recompute.",
+    )
+    parser.add_argument(
+        "--predict-url",
+        default=None,
+        help="Predictor models predict endpoint used by --repair-mode recompute.",
+    )
+    parser.add_argument(
+        "--prediction-batch-size",
+        type=int,
+        default=DEFAULT_PREDICTION_BATCH_SIZE,
+        help="Number of SMILES per prediction API POST batch in --repair-mode recompute.",
+    )
+    parser.add_argument(
+        "--resolver-timeout",
+        type=float,
+        default=None,
+        help="Resolver request timeout in seconds.",
+    )
+    parser.add_argument(
+        "--predict-timeout",
+        type=float,
+        default=None,
+        help="Prediction API request timeout in seconds.",
     )
     parser.add_argument(
         "--mongo-cursor-batch-size",
@@ -228,6 +279,14 @@ def resolve_args_from_env(args: argparse.Namespace) -> None:
         args.mongo_uri = os.getenv("MONGO_URI")
     if args.database is None:
         args.database = os.getenv("MONGO_DATABASE", "predictor")
+    if args.resolver_url is None:
+        args.resolver_url = os.getenv("RESOLVER_LOOKUP_API", DEFAULT_RESOLVER_LOOKUP_API)
+    if args.predict_url is None:
+        args.predict_url = os.getenv("PREDICTOR_MODELS_PREDICT_API", DEFAULT_PREDICT_API)
+    if args.resolver_timeout is None:
+        args.resolver_timeout = float(os.getenv("RESOLVER_LOOKUP_TIMEOUT", "30"))
+    if args.predict_timeout is None:
+        args.predict_timeout = float(os.getenv("PREDICTOR_MODELS_PREDICT_TIMEOUT", "300"))
 
 
 def resolve_mongo_socket_timeout_ms(args: argparse.Namespace) -> int | None:
@@ -466,6 +525,10 @@ def iter_mismatch_batches(
             yield candidate_buffer[: args.batch_size]
             candidate_buffer = candidate_buffer[args.batch_size :]
 
+        if args.repair_mode == "recompute" and candidate_buffer:
+            yield candidate_buffer
+            candidate_buffer = []
+
         if page_doc_count < args.mongo_cursor_batch_size:
             break
 
@@ -492,7 +555,406 @@ def write_report_rows(report_path: Path | None, candidates: list[MismatchCandida
             report_file.write(json.dumps(row, sort_keys=True) + "\n")
 
 
-def process_batch(collection, candidates: list[MismatchCandidate], args: argparse.Namespace, stats: CleanupStats) -> None:
+def _ordered_unique(values: list[str]) -> list[str]:
+    unique_values = []
+    seen = set()
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        unique_values.append(value)
+    return unique_values
+
+
+def _chunk_sequence(items, chunk_size: int):
+    if chunk_size <= 0:
+        raise ValueError("chunk_size must be positive")
+
+    for start in range(0, len(items), chunk_size):
+        yield items[start : start + chunk_size]
+
+
+def build_inchi_key_resolver_payload(inchi_keys: list[str]) -> dict[str, Any]:
+    return {
+        "fuzzy": "Not",
+        "ids": list(inchi_keys),
+        "idsType": "InChIKey",
+        "mol": False,
+        "filters": {},
+        "format": "UNKNOWN",
+    }
+
+
+def _clean_text(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text or text.upper() == "N/A":
+        return None
+    return text
+
+
+def _extract_chemical(payload: Any) -> dict[str, Any] | None:
+    if isinstance(payload, list):
+        for item in payload:
+            chemical = _extract_chemical(item)
+            if chemical:
+                return chemical
+        return None
+
+    if not isinstance(payload, dict):
+        return None
+
+    chemical = payload.get("chemical")
+    if isinstance(chemical, dict):
+        return chemical
+
+    chemicals = payload.get("chemicals")
+    if isinstance(chemicals, list):
+        for item in chemicals:
+            chemical = _extract_chemical(item)
+            if chemical:
+                return chemical
+
+    if any(
+        field in payload
+        for field in ("chemId", "cid", "sid", "casrn", "name", "smiles", "canonicalSmiles", "inchiKey")
+    ):
+        return payload
+
+    return None
+
+
+def _extract_resolver_items(payload: Any) -> list[Any] | None:
+    if isinstance(payload, list):
+        return payload
+
+    if isinstance(payload, dict):
+        for key in ("chemicals", "results", "items"):
+            items = payload.get(key)
+            if isinstance(items, list):
+                return items
+        return [payload]
+
+    return None
+
+
+def _match_resolver_item_index(raw_item: Any, input_size: int) -> int | None:
+    if not isinstance(raw_item, dict):
+        return None
+
+    for key in ("id", "recordId", "index", "idx"):
+        value = raw_item.get(key)
+        if value is None:
+            continue
+        try:
+            index = int(str(value).strip())
+        except ValueError:
+            continue
+        if 0 <= index < input_size:
+            return index
+
+    return None
+
+
+def _match_resolver_item_query(raw_item: Any, inchi_keys: list[str], used_indexes: set[int]) -> int | None:
+    if not isinstance(raw_item, dict):
+        return None
+
+    query_inchi_key = normalize_inchi_key(raw_item.get("query") or raw_item.get("input"))
+    if query_inchi_key is None:
+        return None
+
+    for index, inchi_key in enumerate(inchi_keys):
+        if index in used_indexes:
+            continue
+        if inchi_keys_match_connectivity(inchi_key, query_inchi_key):
+            return index
+
+    return None
+
+
+def _match_resolver_item_chemical(
+    chemical: dict[str, Any] | None,
+    inchi_keys: list[str],
+    used_indexes: set[int],
+) -> int | None:
+    if not isinstance(chemical, dict):
+        return None
+
+    chemical_inchi_key = normalize_inchi_key(chemical.get("inchiKey"))
+    if chemical_inchi_key is None:
+        return None
+
+    for index, inchi_key in enumerate(inchi_keys):
+        if index in used_indexes:
+            continue
+        if inchi_keys_match_connectivity(inchi_key, chemical_inchi_key):
+            return index
+
+    return None
+
+
+def parse_inchi_key_resolver_payload(payload: Any, inchi_keys: list[str]) -> dict[str, dict[str, Any]]:
+    items = _extract_resolver_items(payload)
+    if not isinstance(items, list) or not items:
+        raise ValueError(f"Unexpected resolver response: {payload!r}")
+
+    results = {}
+    used_indexes: set[int] = set()
+    use_positional_fallback = len(items) == len(inchi_keys)
+
+    for item_position, item in enumerate(items):
+        chemical = _extract_chemical(item)
+        if not isinstance(chemical, dict):
+            continue
+
+        match_index = _match_resolver_item_index(item, len(inchi_keys))
+        if match_index is not None and match_index in used_indexes:
+            match_index = None
+        if match_index is None:
+            match_index = _match_resolver_item_query(item, inchi_keys, used_indexes)
+        if match_index is None:
+            match_index = _match_resolver_item_chemical(chemical, inchi_keys, used_indexes)
+        if match_index is None and use_positional_fallback and item_position not in used_indexes:
+            match_index = item_position
+
+        if match_index is None or match_index in used_indexes:
+            continue
+
+        input_inchi_key = inchi_keys[match_index]
+        chemical_inchi_key = normalize_inchi_key(chemical.get("inchiKey"))
+        if chemical_inchi_key is not None and not inchi_keys_match_connectivity(input_inchi_key, chemical_inchi_key):
+            LOGGER.warning(
+                "Resolver returned nonmatching chemical for InChIKey=%s resolved_inchi=%s",
+                input_inchi_key,
+                chemical_inchi_key,
+            )
+            continue
+
+        used_indexes.add(match_index)
+        results[input_inchi_key] = chemical
+
+    return results
+
+
+def lookup_inchi_keys_with_fallback(
+    session: requests.Session,
+    resolver_url: str,
+    inchi_keys: list[str],
+    timeout: float,
+    stats: CleanupStats,
+) -> dict[str, dict[str, Any]]:
+    if not inchi_keys:
+        return {}
+
+    stats.resolver_batches += 1
+    try:
+        response = session.post(
+            resolver_url,
+            json=build_inchi_key_resolver_payload(inchi_keys),
+            headers={"accept": "application/json"},
+            timeout=timeout,
+        )
+        response.raise_for_status()
+        return parse_inchi_key_resolver_payload(response.json(), inchi_keys)
+    except (RequestException, ValueError) as exc:
+        if len(inchi_keys) == 1:
+            LOGGER.warning(
+                "Resolver lookup failed for one InChIKey; skipping inchi_key=%s error=%s",
+                inchi_keys[0],
+                exc,
+            )
+            return {}
+
+        midpoint = len(inchi_keys) // 2
+        LOGGER.warning(
+            "Resolver batch failed; splitting batch_size=%s left=%s right=%s error=%s",
+            len(inchi_keys),
+            midpoint,
+            len(inchi_keys) - midpoint,
+            exc,
+        )
+        results = lookup_inchi_keys_with_fallback(
+            session,
+            resolver_url,
+            inchi_keys[:midpoint],
+            timeout,
+            stats,
+        )
+        results.update(
+            lookup_inchi_keys_with_fallback(
+                session,
+                resolver_url,
+                inchi_keys[midpoint:],
+                timeout,
+                stats,
+            )
+        )
+        return results
+
+
+def _json_model_id(value: str) -> int | str:
+    try:
+        return int(value)
+    except ValueError:
+        return value
+
+
+def _predict_batch_once(
+    session: requests.Session,
+    predict_url: str,
+    model_id: str,
+    smiles_values: list[str],
+    timeout: float,
+) -> int:
+    response = session.post(
+        predict_url,
+        json={"model_id": _json_model_id(model_id), "smiles": smiles_values},
+        headers={"accept": "application/json"},
+        timeout=timeout,
+    )
+    response.raise_for_status()
+
+    try:
+        payload = response.json()
+    except ValueError:
+        return len(smiles_values)
+
+    if isinstance(payload, dict) and payload.get("error"):
+        raise ValueError(f"Prediction API returned error: {payload.get('error')}")
+
+    results = payload.get("results") if isinstance(payload, dict) else None
+    if isinstance(results, list):
+        failures = sum(1 for item in results if isinstance(item, dict) and item.get("error"))
+        return len(results) - failures
+
+    return len(smiles_values)
+
+
+def predict_smiles_with_fallback(
+    session: requests.Session,
+    predict_url: str,
+    model_id: str,
+    smiles_values: list[str],
+    timeout: float,
+    stats: CleanupStats,
+) -> int:
+    if not smiles_values:
+        return 0
+
+    stats.prediction_batches += 1
+    stats.prediction_requests += len(smiles_values)
+    try:
+        success_count = _predict_batch_once(session, predict_url, model_id, smiles_values, timeout)
+        stats.recomputed_predictions += success_count
+        stats.prediction_failures += max(0, len(smiles_values) - success_count)
+        return success_count
+    except (RequestException, ValueError) as exc:
+        if len(smiles_values) == 1:
+            stats.prediction_failures += 1
+            LOGGER.warning(
+                "Prediction recompute failed for one SMILES; model_id=%s smiles=%s error=%s",
+                model_id,
+                smiles_values[0],
+                exc,
+            )
+            return 0
+
+        midpoint = len(smiles_values) // 2
+        LOGGER.warning(
+            "Prediction batch failed; splitting model_id=%s batch_size=%s left=%s right=%s error=%s",
+            model_id,
+            len(smiles_values),
+            midpoint,
+            len(smiles_values) - midpoint,
+            exc,
+        )
+        return predict_smiles_with_fallback(
+            session,
+            predict_url,
+            model_id,
+            smiles_values[:midpoint],
+            timeout,
+            stats,
+        ) + predict_smiles_with_fallback(
+            session,
+            predict_url,
+            model_id,
+            smiles_values[midpoint:],
+            timeout,
+            stats,
+        )
+
+
+def resolve_recompute_smiles(
+    session: requests.Session,
+    candidates: list[MismatchCandidate],
+    args: argparse.Namespace,
+    stats: CleanupStats,
+) -> dict[str, str]:
+    unique_inchi_keys = _ordered_unique([candidate.key_inchi_key for candidate in candidates])
+    resolved_by_inchi_key = lookup_inchi_keys_with_fallback(
+        session,
+        args.resolver_url,
+        unique_inchi_keys,
+        args.resolver_timeout,
+        stats,
+    )
+    stats.resolver_hits += len(resolved_by_inchi_key)
+
+    smiles_by_key = {}
+    for candidate in candidates:
+        resolved_chemical = resolved_by_inchi_key.get(candidate.key_inchi_key)
+        if not resolved_chemical:
+            stats.skipped_without_resolver_match += 1
+            continue
+
+        smiles = _clean_text(resolved_chemical.get("smiles")) or _clean_text(
+            resolved_chemical.get("canonicalSmiles")
+        )
+        if smiles is None:
+            stats.skipped_without_resolver_match += 1
+            continue
+
+        smiles_by_key[candidate.key] = smiles
+
+    return smiles_by_key
+
+
+def recompute_deleted_candidates(
+    session: requests.Session,
+    candidates: list[MismatchCandidate],
+    smiles_by_key: dict[str, str],
+    args: argparse.Namespace,
+    stats: CleanupStats,
+) -> None:
+    smiles_by_model_id: dict[str, list[str]] = defaultdict(list)
+    for candidate in candidates:
+        smiles = smiles_by_key.get(candidate.key)
+        if smiles:
+            smiles_by_model_id[candidate.model_id].append(smiles)
+
+    for model_id, smiles_values in sorted(smiles_by_model_id.items()):
+        unique_smiles = _ordered_unique(smiles_values)
+        for smiles_batch in _chunk_sequence(unique_smiles, args.prediction_batch_size):
+            predict_smiles_with_fallback(
+                session,
+                args.predict_url,
+                model_id,
+                smiles_batch,
+                args.predict_timeout,
+                stats,
+            )
+
+
+def process_batch(
+    collection,
+    session: requests.Session,
+    candidates: list[MismatchCandidate],
+    args: argparse.Namespace,
+    stats: CleanupStats,
+) -> None:
     stats.candidates += len(candidates)
     stats.planned_deletes += len(candidates)
 
@@ -511,7 +973,8 @@ def process_batch(collection, candidates: list[MismatchCandidate], args: argpars
             )
 
     if not args.write:
-        LOGGER.info("Dry-run: would delete %s mismatched cache document(s) in this batch", len(candidates))
+        action = "delete and recompute" if args.repair_mode == "recompute" else "delete"
+        LOGGER.info("Dry-run: would %s %s mismatched cache document(s) in this batch", action, len(candidates))
         return
 
     result = collection.bulk_write(
@@ -521,15 +984,22 @@ def process_batch(collection, candidates: list[MismatchCandidate], args: argpars
     stats.deleted_documents += result.deleted_count
     LOGGER.info("Deleted batch: deleted=%s", result.deleted_count)
 
+    if args.repair_mode != "recompute":
+        return
+
+    smiles_by_key = resolve_recompute_smiles(session, candidates, args, stats)
+    recompute_deleted_candidates(session, candidates, smiles_by_key, args, stats)
+
 
 def cleanup(collection, args: argparse.Namespace) -> CleanupStats:
     stats = CleanupStats()
+    session = requests.Session()
 
     if args.report_jsonl is not None and args.report_jsonl.exists():
         args.report_jsonl.write_text("", encoding="utf-8")
 
     for candidate_batch in iter_mismatch_batches(collection, args, stats):
-        process_batch(collection, candidate_batch, args, stats)
+        process_batch(collection, session, candidate_batch, args, stats)
 
     return stats
 
@@ -551,6 +1021,12 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("--progress-every cannot be negative")
     if args.sample_size < 0:
         raise ValueError("--sample-size cannot be negative")
+    if args.prediction_batch_size <= 0:
+        raise ValueError("--prediction-batch-size must be positive")
+    if args.resolver_timeout is not None and args.resolver_timeout <= 0:
+        raise ValueError("--resolver-timeout must be positive")
+    if args.predict_timeout is not None and args.predict_timeout <= 0:
+        raise ValueError("--predict-timeout must be positive")
 
 
 def main() -> int:
@@ -569,10 +1045,11 @@ def main() -> int:
         collection = client[args.database][args.collection]
         LOGGER.info(
             "Starting prediction cache identity cleanup: database=%s collection=%s write=%s "
-            "keys=%s model_ids=%s only_without_standardized=%s",
+            "repair_mode=%s keys=%s model_ids=%s only_without_standardized=%s",
             args.database,
             args.collection,
             args.write,
+            args.repair_mode,
             len(args.key),
             args.model_id,
             args.only_without_standardized,
@@ -587,13 +1064,22 @@ def main() -> int:
 
     LOGGER.info(
         "Cleanup complete: scanned_documents=%s candidates=%s planned_deletes=%s "
-        "deleted_documents=%s skipped_missing_key_inchi=%s skipped_missing_chemical_inchi=%s",
+        "deleted_documents=%s resolver_batches=%s resolver_hits=%s prediction_batches=%s "
+        "prediction_requests=%s recomputed_predictions=%s prediction_failures=%s "
+        "skipped_missing_key_inchi=%s skipped_missing_chemical_inchi=%s skipped_without_resolver_match=%s",
         stats.scanned_documents,
         stats.candidates,
         stats.planned_deletes,
         stats.deleted_documents,
+        stats.resolver_batches,
+        stats.resolver_hits,
+        stats.prediction_batches,
+        stats.prediction_requests,
+        stats.recomputed_predictions,
+        stats.prediction_failures,
         stats.skipped_missing_key_inchi,
         stats.skipped_missing_chemical_inchi,
+        stats.skipped_without_resolver_match,
     )
     return 0
 

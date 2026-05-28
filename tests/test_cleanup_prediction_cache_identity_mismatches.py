@@ -16,6 +16,50 @@ class _DummyUpdateOne:
         self.update = update
 
 
+class _DummyResponse:
+    def __init__(self, payload, status_code=200):
+        self.payload = payload
+        self.status_code = status_code
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise Exception(f"HTTP {self.status_code}")
+
+    def json(self):
+        return self.payload
+
+
+class _DummySession:
+    def __init__(self, responses=None):
+        self.responses = list(responses or [])
+        self.posts = []
+
+    def post(self, url, json=None, headers=None, timeout=None):
+        self.posts.append(
+            {
+                "url": url,
+                "json": json,
+                "headers": headers,
+                "timeout": timeout,
+            }
+        )
+        if self.responses:
+            return self.responses.pop(0)
+        return _DummyResponse({})
+
+
+if "requests" not in sys.modules:
+    requests_stub = types.ModuleType("requests")
+    requests_stub.RequestException = Exception
+    requests_stub.Session = _DummySession
+    sys.modules["requests"] = requests_stub
+
+if "requests.exceptions" not in sys.modules:
+    requests_exceptions_stub = types.ModuleType("requests.exceptions")
+    requests_exceptions_stub.RequestException = Exception
+    sys.modules["requests.exceptions"] = requests_exceptions_stub
+
+
 if "pymongo" not in sys.modules:
     pymongo_stub = types.ModuleType("pymongo")
     sys.modules["pymongo"] = pymongo_stub
@@ -134,6 +178,67 @@ class TestCleanupPredictionCacheIdentityMismatches(unittest.TestCase):
                 "key": "WOZVHXUHUFLZGK-UHFFFAOYSA-N-1066",
                 "prediction.chemicalIdentifiers.inchiKey": "fxhooirpvkkkfg-uhfffaoyna-n",
             },
+        )
+
+    def test_build_inchi_key_resolver_payload_uses_inchi_key_type(self):
+        payload = cleanup.build_inchi_key_resolver_payload(["WOZVHXUHUFLZGK-UHFFFAOYSA-N"])
+
+        self.assertEqual(payload["ids"], ["WOZVHXUHUFLZGK-UHFFFAOYSA-N"])
+        self.assertEqual(payload["idsType"], "InChIKey")
+        self.assertEqual(payload["fuzzy"], "Not")
+        self.assertFalse(payload["mol"])
+
+    def test_parse_inchi_key_resolver_payload_maps_query_to_chemical(self):
+        payload = [
+            {
+                "query": "WOZVHXUHUFLZGK-UHFFFAOYSA-N",
+                "chemical": {
+                    "smiles": "COC(C1C=CC(C(OC)=O)=CC=1)=O",
+                    "inchiKey": "WOZVHXUHUFLZGK-UHFFFAOYNA-N",
+                },
+            }
+        ]
+
+        resolved = cleanup.parse_inchi_key_resolver_payload(
+            payload,
+            ["WOZVHXUHUFLZGK-UHFFFAOYSA-N"],
+        )
+
+        self.assertEqual(
+            resolved["WOZVHXUHUFLZGK-UHFFFAOYSA-N"]["smiles"],
+            "COC(C1C=CC(C(OC)=O)=CC=1)=O",
+        )
+
+    def test_predict_smiles_with_fallback_posts_legacy_batch_shape(self):
+        stats = cleanup.CleanupStats()
+        session = _DummySession(
+            [
+                _DummyResponse(
+                    {
+                        "results": [
+                            {"chemical": {"smiles": "CCC"}},
+                            {"chemical": {"smiles": "CCO"}},
+                        ]
+                    }
+                )
+            ]
+        )
+
+        success_count = cleanup.predict_smiles_with_fallback(
+            session,
+            "https://example.test/api/predictor_models/predict",
+            "1066",
+            ["CCC", "CCO"],
+            10,
+            stats,
+        )
+
+        self.assertEqual(success_count, 2)
+        self.assertEqual(stats.prediction_batches, 1)
+        self.assertEqual(stats.recomputed_predictions, 2)
+        self.assertEqual(
+            session.posts[0]["json"],
+            {"model_id": 1066, "smiles": ["CCC", "CCO"]},
         )
 
 
