@@ -9,6 +9,7 @@ import traceback
 from indigo import Indigo
 from indigo.renderer import IndigoRenderer
 import base64
+import math
 
 from sqlalchemy import create_engine
 from sqlalchemy.engine import URL
@@ -392,7 +393,7 @@ class ModelInitializer:
         ]: 
             model.unitsDisplay = pc.MG_L  # units that program office wants (Dashboard uses mol/L)
 
-    @timer
+    # @timer
     def initModel(self, model_id):
 
         session = getSession()
@@ -1112,14 +1113,18 @@ class ModelPredictor:
 
         matching_row_training = model.df_training[model.df_training['ID'] == qsarSmiles]
         matching_row_test = model.df_prediction[model.df_prediction['ID'] == qsarSmiles]
-
+        
         if not matching_row_training.empty:
             modelResults.experimentalValueUnitsModel = matching_row_training['Property'].values[0]
             modelResults.experimentalValueSet = "Training"
-
+            
         if not matching_row_test.empty:
             modelResults.experimentalValueUnitsModel = matching_row_test['Property'].values[0]
             modelResults.experimentalValueSet = "Test"
+            
+        # logging.info(f"experimentalValueSet={modelResults.experimentalValueSet}")        
+        # logging.info(f"experimentalValueUnitsModel={ modelResults.experimentalValueUnitsModel}")
+
 
     def setExpPredValuesForADAnalogs(self, model, analogs):
 
@@ -1235,13 +1240,13 @@ class ModelPredictor:
         df_neighborsTraining = pd.DataFrame(neighborsTraining)
         
         if model.is_binary:
-
-            stats_test = stats.calculate_binary_statistics(df_neighborsTest, 0, pc.TAG_TEST)
+            binary_cutoff = 0.5
+            stats_test = stats.calculate_binary_statistics(df_neighborsTest, binary_cutoff, pc.TAG_TEST)
             neighborsTestBA = stats_test[pc.BALANCED_ACCURACY + pc.TAG_TEST]
             neighborsTestSN = stats_test[pc.SENSITIVITY + pc.TAG_TEST]
             neighborsTestSP = stats_test[pc.SPECIFICITY + pc.TAG_TEST]
                         
-            stats_training = stats.calculate_binary_statistics(df_neighborsTraining, 0, pc.TAG_TRAINING)
+            stats_training = stats.calculate_binary_statistics(df_neighborsTraining, binary_cutoff, pc.TAG_TRAINING)
             neighborsTrainingBA = stats_training[pc.BALANCED_ACCURACY + pc.TAG_TRAINING]
             neighborsTrainingSN = stats_training[pc.SENSITIVITY + pc.TAG_TRAINING]
             neighborsTrainingSP = stats_training[pc.SPECIFICITY + pc.TAG_TRAINING]
@@ -1434,10 +1439,22 @@ class ModelPredictor:
             chemical["cid"] = "N/A"
             chemical["name"] = "N/A"
                 
-        if modelResults.experimentalValueUnitsModel:
-            modelResults.experimentalValueUnitsDisplay = uc.convert_units(model.propertyName, modelResults.experimentalValueUnitsModel, model.unitsModel, model.unitsDisplay,
-                                                                    chemical["sid"], chemical["averageMass"])
+            
+        # val = modelResults.experimentalValueUnitsModel
         
+        val = modelResults.experimentalValueUnitsModel
+        is_missing = (val is None) or (isinstance(val, float) and math.isnan(val))  # need to make more robust because if val == 0 it can behave like false
+
+        if not is_missing:
+            modelResults.experimentalValueUnitsDisplay = uc.convert_units(
+                model.propertyName, val, model.unitsModel, model.unitsDisplay,
+                chemical["sid"], chemical.get("averageMass")
+            )
+            # print('modelResults.experimentalValueUnitsDisplay', modelResults.experimentalValueUnitsDisplay)
+        # else:
+            # print("experimentalValueUnitsModel is None/NaN; skipping conversion")
+            
+            
         modelResults.predictionValueUnitsDisplay = uc.convert_units(model.propertyName, pred_value, model.unitsModel, model.unitsDisplay,
                                                                     chemical["sid"], chemical["averageMass"])
         modelResults.unitsDisplay = model.unitsDisplay

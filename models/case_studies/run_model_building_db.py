@@ -654,9 +654,6 @@ class ModelLoader():
         image_id = self.load_model_file(filePathOutHistogram, user, fk_model_id, 4)
         logging.info(f"Histogram plot loaded to db with id: {image_id}")
             
-        filePathOutExcelSummary = os.path.join(folder_path, "detailed_summary.xlsx")
-        image_id = self.load_model_file(filePathOutExcelSummary, user, fk_model_id, 2)
-        logging.info(f"Excel summary loaded to db with id: {image_id}")
         
         # TODO: created detailed spreadsheet and store in the database
     
@@ -1987,6 +1984,8 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         if folder_embedding is not None:
             subfolder = subfolder + "_" + folder_embedding
             
+        model.subfolder=subfolder
+                        
         path_segments = [PROJECT_ROOT, "data", "models" + append_to_models_folder, params.dataset_name, subfolder]
         
         folder_path = os.path.join(*path_segments)
@@ -2016,6 +2015,13 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         mdo = ModelDataObjects(model=model, df_pv=df_pv, df_gmd=df_dps, df_gmd_external=df_dps_ext)
         mte = ModelToExcel(mdo, detailed_summary_path)
         mte.create_excel()
+        
+        #need to load model separately from rest of model objects since need to load model into db to get id then create the excel file that displays that id in the summary:
+        filePathOutExcelSummary = os.path.join(folder_path, "detailed_summary.xlsx")
+        image_id = ml.load_model_file(filePathOutExcelSummary, user, model.modelId, 2)
+        logging.info(f"Excel summary loaded to db with id: {image_id}")
+        
+        return model
 
     except Exception:
         # Print the exception traceback to standard error

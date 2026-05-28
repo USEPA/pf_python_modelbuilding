@@ -205,19 +205,25 @@ class ReportCreator:
                         my_td += b("Property name:"), " " + md["propertyName"], br()
                         my_td += b("Property description:"), " " + md["propertyDescription"], br()
         
-                        if mr["experimentalValueUnitsModel"]: 
-                            str_exp_model_units = get_formatted_value(md["propertyIsBinary"], mr["experimentalValueUnitsModel"], 3)
-                            my_td += b("Experimental value:"), " " + str_exp_model_units + " " + md["unitsModel"]
+                        val_model = mr.get("experimentalValueUnitsModel")
+                        is_missing = (val_model is None) or (isinstance(val_model, float) and math.isnan(val_model)) # need to make more robust because if val == 0 it can behave like false (binary model)
+                        
+                        if not is_missing:
+                            str_exp_model_units = get_formatted_value(md["propertyIsBinary"], val_model, 3)
+                            my_td += b("Experimental value:"), f" {str_exp_model_units} {md['unitsModel']}"
                         
                             if md["unitsDisplay"] != md["unitsModel"]:
-                                str_exp_display_units = get_formatted_value(md["propertyIsBinary"], mr["experimentalValueUnitsDisplay"], 3)
-                                my_td += " = " + str_exp_display_units + " " + md["unitsDisplay"]
-    
-                            my_td += em(" (in " + mr["experimentalValueSet"].lower() + " set)"), br()
-    
+                                val_disp = mr.get("experimentalValueUnitsDisplay")
+                                is_disp_missing = (val_disp is None) or (isinstance(val_disp, float) and math.isnan(val_disp))
+                                if not is_disp_missing:
+                                    str_exp_display_units = get_formatted_value(md["propertyIsBinary"], val_disp, 3)
+                                    my_td += f" = {str_exp_display_units} {md['unitsDisplay']}",
+                            exp_set = mr.get("experimentalValueSet")
+                            if exp_set:
+                                my_td += em(f" (in {exp_set.lower()} set)"), br()
                         else:
                             my_td += b("Experimental value:"), " N/A", br()
-            
+                
                         str_pred_model_units = get_formatted_value(md["propertyIsBinary"], mr["predictionValueUnitsModel"], 3)
                         
                         if mr["predictionError"]:

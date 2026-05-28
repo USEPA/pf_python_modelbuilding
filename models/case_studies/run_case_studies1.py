@@ -19,6 +19,13 @@ import pandas as pd
 from sqlalchemy import text
 import os
 from pathlib import Path
+from sqlalchemy.exc import SQLAlchemyError
+
+
+import models.db_utilities.dataset_utilities_db as du  
+from model_ws_utilities import call_do_predictions_from_df
+from io import StringIO
+from StatsCalculator import calculate_binary_statistics, calculate_continuous_statistics
 
 load_dotenv("../../personal.env")
 PROJECT_ROOT = os.getenv("PROJECT_ROOT")
@@ -42,7 +49,7 @@ def run_example():
 def run_Koc():
     unique_identifier = None
     # write_to_db = True
-    write_to_db = False
+    write_to_db = True
     # write_to_db=True
     dataset_name = "KOC v1 modeling"
     descriptor_set_name = "WebTEST-default"
@@ -60,26 +67,26 @@ def run_Koc():
                 write_to_db=write_to_db, unique_identifier=unique_identifier,
                 append_to_models_folder=append_to_models_folder)  # OK
 
-    for method in ['rf', 'xgb']:
-        run_dataset(dataset_name=dataset_name, qsar_method=method, feature_selection=False,
-            ad_measure_model=ad_measure_model, write_to_db=write_to_db, unique_identifier=unique_identifier,
-            append_to_models_folder=append_to_models_folder)  
+    # for method in ['rf', 'xgb']:
+    #     run_dataset(dataset_name=dataset_name, qsar_method=method, feature_selection=False,
+    #         ad_measure_model=ad_measure_model, write_to_db=write_to_db, unique_identifier=unique_identifier,
+    #         append_to_models_folder=append_to_models_folder)  
+    # #
+    #     run_dataset(dataset_name=dataset_name, qsar_method=method, feature_selection=True,
+    #         ad_measure_model=ad_measure_model, write_to_db=write_to_db, unique_identifier=unique_identifier,
+    #         append_to_models_folder=append_to_models_folder)  
     #
-        run_dataset(dataset_name=dataset_name, qsar_method=method, feature_selection=True,
-            ad_measure_model=ad_measure_model, write_to_db=write_to_db, unique_identifier=unique_identifier,
-            append_to_models_folder=append_to_models_folder)  
-    
-    
-    for method in ['reg', 'knn']:
-        params = set_hyper_parameters(qsar_method=method, feature_selection=True, descriptor_set_name=descriptor_set_name, 
-                                      splitting_name=splitting_name, dataset_name=dataset_name, ad_measure=ad_measure_model)
-        # params.max_features = 12
-        params.max_features = 25
-        params.descriptor_coefficient = 0.006
-        run_dataset(dataset_name=dataset_name, qsar_method=params.qsar_method, feature_selection=params.feature_selection,
-            params = params, ad_measure_model=ad_measure_model, write_to_db=write_to_db, 
-            unique_identifier=unique_identifier, 
-            append_to_models_folder=append_to_models_folder)  
+    #
+    # for method in ['reg', 'knn']:
+    #     params = set_hyper_parameters(qsar_method=method, feature_selection=True, descriptor_set_name=descriptor_set_name, 
+    #                                   splitting_name=splitting_name, dataset_name=dataset_name, ad_measure=ad_measure_model)
+    #     # params.max_features = 12
+    #     params.max_features = 25
+    #     params.descriptor_coefficient = 0.006
+    #     run_dataset(dataset_name=dataset_name, qsar_method=params.qsar_method, feature_selection=params.feature_selection,
+    #         params = params, ad_measure_model=ad_measure_model, write_to_db=write_to_db, 
+    #         unique_identifier=unique_identifier, 
+    #         append_to_models_folder=append_to_models_folder)  
 
 
     # for method in ['rf', 'xgb']:
@@ -236,36 +243,257 @@ def run_fish_tox_2():
     
 def run_biodeg_rifm():
     
-    # dataset_name = 'exp_prop_RBIODEG_RIFM_BY_DTXSID' 
     dataset_name = 'exp_prop_RBIODEG_RIFM_CHEMREG' # automapped one
     
     write_to_db = True
+    # write_to_db = False
+    
     unique_identifier = None
     ad_measure_model = [pc.Applicability_Domain_TEST_Embedding_Euclidean, pc.Applicability_Domain_TEST_Fragment_Counts]
     descriptor_set_name = "WebTEST-default"
     splitting_name = "RND_REPRESENTATIVE"  
     
-    append_to_models_folder = ""
-    # append_to_models_folder = "_0.006"
+    
+    # append_to_models_folder = ""
+    append_to_models_folder = "_0.001"
 
-    run_dataset(dataset_name=dataset_name, qsar_method='gcm', feature_selection=False,
+    model = run_dataset(dataset_name=dataset_name, qsar_method='gcm', feature_selection=False,
                 ad_measure_model=ad_measure_model, write_to_db=write_to_db, unique_identifier=unique_identifier, append_to_models_folder=append_to_models_folder)  # OK
-    #
+    
     # for method in ['rf', 'xgb']:        
-    #     run_dataset(dataset_name=dataset_name, qsar_method=method, feature_selection=False, 
+    #     model = run_dataset(dataset_name=dataset_name, qsar_method=method, feature_selection=False, 
     #                 ad_measure_model=ad_measure_model, write_to_db=write_to_db, unique_identifier=unique_identifier, append_to_models_folder=append_to_models_folder)  # OK
     
-
     # for method in ['rf']:
     # for method in ['rf', 'xgb', 'reg','knn']:
     #     params = set_hyper_parameters(qsar_method=method, feature_selection=True, descriptor_set_name=descriptor_set_name, 
     #                                   splitting_name=splitting_name, dataset_name=dataset_name, ad_measure=ad_measure_model)
-    #     params.descriptor_coefficient = 0.006
+    #     params.descriptor_coefficient = 0.001
     #     run_dataset(dataset_name=dataset_name, qsar_method=params.qsar_method, feature_selection=params.feature_selection,
     #         params = params, ad_measure_model=ad_measure_model, write_to_db=write_to_db, 
     #         unique_identifier=unique_identifier, append_to_models_folder=append_to_models_folder) 
+    
+    Results.summarize_model_stats(dataset_name, append_to_models_folder=append_to_models_folder)
+    
+    #TODO determine how RIFM only models work for test set of ECHA+RIFM set
 
+
+def run_RIFM_model_on_ECHA_test_set():
+    
+    dataset_name = 'exp_prop_RBIODEG_RIFM_CHEMREG'
+    
+    dataset_name_ECHA_RIFM = 'exp_prop_RBIODEG_301F v1 modeling'
+    
+    descriptor_set_name = "WebTEST-default"
+    splitting_name = "RND_REPRESENTATIVE"
+    
+    _, df_prediction = du.get_training_prediction_instances(getSession(),  dataset_name_ECHA_RIFM, descriptor_set_name, splitting_name)
+
+    session=getSession()
+    
+    model_ids = get_model_ids(session, dataset_name=dataset_name)
+    
+    from model_ws_db_utilities import ModelInitializer
+    mi = ModelInitializer()
+    
+    for model_id in model_ids:
+        model=mi.initModel(model_id)
         
+        # print(model.qsar_method, len(model.embedding))
+    
+        if len(model.embedding)>100:
+            use_fs=False
+        else:
+            use_fs=True
+    
+        run = model.qsar_method+"_WebTEST-default_fs="+str(use_fs)
+        
+        json_predictions = call_do_predictions_from_df(df_prediction, model)
+        df_predictions_test = pd.read_json(StringIO(json_predictions), orient="records")
+        
+        # print(df_predictions_test)
+        
+        test_stats = calculate_binary_statistics(df_predictions_test, 0.5, "_Test")
+        print(f"{run}\t{test_stats['BA_Test']:.3f}")
+    
+def lookAtModelCoefficients():
+    
+    # model_id = 1847 #GCM RBIODEG ECHA+RIFM
+    # model_id = 1843   #REG RBIODEG ECHA+RIFM
+    # model_id = 1763 #GCM KOC
+    
+    model_id = 1877  #GCM RBIODEG RIFM, redone
+    
+    from model_ws_db_utilities import ModelInitializer
+    
+    mi = ModelInitializer()
+    model=mi.initModel(model_id)
+    
+    y = model.df_training[model.df_training.columns[1]]
+    X = model.df_training[model.embedding]
+
+    modelCoefficients = json.loads(model.getOriginalRegressionCoefficients2(X, y))
+    
+    print(json.dumps(modelCoefficients, indent=4))
+
+
+
+def testCoefficientFromScratch():
+
+    from sklearn.datasets import make_classification
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.pipeline import Pipeline
+    from models.ModelBuilder import Model
+    
+    X, y = make_classification(n_samples=500, n_features=5, random_state=0)
+    df = pd.DataFrame(X, columns=[f"x{i}" for i in range(X.shape[1])])
+    
+    pipe = Pipeline([
+        ("scaler", StandardScaler()),
+        # ("clf", LogisticRegression(max_iter=1000))
+        # ("clf", LogisticRegression(penalty="l2", solver="liblinear", random_state=0))
+        ("clf", LogisticRegression(solver='liblinear', max_iter=1000, dual=False))        
+    ]).fit(df, y)
+    
+    
+    # pipe = Pipeline([
+    #     ("scaler", StandardScaler()),
+    #     ("clf", LogisticRegression(random_state=0))  # doesnt give std_errors
+    # ]).fit(df, y)
+        
+    
+    self_like = type("T", (), {})()
+    self_like.get_model = lambda: pipe
+    self_like.embedding = list(df.columns)
+    
+    print(Model.getOriginalRegressionCoefficients2(self_like, df, y))
+    
+    
+
+def run_continuous_model_on_test_set():
+    
+    # dataset_name= 'exp_prop_PERCENT_BIODEGRADATION_RIFM_CHEMREG'
+    # dataset_name_test = 'exp_prop_RBIODEG_301F v1 modeling'
+
+    dataset_name = 'exp_prop_PERCENT_BIODEGRADATION_301F v1 modeling'
+    dataset_name_test = 'exp_prop_RBIODEG_RIFM_CHEMREG'
+    
+    descriptor_set_name = "WebTEST-default"
+    splitting_name = "RND_REPRESENTATIVE"
+    
+    _, df_prediction = du.get_training_prediction_instances(getSession(),  dataset_name_test, descriptor_set_name, splitting_name)
+
+    session=getSession()
+    
+    model_ids = get_model_ids(session, dataset_name=dataset_name)
+    
+    from model_ws_db_utilities import ModelInitializer
+    mi = ModelInitializer()
+    
+    for model_id in model_ids:
+        model=mi.initModel(model_id)
+        
+        # print(model.qsar_method, len(model.embedding))
+    
+        if len(model.embedding)>100:
+            use_fs=False
+        else:
+            use_fs=True
+    
+        run = model.qsar_method+"_WebTEST-default_fs="+str(use_fs)
+        
+        json_predictions = call_do_predictions_from_df(df_prediction, model)
+        df_predictions_test = pd.read_json(StringIO(json_predictions), orient="records")
+        
+        df_predictions_test["pred"] = (df_predictions_test["pred"] >= 60).astype(int)
+
+        # print(df_predictions_test)
+        test_stats = calculate_binary_statistics(df_predictions_test, 0.5, "_Test")
+        print(f"{run}\t{test_stats['BA_Test']:.3f}")
+    
+
+def get_model_ids(session, dataset_name: str):
+    """
+    Return a list of model IDs for the given dataset name.
+    """
+    sql = text("SELECT id FROM qsar_models.models WHERE dataset_name = :dataset_name")
+    try:
+        result = session.execute(sql, {"dataset_name": dataset_name})
+        # Extract the single selected column as a list
+        return result.scalars().all()
+    except SQLAlchemyError:
+        logging.exception("Failed to fetch model ids for dataset_name=%r", dataset_name)
+        return []    
+    
+
+
+def calculate_stats_for_binary_test_set(df_prediction, model, log_path="binary_test_stats.log"):
+    json_predictions = call_do_predictions_from_df(df_prediction, model)
+    df_predictions_test = pd.read_json(StringIO(json_predictions), orient="records")
+    df_predictions_test["pred"] = (df_predictions_test["pred"] >= 60).astype(int)
+
+    test_stats = calculate_binary_statistics(df_predictions_test, 0.5, "_Test")
+
+    # Compose the same line as printed
+    line = f"{model.subfolder}\t{test_stats['BA_Test']:.3f}\n"
+    print(line.rstrip("\n"))
+
+    # Ensure directory exists (if a path with directories was provided)
+    log_dir = os.path.dirname(log_path)
+    if log_dir:
+        os.makedirs(log_dir, exist_ok=True)
+
+    # Append to file
+    with open(log_path, "a", encoding="utf-8") as f:
+        f.write(line)
+
+    return test_stats
+
+
+def run_percentage_biodegradation():
+
+    # dataset_name = 'exp_prop_PERCENT_BIODEGRADATION_RIFM_CHEMREG'
+    # dataset_name_binary = "exp_prop_RBIODEG_RIFM_CHEMREG"
+    
+    dataset_name = "exp_prop_PERCENT_BIODEGRADATION_301F v1 modeling"
+    dataset_name_binary = "exp_prop_RBIODEG_301F v1 modeling"
+    
+    write_to_db = True
+    # write_to_db = False
+    
+    unique_identifier = None
+    ad_measure_model = [pc.Applicability_Domain_TEST_Embedding_Euclidean, pc.Applicability_Domain_TEST_Fragment_Counts]
+    descriptor_set_name = "WebTEST-default"
+    splitting_name = "RND_REPRESENTATIVE"  
+    
+    #get the prediction set for the corresponding binary dataset:  
+    _, df_prediction_binary = du.get_training_prediction_instances(getSession(),  dataset_name_binary, descriptor_set_name, splitting_name)
+    
+    # append_to_models_folder = ""
+    append_to_models_folder = "_0.001"
+    
+    PROJECT_ROOT = os.getenv("PROJECT_ROOT")
+    log_path= os.path.join(PROJECT_ROOT, "data", "models" + append_to_models_folder, dataset_name,"binary_test_stats.log")
+
+    model = run_dataset(dataset_name=dataset_name, qsar_method='gcm', feature_selection=False,
+                ad_measure_model=ad_measure_model, write_to_db=write_to_db, unique_identifier=unique_identifier, append_to_models_folder=append_to_models_folder)  # OK
+    calculate_stats_for_binary_test_set(df_prediction_binary, model, log_path)
+    
+    for method in ['rf', 'xgb']:        
+        model = run_dataset(dataset_name=dataset_name, qsar_method=method, feature_selection=False, 
+                    ad_measure_model=ad_measure_model, write_to_db=write_to_db, unique_identifier=unique_identifier, append_to_models_folder=append_to_models_folder)  # OK
+        calculate_stats_for_binary_test_set(df_prediction_binary, model, log_path)
+                
+    for method in ['rf', 'xgb', 'reg','knn']:
+        params = set_hyper_parameters(qsar_method=method, feature_selection=True, descriptor_set_name=descriptor_set_name, 
+                                      splitting_name=splitting_name, dataset_name=dataset_name, ad_measure=ad_measure_model)
+        params.descriptor_coefficient = 0.001
+        model = run_dataset(dataset_name=dataset_name, qsar_method=params.qsar_method, feature_selection=params.feature_selection,
+            params = params, ad_measure_model=ad_measure_model, write_to_db=write_to_db, 
+            unique_identifier=unique_identifier, append_to_models_folder=append_to_models_folder) 
+        calculate_stats_for_binary_test_set(df_prediction_binary, model, log_path)
+    
     Results.summarize_model_stats(dataset_name, append_to_models_folder=append_to_models_folder)
 
 
@@ -342,14 +570,15 @@ def calculate_stats_for_subset(dataset_name, df_smiles_subset, append_to_models_
 def run_biodeg_301F():
     
     dataset_name = 'exp_prop_RBIODEG_301F v1 modeling' # automapped one
-    write_to_db = True
+    # write_to_db = True
+    write_to_db = False
     ad_measure_model = [pc.Applicability_Domain_TEST_Embedding_Euclidean, pc.Applicability_Domain_TEST_Fragment_Counts]
     descriptor_set_name = "WebTEST-default"
     splitting_name = "RND_REPRESENTATIVE"
     unique_identifier=None 
 
     # append_to_models_folder = ""
-    append_to_models_folder = "_desc_coef_0.001"
+    append_to_models_folder = "_0.001"
     
     run_dataset(dataset_name=dataset_name, qsar_method='gcm', feature_selection=False, 
                 ad_measure_model=ad_measure_model, write_to_db=write_to_db, unique_identifier=unique_identifier, append_to_models_folder=append_to_models_folder)  # OK
@@ -365,8 +594,8 @@ def run_biodeg_301F():
         run_dataset(dataset_name=dataset_name, qsar_method=params.qsar_method, feature_selection=params.feature_selection,
             params = params, ad_measure_model=ad_measure_model, write_to_db=write_to_db, 
             unique_identifier=unique_identifier, append_to_models_folder=append_to_models_folder) 
-
-        
+    
+    
     Results.summarize_model_stats(dataset_name, append_to_models_folder=append_to_models_folder)
     
     dataset_name_subset='exp_prop_RBIODEG_RIFM_CHEMREG'
@@ -617,7 +846,15 @@ def main():
     
     # run_biodeg_rifm()
     # run_biodeg_301F()
-     
+    # run_percentage_biodegradation()
+    
+    # run_continuous_model_on_test_set()
+    
+    lookAtModelCoefficients()
+    # testCoefficientFromScratch()
+    
+    # run_RIFM_model_on_ECHA_test_set()
+         
     
     # run_pchem()
     
@@ -637,7 +874,7 @@ def main():
     # test_load_model_with_external_set()
     # run_rifm_rf_models()
 
-    full_test_mte()
+    # full_test_mte()
 
 
 if __name__ == "__main__":

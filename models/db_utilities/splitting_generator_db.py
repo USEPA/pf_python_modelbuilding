@@ -942,7 +942,7 @@ def create_splittings(datasetName,  datasetName2=None, descriptorSetName = 'WebT
     Creates entries in data_points_in_splittings table in database
     """
     
-    write_to_db = False
+    write_to_db = True
     delete_old = False
     
     user="tmarti02"
@@ -1319,6 +1319,49 @@ def make_inner_cv_splits(
     }
 
 
+def delete_splitting_rows_for_dataset(session, dataset_name: str) -> int:
+    """
+    Delete rows in qsar_datasets.data_points_in_splittings linked to the given dataset name.
+    Returns the number of rows deleted.
+    """
+    sql = text("""
+        DELETE FROM qsar_datasets.data_points_in_splittings AS dpis
+        WHERE dpis.fk_data_point_id IN (
+            SELECT dp.id
+            FROM qsar_datasets.data_points AS dp
+            JOIN qsar_datasets.datasets AS d
+              ON dp.fk_dataset_id = d.id
+            WHERE d.name = :dataset_name
+        )
+    """)
+    try:
+        result = session.execute(sql, {"dataset_name": dataset_name})
+        session.commit()
+        return result.rowcount
+    except Exception:
+        session.rollback()
+        raise
+
+
+def run_deletes():
+    session = getSession()
+    datasets = [
+        "exp_prop_PERCENT_BIODEGRADATION_301F v1 modeling",
+        "exp_prop_RBIODEG_301F v1 modeling",
+        "exp_prop_PERCENT_BIODEGRADATION_RIFM_CHEMREG",
+        "exp_prop_RBIODEG_RIFM_CHEMREG",
+    ]
+    total = 0
+    try:
+        for ds in datasets:
+            deleted = delete_splitting_rows_for_dataset(session, ds)
+            print(f"{ds}: deleted {deleted} rows")
+            total += deleted
+        print(f"Total deleted across datasets: {total}")
+    finally:
+        session.close()
+
+
 def _write_inner_splits_excel(datasetName: str, inner_rows: pd.DataFrame, class_balance_df: pd.DataFrame) -> Path:
     """
     Helper to write the Excel file with two sheets:
@@ -1349,13 +1392,11 @@ if __name__ == '__main__':
     # dataset_name = 'exp_prop_RBIODEG_NITE_OPPT v1.0'
     # dataset_name = 'ECOTOX_2024_12_12_96HR_Fish_LC50_v3a modeling'
     # create_splittings(dataset_name)
+    
+    # create_inner_splittings(dataset_name)
                       
-    # dataset_name = 'exp_prop_RBIODEG_RIFM_CHEMREG'
+    # run_deletes()
+                          
     dataset_name = 'exp_prop_RBIODEG_301F v1 modeling'
     dataset_name2 = 'exp_prop_RBIODEG_RIFM_CHEMREG'
     create_splittings(dataset_name, datasetName2=dataset_name2)
-
-        
-    # create_inner_splittings(dataset_name)
-    
-    

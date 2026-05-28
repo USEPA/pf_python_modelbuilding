@@ -105,13 +105,16 @@ def model_registry_model_obj(regressor_name, is_categorical):
         else:
             return LGBMRegressor(eval_metric='rmse',random_state=SEED,)
     
-    elif regressor_name == 'reg' or regressor_name == 'gcm':
-        # return LinearRegression()
+    elif regressor_name == 'gcm' or regressor_name == 'reg':
+
+        #liblinear allows generation of standard deviations of parameters
+        # l2 is default, Prefer dual=False when n_samples > n_features
+        
         if is_categorical:
-            # return LogisticRegression(penalty='none')
-            return LogisticRegression(max_iter=1000)
+            return LogisticRegression(solver='liblinear', max_iter=1000, dual=False)
         else:
             return LinearRegression()
+    
     elif regressor_name == 'las':
         if is_categorical:
             return Lasso()
@@ -263,154 +266,392 @@ class Model:
         }
 
 
-    def getOriginalRegressionCoefficients(self):
-
-        # print('enter getOriginalRegressionCoefficients')
-
-        model_obj = self.get_model()
-        reg = model_obj.steps[1][1]
-        scale = model_obj.steps[0][1]
-        
-        # Get the scaled coefficients and intercept
-        beta_scaled = reg.coef_
-        intercept_scaled = reg.intercept_
-
-        # Get the means and standard deviations used by the StandardScaler
-        means = scale.mean_
-        stds = scale.scale_
-
-        # Transform the coefficients to the unscaled version
-        beta_unscaled = beta_scaled / stds
-
-        # Transform the intercept to the unscaled version
-        intercept_unscaled = intercept_scaled - np.sum((means * beta_scaled) / stds)
-
-        # Report the unscaled coefficients and intercept
-        # print("Intercept (unscaled):", intercept_unscaled)
-        # print("Coefficients (unscaled):", beta_unscaled)
-        # print(self.embedding)
-
-        # from collections import OrderedDict
-        # coefficients_dict = OrderedDict()
-        #
-        # # Create a dictionary for the coefficients, starting with the intercept
-        # coefficients_dict['Intercept'] = intercept_unscaled
-        #
-        # # Add the coefficients in the order of embedding
-        # coefficients_dict.update(dict(zip(self.embedding, beta_unscaled)))
-        #
-        # # print(coefficients_dict)
-        # # return coefficients_dict
-        # return json.dumps(coefficients_dict,indent=4)
+    # def getOriginalRegressionCoefficients(self):
+    #
+    #     # print('enter getOriginalRegressionCoefficients')
+    #
+    #     model_obj = self.get_model()
+    #     reg = model_obj.steps[1][1]
+    #     scale = model_obj.steps[0][1]
+    #
+    #     # Get the scaled coefficients and intercept
+    #     beta_scaled = reg.coef_
+    #     intercept_scaled = reg.intercept_
+    #
+    #     # Get the means and standard deviations used by the StandardScaler
+    #     means = scale.mean_
+    #     stds = scale.scale_
+    #
+    #     # Transform the coefficients to the unscaled version
+    #     beta_unscaled = beta_scaled / stds
+    #
+    #     # Transform the intercept to the unscaled version
+    #     intercept_unscaled = intercept_scaled - np.sum((means * beta_scaled) / stds)
+    #
+    #     # Report the unscaled coefficients and intercept
+    #     # print("Intercept (unscaled):", intercept_unscaled)
+    #     # print("Coefficients (unscaled):", beta_unscaled)
+    #     # print(self.embedding)
+    #
+    #     # from collections import OrderedDict
+    #     # coefficients_dict = OrderedDict()
+    #     #
+    #     # # Create a dictionary for the coefficients, starting with the intercept
+    #     # coefficients_dict['Intercept'] = intercept_unscaled
+    #     #
+    #     # # Add the coefficients in the order of embedding
+    #     # coefficients_dict.update(dict(zip(self.embedding, beta_unscaled)))
+    #     #
+    #     # # print(coefficients_dict)
+    #     # # return coefficients_dict
+    #     # return json.dumps(coefficients_dict,indent=4)
+    #
+    #     coefficients = []
+    #     coefficients.append({"name": "Intercept", "coefficient": float(intercept_unscaled)})
+    #     for name, coef in zip(self.embedding, beta_unscaled):
+    #         coefficients.append({"name": name, "coefficient": float(coef)})
+    #
+    #     return json.dumps(coefficients,indent=4)
     
-        coefficients = []
-        coefficients.append({"name": "Intercept", "coefficient": float(intercept_unscaled)})
-        for name, coef in zip(self.embedding, beta_unscaled):
-            coefficients.append({"name": name, "coefficient": float(coef)})
-    
-        return json.dumps(coefficients,indent=4)
-    
 
+
+    # def getOriginalRegressionCoefficients2(self, X, y):
+    #     """
+    #     Return a list of dicts: [{'name': <str>, 'coefficient': <float>, 'std_error': <float>}]
+    #     for the unscaled coefficients and intercept.
+    #
+    #     Assumptions:
+    #     - reg is an OLS-like estimator (e.g., LinearRegression) with fit_intercept=True.
+    #     - X is the training DataFrame used to fit the model, with columns matching self.embedding.
+    #     - y is the training target (Series or 1D array).
+    #
+    #     Notes:
+    #     - For multi-output regression, this computes SEs for the first target only.
+    #     - If any feature has std == 0 (constant feature), SEs for that coefficient are set to NaN.
+    #     """
+    #     model_obj = self.get_model()
+    #     reg = model_obj.steps[1][1]    # e.g., LinearRegression
+    #     scale = model_obj.steps[0][1]  # StandardScaler
+    #
+    #     # Arrange X columns in the same order as self.embedding (features used by the model)
+    #     X_feats = X[self.embedding].to_numpy(dtype=float)
+    #
+    #     # Use the scaler from the pipeline to transform X
+    #     X_scaled = scale.transform(X_feats)
+    #
+    #     # Ensure y is 1D np.array
+    #     y = np.asarray(y).ravel()
+    #     n, p = X_scaled.shape
+    #
+    #     # Extract scaled coefficients/intercept (handle multi-output)
+    #     beta_scaled = np.asarray(reg.coef_)
+    #     intercept_scaled = np.asarray(reg.intercept_)
+    #
+    #     if beta_scaled.ndim == 2:
+    #         beta_scaled = beta_scaled[0]
+    #     if intercept_scaled.ndim > 0:
+    #         intercept_scaled = intercept_scaled[0]
+    #
+    #     # Scaler params
+    #     means = np.asarray(scale.mean_, dtype=float)
+    #     stds  = np.asarray(scale.scale_, dtype=float)
+    #
+    #     # Compute unscaled coefficients
+    #     with np.errstate(divide='ignore', invalid='ignore'):
+    #         beta_unscaled = np.divide(beta_scaled, stds, where=stds != 0)
+    #     intercept_unscaled = intercept_scaled - np.sum((means * beta_scaled) / stds)
+    #
+    #     # OLS residuals and sigma^2
+    #     y_hat = reg.predict(X_scaled)
+    #     residuals = y - y_hat
+    #     # Degrees of freedom: n - (p + 1) when intercept is included
+    #     df_resid = n - (p + 1)
+    #     if df_resid <= 0:
+    #         raise ValueError("Not enough degrees of freedom to estimate standard errors.")
+    #     RSS = np.sum(residuals**2)
+    #     sigma2 = RSS / df_resid
+    #
+    #     # Build design matrix consistent with fit_intercept=True (assumed)
+    #     Z = np.column_stack([np.ones(n, dtype=float), X_scaled])  # shape: (n, p+1)
+    #
+    #     # Covariance of scaled parameters: sigma^2 * (Z^T Z)^(-1)
+    #     XtX = Z.T @ Z
+    #     XtX_inv = np.linalg.pinv(XtX)  # robust to singularity
+    #     cov_scaled = sigma2 * XtX_inv   # shape: (p+1, p+1)
+    #
+    #     # Transform covariance to unscaled parameters using linear transform:
+    #     # theta_unscaled = T @ theta_scaled
+    #     # where theta = [intercept, beta_1, ..., beta_p]
+    #     T = np.zeros((p + 1, p + 1), dtype=float)
+    #     T[0, 0] = 1.0
+    #     # Intercept row depends on scaled intercept and scaled betas
+    #     with np.errstate(divide='ignore', invalid='ignore'):
+    #         ratios = np.divide(means, stds, where=stds != 0)  # mean_j / std_j
+    #     T[0, 1:] = -ratios
+    #     # Coefficient rows: beta_unscaled_j = beta_scaled_j / std_j
+    #     with np.errstate(divide='ignore', invalid='ignore'):
+    #         inv_stds = np.divide(1.0, stds, where=stds != 0)
+    #     np.fill_diagonal(T[1:, 1:], inv_stds)
+    #
+    #     cov_unscaled = T @ cov_scaled @ T.T
+    #     se_unscaled = np.sqrt(np.diag(cov_unscaled))
+    #
+    #     # Build coefficients: list of dicts with name, coefficient, std_error
+    #     coefficients = []
+    #     coefficients.append({
+    #         "name": "Intercept",
+    #         "coefficient": float(intercept_unscaled),
+    #         "std_error": float(se_unscaled[0]),
+    #     })
+    #     for i, (name, coef) in enumerate(zip(self.embedding, beta_unscaled), start=1):
+    #         # If std was zero (constant feature), set SE to NaN
+    #         se = se_unscaled[i] if np.isfinite(inv_stds[i-1]) else np.nan
+    #         coefficients.append({
+    #             "name": name,
+    #             "coefficient": float(coef),
+    #             "std_error": float(se) if np.isfinite(se) else np.nan,
+    #         })
+    #
+    #     return json.dumps(coefficients,indent=4)
+    
 
     def getOriginalRegressionCoefficients2(self, X, y):
         """
-        Return a list of dicts: [{'name': <str>, 'coefficient': <float>, 'std_error': <float>}]
-        for the unscaled coefficients and intercept.
-        
-        Assumptions:
-        - reg is an OLS-like estimator (e.g., LinearRegression) with fit_intercept=True.
-        - X is the training DataFrame used to fit the model, with columns matching self.embedding.
-        - y is the training target (Series or 1D array).
-        
-        Notes:
-        - For multi-output regression, this computes SEs for the first target only.
-        - If any feature has std == 0 (constant feature), SEs for that coefficient are set to NaN.
+        Return a JSON list of dicts:
+          [{'name': <str>, 'coefficient': <float>, 'std_error': <float>}]
+        for coefficients and intercept, in original units when possible.
+
+        Supports:
+        - LinearRegression (OLS) in a Pipeline.
+        - LogisticRegression (binary) in a Pipeline.
+          - For L2 (default) or no penalty: SEs via observed information.
+          - For L1/elastic-net or multinomial: SEs are NaN.
+
+        Implementation details:
+        - Builds the information matrix in the estimator’s input space using pipeline[:-1].transform(X),
+          which ensures alignment with reg.coef_.
+        - Handles dense and sparse matrices safely.
+        - If the step immediately before the estimator is a simple StandardScaler, results are transformed
+          back to original feature units; otherwise coefficients/SEs are reported in the estimator space.
         """
-        model_obj = self.get_model()
-        reg = model_obj.steps[1][1]    # e.g., LinearRegression
-        scale = model_obj.steps[0][1]  # StandardScaler
-        
-        # Arrange X columns in the same order as self.embedding (features used by the model)
-        X_feats = X[self.embedding].to_numpy(dtype=float)
-        
-        # Use the scaler from the pipeline to transform X
-        X_scaled = scale.transform(X_feats)
-        
-        # Ensure y is 1D np.array
+        import numpy as np
+        import json
+        from scipy import sparse as sp
+
+        pipe = self.get_model()
+        if not hasattr(pipe, "steps") or len(pipe.steps) == 0:
+            raise ValueError("Expected a sklearn Pipeline in self.get_model().")
+
+        reg = pipe.steps[-1][1]
+
+        # Transform X through all preprocessing steps before the estimator
+        if len(pipe.steps) > 1:
+            preproc = pipe[:-1]
+            X_in = preproc.transform(X[self.embedding])
+        else:
+            preproc = None
+            X_in = X[self.embedding].to_numpy(dtype=float)
+
+        # y as 1D array
         y = np.asarray(y).ravel()
-        n, p = X_scaled.shape
-    
-        # Extract scaled coefficients/intercept (handle multi-output)
-        beta_scaled = np.asarray(reg.coef_)
-        intercept_scaled = np.asarray(reg.intercept_)
-        
+
+        # Convert to appropriate types and get shape
+        is_sparse = sp.issparse(X_in)
+        if is_sparse:
+            X_mat = X_in.tocsr()
+            n, p = X_mat.shape
+        else:
+            X_mat = np.asarray(X_in, dtype=float)
+            n, p = X_mat.shape
+
+        # Build design matrix Z = [1, X_mat] in estimator's space
+        if is_sparse:
+            ones_col = sp.csr_matrix(np.ones((n, 1), dtype=float))
+            Z = sp.hstack([ones_col, X_mat], format="csr")  # shape (n, p+1)
+        else:
+            Z = np.column_stack([np.ones(n, dtype=float), X_mat])  # shape (n, p+1)
+
+        # Extract coefficients in estimator's space
+        beta_scaled = np.asarray(getattr(reg, "coef_", []))
+        intercept_scaled = np.asarray(getattr(reg, "intercept_", 0.0))
         if beta_scaled.ndim == 2:
             beta_scaled = beta_scaled[0]
-        if intercept_scaled.ndim > 0:
-            intercept_scaled = intercept_scaled[0]
-    
-        # Scaler params
-        means = np.asarray(scale.mean_, dtype=float)
-        stds  = np.asarray(scale.scale_, dtype=float)
-    
-        # Compute unscaled coefficients
-        with np.errstate(divide='ignore', invalid='ignore'):
-            beta_unscaled = np.divide(beta_scaled, stds, where=stds != 0)
-        intercept_unscaled = intercept_scaled - np.sum((means * beta_scaled) / stds)
-    
-        # OLS residuals and sigma^2
-        y_hat = reg.predict(X_scaled)
-        residuals = y - y_hat
-        # Degrees of freedom: n - (p + 1) when intercept is included
-        df_resid = n - (p + 1)
-        if df_resid <= 0:
-            raise ValueError("Not enough degrees of freedom to estimate standard errors.")
-        RSS = np.sum(residuals**2)
-        sigma2 = RSS / df_resid
-    
-        # Build design matrix consistent with fit_intercept=True (assumed)
-        Z = np.column_stack([np.ones(n, dtype=float), X_scaled])  # shape: (n, p+1)
-    
-        # Covariance of scaled parameters: sigma^2 * (Z^T Z)^(-1)
-        XtX = Z.T @ Z
-        XtX_inv = np.linalg.pinv(XtX)  # robust to singularity
-        cov_scaled = sigma2 * XtX_inv   # shape: (p+1, p+1)
-    
-        # Transform covariance to unscaled parameters using linear transform:
-        # theta_unscaled = T @ theta_scaled
-        # where theta = [intercept, beta_1, ..., beta_p]
-        T = np.zeros((p + 1, p + 1), dtype=float)
-        T[0, 0] = 1.0
-        # Intercept row depends on scaled intercept and scaled betas
-        with np.errstate(divide='ignore', invalid='ignore'):
-            ratios = np.divide(means, stds, where=stds != 0)  # mean_j / std_j
-        T[0, 1:] = -ratios
-        # Coefficient rows: beta_unscaled_j = beta_scaled_j / std_j
-        with np.errstate(divide='ignore', invalid='ignore'):
-            inv_stds = np.divide(1.0, stds, where=stds != 0)
-        np.fill_diagonal(T[1:, 1:], inv_stds)
-    
-        cov_unscaled = T @ cov_scaled @ T.T
-        se_unscaled = np.sqrt(np.diag(cov_unscaled))
-    
-        # Build coefficients: list of dicts with name, coefficient, std_error
+        else:
+            beta_scaled = np.asarray(beta_scaled, dtype=float).ravel()
+        intercept_scaled = float(np.ravel(intercept_scaled)[0] if np.ndim(intercept_scaled) > 0 else intercept_scaled)
+
+        # Decide linear vs logistic
+        is_logistic = hasattr(reg, "predict_proba") and hasattr(reg, "classes_")
+
+        cov_scaled = None
+        if is_logistic:
+            classes_ = getattr(reg, "classes_", None)
+            if classes_ is None or len(classes_) != 2:
+                cov_scaled = None  # multinomial not handled here
+            else:
+                # Probabilities in estimator’s input space
+                proba = reg.predict_proba(X_mat)
+                if not np.isfinite(proba).all():
+                    cov_scaled = None
+                else:
+                    p_hat = proba[:, 1]
+
+                    # Class weights (handles class_weight='balanced' or dict)
+                    weights = np.ones(n, dtype=float)
+                    cw_param = getattr(reg, "class_weight", None)
+                    if cw_param is not None:
+                        if cw_param == "balanced":
+                            classes = np.unique(y)
+                            n_classes = len(classes)
+                            counts = {c: np.sum(y == c) for c in classes}
+                            w_map = {c: (n / (n_classes * counts[c])) for c in classes}
+                        elif isinstance(cw_param, dict):
+                            w_map = cw_param
+                        else:
+                            w_map = None
+                        if w_map is not None:
+                            weights = np.array([w_map.get(yi, 1.0) for yi in y], dtype=float)
+
+                    # Observed information H = Z' W Z (+ penalty for L2)
+                    w = weights * p_hat * (1.0 - p_hat)
+                    w = np.maximum(w, 0.0)
+                    if is_sparse:
+                        Z_w = Z.multiply(np.sqrt(w)[:, None])  # sparse row scaling
+                        H = (Z_w.T @ Z_w).toarray()
+                    else:
+                        Z_w = Z * np.sqrt(w)[:, None]
+                        H = Z_w.T @ Z_w
+
+                    # Regularization detection (new/old API)
+                    def _reg_type_and_lambda(reg_):
+                        # Returns ("l2" | "l1" | "elasticnet" | "none", lam)
+                        # lam = 1/C for L2; 0 if none/unsupported; intercept not penalized elsewhere.
+                        C = float(getattr(reg_, "C", 1.0))
+                        if np.isinf(C):
+                            return "none", 0.0
+                        l1r = getattr(reg_, "l1_ratio", None)
+                        if l1r is not None:
+                            if l1r == 0:
+                                return "l2", (1.0 / C if C > 0 else np.inf)
+                            if l1r == 1:
+                                return "l1", 0.0
+                            return "elasticnet", 0.0
+                        pen = getattr(reg_, "penalty", None)
+                        if pen in ("none",):
+                            return "none", 0.0
+                        if pen in ("l1", "elasticnet"):
+                            return pen, 0.0
+                        # Treat missing/None as L2 (scikit-learn default)
+                        return "l2", (1.0 / C if C > 0 else np.inf)
+
+                    reg_type, lam = _reg_type_and_lambda(reg)
+
+                    # Add L2 penalty if applicable (intercept unpenalized)
+                    if reg_type == "l2" and np.isfinite(lam) and lam > 0:
+                        P = np.zeros_like(H)
+                        P[1:, 1:] = lam * np.eye(p)
+                        H = H + P
+                    elif reg_type in ("l1", "elasticnet"):
+                        H = None  # not supported for SEs
+
+                    if H is not None and np.all(np.isfinite(H)):
+                        # Add tiny jitter for numerical stability before inversion
+                        jitter = 1e-12
+                        H_j = H + jitter * np.eye(p + 1)
+                        cov_scaled = np.linalg.pinv(H_j)
+                    else:
+                        cov_scaled = None
+        else:
+            # OLS-like linear regression in estimator's space
+            y_hat = reg.predict(X_mat)
+            residuals = y - y_hat
+            df_resid = n - (p + 1)
+            if df_resid <= 0:
+                raise ValueError("Not enough degrees of freedom to estimate standard errors.")
+            RSS = float(np.sum(residuals ** 2))
+            sigma2 = RSS / df_resid
+            if is_sparse:
+                XtX = (Z.T @ Z).toarray()
+            else:
+                XtX = Z.T @ Z
+            XtX_inv = np.linalg.pinv(XtX)
+            cov_scaled = sigma2 * XtX_inv
+
+        # SEs in estimator's space
+        if cov_scaled is None or not np.isfinite(cov_scaled).all():
+            se_scaled = np.full(p + 1, np.nan, dtype=float)
+        else:
+            diag_cov = np.diag(cov_scaled)
+            diag_cov = np.where(diag_cov >= 0, diag_cov, 0.0)
+            se_scaled = np.sqrt(diag_cov)
+
+        # Default: report in estimator's space
+        intercept_est = intercept_scaled
+        beta_est = beta_scaled.copy()
+        se_est = se_scaled.copy()
+
+        # Try to unscale back to original units if the step just before the estimator is StandardScaler
+        if len(pipe.steps) > 1:
+            prev_step = pipe.steps[-2][1]
+            if hasattr(prev_step, "scale_") and hasattr(prev_step, "transform"):
+                stds = np.asarray(prev_step.scale_, dtype=float)
+                means_attr = getattr(prev_step, "mean_", None)
+                if means_attr is None:
+                    means = np.zeros_like(stds, dtype=float)
+                else:
+                    means = np.asarray(means_attr, dtype=float)
+
+                if stds.shape[0] == p:  # ensure dimension match
+                    # Build linear transform T for [a, b] -> [a*, b*]
+                    mask = (stds != 0.0)
+                    inv_stds = np.zeros_like(stds, dtype=float)
+                    inv_stds[mask] = 1.0 / stds[mask]
+                    ratios = np.zeros_like(stds, dtype=float)
+                    ratios[mask] = means[mask] * inv_stds[mask]
+
+                    T = np.zeros((p + 1, p + 1), dtype=float)
+                    T[0, 0] = 1.0
+                    T[0, 1:] = -ratios
+                    np.fill_diagonal(T[1:, 1:], inv_stds)
+
+                    theta_est = np.concatenate([[intercept_est], beta_est])
+                    theta_orig = T @ theta_est
+                    intercept_orig = theta_orig[0]
+                    beta_orig = theta_orig[1:]
+
+                    if np.isfinite(se_est).all() and cov_scaled is not None and np.isfinite(cov_scaled).all():
+                        cov_orig = T @ cov_scaled @ T.T
+                        d = np.diag(cov_orig)
+                        d = np.where(d >= 0, d, 0.0)
+                        se_orig = np.sqrt(d)
+                    else:
+                        se_orig = np.full(p + 1, np.nan, dtype=float)
+
+                    intercept_est = float(intercept_orig)
+                    beta_est = beta_orig
+                    se_est = se_orig
+
+                    # If feature had zero std, its SE is undefined in original units
+                    for j in range(p):
+                        if stds[j] == 0.0:
+                            se_est[j + 1] = np.nan
+
+        # Assemble output
         coefficients = []
         coefficients.append({
             "name": "Intercept",
-            "coefficient": float(intercept_unscaled),
-            "std_error": float(se_unscaled[0]),
+            "coefficient": float(intercept_est),
+            "std_error": float(se_est[0]) if np.isfinite(se_est[0]) else np.nan,
         })
-        for i, (name, coef) in enumerate(zip(self.embedding, beta_unscaled), start=1):
-            # If std was zero (constant feature), set SE to NaN
-            se = se_unscaled[i] if np.isfinite(inv_stds[i-1]) else np.nan
+        for j, (name, coef) in enumerate(zip(self.embedding, beta_est), start=1):
+            se = se_est[j]
             coefficients.append({
                 "name": name,
                 "coefficient": float(coef),
                 "std_error": float(se) if np.isfinite(se) else np.nan,
             })
-    
-        return json.dumps(coefficients,indent=4)
-        
+
+        return json.dumps(coefficients, indent=4)
 
     def set_model_obj_pmml_for_prediction(self, pmml_file_path, qsar_method):
 
