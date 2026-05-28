@@ -18,7 +18,7 @@ import traceback
 import json
 from sklearn2pmml.pipeline import PMMLPipeline as PMMLPipeline
 from model_ws_db_utilities import ModelInitializer
-from models.case_studies.run_model_building import runAD
+from models.case_studies.run_model_building import runAD, set_hyper_parameters
 from models.ModelBuilder import Model
 from models.db_utilities.raw_exp_data_db import ExpDataGetter
 from models.db_utilities.dataset_utilities_db import getMappedDatapoints
@@ -311,6 +311,7 @@ class ExcelFormatter:
         ws = writer.sheets[sheet_name]
         workbook = writer.book
         nrows, ncols = df.shape
+        nrows = max(nrows, 1)  # Ensure at least 1 row
 
         subtotal_format = workbook.add_format({"num_format": "#,##0"})
         
@@ -336,6 +337,7 @@ class ExcelFormatter:
         """
         ws = writer.sheets[sheet_name]
         nrows, ncols = df.shape
+        nrows = max(nrows, 1)  # Ensure at least 1 row
         header_row = ExcelFormatter.get_header_row(has_subtotals=has_subtotals, has_superheaders=has_superheaders)
         data_end_row = nrows + (1 if has_subtotals else 0) + (1 if has_superheaders else 0)
         ws.autofilter(header_row, 0, data_end_row, ncols - 1)
@@ -618,10 +620,7 @@ class ChartBuilder:
                 max_value = max_int + 1
             else:
                 max_value = max_int
-            
-            # ax.set_xticks(range(min_value, max_value + 1))
-            # ax.set_yticks(range(min_value, max_value + 1))
-            
+                        
         elif unit_name == "°C":
             min_value = (np.floor(min_value / 50) * 50) - 50
             max_value = (np.ceil(max_value / 50) * 50) + 50
@@ -911,6 +910,10 @@ class ChartBuilder:
             has_subtotals: Whether data rows include subtotal formulas. Defaults to False.
             has_superheaders: Whether sheet has superheader rows. Defaults to False.
         """
+        if df is None or df.empty:
+            logging.error(f"DataFrame for {sheet_name} is None or empty, skipping plot creation")
+            return
+
         worksheet = writer.sheets[sheet_name]
         worksheet_plot = writer.sheets[sheet_name_plot]
         nrows = len(df)
@@ -938,8 +941,6 @@ class ChartBuilder:
             logging.error(f"Dataframe columns:\n\t{list(df.columns)}")
             raise ValueError(f"Column not found: {e}")
 
-        # mn, mx, major_unit = ChartBuilder.compute_equal_axis_bounds(
-        #     df[x_col], df[y_col], pad_ratio=pad_ratio, integer_ticks=integer_ticks, log_plot=log_plot, target_ticks=5)
         if not is_binary:
             ChartBuilder.add_scatter_plot(workbook, sheet_name, sheet_name_plot, worksheet, worksheet_plot, df, x_col, y_col, x_col_idx, y_col_idx, x_col_name, y_col_name, property_name, property_units, nrows, data_start_row, yx_offset_rows, chart_size_px)
         else:
@@ -1280,8 +1281,6 @@ class DataQuerier:
             summary_dict["nExternal"] = [model.num_external]
         summary = pd.DataFrame(summary_dict)
 
-        # self.cover_sheet_df = summary
-
         logging.info(f"Finished building Cover Sheet from Model (model_id = {self.model_id})")
 
         return summary
@@ -1299,7 +1298,8 @@ class DataQuerier:
 
         model = self.query_model()
 
-        if getattr(model, "modelStatistics", None) is None:
+        stats_check = getattr(model, "modelStatistics", {})
+        if not stats_check:
             model.modelStatistics = DataTransformer.get_modelStatistics(model)
 
         if not model.is_binary:
@@ -1314,7 +1314,6 @@ class DataQuerier:
         return statistics
 
     def query_continuous_stats_dict(self, model: Model) -> dict:
-        # TODO: Add code to automatically generate these statistics from the model dataframes if modelStatistics is unpopulated
         statistics_dict = {
             "nTraining": [model.num_training],
             "nTest": [model.num_prediction],
@@ -1384,7 +1383,6 @@ class DataQuerier:
         return statistics_dict
 
     def query_binary_stats_dict(self, model: Model) -> dict:
-        # TODO: Add code to automatically generate these statistics from the model dataframes if modelStatistics is unpopulated
         statistics_dict = {
             "nTraining": [model.num_training],
             "nTest": [model.num_prediction],
@@ -1469,10 +1467,7 @@ class DataQuerier:
         df_pv = self.query_df_pv()
         records_df = DataTransformer.get_records_df(df_pv)
         logging.info(f"Finished building Records from Model (model_id = {self.model_id})")
-        # self.records_df = records_df
-
-        # DataTransformer.get_superheaders(records_df)
-
+        
         return records_df
     
     def query_external_records_df(self) -> pd.DataFrame:
@@ -1492,10 +1487,7 @@ class DataQuerier:
             return None
         external_records_df = DataTransformer.get_records_df(df_pv)
         logging.info(f"Finished building External Records from Model (model_id = {self.model_id})")
-        # self.records_df = records_df
-
-        # DataTransformer.get_superheaders(records_df)
-
+        
         return external_records_df
     
     def query_model_descriptors_df(self) -> pd.DataFrame:
@@ -1526,7 +1518,6 @@ class DataQuerier:
             results_dict["model_details"]["embedding"] = model.embedding
 
         method_name = getattr(model, "qsar_method", False) or getattr(model, "regressor_name", False) or ""
-        # method_name = getattr(model, "regressor_name", "") if method_name == "" else method_name
         if any(method in method_name for method in ["reg", "las", "gcm"]):
             coefficients_df = DataTransformer.get_model_coefficients(model)
             results_dict["model_details"]["model_coefficients"] = coefficients_df
@@ -1534,8 +1525,6 @@ class DataQuerier:
             logging.warning(f"Model type {method_name} does not support coefficient retrieval, coefficient values will not be added to Model Descriptors sheet")
         
         model_descriptors = DataTransformer.get_model_descriptors_df(results_dict)
-
-        # self.model_descriptors_df = model_descriptors
 
         logging.info(f"Finished building Model Descriptors from Model (model_id = {self.model_id})")
 
@@ -1604,8 +1593,6 @@ class DataQuerier:
         model_descriptor_values_df = pd.DataFrame(model_descriptor_values_dict)
         model_descriptor_values_df = ExcelFormatter.handle_accidental_formulas(model_descriptor_values_df)
 
-        # self.model_descriptor_values_df = model_descriptor_values_df
-
         logging.info(f"Finished building Model Descriptor Values from Model (model_id = {self.model_id})")
 
         return model_descriptor_values_df
@@ -1643,8 +1630,6 @@ class DataQuerier:
             "Mol Weight": temp["mol_weight"]
         }
         training_cv_predictions_df = pd.DataFrame(training_cv_predictions_dict)
-
-        # self.training_cv_predictions_df = training_cv_predictions_df
 
         logging.info(f"Finished building Training CV Predictions from Model (model_id = {self.model_id})")
 
@@ -1695,8 +1680,6 @@ class DataQuerier:
             "Mol Weight": temp["mol_weight"]
         }
         test_set_predictions_df = pd.DataFrame(test_predictions_dict)
-
-        # self.test_set_predictions_df = test_set_predictions_df
 
         logging.info(f"Finished building Test Set Predictions from Model (model_id = {self.model_id})")
 
@@ -1751,8 +1734,6 @@ class DataQuerier:
         }
         external_predictions_df = pd.DataFrame(external_predictions_dict)
         external_predictions_df.dropna(axis=0, subset=["Exp Prop ID", "Exp", "Pred"], how="any", inplace=True)
-
-        # self.external_predictions_df = external_predictions_df
 
         logging.info(f"Finished building External Predictions from Model (model_id = {self.model_id})")
 
@@ -2006,25 +1987,41 @@ class DataTransformer:
     @staticmethod
     def get_modelStatistics(model: Model) -> dict:
         # TODO: Fix entirely and get working, then test
+        logging.warning("Running get_modelStatistics as modelStatistics was null or undefined for the provided model")
         try:
-            is_binary = model.is_binary
-            df_predictions_test = model.df_preds_test
-            df_predictions_training = model.df_preds_training_cv
-            df_training = model.df_training
-            df_predictions_all = model.df_preds_training_cv
-            df_prediction_ext = model.df_preds_external
-            ad_measure_model = model.applicabilityDomainName
+            is_binary = getattr(model, "is_binary", None)
+            ad_measure_model = getattr(model, "applicabilityDomainName", None)
             run_AD = True if ad_measure_model else False
             ad_measures = ad_measure_model.split(" and ") if ad_measure_model else None
-            df_prediction = model.df_prediction
-            dataset_name_ext = model.external_dataset_name
-            params = model.get_single_parameters()
+            df_training = getattr(model, "df_training", None)
+            df_predictions_training = getattr(model, "df_preds_training_cv", None)
+            df_predictions_test = getattr(model, "df_preds_test", None)
+            df_predictions_all = getattr(model, "df_preds_training_cv", None)
+            df_prediction = getattr(model, "df_prediction", None)
+            df_pred_test = getattr(model, "df_preds_test", None)
+            dataset_name_ext = getattr(model, "external_dataset_name", None)
+            df_prediction_ext = getattr(model, "df_preds_external", None)
+            df_pred_ext = getattr(model, "df_preds_external", None)
+            
+            qsar_method = getattr(model, "qsar_method", None)
+            feature_selection = getattr(model, "feature_selection", False)
+            descriptor_set_name = getattr(model, "descriptorSetName", None)
+            splitting_name = getattr(model, "splittingName", None)
+            dataset_name = getattr(model, "datasetName", None)
+            params = set_hyper_parameters(qsar_method, feature_selection, descriptor_set_name, splitting_name, dataset_name, ad_measures)
+            
+            validity_dict = {"is_binary": is_binary, "df_predictions_test": df_predictions_test, "df_predictions_training": df_predictions_training, "df_training": df_training, "df_predictions_all": df_predictions_all, "df_prediction": df_prediction, "params": params, "df_pred_test": df_pred_test}
+            if dataset_name_ext is not None:
+                validity_dict.update({"dataset_name_ext": dataset_name_ext, "df_prediction_ext": df_prediction_ext, "df_pred_ext": df_pred_ext})
+            validity_check = [name for name, value in validity_dict.items() if value is None or (isinstance(value, pd.DataFrame) and value.empty)]
+            if validity_check:
+                raise Exception(f"One or more required attributes are missing from the model: {validity_check}")
         except Exception as e:
             logging.error("Error occurred while fetching model statistics.")
             logging.error(e)
-            return
+            return {}
 
-        # training_stats and test_stats (from Results.???)
+        # training_stats and test_stats
         if is_binary:
             test_stats = calculate_binary_statistics(df_predictions_test, 0.5, "_Test")
             training_stats = calculate_binary_statistics(df_predictions_training, 0.5, "_Training")
@@ -2082,7 +2079,6 @@ class DataTransformer:
             ms["cv_stats"] = cv_stats
 
         if ext_stats:
-            # print('ext_stats', json.dumps(ext_stats))
             ext_stats.pop("Coverage_External")
             ms["ext_stats"] = ext_stats
 
@@ -2913,7 +2909,6 @@ class ModelToExcel:
         startcol=0
         if self.create_records_superheaders and self.records_df is not None:
             superheaders = getattr(self, "superheaders", None)
-            # TODO: add in the external_superheaders as well
             external_superheaders = getattr(self, "external_superheaders", None)
             if external_superheaders is not None:
                 superheaders = {key: [*value, *external_superheaders.get(key, [])] for key, value in superheaders.items()}
@@ -3017,7 +3012,6 @@ class ModelToExcel:
             return None
         
         start_row = ExcelFormatter.get_header_row(has_subtotals=add_subtotals)
-        # format_cols = [col for col in model_descriptor_values.columns if col.startswith("Observed") or col.startswith("Predicted")]
         model_descriptor_values.to_excel(writer, sheet_name="Model Descriptor Values", index=False, startrow=start_row)
 
         workbook = writer.book
@@ -3077,7 +3071,6 @@ class ModelToExcel:
         col_widths = ExcelFormatter.set_column_width(writer, "Training CV Predictions", training_cv_predictions, min_col_width=min_col_width, col_width_pad=col_width_pad, how="header")
         ExcelFormatter.set_sig_figs(writer, "Training CV Predictions", training_cv_predictions, columns=["Exp", "Pred", "Absolute Error", "Mol Weight"], sig_figs=3, col_widths=col_widths)
         ExcelFormatter.add_filter(writer, "Training CV Predictions", training_cv_predictions, has_subtotals=add_subtotals)
-        
         ChartBuilder.add_plot(writer, workbook, "Training CV Predictions", "Training CV Predictions", training_cv_predictions, is_binary=self.model.is_binary, x_col=x_col, y_col=y_col, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, log_plot=self.log_plot, yx_offset_rows=yx_offset_rows, property_name=property_name, property_units=property_units, has_subtotals=add_subtotals)
 
         return training_cv_predictions
@@ -3367,7 +3360,8 @@ def query_example() -> None:
     data from the database, then generates the Excel workbook.
     """
     logging.info("Running query_example()")
-    model_id = 1753
+    # model_id = 1753
+    model_id = 1600
     try:
         file_path = os.path.join(PROJECT_ROOT, "data", "excel_summaries", f"{model_id}_summary.xlsx")
 

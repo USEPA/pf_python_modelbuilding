@@ -17,8 +17,153 @@ import model_ws_utilities as mwu
 from models import df_utilities as dfu
 import models.results_utilities as ru
 
+from typing import Optional, Dict, Any, Iterable, Tuple, Union, List
+from dataclasses import dataclass, field, asdict
 
 np.random.seed(seed=42)  # makes results the same each time
+
+feature_selection_method_genetic_algorithm = "Genetic algorithm"
+feature_selection_method_group_contribution = "Group contribution" 
+feature_selection_method_importance = "Importance"
+
+@dataclass
+class ParametersImportance:
+    dataset_name: str
+    qsar_method: str    
+    descriptor_set_name: str
+    ad_measure: list[str]
+
+    splitting_name: str = "RND_REPRESENTATIVE"
+    feature_selection_method: str = feature_selection_method_importance
+    hyperparameter_grid: Optional[Dict[str, Any]] = None
+    feature_selection: bool = False
+    remove_log_p_descriptors: bool = False
+    
+    num_generations: int = 1
+
+    use_permutative: bool = True
+    use_wards: bool = False
+    run_rfe: bool = True
+    run_sfs: bool = True
+    n_features_to_select = 'auto'  # not used
+
+    min_descriptor_count: int = 30
+    max_descriptor_count: int = 40
+    
+    # min_descriptor_count: int = 20
+    # max_descriptor_count: int = 30
+    
+    descriptor_coefficient: float = 0.006  # set to None for auto penalty value
+    alpha = 0.7
+
+    include_standardization_in_pmml: bool = False
+    use_pmml_pipeline: bool = False
+    n_threads: Optional[int] = 4  # Set to n/2 where n is the number of logical processors on your computer
+
+    # Derived value (set in __post_init__)
+    fraction_of_max_importance: float = field(init=False)
+
+    def __post_init__(self):
+        method = self.qsar_method.lower()
+                
+        if method == "rf":
+            self.fraction_of_max_importance = 0.25
+        elif method == "xgb":
+            self.fraction_of_max_importance = 0.03
+        elif method == "lgb":
+            self.fraction_of_max_importance = 0.03  # TODO this needs checking
+        else:
+            raise ValueError(f"invalid method: {self.qsar_method}")
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+    
+
+@dataclass
+class ParametersGroupContribution:
+    dataset_name: str
+    qsar_method: str    
+    descriptor_set_name: str
+    ad_measure: list[str]
+    splitting_name: str = "RND_REPRESENTATIVE"
+    
+    feature_selection_method: str = feature_selection_method_group_contribution 
+    hyperparameter_grid: Optional[Dict[str, Any]] = None
+    feature_selection: bool = True
+    min_count = 3  # minimum number of nonzero fragment values to keep a fragment column and its associated rows
+    remove_log_p_descriptors: bool = False
+    n_threads: int = 10
+    include_standardization_in_pmml: bool = False
+    use_pmml_pipeline: bool = False
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class ParametersGeneric:
+    dataset_name: str
+    qsar_method: str    
+    descriptor_set_name: str
+    ad_measure: list[str]
+
+    splitting_name: str = "RND_REPRESENTATIVE"
+    
+    hyperparameter_grid: Optional[Dict[str, Any]] = None
+    feature_selection: bool = False
+    remove_log_p_descriptors: bool = False
+    n_threads: int = 10
+    include_standardization_in_pmml: bool = False
+    use_pmml_pipeline: bool = False
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class ParametersGeneticAlgorithm:
+    dataset_name: str
+    qsar_method: str
+    descriptor_set_name: str
+    ad_measure: List[str]
+
+    splitting_name: str = "RND_REPRESENTATIVE"
+
+    feature_selection_method: str = feature_selection_method_genetic_algorithm  # ensure this is defined
+    hyperparameter_grid: Optional[Dict[str, Any]] = None
+    feature_selection: bool = False
+    remove_log_p_descriptors: bool = False
+
+    num_generations: int = 100
+    num_optimizers: int = 100
+    num_jobs: int = 4
+    n_threads: Optional[int] = None
+    max_length: int = 24  # still use?
+    max_features: int = 25
+
+    descriptor_coefficient: float = 0.006
+    alpha: float = 0.7
+
+    threshold: int = 1
+    elitism: bool = True
+    crossover_probability: float = 0.9
+    mutation_probability: float = 0.05
+
+    use_wards: bool = False
+    run_rfe: bool = True
+    run_sfs: bool = True
+    
+    n_features_to_select: Union[int, str] = "auto"
+
+    remove_fragment_descriptors: bool = True
+    remove_acnt_descriptors: bool = True
+
+    include_standardization_in_pmml: bool = False
+    use_pmml_pipeline: bool = False
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
 
 def runModelOptionsTodd():
     num_jobs=16
@@ -1359,6 +1504,76 @@ def save_prediction_results(set, training_tsv, prediction_tsv, model, mp, result
         ru.generatePlot2(fileOut=fileOut, property_name=mp.dataset_name, title=title, exp=exp, pred=pred)
 
     return df_results
+
+
+def set_hyper_parameters(qsar_method, feature_selection, descriptor_set_name, splitting_name, dataset_name, ad_measure):
+    params = None    
+        
+    if qsar_method == "xgb":
+        grid = {'estimator__booster': ['gbtree']}
+        params = ParametersImportance(qsar_method=qsar_method, feature_selection=feature_selection, hyperparameter_grid=grid,
+                                      descriptor_set_name=descriptor_set_name, dataset_name=dataset_name,
+                                      splitting_name=splitting_name, ad_measure=ad_measure)
+        
+        # print(params.dataset_name)
+        
+    elif qsar_method == "lgb":
+        grid = {}        
+        params = ParametersImportance(qsar_method=qsar_method, feature_selection=feature_selection, hyperparameter_grid=grid,
+                                      descriptor_set_name=descriptor_set_name, dataset_name=dataset_name,
+                                      splitting_name=splitting_name, ad_measure=ad_measure)
+    
+    elif qsar_method == "rf":
+        # grid = {'estimator__max_features': ['sqrt', 'log2'],
+        #                              'estimator__min_impurity_decrease': [10 ** x for x in range(-5, 0)],
+        #                              'estimator__n_estimators': [10, 100, 250, 500]}
+
+        grid = {"estimator__max_features": ["sqrt", "log2"]}
+
+        params = ParametersImportance(qsar_method=qsar_method, feature_selection=feature_selection, hyperparameter_grid=grid,
+                                      descriptor_set_name=descriptor_set_name, dataset_name=dataset_name,
+                                      splitting_name=splitting_name, ad_measure=ad_measure)
+    
+    elif qsar_method == "knn": 
+        # grid = {'estimator__n_neighbors': [5], 'estimator__weights': ['distance']}  # default, same as OPERA
+        
+        grid = {'estimator__n_neighbors': [3], 'estimator__weights': ['distance']}  # matches AD in terms of using 3
+        
+        params = ParametersGeneticAlgorithm(qsar_method=qsar_method, hyperparameter_grid=grid, feature_selection=feature_selection,
+                                            descriptor_set_name=descriptor_set_name, dataset_name=dataset_name,
+                                            splitting_name=splitting_name, ad_measure=ad_measure)
+    elif qsar_method == "reg": 
+        grid = {}  # default, same as OPERA
+        params = ParametersGeneticAlgorithm(qsar_method=qsar_method, hyperparameter_grid=grid, feature_selection=feature_selection,
+                                            descriptor_set_name=descriptor_set_name, dataset_name=dataset_name,
+                                            splitting_name=splitting_name, ad_measure=ad_measure)
+        
+        params.remove_fragment_descriptors = True
+        params.remove_acnt_descriptors = True        
+
+    elif qsar_method == "las": 
+        # grid = {'estimator__alpha': [np.round(i, 5) for i in np.logspace(-4, 0, num=20)],
+        #                             'estimator__max_iter': [1000000]}
+        grid = {}
+        params = ParametersGeneticAlgorithm(qsar_method=qsar_method, hyperparameter_grid=grid, feature_selection=feature_selection,
+                                            descriptor_set_name=descriptor_set_name, dataset_name=dataset_name,
+                                            splitting_name=splitting_name, ad_measure=ad_measure)
+    elif qsar_method == "gcm":
+        grid = {}        
+        params = ParametersGroupContribution(qsar_method=qsar_method, hyperparameter_grid=grid, feature_selection=feature_selection,
+                                             descriptor_set_name=descriptor_set_name, dataset_name=dataset_name,
+                                             splitting_name=splitting_name, ad_measure=ad_measure)
+
+    elif qsar_method == "svm":
+        grid = {}        
+        params = ParametersGeneric(qsar_method=qsar_method, hyperparameter_grid=grid, feature_selection=feature_selection,
+                                             descriptor_set_name=descriptor_set_name, dataset_name=dataset_name,
+                                             splitting_name=splitting_name, ad_measure=ad_measure)
+    else:
+        print('qsar_method not handled:', qsar_method)
+        return None
+
+    return params
 
 
 def runAD(isBinary, adMeasure, df_results, model, training_tsv, prediction_tsv):
