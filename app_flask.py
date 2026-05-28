@@ -834,8 +834,8 @@ def model_coeffs(model_id):
     if model is None:
         abort(404, 'no stored model with id ' + model_id)
         
-    if hasattr(model, 'getOriginalRegressionCoefficients') and callable(getattr(model, 'getOriginalRegressionCoefficients')):
-        coeff_dict = model.getOriginalRegressionCoefficients()
+    if hasattr(model, 'getOriginalRegressionCoefficients2') and callable(getattr(model, 'getOriginalRegressionCoefficients2')):
+        coeff_dict = model.getOriginalRegressionCoefficients2()
         return coeff_dict, 200
     else:
         return "Cant return coefficients for " + model.qsar_method

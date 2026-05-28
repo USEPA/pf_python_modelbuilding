@@ -3361,7 +3361,7 @@ def query_example() -> None:
     """
     logging.info("Running query_example()")
     # model_id = 1753
-    model_id = 1600
+    model_id = 1847
     try:
         file_path = os.path.join(PROJECT_ROOT, "data", "excel_summaries", f"{model_id}_summary.xlsx")
 

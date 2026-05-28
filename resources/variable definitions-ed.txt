@@ -501,8 +501,6 @@ Hg	Hg fragment count	Molecular Fragments
 Pb	Pb fragment count	Molecular Fragments
 B	B fragment count	Molecular Fragments
 P [+3 valence, all single bonds]	P [+3 valence, all single bonds] fragment count	Molecular Fragments
-P [+3 valence, all single bonds]	P [+3 valence, all single bonds] fragment count	Molecular Fragments
-P [+3 valence, all single bonds]	P [+3 valence, all single bonds] fragment count	Molecular Fragments
 P [+5 valence, one double bond]	P [+5 valence, one double bond] fragment count	Molecular Fragments
 P [+5 valence, two double bonds]	P [+5 valence, two double bonds] fragment count	Molecular Fragments
 P [+5 valence, all single bonds]	P [+5 valence, all single bonds] fragment count	Molecular Fragments
@@ -513,6 +511,7 @@ As [+5 valence, one double bond]	As [+5 valence, one double bond] fragment count
 As [+5 valence, two double bonds]	As [+5 valence, two double bonds] fragment count	Molecular Fragments
 As [+5 valence, all single bonds]	As [+5 valence, all single bonds] fragment count	Molecular Fragments
 As	As fragment count	Molecular Fragments
+N=C=N	N=C=N fragment count	Molecular Fragments
 numHBa	Number of hydrogen bond acceptors	2-D Molecular Properties
 numHBd	Number of hydrogen bond donors	2-D Molecular Properties
 numwHBd	Number of weak hydrogen bond donors (i.e. -CHX, where X = Cl, F)	2-D Molecular Properties
