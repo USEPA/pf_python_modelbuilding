@@ -4,9 +4,12 @@ Find, delete, or recompute predictor_models_cache records whose cache-key
 InChIKey does not match prediction.chemicalIdentifiers.inchiKey.
 
 These records are unsafe because the cache key belongs to one chemical while the
-stored prediction payload belongs to another. Deleting them is the lazy repair:
-the next API request recomputes the prediction and overwrites the cache.
-Recompute mode does that cache warm-up immediately in prediction API batches.
+stored prediction payload belongs to another. The cleanup is intentionally split
+into two phases:
+
+1. scan the whole collection and write mismatched cache keys to a file;
+2. after the scan finishes, read that file in batches, delete stale cache rows,
+   and optionally warm the cache by calling the prediction API.
 """
 
 from __future__ import annotations
@@ -47,13 +50,14 @@ from util.prediction_cache_key_utils import (  # noqa: E402
 )
 
 
-DEFAULT_BATCH_SIZE = 1000
+DEFAULT_BATCH_SIZE = 100
 DEFAULT_CURSOR_BATCH_SIZE = 5000
-DEFAULT_PROGRESS_EVERY = 25000
+DEFAULT_PROGRESS_EVERY = 5000
 DEFAULT_PREDICTION_BATCH_SIZE = 25
 DEFAULT_RESOLVER_LOOKUP_API = "https://cim-dev.sciencedataexperts.com/api/resolver/lookup"
 DEFAULT_PREDICT_API = "https://cim-dev.sciencedataexperts.com/api/predictor_models/predict"
 DEFAULT_PREDICTION_GATEWAY_SPLIT_THRESHOLD = 10
+DEFAULT_MISMATCH_KEYS_FILE = Path("/tmp/predictor_cache_identity_mismatch_keys.txt")
 KEY_RE = re.compile(r"^([A-Z]{14}-[A-Z]{10}-[A-Z])-(.+)$")
 LOGGER = logging.getLogger("prediction_cache_identity_cleanup")
 
@@ -178,7 +182,7 @@ def parse_args() -> argparse.Namespace:
         "--batch-size",
         type=int,
         default=DEFAULT_BATCH_SIZE,
-        help="Number of mismatched cache records to process per Mongo/write batch.",
+        help="Number of mismatched cache keys to write/process per repair batch.",
     )
     parser.add_argument(
         "--repair-mode",
@@ -271,6 +275,15 @@ def parse_args() -> argparse.Namespace:
         "--report-jsonl",
         type=Path,
         help="Optional path for a JSONL report of mismatched records.",
+    )
+    parser.add_argument(
+        "--mismatch-keys-file",
+        type=Path,
+        default=DEFAULT_MISMATCH_KEYS_FILE,
+        help=(
+            "Path for the scan output file containing one mismatched cache key per line. "
+            "The repair phase reads this file after the full scan completes."
+        ),
     )
     parser.add_argument(
         "--write",
@@ -380,6 +393,17 @@ def build_scan_query(args: argparse.Namespace) -> dict[str, Any]:
     return {"$and": clauses}
 
 
+def mismatch_projection() -> dict[str, int]:
+    return {
+        "key": 1,
+        "prediction.chemicalIdentifiers.inchiKey": 1,
+        "prediction.chemicalIdentifiers.smiles": 1,
+        "prediction.chemicalIdentifiers.canonicalSmiles": 1,
+        "prediction.chemicalIdentifiers.name": 1,
+        "prediction.standardizedChemical": 1,
+    }
+
+
 def build_resume_scan_query(query: dict[str, Any], last_seen_key: str | None) -> dict[str, Any]:
     if last_seen_key is None:
         return query
@@ -457,14 +481,7 @@ def iter_mismatch_batches(
     stats: CleanupStats,
 ):
     query = build_scan_query(args)
-    projection = {
-        "key": 1,
-        "prediction.chemicalIdentifiers.inchiKey": 1,
-        "prediction.chemicalIdentifiers.smiles": 1,
-        "prediction.chemicalIdentifiers.canonicalSmiles": 1,
-        "prediction.chemicalIdentifiers.name": 1,
-        "prediction.standardizedChemical": 1,
-    }
+    projection = mismatch_projection()
     model_ids = {str(model_id) for model_id in args.model_id}
 
     candidate_buffer = []
@@ -537,10 +554,6 @@ def iter_mismatch_batches(
             yield candidate_buffer[: args.batch_size]
             candidate_buffer = candidate_buffer[args.batch_size :]
 
-        if args.repair_mode == "recompute" and candidate_buffer:
-            yield candidate_buffer
-            candidate_buffer = []
-
         if page_doc_count < args.mongo_cursor_batch_size:
             break
 
@@ -560,11 +573,56 @@ def write_report_rows(report_path: Path | None, candidates: list[MismatchCandida
     if report_path is None or not candidates:
         return
 
+    report_path.parent.mkdir(parents=True, exist_ok=True)
     with report_path.open("a", encoding="utf-8") as report_file:
         for candidate in candidates:
             row = asdict(candidate)
             row["doc_id"] = str(candidate.doc_id)
             report_file.write(json.dumps(row, sort_keys=True) + "\n")
+
+
+def reset_output_file(path: Path | None) -> None:
+    if path is None:
+        return
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("", encoding="utf-8")
+
+
+def write_mismatch_keys(keys_path: Path, candidates: list[MismatchCandidate]) -> None:
+    if not candidates:
+        return
+
+    keys_path.parent.mkdir(parents=True, exist_ok=True)
+    with keys_path.open("a", encoding="utf-8") as keys_file:
+        for candidate in candidates:
+            keys_file.write(f"{candidate.key}\n")
+
+
+def count_file_records(path: Path) -> int:
+    if not path.exists():
+        return 0
+
+    with path.open("r", encoding="utf-8") as input_file:
+        return sum(1 for line in input_file if line.strip())
+
+
+def iter_key_file_batches(path: Path, batch_size: int):
+    batch = []
+
+    with path.open("r", encoding="utf-8") as input_file:
+        for raw_line in input_file:
+            key = raw_line.strip()
+            if not key:
+                continue
+
+            batch.append(key)
+            if len(batch) >= batch_size:
+                yield batch
+                batch = []
+
+    if batch:
+        yield batch
 
 
 def _ordered_unique(values: list[str]) -> list[str]:
@@ -1028,43 +1086,129 @@ def recompute_deleted_candidates(
             )
 
 
-def process_batch(
+def log_mismatch_samples(
+    candidates: list[MismatchCandidate],
+    args: argparse.Namespace,
+    logged_samples: int,
+) -> int:
+    if args.sample_size <= 0 or logged_samples >= args.sample_size:
+        return logged_samples
+
+    remaining_sample_slots = args.sample_size - logged_samples
+    for candidate in candidates[:remaining_sample_slots]:
+        LOGGER.info(
+            "Mismatch sample: key=%s key_inchi=%s chemical_inchi=%s chemical_name=%s chemical_smiles=%s",
+            candidate.key,
+            candidate.key_inchi_key,
+            candidate.chemical_inchi_key,
+            candidate.chemical_name,
+            candidate.chemical_smiles,
+        )
+        logged_samples += 1
+
+    return logged_samples
+
+
+def scan_mismatches_to_files(collection, args: argparse.Namespace, stats: CleanupStats) -> int:
+    reset_output_file(args.mismatch_keys_file)
+    reset_output_file(args.report_jsonl)
+
+    LOGGER.info(
+        "Starting scan phase: keys_file=%s report_jsonl=%s progress_every=%s",
+        args.mismatch_keys_file,
+        args.report_jsonl,
+        args.progress_every,
+    )
+
+    logged_samples = 0
+    for candidate_batch in iter_mismatch_batches(collection, args, stats):
+        stats.candidates += len(candidate_batch)
+        stats.planned_deletes += len(candidate_batch)
+        write_mismatch_keys(args.mismatch_keys_file, candidate_batch)
+        write_report_rows(args.report_jsonl, candidate_batch)
+        logged_samples = log_mismatch_samples(candidate_batch, args, logged_samples)
+
+    file_records = count_file_records(args.mismatch_keys_file)
+    LOGGER.info(
+        "Scan phase complete: scanned_documents=%s mismatches=%s keys_file=%s file_records=%s",
+        stats.scanned_documents,
+        stats.candidates,
+        args.mismatch_keys_file,
+        file_records,
+    )
+    return file_records
+
+
+def fetch_live_mismatch_candidates_for_keys(
+    collection,
+    keys: list[str],
+    args: argparse.Namespace,
+) -> list[MismatchCandidate]:
+    if not keys:
+        return []
+
+    model_ids = {str(model_id) for model_id in args.model_id}
+    docs_by_key = {}
+    cursor = collection.find(
+        {"key": {"$in": list(dict.fromkeys(keys))}},
+        projection=mismatch_projection(),
+    ).hint("key_idx")
+    try:
+        for doc in cursor:
+            key = doc.get("key")
+            if isinstance(key, str):
+                docs_by_key[key] = doc
+    finally:
+        cursor.close()
+
+    candidates = []
+    seen_keys = set()
+    for key in keys:
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        doc = docs_by_key.get(key)
+        if doc is None:
+            continue
+
+        candidate = mismatch_from_doc(
+            doc,
+            model_ids=model_ids,
+            only_without_standardized=args.only_without_standardized,
+        )
+        if candidate is not None:
+            candidates.append(candidate)
+
+    return candidates
+
+
+def process_repair_batch(
     collection,
     session: requests.Session,
-    candidates: list[MismatchCandidate],
+    keys: list[str],
+    batch_number: int,
+    total_batches: int,
     args: argparse.Namespace,
     stats: CleanupStats,
 ) -> None:
-    stats.candidates += len(candidates)
-    stats.planned_deletes += len(candidates)
-
-    write_report_rows(args.report_jsonl, candidates)
-
-    if args.sample_size > 0 and stats.candidates <= args.sample_size:
-        remaining_sample_slots = args.sample_size - (stats.candidates - len(candidates))
-        for candidate in candidates[:remaining_sample_slots]:
-            LOGGER.info(
-                "Mismatch sample: key=%s key_inchi=%s chemical_inchi=%s chemical_name=%s chemical_smiles=%s",
-                candidate.key,
-                candidate.key_inchi_key,
-                candidate.chemical_inchi_key,
-                candidate.chemical_name,
-                candidate.chemical_smiles,
-            )
-
-    if not args.write:
-        action = "delete and recompute" if args.repair_mode == "recompute" else "delete"
-        LOGGER.info("Dry-run: would %s %s mismatched cache document(s) in this batch", action, len(candidates))
-        return
-
-    result = collection.bulk_write(
-        [DeleteOne(build_delete_filter(candidate)) for candidate in candidates],
-        ordered=False,
+    LOGGER.info(
+        "Repair batch start: batch=%s/%s keys=%s repair_mode=%s",
+        batch_number,
+        total_batches,
+        len(keys),
+        args.repair_mode,
     )
-    stats.deleted_documents += result.deleted_count
-    LOGGER.info("Deleted batch: deleted=%s", result.deleted_count)
 
-    if args.repair_mode != "recompute":
+    candidates = fetch_live_mismatch_candidates_for_keys(collection, keys, args)
+    if not candidates:
+        LOGGER.info(
+            "Repair batch complete: batch=%s/%s keys=%s live_mismatches=0 deleted=0 "
+            "resolved_cache_keys=0 recomputed=0 prediction_failures=0 skipped_live_mismatch=%s",
+            batch_number,
+            total_batches,
+            len(keys),
+            len(keys),
+        )
         return
 
     resolver_batches_before = stats.resolver_batches
@@ -1074,15 +1218,42 @@ def process_batch(
     recomputed_before = stats.recomputed_predictions
     prediction_failures_before = stats.prediction_failures
     skipped_resolver_before = stats.skipped_without_resolver_match
+    smiles_by_key = {}
+    if args.repair_mode == "recompute":
+        smiles_by_key = resolve_recompute_smiles(session, candidates, args, stats)
 
-    smiles_by_key = resolve_recompute_smiles(session, candidates, args, stats)
+    result = collection.bulk_write(
+        [DeleteOne(build_delete_filter(candidate)) for candidate in candidates],
+        ordered=False,
+    )
+    stats.deleted_documents += result.deleted_count
+
+    if args.repair_mode != "recompute":
+        LOGGER.info(
+            "Repair batch complete: batch=%s/%s keys=%s live_mismatches=%s deleted=%s "
+            "resolved_cache_keys=0 recomputed=0 prediction_failures=0 skipped_live_mismatch=%s",
+            batch_number,
+            total_batches,
+            len(keys),
+            len(candidates),
+            result.deleted_count,
+            len(keys) - len(candidates),
+        )
+        return
+
     recompute_deleted_candidates(session, candidates, smiles_by_key, args, stats)
     LOGGER.info(
-        "Deleted batch recompute summary: candidates=%s resolved_cache_keys=%s "
+        "Repair batch complete: batch=%s/%s keys=%s live_mismatches=%s deleted=%s "
+        "resolved_cache_keys=%s skipped_live_mismatch=%s "
         "resolver_batches=%s resolver_hits=%s prediction_batches=%s prediction_requests=%s "
         "recomputed=%s prediction_failures=%s skipped_without_resolver_match=%s",
+        batch_number,
+        total_batches,
+        len(keys),
         len(candidates),
+        result.deleted_count,
         len(smiles_by_key),
+        len(keys) - len(candidates),
         stats.resolver_batches - resolver_batches_before,
         stats.resolver_hits - resolver_hits_before,
         stats.prediction_batches - prediction_batches_before,
@@ -1093,15 +1264,57 @@ def process_batch(
     )
 
 
+def repair_from_keys_file(
+    collection,
+    session: requests.Session,
+    args: argparse.Namespace,
+    stats: CleanupStats,
+    file_records: int,
+) -> None:
+    if file_records == 0:
+        LOGGER.info("Repair phase skipped: mismatch keys file is empty")
+        return
+
+    total_batches = (file_records + args.batch_size - 1) // args.batch_size
+    LOGGER.info(
+        "Starting repair phase from keys file: keys_file=%s file_records=%s batch_size=%s total_batches=%s",
+        args.mismatch_keys_file,
+        file_records,
+        args.batch_size,
+        total_batches,
+    )
+    for batch_number, key_batch in enumerate(
+        iter_key_file_batches(args.mismatch_keys_file, args.batch_size),
+        start=1,
+    ):
+        process_repair_batch(
+            collection,
+            session,
+            key_batch,
+            batch_number,
+            total_batches,
+            args,
+            stats,
+        )
+
+
 def cleanup(collection, args: argparse.Namespace) -> CleanupStats:
     stats = CleanupStats()
     session = requests.Session()
 
-    if args.report_jsonl is not None and args.report_jsonl.exists():
-        args.report_jsonl.write_text("", encoding="utf-8")
+    file_records = scan_mismatches_to_files(collection, args, stats)
 
-    for candidate_batch in iter_mismatch_batches(collection, args, stats):
-        process_batch(collection, session, candidate_batch, args, stats)
+    if not args.write:
+        action = "delete and recompute" if args.repair_mode == "recompute" else "delete"
+        LOGGER.info(
+            "Dry-run complete after scan: would %s %s mismatched cache document(s) from keys_file=%s",
+            action,
+            file_records,
+            args.mismatch_keys_file,
+        )
+        return stats
+
+    repair_from_keys_file(collection, session, args, stats, file_records)
 
     return stats
 
@@ -1131,6 +1344,8 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("--resolver-timeout must be positive")
     if args.predict_timeout is not None and args.predict_timeout <= 0:
         raise ValueError("--predict-timeout must be positive")
+    if args.report_jsonl is not None and args.report_jsonl.resolve() == args.mismatch_keys_file.resolve():
+        raise ValueError("--report-jsonl and --mismatch-keys-file must point to different files")
 
 
 def main() -> int:
@@ -1149,7 +1364,7 @@ def main() -> int:
         collection = client[args.database][args.collection]
         LOGGER.info(
             "Starting prediction cache identity cleanup: database=%s collection=%s write=%s "
-            "repair_mode=%s keys=%s model_ids=%s only_without_standardized=%s",
+            "repair_mode=%s keys=%s model_ids=%s only_without_standardized=%s mismatch_keys_file=%s",
             args.database,
             args.collection,
             args.write,
@@ -1157,6 +1372,7 @@ def main() -> int:
             len(args.key),
             args.model_id,
             args.only_without_standardized,
+            args.mismatch_keys_file,
         )
         stats = cleanup(collection, args)
     except (PyMongoError, ValueError):
