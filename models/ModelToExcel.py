@@ -106,7 +106,7 @@ class ModelDataObjects:
     def __post_init__(self):
         logging.info("Initializing ModelDataObjects...")
         if self.model_id is not None:
-            logging.info(f"model_id provided, initializing using DataQuerier for model_id={self.model_id}...")
+            logging.debug(f"model_id provided, initializing using DataQuerier for model_id={self.model_id}...")
             if self.model is not None:
                 logging.warning(f"Both model_id and model provided, priority given to model_id, database will be queried for model_id={self.model_id}...")
             
@@ -134,7 +134,7 @@ class ModelDataObjects:
             self.external_superheaders = DataTransformer.get_superheaders(self.external_records_df, self.experimental_parameters["Field"].tolist())
 
         elif self.model is not None:
-            logging.info("Initializing with provided model and dataframes...")
+            logging.debug("Initializing with provided model and dataframes...")
             if self.df_pv is None:
                 logging.warning("df_pv is None, will be queried from the database using the provided model")
             if self.df_gmd is None:
@@ -166,7 +166,7 @@ class ModelDataObjects:
             self.external_superheaders = DataTransformer.get_superheaders(self.external_records_df, self.experimental_parameters["Field"].tolist())
 
         else:
-            logging.info("Not initialized with model_id or model, manual initialization required")
+            logging.debug("Not initialized with model_id or model, manual initialization required")
         
 
 # ============================================================
@@ -428,7 +428,7 @@ class ExcelFormatter:
             df_target: Target dataframe (used to create the mapping)
             link_column: Column name to match on (must exist in both dataframes)
         """
-        logging.info(f"Processing hyperlinks for {source_sheet}")
+        logging.debug(f"Processing hyperlinks for {source_sheet}")
         
         
         if df_source is None or df_source.empty:
@@ -510,7 +510,7 @@ class ExcelFormatter:
         except Exception as e:
             logging.error(f"Error adding hyperlinks: {e}")
         
-        logging.info(f"Added {hyperlinks_added} hyperlinks from {source_sheet} to {target_sheet} ({unmatched_count} unmatched)")
+        logging.debug(f"Added {hyperlinks_added} hyperlinks from {source_sheet} to {target_sheet} ({unmatched_count} unmatched)")
 
 
 # ============================================================
@@ -842,8 +842,8 @@ class ChartBuilder:
         count_1_0 = ((df[x_col] == 1) & (df[y_col] < 0.5)).sum()  # Exp=1, Pred=0 (incorrect)
         count_1_1 = ((df[x_col] == 1) & (df[y_col] >= 0.5)).sum()  # Exp=1, Pred=1 (correct)
 
-        # logging.info(f"Frequency counts for {sheet_name}:\n\tExp=0, Pred=0: {count_0_0}\n\tExp=0, Pred=1: {count_0_1}\n\tExp=1, Pred=0: {count_1_0}\n\tExp=1, Pred=1: {count_1_1}")
-        logging.info(f"Frequency counts for {sheet_name}:\n\t\t\tPredicted 0\t\tPredicted 1\n\tExperimental 0\t\t{count_0_0}\t\t{count_0_1}\n\tExperimental 1\t\t{count_1_0}\t\t{count_1_1}")
+        # logging.debug(f"Frequency counts for {sheet_name}:\n\tExp=0, Pred=0: {count_0_0}\n\tExp=0, Pred=1: {count_0_1}\n\tExp=1, Pred=0: {count_1_0}\n\tExp=1, Pred=1: {count_1_1}")
+        logging.debug(f"Frequency counts for {sheet_name}:\n\t\t\tPredicted 0\t\tPredicted 1\n\tExperimental 0\t\t{count_0_0}\t\t{count_0_1}\n\tExperimental 1\t\t{count_1_0}\t\t{count_1_1}")
 
         # Worksheet formats
         centered = workbook.add_format({"align": "center", "valign": "vcenter", "bold": True})
@@ -1079,10 +1079,10 @@ class DataQuerier:
             return self.model
 
         try:            
-            logging.info(f"Loading model {self.model_id} from database")
+            logging.debug(f"Loading model {self.model_id} from database")
             initializer: ModelInitializer = ModelInitializer()
             model: Model = initializer.initModel(self.model_id)
-            logging.info(f"Done loading model {self.model_id} from database")
+            logging.debug(f"Done loading model {self.model_id} from database")
             
             if model is None:
                 logging.error(f"Failed to load model {self.model_id}")
@@ -1136,10 +1136,10 @@ class DataQuerier:
             return None
         
         try:
-            logging.info(f"Loading df_pv for {dataset_name} from database")
+            logging.debug(f"Loading df_pv for {dataset_name} from database")
             edg = ExpDataGetter()
             df_pv, _ = edg.get_mapped_property_values(self.session, dataset_name, snapshot_id, duplicate_strategy=duplicate_strategy)
-            logging.info(f"Done loading df_pv for {dataset_name} from database")
+            logging.debug(f"Done loading df_pv for {dataset_name} from database")
             
             if df_pv is None:
                 logging.error(f"Failed to query df_pv for {dataset_name}")
@@ -1194,9 +1194,9 @@ class DataQuerier:
             return None
         
         try:
-            logging.info(f"Loading df_gmd for {dataset_name} from database")
+            logging.debug(f"Loading df_gmd for {dataset_name} from database")
             df_gmd = getMappedDatapoints(self.session, dataset_name)
-            logging.info(f"Done loading df_gmd for {dataset_name} from database")
+            logging.debug(f"Done loading df_gmd for {dataset_name} from database")
             
             if df_gmd is None:
                 logging.error(f"Failed to query df_gmd for {dataset_name}")
@@ -1229,7 +1229,7 @@ class DataQuerier:
         if self.experimental_parameters is not None:
             return self.experimental_parameters
 
-        logging.info("Querying experimental parameters from database")
+        logging.debug("Querying experimental parameters from database")
 
         sql = text("""
             select p.name as "Field", p.description as "Description"
@@ -1255,7 +1255,7 @@ class DataQuerier:
         Returns:
             pd.DataFrame: Single-row dataframe with model metadata (name, property, dataset, etc.).
         """
-        logging.info(f"Building Cover Sheet from Model (model_id = {self.model_id})")
+        logging.debug(f"Building Cover Sheet from Model (model_id = {self.model_id})")
         model = self.query_model()
         model_id = getattr(model, "modelId", None)
         model_id = int(model_id) if model_id is not None else None
@@ -1281,7 +1281,7 @@ class DataQuerier:
             summary_dict["nExternal"] = [model.num_external]
         summary = pd.DataFrame(summary_dict)
 
-        logging.info(f"Finished building Cover Sheet from Model (model_id = {self.model_id})")
+        logging.debug(f"Finished building Cover Sheet from Model (model_id = {self.model_id})")
 
         return summary
 
@@ -1294,7 +1294,7 @@ class DataQuerier:
         Returns:
             pd.DataFrame: Single-row dataframe with model performance metrics rounded to 2 decimal places.
         """
-        logging.info(f"Building Statistics from Model (model_id = {self.model_id})")
+        logging.debug(f"Building Statistics from Model (model_id = {self.model_id})")
 
         model = self.query_model()
 
@@ -1309,7 +1309,7 @@ class DataQuerier:
 
         statistics = pd.DataFrame(statistics_dict).apply(lambda x: round(x, 2) if isinstance(x, float) else x)
 
-        logging.info(f"Finished building Statistics from Model (model_id = {self.model_id})")
+        logging.debug(f"Finished building Statistics from Model (model_id = {self.model_id})")
 
         return statistics
 
@@ -1462,11 +1462,11 @@ class DataQuerier:
         Returns:
             pd.DataFrame: Records dataframe with experimental data, sources, and measurement details.
         """
-        logging.info(f"Building Records from Model (model_id = {self.model_id})")
+        logging.debug(f"Building Records from Model (model_id = {self.model_id})")
         
         df_pv = self.query_df_pv()
         records_df = DataTransformer.get_records_df(df_pv)
-        logging.info(f"Finished building Records from Model (model_id = {self.model_id})")
+        logging.debug(f"Finished building Records from Model (model_id = {self.model_id})")
         
         return records_df
     
@@ -1479,14 +1479,14 @@ class DataQuerier:
         Returns:
             pd.DataFrame: Records dataframe with experimental data, sources, and measurement details.
         """
-        logging.info(f"Building External Records from Model (model_id = {self.model_id})")
+        logging.debug(f"Building External Records from Model (model_id = {self.model_id})")
         
         df_pv = self.query_df_pv(external=True)
         if df_pv is None:
             logging.warning(f"Skipping External Records for model (model_id = {self.model_id}), as df_pv_external is None")
             return None
         external_records_df = DataTransformer.get_records_df(df_pv)
-        logging.info(f"Finished building External Records from Model (model_id = {self.model_id})")
+        logging.debug(f"Finished building External Records from Model (model_id = {self.model_id})")
         
         return external_records_df
     
@@ -1499,7 +1499,7 @@ class DataQuerier:
         Returns:
             pd.DataFrame: Model descriptors with definitions, classifications, and optional coefficients.
         """
-        logging.info(f"Building Model Descriptors from Model (model_id = {self.model_id})")
+        logging.debug(f"Building Model Descriptors from Model (model_id = {self.model_id})")
         
         model = self.query_model()
 
@@ -1526,7 +1526,7 @@ class DataQuerier:
         
         model_descriptors = DataTransformer.get_model_descriptors_df(results_dict)
 
-        logging.info(f"Finished building Model Descriptors from Model (model_id = {self.model_id})")
+        logging.debug(f"Finished building Model Descriptors from Model (model_id = {self.model_id})")
 
         return model_descriptors
     
@@ -1539,7 +1539,7 @@ class DataQuerier:
         Returns:
             pd.DataFrame: All compounds with observed/predicted values, fold assignments, and descriptor values.
         """
-        logging.info(f"Building Model Descriptor Values from Model (model_id = {self.model_id})")
+        logging.debug(f"Building Model Descriptor Values from Model (model_id = {self.model_id})")
 
         model = self.query_model()
         df_gmd = self.query_df_gmd(external=False)
@@ -1593,7 +1593,7 @@ class DataQuerier:
         model_descriptor_values_df = pd.DataFrame(model_descriptor_values_dict)
         model_descriptor_values_df = ExcelFormatter.handle_accidental_formulas(model_descriptor_values_df)
 
-        logging.info(f"Finished building Model Descriptor Values from Model (model_id = {self.model_id})")
+        logging.debug(f"Finished building Model Descriptor Values from Model (model_id = {self.model_id})")
 
         return model_descriptor_values_df
     
@@ -1606,7 +1606,7 @@ class DataQuerier:
         Returns:
             pd.DataFrame: Training CV predictions with compound identifiers, experimental/predicted values, and fold assignments.
         """
-        logging.info(f"Building Training CV Predictions from Model (model_id = {self.model_id})")
+        logging.debug(f"Building Training CV Predictions from Model (model_id = {self.model_id})")
 
         model = self.query_model()
         df_gmd = self.query_df_gmd(external=False)
@@ -1631,7 +1631,7 @@ class DataQuerier:
         }
         training_cv_predictions_df = pd.DataFrame(training_cv_predictions_dict)
 
-        logging.info(f"Finished building Training CV Predictions from Model (model_id = {self.model_id})")
+        logging.debug(f"Finished building Training CV Predictions from Model (model_id = {self.model_id})")
 
         return training_cv_predictions_df
 
@@ -1644,7 +1644,7 @@ class DataQuerier:
         Returns:
             pd.DataFrame: Test set predictions with compound identifiers, experimental/predicted values, and AD membership.
         """
-        logging.info(f"Building Test Set Predictions from Model (model_id = {self.model_id})")
+        logging.debug(f"Building Test Set Predictions from Model (model_id = {self.model_id})")
 
         model = self.query_model()
         df_gmd = self.query_df_gmd(external=False)
@@ -1681,7 +1681,7 @@ class DataQuerier:
         }
         test_set_predictions_df = pd.DataFrame(test_predictions_dict)
 
-        logging.info(f"Finished building Test Set Predictions from Model (model_id = {self.model_id})")
+        logging.debug(f"Finished building Test Set Predictions from Model (model_id = {self.model_id})")
 
         return test_set_predictions_df
     
@@ -1695,10 +1695,10 @@ class DataQuerier:
             Optional[pd.DataFrame]: External predictions with compound identifiers and AD membership, or None if no external dataset.
         """
         if self.dataset_name_external is None:
-            logging.info(f"External dataset name is None for provided Model (model_id = {self.model_id}), skipping External Predictions sheet")
+            logging.debug(f"External dataset name is None for provided Model (model_id = {self.model_id}), skipping External Predictions sheet")
             return None
         
-        logging.info(f"Building External Predictions from Model (model_id = {self.model_id})")
+        logging.debug(f"Building External Predictions from Model (model_id = {self.model_id})")
 
         model = self.query_model()
         df_gmd_external = self.query_df_gmd(external=True)
@@ -1735,7 +1735,7 @@ class DataQuerier:
         external_predictions_df = pd.DataFrame(external_predictions_dict)
         external_predictions_df.dropna(axis=0, subset=["Exp Prop ID", "Exp", "Pred"], how="any", inplace=True)
 
-        logging.info(f"Finished building External Predictions from Model (model_id = {self.model_id})")
+        logging.debug(f"Finished building External Predictions from Model (model_id = {self.model_id})")
 
         return external_predictions_df
 
@@ -2210,7 +2210,7 @@ class DataTransformer:
             else:
                 empty_superheaders.append(superheader)
         for superheader in empty_superheaders:
-            logging.info(f"Removing empty superheader: {superheader}")
+            logging.debug(f"Removing empty superheader: {superheader}")
             superheaders.pop(superheader)
 
         return superheaders
@@ -3204,25 +3204,25 @@ class ModelToExcel:
             workbook = writer.book
             workbook.nan_inf_to_errors = True
 
-            logging.info("Creating Cover Sheet...")
+            logging.debug("Creating Cover Sheet...")
             self.cover_sheet(writer, self.cover_sheet_df)
 
-            logging.info("Creating Statistics...")
+            logging.debug("Creating Statistics...")
             self.statistics(writer, self.statistics_df, self.model.is_binary)
 
-            logging.info("Creating Records...")
+            logging.debug("Creating Records...")
             df = self.records(writer, self.records_df, external=False, add_subtotals=self.add_subtotals, exclude_blank_columns=self.exclude_blank_columns, include_qc_columns=self.include_qc_columns, include_value_original=self.include_value_original)
 
-            logging.info("Creating External Records...")
+            logging.debug("Creating External Records...")
             df = self.records(writer, self.external_records_df, external=True, add_subtotals=self.add_subtotals, exclude_blank_columns=self.exclude_blank_columns, include_qc_columns=self.include_qc_columns, include_value_original=self.include_value_original)
 
-            logging.info("Creating Records Field Descriptions...")
+            logging.debug("Creating Records Field Descriptions...")
             df = self.records_field_descriptions(writer, self.records_field_descriptions_df)
 
-            logging.info("Creating Model Descriptors...")
+            logging.debug("Creating Model Descriptors...")
             df = self.model_descriptors(writer, self.model_descriptors_df, add_subtotals=self.add_subtotals)
 
-            logging.info("Creating Model Descriptor Values...")
+            logging.debug("Creating Model Descriptor Values...")
             df = self.model_descriptor_values(writer, self.model_descriptor_values_df, add_subtotals=self.add_subtotals)
 
             try:
@@ -3236,21 +3236,21 @@ class ModelToExcel:
             except Exception as e:
                 property_units = None
 
-            logging.info("Creating Training CV Predictions...")
+            logging.debug("Creating Training CV Predictions...")
             df = self.training_cv_predictions(writer, self.training_cv_predictions_df, add_subtotals=self.add_subtotals, x_col=x_col, y_col=y_col, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, yx_offset_rows=yx_offset_rows, col_width_pad=col_width_pad, min_col_width=min_col_width, property_name=property_name, property_units=property_units)
 
-            logging.info("Creating Test Set Predictions...")
+            logging.debug("Creating Test Set Predictions...")
             df = self.test_set_predictions(writer, self.test_set_predictions_df, add_subtotals=self.add_subtotals, x_col=x_col, y_col=y_col, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, yx_offset_rows=yx_offset_rows, col_width_pad=col_width_pad, min_col_width=min_col_width, property_name=property_name, property_units=property_units)
 
             if self.external_predictions_df is not None:
-                logging.info("Creating External Predictions...")
+                logging.debug("Creating External Predictions...")
                 df = self.external_predictions(writer, self.external_predictions_df, add_subtotals=self.add_subtotals, x_col=x_col, y_col=y_col, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, yx_offset_rows=yx_offset_rows, col_width_pad=col_width_pad, min_col_width=min_col_width, property_name=property_name, property_units=property_units)
 
-            # logging.info("Done creating detailed Excel!")
-            # logging.info("Done with initial passthrough of all sheets!")
+            # logging.debug("Done creating detailed Excel!")
+            # logging.debug("Done with initial passthrough of all sheets!")
 
             # Add Hyperlinks
-            logging.info("Adding hyperlinks...")
+            logging.debug("Adding hyperlinks...")
             try:
                 ExcelFormatter.add_hyperlinks_to_sheet(writer, "Records", "Training CV Predictions", self.records_df, self.training_cv_predictions_df, has_subtotals=self.add_subtotals, source_has_superheaders=self.create_records_superheaders)
             except Exception as e:
@@ -3296,7 +3296,7 @@ class ModelToExcel:
                 old_value, new_value = update_statistic_value(session, self.model.modelId, stat, stats_df.at[0, stat], user_id, upload_to_db)
                 stats[stat] = {"old": old_value, "new": new_value}
         
-        logging.info(f"Updated statistics for model {self.model.modelId}:\n{json.dumps(stats, indent=4)}")
+        logging.debug(f"Updated statistics for model {self.model.modelId}:\n{json.dumps(stats, indent=4)}")
         
         return stats
 
@@ -3328,7 +3328,7 @@ def update_excel_summaries(username: str, model_ids: Optional[list[int]] = None,
 
         with open(file_path, "rb") as file:
             file_bytes = file.read()
-            logging.info(f"Model #: {model_id}, Length of Summary: {len(file_bytes)}")
+            logging.debug(f"Model #: {model_id}, Length of Summary: {len(file_bytes)}")
         
         if len(file_bytes) == 0:
             logging.warning(f"Model {model_id} summary has 0 bytes")
