@@ -1046,7 +1046,7 @@ class ModelPredictor:
 
         md.performance["train"] = {}
         md.performance["fiveFoldICV"] = {}
-        md.performance["external"] = {}
+        md.performance["external"] = {}  # TODO rename to "prediction" since can have separate external set from another data source
         md.performance["externalAD"] = {}
         
         if md.propertyIsBinary:
@@ -1363,6 +1363,14 @@ class ModelPredictor:
         self.addLinks(modelDetails, fileAPI)
         self.addPerformance(modelDetails)
         
+        modelDetails.performance["train"]["N"] = model.num_training
+        modelDetails.performance["fiveFoldICV"]["N"] = model.num_training
+        modelDetails.performance["external"]["N"] = model.num_prediction  # TODO: rename to prediction 
+        
+        # TODO later will have separate external set which is separate from prediction set 
+        # if model.num_external is not None:
+        #     modelDetails.performance["external"]["n"] = model.num_external
+
         modelResults = ModelResults()
     
         # Standardize smiles:

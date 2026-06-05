@@ -371,6 +371,8 @@ class ReportCreator:
     class ModelPerformanceSection:
         
         def write_model_performance(self, md):
+            
+            print(json.dumps(md,indent=4))            
         
             with table(border="0", width="100%", cellpadding="10"):
                 with tbody():
@@ -411,8 +413,8 @@ class ReportCreator:
                     with tbody():
                         with tr():
                             # Row for "Training" and "Test" headers
-                            td("Training (80%)", colspan="3", align="center", style="background-color: #d3d3d3; width: 25%;")
-                            td("5-fold CV (80%)", colspan="3", align="center", style="background-color: #ccffcc; width: 25%;")
+                            td(f"Training (80%, n={ms['train']['N']})", colspan="3", align="center", style="background-color: #d3d3d3; width: 25%;")
+                            td(f"5-fold CV (80%, n={ms['train']['N']})", colspan="3", align="center", style="background-color: #ccffcc; width: 25%;")
                 
                         with tr():
                             
@@ -548,6 +550,9 @@ class ReportCreator:
         def addStatsTableTest(self, md): 
         
             ms = md["performance"]
+            
+            set="external"
+            
         
             with table(border=1, cellpadding="0", cellspacing="0", width="100%"):
                 caption("Model Test Set Statistics")
@@ -555,7 +560,7 @@ class ReportCreator:
                 with tbody():
                     with tr():
                         # Row for "Training" and "Test" headers
-                        td("Test (20%)", colspan="3", align="center", style="background-color: #ccccff; width: 25%;")
+                        td(f"Test (20%, n={ms[set]['N']})", colspan="3", align="center", style="background-color: #ccccff; width: 25%;")
                         td("Test Set Applicability Domain Statistics", colspan="3", align="center",
                            style="background-color: #ffffcc; width: 25%;")
         
@@ -583,23 +588,23 @@ class ReportCreator:
                     with tr():
                         
                         if md['propertyIsBinary']:
-                            td(format2(ms["external"]["BA"]), align="center")
-                            td(format2(ms["external"]["SN"]), align="center")
-                            td(format2(ms["external"]["SP"]), align="center")
+                            td(format2(ms[set]["BA"]), align="center")
+                            td(format2(ms[set]["SN"]), align="center")
+                            td(format2(ms[set]["SP"]), align="center")
     
                             # AD stats
-                            td(format2(ms["externalAD"]["BA_inside_AD"]), align="center")
-                            td(format2(ms["externalAD"]["BA_outside_AD"]), align="center")
-                            td(format2(ms["externalAD"]["Fraction_inside_AD"]), align="center")    
+                            td(format2(ms[set+"AD"]["BA_inside_AD"]), align="center")
+                            td(format2(ms[set+"AD"]["BA_outside_AD"]), align="center")
+                            td(format2(ms[set+"AD"]["Fraction_inside_AD"]), align="center")    
                         else:
-                            td(format2(ms["external"]["R2"]), align="center")
-                            td(format2(ms["external"]["RMSE"]), align="center")
-                            td(format2(ms["external"]["MAE"]), align="center")
+                            td(format2(ms[set]["R2"]), align="center")
+                            td(format2(ms[set]["RMSE"]), align="center")
+                            td(format2(ms[set]["MAE"]), align="center")
     
                             # AD stats
-                            td(format2(ms["externalAD"]["MAE_inside_AD"]), align="center")
-                            td(format2(ms["externalAD"]["MAE_outside_AD"]), align="center")
-                            td(format2(ms["externalAD"]["Fraction_inside_AD"]), align="center")    
+                            td(format2(ms[set+"AD"]["MAE_inside_AD"]), align="center")
+                            td(format2(ms[set+"AD"]["MAE_outside_AD"]), align="center")
+                            td(format2(ms[set+"AD"]["Fraction_inside_AD"]), align="center")    
     
     class RawExpDataSection:
         
