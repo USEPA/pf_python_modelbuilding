@@ -4,10 +4,9 @@ import os
 import threading
 from urllib.parse import urljoin
 
-import requests
-from requests.adapters import HTTPAdapter
 from indigo import Indigo
 
+from model_service_common.http import build_requests_session
 from utils import timer
 import numpy as np
 
@@ -32,13 +31,10 @@ def get_requests_session():
     if session is not None:
         return session
 
-    session = requests.Session()
-    adapter = HTTPAdapter(
-        pool_connections=_get_pool_size("API_HTTP_POOL_CONNECTIONS", 32),
-        pool_maxsize=_get_pool_size("API_HTTP_POOL_MAXSIZE", 64),
+    session = build_requests_session(
+        _get_pool_size("API_HTTP_POOL_CONNECTIONS", 32),
+        _get_pool_size("API_HTTP_POOL_MAXSIZE", 64),
     )
-    session.mount("http://", adapter)
-    session.mount("https://", adapter)
     _thread_local.requests_session = session
     return session
 
@@ -211,7 +207,7 @@ class DescriptorsAPI:
             # some descriptors dont have header option? Should be fixed so this doesnt cause issue if must be false
         }
 
-        response = requests.get(descriptors_api, params=params)
+        response = get_requests_session().get(descriptors_api, params=params)
 
         return response 
 

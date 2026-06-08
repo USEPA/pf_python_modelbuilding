@@ -23,6 +23,7 @@ from connexion.options import SwaggerUIOptions
 from starlette.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse, StreamingResponse
 
+from model_service_common.monitoring import install_monitoring
 import util.get_model_file as gmf
 from util.helpers import (
     collect_model_details_for_metadata,
@@ -78,6 +79,7 @@ _configure_logging()
 options = SwaggerUIOptions(spec_path="/api/predictor_models/swagger.yaml",
                            swagger_ui_path="/api/predictor_models/swagger")
 app = connexion.AsyncApp(__name__, swagger_ui_options=options)
+install_monitoring(app, service_name="predictor_models")
 app.add_middleware(
     CORSMiddleware,
     position=MiddlewarePosition.BEFORE_EXCEPTION,

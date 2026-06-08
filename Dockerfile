@@ -33,6 +33,8 @@ COPY --from=builder /install /usr/local
 
 COPY . .
 
-EXPOSE 8080
+EXPOSE 8080 9090
 
-CMD ["uvicorn", "--host", "0.0.0.0", "--port", "8080", "app:app"]
+ENV MONITORING_PORT=9090
+
+CMD ["sh", "-c", "export SERVICE_NAME=${SERVICE_NAME:-predictor_models}; export READINESS_URL=${READINESS_URL:-http://127.0.0.1:8080/api/predictor_models/version}; export PROMETHEUS_MULTIPROC_DIR=${PROMETHEUS_MULTIPROC_DIR:-/tmp/prometheus_multiproc}; mkdir -p \"$PROMETHEUS_MULTIPROC_DIR\"; rm -f \"$PROMETHEUS_MULTIPROC_DIR\"/*.db; uvicorn --host ${MONITORING_HOST:-0.0.0.0} --port ${MONITORING_PORT:-9090} model_service_common.monitoring:monitoring_app & exec uvicorn --host 0.0.0.0 --port 8080 app:app"]
