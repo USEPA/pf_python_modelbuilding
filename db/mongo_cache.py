@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import re
 import threading
 import time
 
@@ -194,6 +195,62 @@ def _normalize_prediction_for_storage(prediction):
     return _coerce_bson_safe(prediction_obj)
 
 
+def _wildcard_key_parts(key):
+    if not isinstance(key, str) or key.count("*") != 1:
+        return None
+
+    prefix, suffix = key.split("*", 1)
+    if not prefix:
+        return None
+
+    return prefix, suffix
+
+
+def _wildcard_key_matches(key, prefix, suffix=""):
+    if not isinstance(key, str) or not key.startswith(prefix):
+        return False
+    return not suffix or key.endswith(suffix)
+
+
+def _wildcard_key_query(prefix, suffix=""):
+    regex = f"^{re.escape(prefix)}"
+    if suffix:
+        regex = f"{regex}.*{re.escape(suffix)}$"
+    return {"key": {"$regex": regex}}
+
+
+def _find_one_by_wildcard(collection, prefix, suffix=""):
+    return collection.find_one(
+        _wildcard_key_query(prefix, suffix),
+        sort=[("key", ASCENDING)],
+    )
+
+
+def _get_in_memory_by_wildcard(prefix, suffix=""):
+    for key, prediction in in_memory_cache.items():
+        if _wildcard_key_matches(key, prefix, suffix):
+            return key, prediction
+    return None
+
+
+def _populate_wildcard_hits_from_exact_hits(cached_predictions, wildcard_keys):
+    for wildcard_key in wildcard_keys:
+        if wildcard_key in cached_predictions:
+            continue
+
+        wildcard_parts = _wildcard_key_parts(wildcard_key)
+        if wildcard_parts is None:
+            continue
+        prefix, suffix = wildcard_parts
+
+        for cached_key, prediction in list(cached_predictions.items()):
+            if _wildcard_key_parts(cached_key) is not None:
+                continue
+            if _wildcard_key_matches(cached_key, prefix, suffix):
+                cached_predictions[wildcard_key] = prediction
+                break
+
+
 def _env_bool(name: str, default: bool = True) -> bool:
     raw = os.getenv(name)
     if raw is None:
@@ -301,13 +358,22 @@ def _ensure_init():
 
 def get_cached_prediction(key: str):
     _ensure_init()
+    wildcard_parts = _wildcard_key_parts(key)
     if predictor_models_cache is not None:
         try:
-            doc = predictor_models_cache.find_one({"key": key})
+            if wildcard_parts is None:
+                doc = predictor_models_cache.find_one({"key": key})
+            else:
+                doc = _find_one_by_wildcard(predictor_models_cache, *wildcard_parts)
             return doc.get("prediction", None) if doc else None
         except PyMongoError as exc:
             logging.warning("Mongo read failed; using in-memory fallback: %s", exc)
-    return in_memory_cache.get(key)
+    if wildcard_parts is None:
+        return in_memory_cache.get(key)
+    cached_prediction = _get_in_memory_by_wildcard(*wildcard_parts)
+    if cached_prediction is not None:
+        return cached_prediction[1]
+    return None
 
 
 def get_cached_predictions(keys):
@@ -317,19 +383,59 @@ def get_cached_predictions(keys):
 
     _ensure_init()
     cached_predictions = {}
+    wildcard_keys = [
+        key for key in key_list if _wildcard_key_parts(key) is not None
+    ]
+    exact_keys = [
+        key for key in key_list if _wildcard_key_parts(key) is None
+    ]
 
     if predictor_models_cache is not None:
         try:
-            for doc in predictor_models_cache.find({"key": {"$in": key_list}}):
-                key = doc.get("key")
-                if key is not None:
-                    cached_predictions[key] = doc.get("prediction")
+            if exact_keys:
+                for doc in predictor_models_cache.find({"key": {"$in": exact_keys}}):
+                    key = doc.get("key")
+                    if key is not None:
+                        cached_predictions[key] = doc.get("prediction")
+
+            _populate_wildcard_hits_from_exact_hits(cached_predictions, wildcard_keys)
+            missing_wildcard_keys = [
+                key for key in wildcard_keys if key not in cached_predictions
+            ]
+            wildcard_hits = {}
+            for wildcard_key in missing_wildcard_keys:
+                wildcard_parts = _wildcard_key_parts(wildcard_key)
+                if wildcard_parts is None:
+                    continue
+                if wildcard_parts in wildcard_hits:
+                    cached_predictions[wildcard_key] = wildcard_hits[wildcard_parts][1]
+                    continue
+
+                doc = _find_one_by_wildcard(predictor_models_cache, *wildcard_parts)
+                if not doc:
+                    continue
+
+                actual_key = doc.get("key")
+                prediction = doc.get("prediction")
+                wildcard_hits[wildcard_parts] = (actual_key, prediction)
+                cached_predictions[wildcard_key] = prediction
+                if actual_key is not None:
+                    cached_predictions.setdefault(actual_key, prediction)
         except PyMongoError as exc:
             logging.warning("Mongo batch read failed; using in-memory fallback: %s", exc)
 
-    for key in key_list:
+    for key in exact_keys:
         if key not in cached_predictions and key in in_memory_cache:
             cached_predictions[key] = in_memory_cache[key]
+    for wildcard_key in wildcard_keys:
+        if wildcard_key in cached_predictions:
+            continue
+        wildcard_parts = _wildcard_key_parts(wildcard_key)
+        if wildcard_parts is None:
+            continue
+        cached_prediction = _get_in_memory_by_wildcard(*wildcard_parts)
+        if cached_prediction is not None:
+            cached_predictions[wildcard_key] = cached_prediction[1]
 
     return cached_predictions
 

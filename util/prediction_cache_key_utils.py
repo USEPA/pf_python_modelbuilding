@@ -158,3 +158,27 @@ def build_prediction_cache_key(
         return None
 
     return f"{inchi_key}-{model_id}"
+
+
+def build_prediction_cache_lookup_keys(
+    model_id: Any,
+    smiles_to_inchi_key: Callable[[Any], str | None],
+    *,
+    smiles: Any = None,
+    chemical: Any = None,
+) -> list[str]:
+    cache_key = build_prediction_cache_key(
+        model_id,
+        smiles_to_inchi_key,
+        smiles=smiles,
+        chemical=chemical,
+    )
+    if cache_key is None:
+        return []
+
+    inchi_key = prediction_cache_key_inchi_key(cache_key)
+    first_block = inchi_key_connectivity_block(inchi_key)
+    if first_block is None:
+        return [cache_key]
+
+    return list(dict.fromkeys([cache_key, f"{first_block}*-{model_id}"]))

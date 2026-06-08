@@ -1,6 +1,7 @@
 import unittest
 
 from util.prediction_cache_key_utils import (
+    build_prediction_cache_lookup_keys,
     build_prediction_cache_key,
     ensure_chemical_inchi_key,
     inchi_key_connectivity_block,
@@ -77,6 +78,21 @@ class TestPredictionCacheKeyUtils(unittest.TestCase):
         )
 
         self.assertEqual(key, "LFQSCWFLJHTTHZ-UHFFFAOYSA-N-1065")
+
+    def test_build_prediction_cache_lookup_keys_include_first_block_fallback(self):
+        keys = build_prediction_cache_lookup_keys(
+            1065,
+            lambda smiles: "lfqscwfljhtthz-uhfffaoysa-n",
+            smiles="CCO",
+        )
+
+        self.assertEqual(
+            keys,
+            [
+                "LFQSCWFLJHTTHZ-UHFFFAOYSA-N-1065",
+                "LFQSCWFLJHTTHZ*-1065",
+            ],
+        )
 
     def test_prediction_cache_key_inchi_key_extracts_inchi_key_prefix(self):
         self.assertEqual(

@@ -38,6 +38,7 @@ from util.units_converter import UnitsConverter
 from util.indigo_utils import IndigoUtils
 from util.serialization_compat import refresh_legacy_serialized_model
 from util.prediction_cache_key_utils import (
+    build_prediction_cache_lookup_keys,
     build_prediction_cache_key,
     ensure_chemical_inchi_key,
     inchi_keys_match_connectivity,
@@ -1097,6 +1098,15 @@ class ModelPredictor:
     @classmethod
     def _build_prediction_cache_key(cls, model_id, smiles=None, chemical=None):
         return build_prediction_cache_key(
+            model_id,
+            cls._get_inchi_key_from_smiles,
+            smiles=smiles,
+            chemical=chemical,
+        )
+
+    @classmethod
+    def _build_prediction_cache_lookup_keys(cls, model_id, smiles=None, chemical=None):
+        return build_prediction_cache_lookup_keys(
             model_id,
             cls._get_inchi_key_from_smiles,
             smiles=smiles,
@@ -2776,7 +2786,14 @@ class ModelPredictor:
             return []
 
         cache_keys = [self._build_prediction_cache_key(model_id, smiles=smiles) for smiles in smiles_list]
-        cached_predictions = get_cached_predictions([key for key in cache_keys if key])
+        lookup_keys_by_index = [
+            self._build_prediction_cache_lookup_keys(model_id, smiles=smiles)
+            for smiles in smiles_list
+        ]
+        lookup_keys = []
+        for candidate_keys in lookup_keys_by_index:
+            lookup_keys.extend(key for key in candidate_keys if key and key not in lookup_keys)
+        cached_predictions = get_cached_predictions(lookup_keys)
 
         results = [None] * len(smiles_list)
         missing_indices = []
@@ -2784,14 +2801,20 @@ class ModelPredictor:
         missing_cache_keys = []
 
         for idx, cache_key in enumerate(cache_keys):
-            prediction = cached_predictions.get(cache_key) if cache_key is not None else None
+            matched_cache_key = None
+            prediction = None
+            for lookup_key in lookup_keys_by_index[idx]:
+                prediction = cached_predictions.get(lookup_key)
+                if prediction is not None:
+                    matched_cache_key = lookup_key
+                    break
             if prediction is not None:
                 prediction_obj = self._prediction_from_cached_value(prediction)
-                if cache_key is not None and self._cached_prediction_conflicts_with_cache_key(cache_key, prediction_obj):
+                if matched_cache_key is not None and self._cached_prediction_conflicts_with_cache_key(matched_cache_key, prediction_obj):
                     logging.warning(
                         "Ignoring cached prediction whose chemicalIdentifiers conflict with cache key; "
                         "key=%s smiles=%s",
-                        cache_key,
+                        matched_cache_key,
                         smiles_list[idx],
                     )
                 else:

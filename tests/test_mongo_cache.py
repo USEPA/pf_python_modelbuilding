@@ -1,6 +1,26 @@
 import os
+import sys
+import types
 import unittest
 from unittest.mock import patch
+
+
+bson_module = types.ModuleType("bson")
+bson_errors_module = types.ModuleType("bson.errors")
+bson_errors_module.InvalidDocument = Exception
+bson_module.errors = bson_errors_module
+
+pymongo_module = types.ModuleType("pymongo")
+pymongo_errors_module = types.ModuleType("pymongo.errors")
+pymongo_module.ASCENDING = 1
+pymongo_module.MongoClient = object
+pymongo_module.ReplaceOne = object
+pymongo_errors_module.PyMongoError = Exception
+
+sys.modules.setdefault("bson", bson_module)
+sys.modules.setdefault("bson.errors", bson_errors_module)
+sys.modules.setdefault("pymongo", pymongo_module)
+sys.modules.setdefault("pymongo.errors", pymongo_errors_module)
 
 from db import mongo_cache
 
@@ -61,6 +81,33 @@ class TestMongoCacheInitRetry(unittest.TestCase):
                 mongo_cache._ensure_init()
 
         init_mongo.assert_not_called()
+
+    def test_get_cached_predictions_matches_trailing_star_from_memory(self):
+        mongo_cache._mongo_init_done = True
+        mongo_cache.in_memory_cache = {
+            "LFQSCWFLJHTTHZ-UHFFFAOYSA-N-1065": {"value": 1},
+        }
+
+        cached_predictions = mongo_cache.get_cached_predictions(["LFQSCWFLJHTTHZ*"])
+
+        self.assertEqual(
+            cached_predictions,
+            {"LFQSCWFLJHTTHZ*": {"value": 1}},
+        )
+
+    def test_get_cached_predictions_matches_wildcard_suffix_from_memory(self):
+        mongo_cache._mongo_init_done = True
+        mongo_cache.in_memory_cache = {
+            "LFQSCWFLJHTTHZ-UHFFFAOYSA-N-1065": {"value": 1},
+            "LFQSCWFLJHTTHZ-UHFFFAOYSA-N-1066": {"value": 2},
+        }
+
+        cached_predictions = mongo_cache.get_cached_predictions(["LFQSCWFLJHTTHZ*-1066"])
+
+        self.assertEqual(
+            cached_predictions,
+            {"LFQSCWFLJHTTHZ*-1066": {"value": 2}},
+        )
 
 
 if __name__ == "__main__":
