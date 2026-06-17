@@ -624,6 +624,8 @@ class ModelLoader():
         
         model.modelId = fk_model_id
         
+        results["model_details"]["modelId"] = fk_model_id
+        
         # ---- store model_bytes into the model_bytes table:----
         self.load_model_bytes(user, model, fk_model_id)
         
@@ -645,7 +647,8 @@ class ModelLoader():
         
         # ---- store plots in model_files table ----
         
-        if not is_binary:             
+        
+        if not isBinary:             
             filePathOutScatter = os.path.join(folder_path, "scatter_plot.png")
             image_id = self.load_model_file(filePathOutScatter, user, fk_model_id, 3)
             logging.info(f"Scatter plot loaded to db with id: {image_id}")
@@ -1580,6 +1583,7 @@ def write_plots(df_pred_test, model, df_pred_cv, folder_path):
     mpsTest = df_pred_test.to_dict(orient='records')
     filePathOutHistogram = os.path.join(folder_path, "histogram.png")
     mtp.generateHistogram2(filePathOutHistogram, model.propertyName, model.unitsModel, mpsTraining, mpsTest, seriesNameTrain="Training set", seriesNameTest="Test set")
+    
     if not model.is_binary:
         filePathOutScatter = os.path.join(folder_path, "scatter_plot.png")
         title = "Prediction results for " + model.propertyName
@@ -1740,6 +1744,8 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
             # dataset_name_ext = 'Koc eChemPortal v1'
         elif dataset_name == 'ECOTOX_2024_12_12_96HR_Fish_LC50_v3a modeling':
             dataset_name_ext = 'QSAR_Toolbox_96HR_Fish_LC50_v3 modeling'    
+        elif dataset_name == 'ECOTOX_2024_12_12_96HR_Fish_LC50_v3b modeling':
+            dataset_name_ext = 'QSAR_Toolbox_96HR_Fish_LC50_v3b modeling'    
         
         elif dataset_name == 'exp_prop_RBIODEG_RIFM_CHEMREG':
             dataset_name_ext = 'exp_prop_RBIODEG_301F v1 modeling' # use ECHA data as external set to see if works ok
@@ -1994,6 +2000,7 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
 
         identifier = get_identifier(unique_identifier, test_stats, ext_stats)
         
+        #TODO write results json after loading model so that model_id is set
         if identifier is None:
             json_path = os.path.join(folder_path, "results.json")
             detailed_summary_path = os.path.join(folder_path, f"detailed_summary.xlsx")
@@ -2001,25 +2008,25 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
             json_path = os.path.join(folder_path, f"results_{identifier}.json")
             detailed_summary_path = os.path.join(folder_path, f"detailed_summary_{identifier}.xlsx")
         
-        with open(json_path, 'w') as json_file:
-            json.dump(results_dict, json_file, indent=4)
-            
-            
         write_prediction_csvs(df_pred_test, df_pred_ext, folder_path)
         write_plots(df_pred_test, model, df_pred_cv, folder_path)
 
         if write_to_db:
             ml.load_model(user, model, results_dict, df_pred_training, df_pred_test, df_pred_cv, folder_path, df_pred_external=df_pred_ext)
 
+        with open(json_path, 'w') as json_file:
+            json.dump(results_dict, json_file, indent=4)
+
         #build excel after loading model so have model id number set:
         mdo = ModelDataObjects(model=model, df_pv=df_pv, df_gmd=df_dps, df_gmd_external=df_dps_ext)
         mte = ModelToExcel(mdo, detailed_summary_path)
         mte.create_excel()
         
-        #need to load model separately from rest of model objects since need to load model into db to get id then create the excel file that displays that id in the summary:
-        filePathOutExcelSummary = os.path.join(folder_path, "detailed_summary.xlsx")
-        image_id = ml.load_model_file(filePathOutExcelSummary, user, model.modelId, 2)
-        logging.info(f"Excel summary loaded to db with id: {image_id}")
+        if write_to_db:
+            #need to load model separately from rest of model objects since need to load model into db to get id then create the excel file that displays that id in the summary:
+            filePathOutExcelSummary = os.path.join(folder_path, "detailed_summary.xlsx")
+            image_id = ml.load_model_file(filePathOutExcelSummary, user, model.modelId, 2)
+            logging.info(f"Excel summary loaded to db with id: {image_id}")
         
         return model
 
@@ -2028,6 +2035,142 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         traceback.print_exc()
         return None
 
+from sqlalchemy import text
+from sqlalchemy.orm import Session
+
+def get_embedding_tsv_by_model_id(
+    session: Session,
+    model_id: int,
+    parse: bool = False) -> Optional[Union[str, List]]:
+    """
+    Fetch the descriptor embedding for a model as a TSV string, or parse it to a list.
+
+    Parameters
+    ----------
+    session : sqlalchemy.orm.Session
+        An active SQLAlchemy session.
+    model_id : int
+        The model ID whose embedding to fetch.
+    parse : bool, optional
+        If True, split the TSV and convert to dtype. Default False (return raw TSV).
+    dtype : callable, optional
+        Conversion function for parsed elements (e.g., float, int). Default float.
+
+    Returns
+    -------
+    Optional[str or List]
+        The TSV string if parse=False; otherwise a list of values.
+        Returns None if the model/embedding is not found.
+    """
+    sql = text("""
+        select de.embedding_tsv
+        from qsar_models.models m
+        join qsar_models.descriptor_embeddings de
+          on m.fk_descriptor_embedding_id = de.id
+        where m.id = :model_id
+        limit 1
+    """)
+
+    embedding_tsv = session.execute(sql, {"model_id": model_id}).scalar_one_or_none()
+    if embedding_tsv is None:
+        return None
+
+    if parse:
+        # Split on tabs and convert each token using dtype
+         return embedding_tsv.rstrip("\r\n").split("\t")
+
+    return embedding_tsv
+
+@staticmethod
+def run_model_embedding_as_knn(model_id, dataset_name,session):
+    """
+    Evaluate analog finding ability by running as kNN
+    """
+        
+    try:
+        
+        
+        embedding = get_embedding_tsv_by_model_id(session, model_id, parse=True)
+        
+        # print(embedding)
+        
+        splitting_name="RND_REPRESENTATIVE"
+        descriptor_set_name="WebTEST-default"
+
+        session = getSession()
+        
+        params = set_hyper_parameters(
+            qsar_method='knn',
+            feature_selection=False,
+            descriptor_set_name=descriptor_set_name,
+            splitting_name=splitting_name,
+            dataset_name=dataset_name,
+            ad_measure=None)
+            
+
+        df_training, df_prediction = du.get_training_prediction_instances(session, dataset_name, descriptor_set_name, splitting_name)
+        
+        if df_training is None or df_prediction is None:
+            logging.error("Failed to retrieve training or prediction dataframes from the database. Ending execution of run_dataset.")
+            return
+
+        s = df_training.iloc[:, 1]
+        is_binary = s.isin([0, 1]).all()
+        # print('is_binary', is_binary)
+        
+        _, _, _, test_stats, _ = ModelBuilder.build_and_test_model(df_training, df_prediction, 5, params, embedding, is_binary)
+
+        return test_stats, embedding
+
+
+    except Exception:
+        # Print the exception traceback to standard error
+        traceback.print_exc()
+        return None
+
+
+@staticmethod
+def run_model_embedding_as_knn_external(model_id, dataset_name,dataset_name_external, session):
+    """
+    Evaluate analog finding ability by running as kNN
+    """
+        
+    try:
+        
+        
+        embedding = get_embedding_tsv_by_model_id(session, model_id, parse=True)
+        
+        # print(embedding)
+        
+        splitting_name="RND_REPRESENTATIVE"
+        descriptor_set_name="WebTEST-default"
+
+        session = getSession()
+        
+        params = set_hyper_parameters(
+            qsar_method='knn',
+            feature_selection=False,
+            descriptor_set_name=descriptor_set_name,
+            splitting_name=splitting_name,
+            dataset_name=dataset_name,
+            ad_measure=None)
+            
+        df_training, _ = du.get_training_prediction_instances(session, dataset_name, descriptor_set_name, splitting_name)
+        df_prediction_ext = du.get_instances_excluding(session, dataset_name_external, dataset_name, descriptor_set_name)
+        
+        s = df_training.iloc[:, 1]
+        is_binary = s.isin([0, 1]).all()
+        # print('is_binary', is_binary)
+        
+        _, _, _, test_stats, _ = ModelBuilder.build_and_test_model(df_training, df_prediction_ext, 5, params, embedding, is_binary)
+
+        return test_stats, embedding
+
+
+    except Exception:
+        # Print the exception traceback to standard error
+        traceback.print_exc()
+        return None
 
 class Results:
 
@@ -2085,7 +2228,9 @@ class Results:
             # results_dict['model_coefficients'] = json.loads(model.getOriginalRegressionCoefficients())
             y = df_training[df_training.columns[1]]
             X = df_training[model.embedding]
-            results_dict["model_details"]['model_coefficients'] = json.loads(model.getOriginalRegressionCoefficients2(X, y))
+            results_dict["model_details"]['model_coefficients'] = json.loads(model.getOriginalRegressionCoefficients2(X, y))            
+            # print(json.dumps(results_dict["model_details"]['model_coefficients'], indent=4))
+            
         
         ms = {}
         results_dict["model_statistics"] = ms
@@ -2286,6 +2431,9 @@ class Results:
             excel_path=excel_path,
             html_name=None
         )
+        
+        import webbrowser
+        webbrowser.open(Path(html_path).absolute().as_uri())
     
         print(f"Saved summary to: {excel_path}")
         print(f"Saved HTML summary to: {html_path}")
