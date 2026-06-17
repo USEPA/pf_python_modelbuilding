@@ -44,6 +44,7 @@ from applicability_domain import applicability_domain_utilities as adu
 
 # debug = False
 import logging
+from dis import dis
 
 logging.getLogger('sqlalchemy').setLevel(logging.ERROR)
 
@@ -1107,10 +1108,14 @@ class ModelPredictor:
             # print(f"An error occurred while loading the molecule: {e}")
             return None
     
-    def setExpValue(self, chemical, model, modelResults:ModelResults):
+    def setExpValue(self, chemical, model, modelResults:ModelResults, neighborResultsTraining, neighborResultsPrediction):
 
         qsarSmiles = chemical["canonicalSmiles"]
-
+                
+        # it is possible that qsarSmiles will be same structure but have different string (i.e. not 100% canonical)
+        # there are multiple instances where it didnt detect an experimental value because the smiles was written differently 
+        #  TODO look up by inchiKey as well?
+        
         matching_row_training = model.df_training[model.df_training['ID'] == qsarSmiles]
         matching_row_test = model.df_prediction[model.df_prediction['ID'] == qsarSmiles]
         
@@ -1122,8 +1127,18 @@ class ModelPredictor:
             modelResults.experimentalValueUnitsModel = matching_row_test['Property'].values[0]
             modelResults.experimentalValueSet = "Test"
             
-        # logging.info(f"experimentalValueSet={modelResults.experimentalValueSet}")        
-        # logging.info(f"experimentalValueUnitsModel={ modelResults.experimentalValueUnitsModel}")
+        if modelResults.experimentalValueSet is None: 
+            if neighborResultsTraining is not None:
+                if neighborResultsTraining["neighbors"][0]["cid"] ==  chemical["cid"]:
+                        modelResults.experimentalValueSet = "Training"
+                        modelResults.experimentalValueUnitsModel = neighborResultsTraining["neighbors"][0]["exp"]
+                elif neighborResultsPrediction["neighbors"][0]["cid"] ==  chemical["cid"]:
+                        modelResults.experimentalValueSet = "Test"
+                        modelResults.experimentalValueUnitsModel = neighborResultsPrediction["neighbors"][0]["exp"]
+
+        
+        logging.info(f"experimentalValueSet={modelResults.experimentalValueSet}")        
+        logging.info(f"experimentalValueUnitsModel={ modelResults.experimentalValueUnitsModel}")
 
 
     def setExpPredValuesForADAnalogs(self, model, analogs):
@@ -1339,14 +1354,14 @@ class ModelPredictor:
         serverAPIs = os.getenv("CIM_API_SERVER", "https://cim-dev.sciencedataexperts.com")
         fileAPI = os.getenv("FILE_API_SERVER", pc.URL_CTX_API)
 
-        logging.info("serverAPIS:{serverAPIs}")
-        logging.info("model.qsarReadyRuleSet:{model.qsarReadyRuleSet}")
-
         # initialize model bytes and all details from db:
         
         mi = ModelInitializer()
         model = mi.init_model(model_id)
         
+        logging.info(f"serverAPIS:{serverAPIs}")
+        logging.info(f"model.qsarReadyRuleSet:{model.qsarReadyRuleSet}")
+
         if serverAPIs == "https://hcd.rtpnc.epa.gov/" and model.qsarReadyRuleSet == 'qsar-ready_04242025_0':
             model.qsarReadyRuleSet = 'qsar-ready_04242025'  # latest rules arent on there yet
         
@@ -1437,9 +1452,12 @@ class ModelPredictor:
         modelResults.predictionValueUnitsModel = pred_value
         modelResults.unitsModel = model.unitsModel  # duplicated so displayed near prediction value
 
-        # set exp value
-        self.setExpValue(chemical, model, modelResults)
+        if generate_report:
+            neighborResultsTraining, neighborResultsPrediction = self.addNeighborsFromSets(model, modelResults, df_prediction)
 
+        # set exp value
+        self.setExpValue(chemical, model, modelResults, neighborResultsTraining, neighborResultsPrediction)
+        
         uc = UnitsConverter()
         
         if "sid" not in chemical:
@@ -1469,8 +1487,11 @@ class ModelPredictor:
                 
         report = Report(chemical, modelDetails, modelResults)
 
+
         if generate_report:
-            report.neighborResultsTraining, report.neighborResultsPrediction = self.addNeighborsFromSets(model, modelResults, df_prediction)
+            report.neighborResultsTraining=neighborResultsTraining
+            report.neighborResultsPrediction=neighborResultsPrediction
+            
             
         return report.to_json(), 200
     
