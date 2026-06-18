@@ -12,8 +12,18 @@ from flask import request, abort, Flask, send_file, jsonify
 
 import json
 import logging
+import os
 import pickle
 import gzip
+
+from dotenv import load_dotenv
+load_dotenv('personal.env')
+
+os.environ["PREDICTOR_MODEL_ARTIFACT_CACHE_ENABLED"] = "false"
+os.environ["MODEL_ARTIFACT_CACHE_ENABLED"] = "false"
+os.environ["PREDICTOR_MODEL_POSTGRES_FALLBACK_ENABLED"] = "true"
+os.environ["MODEL_POSTGRES_FALLBACK_ENABLED"] = "true"
+os.environ["MONGO_CACHE_ENABLED"] = "false"
 
 from model_ws_db_utilities import ModelPredictor, ModelInitializer
 
@@ -26,8 +36,6 @@ from applicability_domain import applicability_domain_utilities as adu
 
 from sklearn2pmml import sklearn2pmml
 
-from dotenv import load_dotenv
-load_dotenv('personal.env')
 from util import predict_constants as pc
 
 import util.get_model_file as gmf

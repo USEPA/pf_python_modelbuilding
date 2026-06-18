@@ -9,8 +9,6 @@ import logging
 import math
 import time
 
-import pypmml
-
 from scipy import stats
 
 import pandas as pd
@@ -18,13 +16,9 @@ import pandas as pd
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
-from sklearn2pmml.pipeline import PMMLPipeline as PMMLPipeline
-
-import model_ws_utilities
-from models import df_utilities as DFU, df_utilities
+from models import df_utilities as DFU
 from sklearn.neighbors import KNeighborsRegressor, KNeighborsClassifier
 from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
-from lightgbm import LGBMRegressor, LGBMClassifier
 
 from utils import to_json_safe
 
@@ -42,6 +36,8 @@ from sklearn_pmml_model.neighbors import PMMLKNeighborsRegressor
 from sklearn_pmml_model.neighbors import PMMLKNeighborsClassifier
 
 from sklearn.model_selection import GridSearchCV, KFold, StratifiedKFold, cross_val_score
+
+
 from sklearn.metrics import balanced_accuracy_score
 
 import numpy as np
@@ -63,6 +59,32 @@ importance_type = 'weight' #default, TODO make a passable parameter to app when 
 # importance_type ='total_cover'
 
 SEED=42
+
+
+def _is_pypmml_model(model_obj):
+    try:
+        import pypmml
+    except ImportError:
+        return False
+
+    return isinstance(model_obj, pypmml.Model)
+
+
+def _is_pmml_pipeline(model_obj):
+    try:
+        from sklearn2pmml.pipeline import PMMLPipeline
+    except ImportError:
+        return False
+
+    return isinstance(model_obj, PMMLPipeline)
+
+
+def _is_pipeline_or_pmml_model(model_obj):
+    return (
+        isinstance(model_obj, Pipeline)
+        or _is_pmml_pipeline(model_obj)
+        or 'PMML' in type(model_obj).__name__
+    )
 
 def model_registry_model_obj(regressor_name, is_categorical):
     '''
@@ -97,6 +119,8 @@ def model_registry_model_obj(regressor_name, is_categorical):
         else:
             return XGBRegressor(importance_type=importance_type, random_state=SEED)
     elif regressor_name == 'lgb':
+        from lightgbm import LGBMRegressor, LGBMClassifier
+
         if is_categorical:
             # return XGBClassifier()
             # return XGBClassifier(use_label_encoder=False, eval_metric='logloss')
@@ -434,8 +458,6 @@ class Model:
         - If the step immediately before the estimator is a simple StandardScaler, results are transformed
           back to original feature units; otherwise coefficients/SEs are reported in the estimator space.
         """
-        import numpy as np
-        import json
         from scipy import sparse as sp
 
         pipe = self.get_model()
@@ -1110,6 +1132,21 @@ class Model:
         # Prepare prediction instances using columns from training data
         pred_ids, pred_labels, pred_features = DFU.prepare_prediction_instances(df_prediction, self.embedding)
 
+        def get_model_input(features):
+            model_input = features
+            if isinstance(self.model_obj, Pipeline) or _is_pmml_pipeline(self.model_obj):
+                pipeline_steps = getattr(self.model_obj, 'steps', None) or []
+                if pipeline_steps:
+                    first_step = pipeline_steps[0][1]
+                    if isinstance(first_step, StandardScaler) and not hasattr(first_step, 'feature_names_in_'):
+                        model_input = features.to_numpy()
+            return model_input
+
+        def get_numeric_series(values):
+            return pd.to_numeric(pd.Series(values), errors='coerce')
+
+        model_input = get_model_input(pred_features)
+
         # print('pred_labels',pred_labels)
 
         # print('Enter model.do_predictions')
@@ -1129,6 +1166,7 @@ class Model:
             pred_features = pd.DataFrame(
                 (np.array(pred_features) - self.training_descriptor_means) / self.training_descriptor_std_devs,
                 columns=self.embedding)
+            model_input = get_model_input(pred_features)
 
         # print('pred_features after scaling')
         # print(pred_features)
@@ -1137,14 +1175,14 @@ class Model:
 
         if self.is_binary:
         
-            if isinstance(self.model_obj, pypmml.Model):
-                predictions = self.model_obj.predict(pred_features)
+            if _is_pypmml_model(self.model_obj):
+                predictions = self.model_obj.predict(model_input)
                 # Probability of class 1
                 predictions = np.asarray(predictions[predictions.columns[1]], dtype=float)
                 # Threshold at 0.5: >=0.5 -> 1, else 0
                 preds = np.rint(predictions)
 
-                y_true = pd.to_numeric(pd.Series(pred_labels), errors='coerce')
+                y_true = get_numeric_series(pred_labels)
                 mask = ~y_true.isna()
                 if mask.sum() == 0:
                     # No valid labels; you’re likely running inference only
@@ -1154,9 +1192,9 @@ class Model:
                     y_pred = np.asarray(preds, dtype=int)
                     score = balanced_accuracy_score(y_true[mask].astype(int), y_pred[mask])
         
-            elif isinstance(self.model_obj, Pipeline) or isinstance(self.model_obj, PMMLPipeline) or 'PMML' in type(self.model_obj).__name__:
+            elif _is_pipeline_or_pmml_model(self.model_obj):
                 # Probability of class 1
-                predictions = self.model_obj.predict_proba(pred_features)[:, 1]
+                predictions = self.model_obj.predict_proba(model_input)[:, 1]
                 # Threshold at 0.5
                 preds = np.rint(predictions)
 
@@ -1170,27 +1208,28 @@ class Model:
                     y_pred = np.asarray(preds, dtype=int)
                     score = balanced_accuracy_score(y_true[mask].astype(int), y_pred[mask])
 
-        
             else:
                 print("Cant handle ", type(self.model_obj))
                 
 
-            logging.debug(r'Balanced Accuracy for Test data = {score}'.format(score=score))
+            if score is not None:
+                logging.debug(r'Balanced Accuracy for Test data = {score}'.format(score=score))
+            else:
+                logging.debug("Skipping Balanced Accuracy for Test data because labels are missing")
 
         elif not self.is_binary:
 
             # inputFolder = 'C:/Users/TMARTI02/OneDrive - Environmental Protection Agency (EPA)/000 Papers/2024 tetko challenge/modeling/'
             # pred_features.to_csv(inputFolder+'predfeatures.csv')
 
-            predictions = self.model_obj.predict(pred_features)
+            predictions = self.model_obj.predict(model_input)
             # print([predictions])
             # print(type(self.model_obj).__name__)
 
-            if isinstance(self.model_obj, pypmml.Model):
+            if _is_pypmml_model(self.model_obj):
                 predictions = np.array(
                     predictions[predictions.columns[0]])  # TODO this might not work directly with kNN
-            elif isinstance(self.model_obj, Pipeline) or isinstance(self.model_obj, PMMLPipeline) or 'PMML' in type(
-                    self.model_obj).__name__:
+            elif _is_pipeline_or_pmml_model(self.model_obj):
                 predictions = np.array(predictions)
             else:
                 print("Cant handle ", type(self.model_obj))
@@ -1199,9 +1238,16 @@ class Model:
             # print(pred_labels)
 
             if df_prediction.shape[0] > 1:
-                score = stats.pearsonr(predictions, pred_labels)[0]
-                score = score * score
-                logging.debug(r'R2 for Test data = {score}'.format(score=score))
+                pred_series = get_numeric_series(predictions)
+                label_series = get_numeric_series(pred_labels)
+                if pred_series.notna().all() and label_series.notna().all() and pred_series.nunique(dropna=True) > 1 and label_series.nunique(dropna=True) > 1:
+                    score = stats.pearsonr(pred_series, label_series)[0]
+                    score = score * score
+                    logging.debug(r'R2 for Test data = {score}'.format(score=score))
+                else:
+                    logging.debug(
+                        "Skipping R2 for Test data because predictions/labels are missing or constant"
+                    )
 
         else:
             print("is_categorical is null")  # does this happen?
@@ -1476,6 +1522,8 @@ class ModelDescription:
 
 
 def runExamples():
+    import model_ws_utilities
+
     # %% Test Script
     # opera_path = r"C:\Users\ncharest\OneDrive - Environmental Protection Agency (EPA)\Profile\Documents\data_sets\OPERA_TEST_DataSetsBenchmark\DataSetsBenchmark\Water solubility OPERA\{filename}"
     # training_df = DFU.load_df_from_file(opera_path.format(filename=r"Water solubility OPERA T.E.S.T. 5.1 training.tsv"),
@@ -1525,5 +1573,3 @@ def runExamples():
 
 if __name__ == "__main__":
     runExamples()
-
-

@@ -7,38 +7,79 @@ Run with Python 3.12
 Repository created 05/21/2021
 """
 import io
-import json
 import logging
 import os
-from concurrent.futures import ProcessPoolExecutor
-from logging import DEBUG
+
+os.environ.setdefault("PREDICTOR_MODEL_ARTIFACT_CACHE_ENABLED", "true")
+os.environ.setdefault("MODEL_ARTIFACT_CACHE_ENABLED", "true")
+os.environ.setdefault("PREDICTOR_MODEL_POSTGRES_FALLBACK_ENABLED", "false")
+os.environ.setdefault("MODEL_POSTGRES_FALLBACK_ENABLED", "false")
+os.environ.setdefault("MONGO_CACHE_ENABLED", "true")
 
 import coloredlogs
 import connexion
 from connexion.middleware import MiddlewarePosition
 from connexion.options import SwaggerUIOptions
-from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
-from starlette.responses import HTMLResponse, Response, JSONResponse, StreamingResponse
+from starlette.responses import JSONResponse, StreamingResponse
 
+from model_service_common.monitoring import install_monitoring
 import util.get_model_file as gmf
-from API_Utilities import SearchAPI
-from model_ws_db_utilities import ModelPredictor
-from report_creator_dict import ReportCreator
+from util.helpers import (
+    collect_model_details_for_metadata,
+    make_predictdb_post_response,
+    make_predictdb_response,
+)
 
-_PROCESS_PREDICTOR = None
 
-load_dotenv()
+def _get_log_level(env_var: str, default: str) -> int:
+    value = os.getenv(env_var, default).strip().upper()
+    level = getattr(logging, value, None)
+    if isinstance(level, int):
+        return level
 
-CIM_API_SERVER = os.getenv("CIM_API_SERVER", "https://cim-dev.sciencedataexperts.com")
+    logging.warning("Invalid log level %r for %s; using %s", value, env_var, default.upper())
+    return getattr(logging, default.upper())
 
-coloredlogs.install(level=DEBUG, milliseconds=True,
-                    fmt='%(asctime)s - %(name)s - %(levelname)s - %(message)s (%(filename)s:%(lineno)d)')
-logging.basicConfig(level=logging.INFO)
+
+def _configure_logging():
+    app_level = _get_log_level("APP_LOG_LEVEL", "INFO")
+    coloredlogs.install(
+        level=app_level,
+        milliseconds=True,
+        fmt='%(asctime)s - %(name)s - %(levelname)s - %(message)s (%(filename)s:%(lineno)d)',
+    )
+    logging.basicConfig(level=app_level)
+
+    logger_levels = {
+        "connexion": _get_log_level("CONNEXION_LOG_LEVEL", "WARNING"),
+        "connexion.operations.openapi3": _get_log_level("CONNEXION_LOG_LEVEL", "WARNING"),
+        "connexion.validators.parameter": _get_log_level("CONNEXION_LOG_LEVEL", "WARNING"),
+        "connexion.middleware.validation": _get_log_level("CONNEXION_LOG_LEVEL", "WARNING"),
+        "connexion.middleware.security": _get_log_level("CONNEXION_LOG_LEVEL", "WARNING"),
+        "connexion.middleware.abstract": _get_log_level("CONNEXION_LOG_LEVEL", "WARNING"),
+        "connexion.middleware.swagger_ui": _get_log_level("CONNEXION_LOG_LEVEL", "WARNING"),
+        "pymongo": _get_log_level("PYMONGO_LOG_LEVEL", "WARNING"),
+        "pymongo.topology": _get_log_level("PYMONGO_LOG_LEVEL", "WARNING"),
+        "pymongo.connection": _get_log_level("PYMONGO_LOG_LEVEL", "WARNING"),
+        "pymongo.command": _get_log_level("PYMONGO_LOG_LEVEL", "WARNING"),
+        "pymongo.serverSelection": _get_log_level("PYMONGO_LOG_LEVEL", "WARNING"),
+        "sqlalchemy": _get_log_level("SQLALCHEMY_LOG_LEVEL", "ERROR"),
+        "uvicorn": _get_log_level("UVICORN_LOG_LEVEL", "INFO"),
+        "uvicorn.access": _get_log_level("UVICORN_ACCESS_LOG_LEVEL", "INFO"),
+        "uvicorn.error": _get_log_level("UVICORN_ERROR_LOG_LEVEL", "INFO"),
+    }
+
+    for logger_name, level in logger_levels.items():
+        logging.getLogger(logger_name).setLevel(level)
+
+
+_configure_logging()
 
 options = SwaggerUIOptions(spec_path="/api/predictor_models/swagger.yaml",
                            swagger_ui_path="/api/predictor_models/swagger")
 app = connexion.AsyncApp(__name__, swagger_ui_options=options)
+install_monitoring(app, service_name="predictor_models")
 app.add_middleware(
     CORSMiddleware,
     position=MiddlewarePosition.BEFORE_EXCEPTION,
@@ -57,8 +98,9 @@ def get_version():
         BUILD_TIMESTAMP = None
         BUILD_NUMBER = None
 
-    return dict(name="predictor_models",
-                title="EPA/Models",
+    return dict(id="predictor_models",
+                name="WebTEST v2",
+                description='These models are based on additional curation and expansion of the WebTEST v1 data sets including aggregation from public websites (e.g., as described in the publication <a href="https://doi.org/10.1021/acs.chemrestox.2c00379" target="_blank">Transparency in Modeling through Careful Application of OECD’s QSAR/QSPR Principles via a Curated Water Solubility Data Set</a> and using a single modeling approach, distinct from the multi-model consensus modeling approach for WebTEST v1',
                 version="1.0.0",
                 compiled=BUILD_TIMESTAMP,
                 build_id=BUILD_NUMBER)
@@ -70,14 +112,21 @@ _metadata = None
 def get_metadata():
     global _metadata
     if _metadata is None:
-        _smiles = "C1CCCCC1"
-        with ProcessPoolExecutor(max_workers=6, initializer=_init_process_predictor) as executor:
-            modelResultsArray = list(executor.map(_predict_smiles_in_process, zip(range(1065, 1071), [_smiles] * 6)))
-
-        _metadata = dict(
+        model_ids = list(range(1065, 1071))
+        model_details_array = collect_model_details_for_metadata(model_ids)
+        metadata = dict(
             version=get_version(),
-            endpoints=list(r['modelDetails'] for r in modelResultsArray)
+            endpoints=model_details_array
         )
+        if len(model_details_array) == len(model_ids):
+            _metadata = metadata
+        else:
+            logging.warning(
+                "Metadata endpoints incomplete; not caching response expected=%s actual=%s",
+                len(model_ids),
+                len(model_details_array),
+            )
+        return metadata
 
     return _metadata
 
@@ -124,93 +173,20 @@ def get_file(type_id: int = None, model_id: int = None):
     )
 
 
-def _to_obj(x):
-    if isinstance(x, (dict, list)):
-        return x
-    if isinstance(x, (str, bytes, bytearray)):
-        return json.loads(x)
-    raise TypeError(f"Unsupported prediction type: {type(x)}")
-
-
-def _to_json_str(x):
-    if isinstance(x, (dict, list)):
-        return json.dumps(x)
-    if isinstance(x, (bytes, bytearray)):
-        return x.decode("utf-8")
-    if isinstance(x, str):
-        return x
-    raise TypeError(f"Unsupported prediction type: {type(x)}")
-
-
-def _init_process_predictor():
-    global _PROCESS_PREDICTOR
-    _PROCESS_PREDICTOR = ModelPredictor()
-
-
-def _predict_smiles_in_process(args):
-    model_id, current_smiles = args
-    predictor = _PROCESS_PREDICTOR
-    if predictor is None:
-        _init_process_predictor()
-        predictor = _PROCESS_PREDICTOR
-    if predictor is None:
-        raise RuntimeError("Failed to initialize process predictor")
-    pred = predictor.predictFromDB(model_id, current_smiles)
-    return _to_obj(pred)
-
-
 def predictDB_POST(body):
     """Automates prediction and AD for batch smiles using model in database"""
-    max_workers = int(os.getenv("PREDICT_BATCH_WORKERS", os.cpu_count() or 1))
-    max_workers = max(1, min(max_workers, len(body["smiles"])))
-
-    with ProcessPoolExecutor(max_workers=max_workers, initializer=_init_process_predictor) as executor:
-        modelResultsArray = list(
-            executor.map(_predict_smiles_in_process, ((body["model_id"], s) for s in body["smiles"])))
-
-    return JSONResponse(content=modelResultsArray)
+    return make_predictdb_post_response(body)
 
 
 def predictDB(model_id, smiles=None, identifier=None, report_format='json'):
     """Automates prediction and AD for single smiles using model in database"""
-
-    if smiles and identifier:
-        return JSONResponse(
-            {"error": "bad request", "message": f"Both SMILES '{smiles}' and identifier {identifier} are provided"},
-            status_code=400,
-        )
-
-    if identifier:
-        chemicals, code = SearchAPI.call_resolver_get(CIM_API_SERVER, identifier)
-        if code != 200 or not chemicals:
-            return JSONResponse(
-                {"error": "not_found", "message": f"Could not find {identifier}"},
-                status_code=404,
-            )
-        smiles = (chemicals[0].get("chemical") or {}).get("smiles")
-
-    if not smiles:
-        return JSONResponse(
-            {"error": "not_found", "message": f"Could not find {identifier}"},
-            status_code=404,
-        )
-
-    mp = ModelPredictor()
-    pred = mp.predictFromDB(model_id, smiles)
-
-    report_format = (report_format or "json").lower()
-    if report_format not in ("json", "html"):
-        report_format = "json"
-
-    if report_format == "html":
-        rc = ReportCreator()
-        modelResultsHtml = rc.create_html_report_from_json(_to_json_str(pred))
-        return HTMLResponse(content=modelResultsHtml)
-
-    return Response(content=_to_json_str(pred), media_type="application/json")
+    return make_predictdb_response(
+        model_id=model_id,
+        smiles=smiles,
+        identifier=identifier,
+        report_format=report_format
+    )
 
 
 if __name__ == '__main__':
-    log = logging.getLogger('pymongo.topology')
-    log.setLevel(logging.INFO)
     app.run(host='0.0.0.0', port=5004)

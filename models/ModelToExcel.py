@@ -1034,15 +1034,22 @@ class DataQuerier:
             Engine: SQLAlchemy engine configured for PostgreSQL connection.
         """
         connect_url = URL.create(
+            # drivername='postgresql+psycopg2',
+            # username=os.getenv('DEV_QSAR_USER'),
+            # password=os.getenv('DEV_QSAR_PASS'),
+            # host=os.getenv('DEV_QSAR_HOST', 'localhost'),
+            # port=os.getenv('DEV_QSAR_PORT', 5432),
+            # database=os.getenv('DEV_QSAR_DATABASE'),
             drivername='postgresql+psycopg2',
-            username=os.getenv('DEV_QSAR_USER'),
-            password=os.getenv('DEV_QSAR_PASS'),
-            host=os.getenv('DEV_QSAR_HOST', 'localhost'),
-            port=os.getenv('DEV_QSAR_PORT', 5432),
-            database=os.getenv('DEV_QSAR_DATABASE'),
+            username=os.getenv('POSTGRES_USER'),
+            password=os.getenv('POSTGRES_PASSWORD'),
+            host=os.getenv('POSTGRES_HOST', 'localhost'),
+            port=os.getenv('POSTGRES_PORT', 5432),
+            database=os.getenv('POSTGRES_DB'),
             **connect_args
         )
         engine = create_engine(connect_url, echo=False)
+        
         return engine
 
     @staticmethod

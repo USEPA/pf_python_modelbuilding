@@ -23,11 +23,11 @@ from decimal import Decimal, getcontext, ROUND_HALF_UP, InvalidOperation
 
 # from indigo import Indigo
 # from indigo.renderer import IndigoRenderer
+from util.chemical_image_utils import resolve_report_image_src
 from util import predict_constants as pc
 # import tempfile
 
 urlChemicalDetails = "https://comptox.epa.gov/dashboard/chemical/details/"
-imgURLCid = "https://comptox.epa.gov/dashboard-api/ccdapp1/chemical-files/image/by-dtxcid/";
 
 import numpy as np           
 import base64, io
@@ -58,12 +58,14 @@ def createAnalogTile(analog, i, md, align):
         pred = get_formatted_value(False, analog["pred"], 3)
         analog_td += b("Predicted: "), pred, br()
 
-    if "cid" in analog:
+    image_src = resolve_report_image_src(analog, width=150, height=150)
+    if image_src:
         imgTitle = "Analog Image for " + analog["name"]
-        analog_td += img(src=imgURLCid + analog["cid"], border="1", alt=imgTitle, title=imgTitle, width="150", height="150"), br()
+        analog_td += img(src=image_src, border="1", alt=imgTitle, title=imgTitle, width="150", height="150"), br()
 
-    if "sid" in analog:
-        analog_td += a(analog["sid"], href=urlChemicalDetails + analog["sid"], title=analog["sid"] + ' on the Chemicals Dashboard', target="_blank")
+    sid = analog.get("sid")
+    if isinstance(sid, str) and sid.strip():
+        analog_td += a(sid, href=f"{urlChemicalDetails}{sid}", title=f"{sid} on the Chemicals Dashboard", target="_blank",)
     elif "cid" in analog:
         analog_td += span(analog["cid"])
         
@@ -149,6 +151,7 @@ class ReportCreator:
     class ChemicalIdentifiersSection:
         
         def create_chemical_identifiers_table(self, chemical):
+                chemical = chemical or {}
                 with table(border="0", width="100%"):
                     with tbody():
                         with tr(bgcolor="black"):
@@ -156,13 +159,18 @@ class ReportCreator:
                                 font("Chemical Identifiers", color="white")
                         with tr():
                             my_td = td()
-                            my_td += b("Preferred name:"), " " + chemical.get("name", "N/A"), br()
-                            my_td += b("DTXSID:"), " " + chemical.get("sid", "N/A"), br()
-                            my_td += b("DTXCID:"), " " + chemical.get("cid", "N/A"), br()
-                            my_td += b("CASRN:"), " " + chemical.get("casrn", "N/A"), br()
-            
-                            if "averageMass" in chemical:
-                                my_td += b("Molecular weight:"), " ", "{:.2f}".format(chemical.get("averageMass")), br()
+                            my_td += b("Preferred name:"), " " + fmt_val(chemical.get("name"), "N/A"), br()
+                            my_td += b("DTXSID:"), " " + fmt_val(chemical.get("sid"), "N/A"), br()
+                            my_td += b("DTXCID:"), " " + fmt_val(chemical.get("cid"), "N/A"), br()
+                            my_td += b("CASRN:"), " " + fmt_val(chemical.get("casrn"), "N/A"), br()
+
+                            average_mass = chemical.get("averageMass")
+                            if fmt_val(average_mass, ""):
+                                try:
+                                    mass_text = "{:.2f}".format(float(average_mass))
+                                except (TypeError, ValueError):
+                                    mass_text = fmt_val(average_mass, "N/A")
+                                my_td += b("Molecular weight:"), " " + mass_text, br()
                             else:
                                 my_td += b("Molecular weight:"), " N/A", br()        
     
@@ -372,8 +380,6 @@ class ReportCreator:
         
         def write_model_performance(self, md):
             
-            print(json.dumps(md,indent=4))            
-        
             with table(border="0", width="100%", cellpadding="10"):
                 with tbody():
                     with tr(bgcolor="black"):
@@ -997,14 +1003,21 @@ table.compact td {
                     pred = get_formatted_value(False, pred_float, 3)
                     td_tc += b("Predicted: "), pred, br()
                 
-                if chemical.get("sid", "N/A") != "N/A": 
-                    title = "Image for " + chemical["name"]
-                    td_tc += img(src=chemical["imageSrc"], border="1", alt=title, title=title, width="150", height="150"), br()
-                    td_tc += a(chemical["chemId"], href=urlChemicalDetails + chemical["sid"], title=chemical["sid"] + ' on the Chemicals Dashboard', target="_blank")
+                image_src = resolve_report_image_src(chemical, width=150, height=150)
+
+                sid = fmt_val(chemical.get("sid"), "N/A")
+                chem_id = fmt_val(chemical.get("chemId"), "N/A")
+
+                if sid != "N/A": 
+                    title = "Image for " + fmt_val(chemical.get("name") or chem_id, "chemical")
+                    if image_src:
+                        td_tc += img(src=image_src, border="1", alt=title, title=title, width="150", height="150"), br()
+                    td_tc += a(chem_id, href=urlChemicalDetails + sid, title=sid + ' on the Chemicals Dashboard', target="_blank")
                 else:
-                    title = "Image for " + chemical["smiles"]
-                    td_tc += img(src=chemical["imageSrc"], border="1", alt=title, title=title, width="150", height="150"), br()
-                    td_tc += chemical["chemId"]        
+                    title = "Image for " + fmt_val(chemical.get("smiles") or chem_id, "chemical")
+                    if image_src:
+                        td_tc += img(src=image_src, border="1", alt=title, title=title, width="150", height="150"), br()
+                    td_tc += chem_id        
     
         def addMaeTable(self, td_tc, md, neighborsInSet):
                 
@@ -1185,11 +1198,13 @@ table.compact td {
                 with tr():  # first row of main table
                     with td(valign="top", width="150px"):
                         
-                        if chemical["imageSrc"] == "N/A":
+                        image_src = resolve_report_image_src(chemical, width=150, height=150)
+
+                        if not image_src or image_src == "N/A":
                                 div("No structure image", style="border: 2px solid black; padding: 10px;")                        
                         else:
-                            title = "Structural image of " + chemical["chemId"]
-                            img(src=chemical["imageSrc"], alt=title, title=title,
+                            title = "Structural image of " + fmt_val(chemical.get("chemId"), "chemical")
+                            img(src=image_src, alt=title, title=title,
                                 height=150, width=150, border="2")
                     
                     cis = self.ChemicalIdentifiersSection()
@@ -1313,4 +1328,3 @@ def create_report_from_json_file():
 if __name__ == '__main__':
     create_report_from_json_file()
     
-

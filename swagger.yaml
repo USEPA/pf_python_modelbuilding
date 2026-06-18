@@ -14,6 +14,13 @@ paths:
         '200':
           description: Success
 
+  /api/predictor_models/metadata:
+    get:
+      operationId: app.get_metadata
+      responses:
+        '200':
+          description: Success
+
   /api/predictor_models/model/file/:
     get:
       operationId: app.get_file
@@ -40,13 +47,6 @@ paths:
                 format: binary
         '404':
           description: Not found
-
-  /api/predictor_models/metadata:
-    get:
-      operationId: app.get_metadata
-      responses:
-        '200':
-          description: Success
 
   /api/predictor_models/predict:
     get:
@@ -136,7 +136,9 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/Request"
+              oneOf:
+                - $ref: "#/components/schemas/RequestLegacy"
+                - $ref: "#/components/schemas/RequestWithChemicals"
       responses:
         '200':
           description: Success
@@ -144,7 +146,7 @@ paths:
 
 components:
   schemas:
-    Request:
+    RequestLegacy:
       type: object
       properties:
         smiles:
@@ -160,4 +162,33 @@ components:
         smiles:
           - FC(C(C(C1OC(=O)C2C(=CC=CC=2)N=1)(F)F)(F)F)(F)F
           - CCCCN
+        model_id: 1065
+    RequestWithChemicals:
+      type: object
+      properties:
+        chemicals:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                oneOf:
+                  - type: integer
+                  - type: string
+              smiles:
+                type: string
+            required:
+              - id
+              - smiles
+        model_id:
+          type: integer
+      required:
+        - chemicals
+        - model_id
+      example:
+        chemicals:
+          - id: 1
+            smiles: CC(C)CCC(C)NC1=CC(=O)C(=CC1=O)NC1C=CC=CC=1
+          - id: 2
+            smiles: CCCCN
         model_id: 1065

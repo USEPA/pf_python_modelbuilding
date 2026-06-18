@@ -190,12 +190,12 @@ if __name__ == '__main__':
 
     session = getSession()  
       
-    # createTrainingTestPlotsForReports(session, write_to_db=False, write_to_harddisk=True)
-    # createTrainingTestPlotsForReports(session, write_to_db=True, write_to_harddisk=True)
-    # display_image_from_db(1065, 3, session)
-    # display_image_from_db(1065, 4, session)
+    createTrainingTestPlotsForReports(session, write_to_db=False, write_to_harddisk=True)
+    createTrainingTestPlotsForReports(session, write_to_db=True, write_to_harddisk=True)
+    display_image_from_db(1065, 3, session)
+    display_image_from_db(1065, 4, session)
     
-    loadPlotsForModelsForDataset(session, dataset_name='ECOTOX_2024_12_12_96HR_Fish_LC50_v3b modeling', write_to_db=True, write_to_harddisk=True)
-    display_image_from_db(1887, 3, session)
-    display_image_from_db(1887, 4, session)
+    # loadPlotsForModelsForDataset(session, dataset_name='ECOTOX_2024_12_12_96HR_Fish_LC50_v3b modeling', write_to_db=True, write_to_harddisk=True)
+    # display_image_from_db(1887, 3, session)
+    # display_image_from_db(1887, 4, session)
 

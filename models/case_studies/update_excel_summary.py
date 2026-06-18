@@ -25,12 +25,13 @@ from models.db_utilities.model_files import upload_or_update_model_file_in_db
 
 def update_excel_summaries():
     
-    # username = 'tmarti02'
-    username = "weston.murdock"
+    username = 'tmarti02'
+    # username = "weston.murdock"
     # model_ids = [1763]
-    # model_ids = [1754, 1756, 1757, 1758, 1763]
-    model_ids = [1753]
-    
+    # model_ids = [1753, 1754, 1755, 1756, 1757, 1758, 1763]
+    # model_ids = [1753]
+    model_ids = [1065]
+        
     # upload_to_db = False
     upload_to_db = True
     

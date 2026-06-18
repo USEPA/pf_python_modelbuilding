@@ -39,7 +39,6 @@ my.env
 contractor.env
 *.ipynb
 *.pkl
-test_model_details.txt
 personal.env
-models/ModelToExcelRefactor.py
 backup
+.DS_Store

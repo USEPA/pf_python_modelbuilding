@@ -93,9 +93,6 @@ def updateStatsPredictModuleModels():
 
     try:
         session = getSession()
-        # print(dbl.session == None)
-        # import os
-        # print(os.getenv('DEV_QSAR_PASS'))
 
         create_statistics(session)
 

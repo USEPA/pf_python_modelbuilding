@@ -1,6 +1,8 @@
-# import concurrent
 import concurrent.futures
+import functools
 import json
+import math
+import multiprocessing as mp
 import os
 import threading
 from io import BytesIO
@@ -9,24 +11,23 @@ import traceback
 from indigo import Indigo
 from indigo.renderer import IndigoRenderer
 import base64
-import math
+from pathlib import Path
 
-from sqlalchemy import create_engine
-from sqlalchemy.engine import URL
-from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy import text, bindparam
 
 from API_Utilities import QsarSmilesAPI, DescriptorsAPI
 
-# from db.mongo_cache import get_cached_prediction, cache_prediction
-from db.mongo_cache import get_cached_prediction, cache_prediction
+from db.mongo_cache import (
+    cache_predictions,
+    get_cached_predictions,
+)
+from db import model_cache
 
 from util import predict_constants as pc
 
-from model_ws_utilities import call_do_predictions_from_df, models
+from model_registry import models
 from models import df_utilities as dfu
 from models.ModelBuilder import Model
+from models.db_utilities.dsstox_db_utilities import _load_missing_dsstox_records_from_resources
 
 import StatsCalculator as stats
 import pandas as pd
@@ -34,37 +35,62 @@ import pandas as pd
 
 from sklearn.preprocessing import StandardScaler
 from sklearn.neighbors import NearestNeighbors
-import model_ws_utilities as mwu
 import numpy as np
 
 from util.units_converter import UnitsConverter
+from util.indigo_utils import IndigoUtils
+from util.serialization_compat import refresh_legacy_serialized_model
+from util.prediction_cache_key_utils import (
+    build_prediction_cache_lookup_keys,
+    build_prediction_cache_key,
+    ensure_chemical_inchi_key,
+    inchi_keys_match_connectivity,
+    normalize_inchi_key,
+    prediction_chemical_conflicts_with_cache_key,
+    standardized_chemical_changes_identity,
+)
+from util.chemical_image_utils import build_render_image_url, get_render_smiles
 
 from utils import timer, print_first_row
 from applicability_domain import applicability_domain_utilities as adu
+from model_service_common.config import get_env as _get_env
+from API_Utilities import SearchAPI
 
 # debug = False
 import logging
 from dis import dis
+
+
+STDIZER_API = _get_env('stdizer.url', 'STDIZER_API', default='http://stdizer-api:8200/api/stdizer')
+DESCRIPTORS_API = _get_env('descriptors.url', 'DESCRIPTORS_API', default='http://descriptors-api:8804/api/descriptors')
+RESOLVER_API = _get_env('resolver.url', 'RESOLVER_API', default='http://resolver-api:8600/api/resolver')
 
 logging.getLogger('sqlalchemy').setLevel(logging.ERROR)
 
 fk_dsstox_snapshot_id = 1  # DSSTOX Snapshot 04/23 (Physchem models were created 2024-02-29), if use fk = 2 or 3 will have more missing records
 
 # Following records are cids in the physchem models that didnt make it into the dsstox_records table for fk_dsstox_snapshot_id = 1 (dsstox changed slightly) 
-# Following was created by ModelInitializer.findMissingDsstoxRecordsInPhyschemModelDatasets()
-dict_missing_dsstox_records = {    
-               # "DTXCID001783033": {"smiles": "[H][C@]12[C@@H](Cl)[C@H](Cl)[C@](C(Cl)Cl)([C@@H](Cl)[C@@H]1Cl)C2(C)C(Cl)Cl"},#has no matching sid in dsstox
-               "DTXCID201784601": {"smiles": "CC[C@@H]1CCC[C@H]1C", "sid": "DTXSID2075055", "casrn": "930-90-5", "name": "trans-1-Methyl-2-ethylcyclopentane"},
-               "DTXCID401783809": {"smiles": "[H][C@]12CO[S@](=O)OC[C@@]1([H])[C@@]1(Cl)C(Cl)=C(Cl)[C@]2(Cl)C1(Cl)Cl", "sid": "DTXSID8037540", "casrn": "33213-65-9", "name": "Endosulfan II"},
-               "DTXCID501782911": {"smiles": "CN1C[C@@]2(C=C)[C@@H]3C[C@H]4OC[C@@H]3[C@@H]1[C@@H]2[C@@]41C(=O)NC2=CC=CC=C12", "sid": "DTXSID40878487", "casrn": "509-15-9", "name": "Gelsemine"},
-               "DTXCID501782985": {"smiles": "[H][C@]12CC(Cl)(Cl)[C@](CCl)([C@@H](Cl)[C@@H]1Cl)C2(CCl)CCl", "sid": "DTXSID80874069", "casrn": "51775-36-1", "name": "2,2,5-endo,6-exo,8,9,10-Heptachlorobornane"},
-               "DTXCID501783733": {"smiles": "[H][C@]12O[C@@]1([H])[C@@]1([H])[C@@]([H])([C@H]2Cl)[C@@]2(Cl)C(Cl)=C(Cl)[C@]1(Cl)C2(Cl)Cl", "sid": "DTXSID1024126", "casrn": "1024-57-3", "name": "Heptachlor epoxide B"},
-               "DTXCID601783831": {"smiles": "[H][C@]12CO[S@@](=O)OC[C@@]1([H])[C@@]1(Cl)C(Cl)=C(Cl)[C@]2(Cl)C1(Cl)Cl", "sid": "DTXSID9037539", "casrn": "959-98-8", "name": "Endosulfan I"},
-               "DTXCID701521422": {"smiles": "[H][C@@]12CCCC[C@@]1([H])CCCC2", "sid": "DTXSID90883405", "casrn": "493-02-7", "name": "trans-Decahydronaphthalene"}}
+# Following was created by models/db_utilities/dsstox_db_utilities.findMissingDsstoxRecordsInPhyschemModelDatasets()
+
+dict_missing_dsstox_records=_load_missing_dsstox_records_from_resources()
+
+# dict_missing_dsstox_records = {    
+#                # "DTXCID001783033": {"smiles": "[H][C@]12[C@@H](Cl)[C@H](Cl)[C@](C(Cl)Cl)([C@@H](Cl)[C@@H]1Cl)C2(C)C(Cl)Cl"},#has no matching sid in dsstox
+#                "DTXCID201784601": {"smiles": "CC[C@@H]1CCC[C@H]1C", "sid": "DTXSID2075055", "casrn": "930-90-5", "name": "trans-1-Methyl-2-ethylcyclopentane"},
+#                "DTXCID401783809": {"smiles": "[H][C@]12CO[S@](=O)OC[C@@]1([H])[C@@]1(Cl)C(Cl)=C(Cl)[C@]2(Cl)C1(Cl)Cl", "sid": "DTXSID8037540", "casrn": "33213-65-9", "name": "Endosulfan II"},
+#                "DTXCID501782911": {"smiles": "CN1C[C@@]2(C=C)[C@@H]3C[C@H]4OC[C@@H]3[C@@H]1[C@@H]2[C@@]41C(=O)NC2=CC=CC=C12", "sid": "DTXSID40878487", "casrn": "509-15-9", "name": "Gelsemine"},
+#                "DTXCID501782985": {"smiles": "[H][C@]12CC(Cl)(Cl)[C@](CCl)([C@@H](Cl)[C@@H]1Cl)C2(CCl)CCl", "sid": "DTXSID80874069", "casrn": "51775-36-1", "name": "2,2,5-endo,6-exo,8,9,10-Heptachlorobornane"},
+#                "DTXCID501783733": {"smiles": "[H][C@]12O[C@@]1([H])[C@@]1([H])[C@@]([H])([C@H]2Cl)[C@@]2(Cl)C(Cl)=C(Cl)[C@]1(Cl)C2(Cl)Cl", "sid": "DTXSID1024126", "casrn": "1024-57-3", "name": "Heptachlor epoxide B"},
+#                "DTXCID601783831": {"smiles": "[H][C@]12CO[S@@](=O)OC[C@@]1([H])[C@@]1(Cl)C(Cl)=C(Cl)[C@]2(Cl)C1(Cl)Cl", "sid": "DTXSID9037539", "casrn": "959-98-8", "name": "Endosulfan I"},
+#                "DTXCID701521422": {"smiles": "[H][C@@]12CCCC[C@@]1([H])CCCC2", "sid": "DTXSID90883405", "casrn": "493-02-7", "name": "trans-Decahydronaphthalene"}}
+
 
 USE_TEMPORARY_MODEL_PLOTS = False
 
-imgURLCid = "https://comptox.epa.gov/dashboard-api/ccdapp1/chemical-files/image/by-dtxcid/";
+_MISSING_NEIGHBOR_DSS_TOX_CACHE = {}
+_MISSING_NEIGHBOR_DSS_TOX_LOCK = threading.Lock()
+_INDIGO_UTILS_LOCAL = threading.local()
+_POSTPROCESS_PREDICTOR = None
 
 """
 Not completed:
@@ -74,29 +100,157 @@ TODO: Add ability to export report as excel
 """
 
 lock = threading.Lock()
+_engine_lock = threading.Lock()
+_engine = None
+_session_factory = None
+_sqlalchemy_text = None
+SQLAlchemyError = Exception
+
+
+def _load_sqlalchemy_error_type():
+    global SQLAlchemyError
+    if SQLAlchemyError is Exception:
+        from sqlalchemy.exc import SQLAlchemyError as sqlalchemy_error
+        SQLAlchemyError = sqlalchemy_error
+    return SQLAlchemyError
+
+
+def text(*args, **kwargs):
+    global _sqlalchemy_text
+    if _sqlalchemy_text is None:
+        from sqlalchemy import text as sqlalchemy_text
+        _sqlalchemy_text = sqlalchemy_text
+        _load_sqlalchemy_error_type()
+    return _sqlalchemy_text(*args, **kwargs)
+
+
+def _reset_runtime_state_after_fork():
+    global lock, _engine_lock, _engine, _session_factory
+    global _MISSING_NEIGHBOR_DSS_TOX_LOCK, _INDIGO_UTILS_LOCAL, _POSTPROCESS_PREDICTOR
+
+    inherited_engine = _engine
+    lock = threading.Lock()
+    _engine_lock = threading.Lock()
+    _MISSING_NEIGHBOR_DSS_TOX_LOCK = threading.Lock()
+    _INDIGO_UTILS_LOCAL = threading.local()
+    _POSTPROCESS_PREDICTOR = None
+    _engine = None
+    _session_factory = None
+
+    if inherited_engine is not None:
+        try:
+            inherited_engine.dispose()
+        except Exception:
+            logging.debug("Failed to dispose inherited SQLAlchemy engine after fork", exc_info=True)
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_reset_runtime_state_after_fork)
+
+
+@functools.lru_cache(maxsize=4096)
+def _render_smiles_to_base64_cached(smiles_string, width=400, height=400):
+    indigo = Indigo()
+    renderer = IndigoRenderer(indigo)
+
+    try:
+        mol = indigo.loadMolecule(smiles_string)
+        indigo.setOption("render-output-format", "png")
+        indigo.setOption("render-image-width", width)
+        indigo.setOption("render-image-height", height)
+        img_bytes = renderer.renderToBuffer(mol)
+        return base64.b64encode(img_bytes).decode("utf-8")
+    except Exception:
+        return None
+
+
+def _get_indigo_utils():
+    indigo_utils = getattr(_INDIGO_UTILS_LOCAL, "indigo_utils", None)
+    if indigo_utils is None:
+        indigo_utils = IndigoUtils()
+        _INDIGO_UTILS_LOCAL.indigo_utils = indigo_utils
+    return indigo_utils
+
+
+@functools.lru_cache(maxsize=50000)
+def _inchi_key_from_smiles_cached(smiles_string):
+    if smiles_string is None:
+        return None
+
+    smiles_text = str(smiles_string).strip()
+    if not smiles_text:
+        return None
+
+    try:
+        return normalize_inchi_key(_get_indigo_utils().inchi_key_from_smiles(smiles_text))
+    except Exception:
+        logging.exception("Failed to generate InChIKey for SMILES=%s", smiles_text)
+        return None
 
 
 def getEngine():
-    connect_url = URL.create(
-        drivername='postgresql+psycopg2',
-        username=os.getenv('DEV_QSAR_USER'),
-        password=os.getenv('DEV_QSAR_PASS'),
-        host=os.getenv('DEV_QSAR_HOST', 'localhost'),
-        port=os.getenv('DEV_QSAR_PORT', 5432),
-        database=os.getenv('DEV_QSAR_DATABASE')
-    )
-    
-    # print(connect_url)    
-    
-    engine = create_engine(connect_url, echo=False)
-    return engine
+    global _engine, _session_factory, SQLAlchemyError
+
+    if _engine is None:
+        with _engine_lock:
+            if _engine is None:
+                from sqlalchemy import create_engine
+                from sqlalchemy.engine import URL
+                from sqlalchemy.exc import SQLAlchemyError as sqlalchemy_error
+                from sqlalchemy.orm import sessionmaker
+
+                SQLAlchemyError = sqlalchemy_error
+                connect_url = URL.create(
+                    drivername='postgresql+psycopg2',
+                    username=os.getenv('POSTGRES_USER'),
+                    password=os.getenv('POSTGRES_PASSWORD'),
+                    host=os.getenv('POSTGRES_HOST', 'localhost'),
+                    port=int(os.getenv('POSTGRES_PORT', 5432)),
+                    database=os.getenv('POSTGRES_DB')
+                )
+
+                _engine = create_engine(connect_url, echo=False, pool_pre_ping=True)
+                _session_factory = sessionmaker(bind=_engine)
+
+    return _engine
 
 
 def getSession():
-    engine = getEngine()
-    Session = sessionmaker(bind=engine)
-    session = Session()
-    return session
+    global _session_factory
+
+    if _session_factory is None:
+        getEngine()
+
+    return _session_factory()
+
+
+def _get_env_positive_int(name: str, default: int) -> int:
+    raw_value = os.getenv(name, str(default))
+    try:
+        return max(1, int(raw_value))
+    except (TypeError, ValueError):
+        logging.warning("Invalid integer value for %s=%r; using default=%s", name, raw_value, default)
+        return default
+
+
+def _chunk_sequence(items, chunk_size):
+    if chunk_size <= 0:
+        raise ValueError("chunk_size must be positive")
+
+    for start in range(0, len(items), chunk_size):
+        yield start, items[start:start + chunk_size]
+
+
+def init_postprocess_predictor():
+    global _POSTPROCESS_PREDICTOR
+    _POSTPROCESS_PREDICTOR = ModelPredictor()
+
+
+def _get_postprocess_predictor():
+    global _POSTPROCESS_PREDICTOR
+    if _POSTPROCESS_PREDICTOR is None:
+        init_postprocess_predictor()
+    return _POSTPROCESS_PREDICTOR
 
 
 class ModelInitializer:
@@ -107,9 +261,20 @@ class ModelInitializer:
             if model_id in models:
                 logging.debug('have model already initialized')
                 model = models[model_id]
+                if model is not None:
+                    return model
+
+                # Previous initialization failed and stored None; allow fresh retry.
+                logging.warning(f"Cached model for {model_id} is None, reloading")
+                models.pop(model_id, None)
             else:
-                model = self.initModel(model_id)
+                model = None
+
+            model = self.initModel(model_id)
+            if model is not None:
                 models[model_id] = model
+            else:
+                logging.error(f"Model initialization failed for model_id={model_id}; not caching")
 
         return model
 
@@ -131,16 +296,27 @@ class ModelInitializer:
 
             # Use BytesIO to collect the byte data
             output_stream = BytesIO()
+            chunk_count = 0
 
             # Fetch and write byte data to the output stream
             for record in result:
+                if record.bytes is None:
+                    logging.error(f"Found NULL model bytes chunk for model_id={model_id}")
+                    return None
                 output_stream.write(record.bytes)  # Assuming the column name is 'bytes'
+                chunk_count += 1
+
+            if chunk_count == 0:
+                logging.error(f"No model bytes found in DB for model_id={model_id}")
+                return None
 
             # Return the combined byte array
-            return output_stream.getvalue()
+            model_bytes = output_stream.getvalue()
+            logging.debug(f"Loaded model bytes for model_id={model_id}: chunks={chunk_count}, total_bytes={len(model_bytes)}")
+            return model_bytes
 
-        except Exception as e:
-            print(f"Exception occurred: {e}")
+        except Exception:
+            logging.exception(f"Failed to read model bytes for model_id={model_id}")
             return None
 
     def get_model_statistics(self, model: Model, session):
@@ -396,55 +572,122 @@ class ModelInitializer:
 
     # @timer
     def initModel(self, model_id):
+        if model_cache.model_artifact_cache_enabled():
+            try:
+                cached_model = model_cache.read_model_snapshot(model_id)
+            except model_cache.ModelArtifactCacheUnavailableError as exc:
+                logging.warning("Predictor model artifact cache unavailable for model_id=%s: %s", model_id, exc)
+            else:
+                if cached_model is not None:
+                    cached_model.modelId = str(model_id)
+                    try:
+                        cached_model, compat_stats = refresh_legacy_serialized_model(
+                            cached_model,
+                            logger=logging.getLogger(__name__),
+                        )
+                        if compat_stats["xgboost_objects"]:
+                            logging.info(
+                                "Refreshed %s legacy XGBoost object(s) after loading model_id=%s from Mongo",
+                                compat_stats["xgboost_objects"],
+                                model_id,
+                            )
+                    except Exception:
+                        logging.exception(
+                            "Failed to refresh legacy serialized components for cached model_id=%s",
+                            model_id,
+                        )
+                    logging.info("Loaded model_id=%s from Mongo model artifact cache", model_id)
+                    return cached_model
+
+        if not model_cache.postgres_fallback_enabled():
+            logging.error("Model_id=%s not found in Mongo artifact cache and Postgres fallback is disabled", model_id)
+            return None
+
+        model = self._init_model_from_postgres(model_id)
+        if model is not None and model_cache.model_artifact_cache_enabled():
+            try:
+                model_cache.write_model_snapshot(model_id, model)
+                logging.info("Stored model_id=%s in Mongo model artifact cache", model_id)
+            except model_cache.ModelArtifactCacheUnavailableError as exc:
+                logging.warning("Could not store model_id=%s in Mongo model artifact cache: %s", model_id, exc)
+            except Exception:
+                logging.exception("Could not store model_id=%s in Mongo model artifact cache", model_id)
+        return model
+
+    @timer
+    def _init_model_from_postgres(self, model_id):
 
         session = getSession()
+        try:
+            model_bytes = self.get_model_bytes(model_id, session)
 
-        model_bytes = self.get_model_bytes(model_id, session)
+            if not model_bytes:
+                logging.error(f"Couldnt load model_id={model_id} from model bytes")
+                return None
 
-        if not model_bytes:
-            logging.error(f"Couldnt load {model_id} from model bytes")
-            return
+            import pickle
+            try:
+                model = pickle.loads(model_bytes)
+            except Exception:
+                logging.exception(f"Failed to deserialize model bytes for model_id={model_id}")
+                return None
 
-        import pickle
-        model = pickle.loads(model_bytes)
+            try:
+                model, compat_stats = refresh_legacy_serialized_model(model, logger=logging.getLogger(__name__))
+                if compat_stats["xgboost_objects"]:
+                    logging.info(
+                        "Refreshed %s legacy XGBoost object(s) after loading model_id=%s",
+                        compat_stats["xgboost_objects"],
+                        model_id,
+                    )
+            except Exception:
+                logging.exception(
+                    f"Failed to refresh legacy serialized components for model_id={model_id}"
+                )
 
-        if not model:
-            logging.error(f"Couldnt load {model_id} from model bytes")
-            return
+            if not model:
+                logging.error(f"Deserialized model is empty for model_id={model_id}")
+                return None
 
-        model.modelId = model_id
+            model.modelId = model_id
 
-        if not hasattr(model, "is_binary"):
-            logging.info('model.is_binary is none, setting to false')
-            model.is_binary = False
+            if not hasattr(model, "is_binary"):
+                logging.info('model.is_binary is none, setting to false')
+                model.is_binary = False
 
-        # Stores model under provided number
+            # Stores model under provided number
+            self.get_model_details(model, session)
+            self.updateUnits(model)
+            self.get_model_statistics(model, session)
+            self.get_training_prediction_instances(session, model)
+            self.get_dsstox_records_for_dataset(model, session)
 
-        self.get_model_details(model, session)
-        
-        self.updateUnits(model)
-        
-        self.get_model_statistics(model, session)
-        self.get_training_prediction_instances(session, model)
-        self.get_dsstox_records_for_dataset(model, session)
+            # get following for pred values for neighbors:
+            model.df_preds_test = self.get_predictions(session, model=model, split_num=1, fk_splitting_id=1)
+            model.df_preds_training_cv = self.get_cv_predictions(session, model)
 
-        # get following for pred values for neighbors:
-        model.df_preds_test = self.get_predictions(session, model=model, split_num=1, fk_splitting_id=1)
-        model.df_preds_training_cv = self.get_cv_predictions(session, model)
+            logging.debug(f"model_description with added metadata:{model.get_model_description_pretty()}")
+            logging.info(f"Successfully initialized model_id={model_id}")
 
-        model.external_dataset_name = self.get_external_dataset_name(session, model)
-        if model.external_dataset_name:
-            self.get_dsstox_records_for_dataset_external(session, model=model, external_dataset_name=model.external_dataset_name)
-            self.get_external_instances(session, model)
-            model.external_dataset_description = self.get_external_dataset_description(session, model)
-            model.df_preds_external = self.get_external_predictions(session, model=model, external_dataset_name=model.external_dataset_name)  # Get external set predictions
-            # model.num_external = model.df_preds_external.shape[0]
+            model.external_dataset_name = self.get_external_dataset_name(session, model)
+            if model.external_dataset_name:
+                self.get_dsstox_records_for_dataset_external(session, model=model, external_dataset_name=model.external_dataset_name)
+                self.get_external_instances(session, model)
+                model.external_dataset_description = self.get_external_dataset_description(session, model)
+                model.df_preds_external = self.get_external_predictions(session, model=model, external_dataset_name=model.external_dataset_name)  # Get external set predictions
+                # model.num_external = model.df_preds_external.shape[0]
+    
+            logging.debug(f"model_description with added metadata:{model.get_model_description_pretty()}")
+            return model
 
-        logging.debug(f"model_description with added metadata:{model.get_model_description_pretty()}")
-
-        session.close()
-
-        return model
+        except Exception:
+            logging.exception(f"Unexpected failure while initializing model_id={model_id}")
+            return None
+        finally:
+            try:
+                session.close()
+            except Exception:
+                logging.exception(f"Failed to close DB session after initModel(model_id={model_id})")
     
     def getQsarDtxcid(self, qsarSmiles, datasetName, session):
         
@@ -511,15 +754,27 @@ class ModelInitializer:
 
             # Note: in the data_points table, sometimes the qsar_dtxcid is pipe delimited pair of cids
             sql = """
-                SELECT dp.canon_qsar_smiles as "canonicalSmiles", dr.dtxsid as sid, dr.dtxcid as cid, dr.casrn, dr.preferred_name as "name" , dr.smiles, dr.indigo_inchi_key as "inchiKey"
-                    FROM qsar_datasets.datasets d
-                    JOIN qsar_datasets.data_points dp ON dp.fk_dataset_id = d.id
-                    LEFT JOIN qsar_models.dsstox_records dr ON dr.dtxcid = split_part(dp.qsar_dtxcid, '|', 1)
-                """                
+                SELECT
+                    dp.canon_qsar_smiles as "canonicalSmiles",
+                    dr.dtxsid as sid,
+                    coalesce(dr.dtxcid, split_part(dp.qsar_dtxcid, '|', 1)) as cid,
+                    dr.casrn,
+                    dr.preferred_name as "name",
+                    dr.smiles,
+                    dr.indigo_inchi_key as "inchiKey"
+                FROM qsar_datasets.datasets d
+                JOIN qsar_datasets.data_points dp
+                  ON dp.fk_dataset_id = d.id
+                LEFT JOIN qsar_models.dsstox_records dr
+                  ON dr.dtxcid = split_part(dp.qsar_dtxcid, '|', 1)
+                 AND dr.fk_dsstox_snapshot_id = :fk_dsstox_snapshot_id
+                WHERE d.name = :datasetName;
+                """
 
-            sql = text(sql + "\nWHERE d.name = :datasetName and dr.fk_dsstox_snapshot_id = :fk_dsstox_snapshot_id;")
+            sql = text(sql)
 
-            # print(sql)
+            # print("in get_dsstox_records_for_dataset(), sql=", sql)
+
 
             # Execute the query with the parameter
             result = connection.execute(sql, {"datasetName": model.datasetName, "fk_dsstox_snapshot_id": fk_dsstox_snapshot_id})
@@ -527,17 +782,57 @@ class ModelInitializer:
             # Convert result to DataFrame
             df = pd.DataFrame(result.fetchall(), columns=result.keys())
 
-            model.df_dsstoxRecords = df;
+            for row_index, row in df[df["sid"].isnull()].iterrows():
+                identifier = row.get("cid")
+                
+                if identifier in dict_missing_dsstox_records:                
+                    fallback_record = dict_missing_dsstox_records.get(identifier)
+                    df.at[row_index, "sid"] = fallback_record.get("sid")
+                    df.at[row_index, "casrn"] = fallback_record.get("casrn")
+                    df.at[row_index, "name"] = fallback_record.get("name")
+                    df.at[row_index, "smiles"] = fallback_record.get("smiles")
+                    logging.info(f"from dict_missing_dsstox_records, for cid={identifier}, sid={fallback_record.get('sid')}")
+                
+                else:
+                    try:
+                        # print(row.get("canonicalSmiles"), identifier)
+                        chemicals, code = SearchAPI.call_resolver_get(RESOLVER_API, identifier)
+                        
+                        if code == 200 and len(chemicals)>0:
+                            fallback_record = chemicals[0]["chemical"]
+                            logging.info(f"from resolver, for cid={identifier}, sid={fallback_record.get('sid')}")
+                            df.at[row_index, "sid"] = fallback_record.get("sid")
+                            df.at[row_index, "casrn"] = fallback_record.get("casrn")
+                            df.at[row_index, "name"] = fallback_record.get("name")
+                            df.at[row_index, "smiles"] = fallback_record.get("smiles")
+                            
+                            #TODO store in _MISSING_NEIGHBOR_DSS_TOX_CACHE so can look up without requerying
+                            
+                        else:
+                            logging.warn("Couldnt find " + identifier + " using resolver")
+                            df.at[row_index, "name"] = identifier
+                            
+                    except Exception as exc:
+                        # traceback.print_exc()   
+                        logging.exception("Resolver lookup failed for identifier=%s", identifier)
+                
+
+            model.df_dsstoxRecords = df
+            # print("in get_dsstox_records_for_dataset(), model.df_dsstoxRecords", model.df_dsstoxRecords)
             
             none_sid_smiles = df[df['sid'].isnull()]['canonicalSmiles']
 
             if len(none_sid_smiles) > 0:
-                print(model.modelId, "Have canonicalSmiles in dataset that isn't in dsstox records:", none_sid_smiles)
-
+                print(model.modelId, "Have canonicalSmiles in dataset that isn't in dsstox records:\n", none_sid_smiles)
+            
+            # df.to_csv(Path(os.getenv("PROJECT_ROOT")) / "df_dsstoxRecords.csv")
+            
             return df
 
         except Exception as e:
-            print(f"Exception occurred: {e}")
+            # traceback.print_exc()   
+            # print(f"Exception occurred: {e}")
+            logging.exception("Failed to get dsstox record")
             return None
 
     @staticmethod
@@ -888,7 +1183,40 @@ class ModelResults:
             "adEstimates": self.adEstimates
         }
 
-        
+
+def _sanitize_api_chemical_identifiers(chemical):
+    if not isinstance(chemical, dict):
+        return chemical
+    sanitized = {}
+    for key, value in chemical.items():
+        if key == "imageSrc":
+            continue
+        sanitized[key] = None if value == "N/A" else value
+    return sanitized
+
+
+def _standardized_chemical_changes_identity(input_smiles, standardized_chemical):
+    return standardized_chemical_changes_identity(
+        input_smiles,
+        standardized_chemical,
+        _inchi_key_from_smiles_cached,
+    )
+
+
+def _build_input_chemical(smiles):
+    return {
+        "chemId": smiles,
+        "cid": None,
+        "sid": None,
+        "casrn": None,
+        "name": None,
+        "smiles": smiles,
+        "canonicalSmiles": smiles,
+        "inchi": None,
+        "additionalProps": {},
+    }
+
+
 class Report:
 
     def __init__(self, chemical, modelDetails:ModelDetails, modelResults:ModelResults):
@@ -902,7 +1230,7 @@ class Report:
     def to_dict(self):
         # Convert the object to a dictionary, including nested objects
         return {
-            "chemicalIdentifiers": self.chemicalIdentifiers,
+            "chemicalIdentifiers": _sanitize_api_chemical_identifiers(self.chemicalIdentifiers),
             "modelDetails": self.modelDetails.__dict__ if self.modelDetails else None,
             "modelResults": self.modelResults.__dict__ if self.modelResults else None,
             "neighborResultsTraining": self.neighborResultsTraining,
@@ -915,7 +1243,7 @@ class Report:
 
 class NeighborGetter:
 
-    def get_neighbors(self, col_name_id, id, test_indices, n_neighbors, df_set):
+    def get_neighbors(self, col_name_id, test_indices, n_neighbors, df_set, return_all=False):
         """Get AD dataframe for k neighbors. TODO can be done in clearer way?
         """
 
@@ -931,10 +1259,27 @@ class NeighborGetter:
         # Transpose ids_combined to align with test_indices rows
         ids_combined_transposed = np.array(ids_combined).T.tolist()
 
+        if return_all:
+            return ids_combined_transposed
+
         neighbors = ids_combined_transposed[0]
         return neighbors
 
-    def find_neighbors_in_set(self, model, df_set, df_test_chemicals):
+    def find_neighbors_in_set(self, model, df_set, df_test_chemicals, precomputed=None, return_all=False):
+
+        if precomputed is not None:
+            test_set = df_test_chemicals[model.embedding]
+            test_x = precomputed["scaler"].transform(test_set)
+            test_distances, test_indices = precomputed["nbrs"].kneighbors(test_x)
+
+            ids = precomputed["ids"]
+            if return_all:
+                neighbors = [[ids[idx] for idx in row_indices] for row_indices in test_indices]
+                distances = [list(distance_row) for distance_row in test_distances]
+            else:
+                neighbors = [ids[idx] for idx in test_indices[0]]
+                distances = list(test_distances[0])
+            return neighbors, distances
 
         n_neighbors = 10
         nbrs = NearestNeighbors(n_neighbors=n_neighbors, algorithm='brute', metric='euclidean')
@@ -963,14 +1308,21 @@ class NeighborGetter:
         test_distances, test_indices = nbrs.kneighbors(test_x)
 
         col_name_id = df_set.columns[0]
-        id_name = df_test_chemicals[col_name_id]
-
-        neighbors = self.get_neighbors(col_name_id, id_name, test_indices, n_neighbors, df_set)
+        neighbors = self.get_neighbors(
+            col_name_id,
+            test_indices,
+            n_neighbors,
+            df_set,
+            return_all=return_all,
+        )
 
         # print(len(test_distances))
         # print(len(neighbors))
 
-        distances = list(test_distances[0])
+        if return_all:
+            distances = [list(distance_row) for distance_row in test_distances]
+        else:
+            distances = list(test_distances[0])
 
         return neighbors, distances
 
@@ -979,8 +1331,1823 @@ class NeighborGetter:
 
 class ModelPredictor:
 
+    def __init__(self):
+        self._descriptor_api = DescriptorsAPI()
+        self._units_converter = UnitsConverter()
+
+    @staticmethod
+    def _get_inchi_key_from_smiles(smiles):
+        return _inchi_key_from_smiles_cached(smiles)
+
+    @staticmethod
+    def _normalize_inchi_key(inchi_key):
+        return normalize_inchi_key(inchi_key)
+
+    @classmethod
+    def _ensure_chemical_inchi_key(cls, chemical, fallback_smiles=None):
+        return ensure_chemical_inchi_key(
+            chemical,
+            cls._get_inchi_key_from_smiles,
+            fallback_smiles=fallback_smiles,
+        )
+
+    @classmethod
+    def _build_prediction_cache_key(cls, model_id, smiles=None, chemical=None):
+        return build_prediction_cache_key(
+            model_id,
+            cls._get_inchi_key_from_smiles,
+            smiles=smiles,
+            chemical=chemical,
+        )
+
+    @classmethod
+    def _build_prediction_cache_lookup_keys(cls, model_id, smiles=None, chemical=None):
+        return build_prediction_cache_lookup_keys(
+            model_id,
+            cls._get_inchi_key_from_smiles,
+            smiles=smiles,
+            chemical=chemical,
+        )
+
+    @staticmethod
+    def _to_lookup(df, key_col, value_cols=None):
+        if df is None or df.empty or key_col not in df.columns:
+            return {}
+
+        lookup_df = df.drop_duplicates(subset=[key_col], keep='first')
+
+        if value_cols is None:
+            return lookup_df.set_index(key_col).to_dict(orient='index')
+
+        existing_value_cols = [col for col in value_cols if col in df.columns]
+        if not existing_value_cols:
+            return {}
+
+        return lookup_df.set_index(key_col)[existing_value_cols].to_dict(orient='index')
+
+    @staticmethod
+    def _prediction_to_obj(prediction):
+
+        def _sanitize_prediction_payload(value):
+            if isinstance(value, list):
+                return [_sanitize_prediction_payload(item) for item in value]
+
+            if isinstance(value, dict):
+                sanitized = {}
+                for key, item in value.items():
+                    if key in {"chemicalIdentifiers", "standardizedChemical"}:
+                        sanitized[key] = _sanitize_api_chemical_identifiers(
+                            ModelPredictor._ensure_chemical_inchi_key(item)
+                        )
+                    else:
+                        sanitized[key] = _sanitize_prediction_payload(item)
+                return sanitized
+
+            return value
+
+        if isinstance(prediction, (dict, list)):
+            return _sanitize_prediction_payload(prediction)
+
+        if isinstance(prediction, (bytes, bytearray)):
+            prediction = prediction.decode("utf-8")
+
+        if isinstance(prediction, str):
+            try:
+                return _sanitize_prediction_payload(json.loads(prediction))
+            except json.JSONDecodeError:
+                return {"error": prediction}
+
+        return {"error": str(prediction)}
+
+    @staticmethod
+    def _prediction_to_json_str(prediction):
+        if isinstance(prediction, (dict, list)):
+            return json.dumps(prediction)
+
+        if isinstance(prediction, (bytes, bytearray)):
+            return prediction.decode("utf-8")
+
+        if isinstance(prediction, str):
+            return prediction
+
+        return json.dumps({"error": str(prediction)})
+
+    @staticmethod
+    def _preview_log_value(value, max_len: int=500) -> str:
+        if isinstance(value, pd.DataFrame):
+            return f"DataFrame rows={len(value.index)} cols={list(value.columns[:10])}"
+        if isinstance(value, dict):
+            return f"dict keys={list(value.keys())[:10]}"
+        if isinstance(value, list):
+            return f"list len={len(value)}"
+
+        text = str(value).replace("\n", " ").strip()
+        if len(text) > max_len:
+            return text[:max_len] + "..."
+        return text
+
+    @staticmethod
+    def _preview_smiles_batch(smiles_values, max_items: int=10, max_len: int=160) -> str:
+        if smiles_values is None:
+            return "[]"
+
+        preview_items = []
+        smiles_list = list(smiles_values)
+        for smiles in smiles_list[:max_items]:
+            text = str(smiles).replace("\n", " ").strip()
+            if len(text) > max_len:
+                text = text[:max_len] + "..."
+            preview_items.append(text)
+
+        if len(smiles_list) > max_items:
+            preview_items.append(f"...(+{len(smiles_list) - max_items} more)")
+
+        return "[" + ", ".join(repr(item) for item in preview_items) + "]"
+
+    @staticmethod
+    def _run_threaded_chunked(items, chunk_size, worker_count, chunk_handler):
+        if not items:
+            return []
+
+        chunks = [chunk for _, chunk in _chunk_sequence(items, chunk_size)]
+        if len(chunks) <= 1 or worker_count <= 1:
+            return chunk_handler(items)
+
+        max_workers = min(worker_count, len(chunks))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
+            chunk_results = list(pool.map(chunk_handler, chunks))
+
+        flattened_results = []
+        for chunk_result in chunk_results:
+            flattened_results.extend(chunk_result)
+        return flattened_results
+
+    @staticmethod
+    def _calculate_dynamic_chunk_size(item_count, worker_count):
+        if item_count <= 0:
+            raise ValueError("item_count must be positive")
+
+        effective_workers = max(1, min(worker_count, item_count))
+        return math.ceil(item_count / effective_workers)
+
+    @staticmethod
+    def _get_standardize_thread_count():
+        return _get_env_positive_int("PREDICT_STANDARDIZE_THREADS", 10)
+
+    @staticmethod
+    def _get_descriptor_thread_count():
+        return _get_env_positive_int("PREDICT_DESCRIPTOR_THREADS", 10)
+
+    @staticmethod
+    def _get_postprocess_process_count():
+        return _get_env_positive_int("PREDICT_REPORT_PROCESSES", 4)
+
+    @staticmethod
+    def _get_postprocess_executor_kind():
+        raw_value = os.getenv("PREDICT_REPORT_EXECUTOR", "thread")
+        value = str(raw_value).strip().lower()
+
+        if value in {"thread", "threads"}:
+            return "thread"
+        if value in {"process", "processes"}:
+            return "process"
+
+        logging.warning(
+            "Invalid post-process executor %r; using default=%s",
+            raw_value,
+            "thread",
+        )
+        return "thread"
+
+    @staticmethod
+    def _strip_model_details_from_prediction(prediction):
+        if isinstance(prediction, list):
+            return [ModelPredictor._strip_model_details_from_prediction(item) for item in prediction]
+
+        if isinstance(prediction, dict):
+            stripped = dict(prediction)
+            stripped.pop("modelDetails", None)
+            return stripped
+
+        return prediction
+
+    @staticmethod
+    def _attach_model_details_to_prediction(prediction, model_details_dict):
+        if not model_details_dict or not isinstance(prediction, dict):
+            return prediction
+
+        prediction_with_details = dict(prediction)
+        prediction_with_details["modelDetails"] = model_details_dict
+        return prediction_with_details
+
+    @staticmethod
+    def _prediction_from_cached_value(prediction):
+        return ModelPredictor._strip_model_details_from_prediction(
+            ModelPredictor._prediction_to_obj(prediction)
+        )
+
+    def _prediction_from_cached_value_for_smiles(self, prediction, fallback_smiles=None):
+        prediction_obj = self._prediction_from_cached_value(prediction)
+        return self._ensure_cached_prediction_uses_input_chemical(prediction_obj, fallback_smiles)
+
+    @classmethod
+    def _cached_prediction_conflicts_with_cache_key(cls, cache_key, prediction):
+        return prediction_chemical_conflicts_with_cache_key(
+            cache_key,
+            prediction,
+            cls._get_inchi_key_from_smiles,
+        )
+
+    def _ensure_cached_prediction_uses_input_chemical(self, prediction, fallback_smiles):
+        if not isinstance(prediction, dict) or not fallback_smiles:
+            return prediction
+
+        if isinstance(prediction.get("standardizedChemical"), dict):
+            return prediction
+
+        chemical = prediction.get("chemicalIdentifiers")
+        if not isinstance(chemical, dict):
+            return prediction
+
+        if not _standardized_chemical_changes_identity(fallback_smiles, chemical):
+            return prediction
+
+        updated_prediction = dict(prediction)
+        updated_prediction["chemicalIdentifiers"] = self._build_minimal_chemical(fallback_smiles)
+        updated_prediction["standardizedChemical"] = chemical
+        return updated_prediction
+
+    @staticmethod
+    def _standardization_match_key(value):
+        if value is None:
+            return None
+
+        value_text = str(value).strip()
+        if not value_text:
+            return None
+
+        return value_text
+
+    def _get_standardization_response_match_keys(self, chemical):
+        if not isinstance(chemical, dict):
+            return []
+
+        match_keys = []
+
+        for field_name, value in (
+            ("id", chemical.get("id")),
+            ("recordId", chemical.get("recordId")),
+        ):
+            match_key = self._standardization_match_key(value)
+            if match_key:
+                match_keys.append((field_name, match_key))
+
+        deduplicated_keys = []
+        seen_keys = set()
+        for field_name, match_key in match_keys:
+            if match_key in seen_keys:
+                continue
+            seen_keys.add(match_key)
+            deduplicated_keys.append((field_name, match_key))
+
+        return deduplicated_keys
+
+    def _get_standardization_response_fallback_match_keys(self, chemical):
+        if not isinstance(chemical, dict):
+            return []
+
+        match_keys = []
+        chemical_with_inchi = self._ensure_chemical_inchi_key(
+            chemical,
+            fallback_smiles=chemical.get("chemId"),
+        )
+        normalized_inchi_key = self._normalize_inchi_key(chemical_with_inchi.get("inchiKey"))
+        if normalized_inchi_key:
+            match_keys.append(("inchiKey", normalized_inchi_key))
+
+        for field_name, value in (
+            ("chemId", chemical.get("chemId")),
+            ("smiles", chemical.get("smiles")),
+            ("canonicalSmiles", chemical.get("canonicalSmiles")),
+        ):
+            match_key = self._standardization_match_key(value)
+            if match_key:
+                match_keys.append((field_name, match_key))
+
+        deduplicated_keys = []
+        seen_pairs = set()
+        for field_name, match_key in match_keys:
+            pair = (field_name, match_key)
+            if pair in seen_pairs:
+                continue
+            seen_pairs.add(pair)
+            deduplicated_keys.append(pair)
+
+        return deduplicated_keys
+
+    def _build_standardization_expected_id_map(self, smiles_list):
+        expected_id_map = {}
+
+        for index, _ in enumerate(smiles_list):
+            expected_id = str(index)
+            expected_id_map.setdefault(expected_id, []).append(index)
+
+        return expected_id_map
+
+    def _build_standardization_expected_fallback_maps(self, smiles_list):
+        expected_maps = {
+            "inchiKey": {},
+            "chemId": {},
+            "smiles": {},
+            "canonicalSmiles": {},
+        }
+
+        for index, smiles in enumerate(smiles_list):
+            expected_id = str(index)
+            smiles_key = self._standardization_match_key(smiles)
+            if smiles_key:
+                for field_name in ("chemId", "smiles", "canonicalSmiles"):
+                    expected_maps[field_name].setdefault(smiles_key, []).append(expected_id)
+
+            inchi_key = self._get_inchi_key_from_smiles(smiles)
+            if inchi_key:
+                expected_maps["inchiKey"].setdefault(inchi_key, []).append(expected_id)
+
+        return expected_maps
+
+    @staticmethod
+    def _select_standardization_expected_id(expected_candidates, grouped_by_id):
+        if not expected_candidates:
+            return None
+
+        for expected_id in expected_candidates:
+            if expected_id not in grouped_by_id:
+                return expected_id
+
+        return expected_candidates[0]
+
+    def _build_standardization_results_by_index(self, grouped_by_id, expected_ids, smiles_list, model):
+        results_by_index = {}
+        mixture_count = 0
+        missing_canonical_count = 0
+
+        for index, smiles in enumerate(smiles_list):
+            grouped_chemicals = grouped_by_id.get(expected_ids[index], [])
+            if not grouped_chemicals:
+                continue
+
+            canonical_chemicals = [
+                chemical for chemical in grouped_chemicals
+                if isinstance(chemical, dict) and chemical.get("canonicalSmiles")
+            ]
+
+            if not canonical_chemicals:
+                missing_canonical_count += 1
+                results_by_index[index] = (f"{smiles} failed standardization", 400)
+                continue
+
+            if model.omitSalts and len(canonical_chemicals) > 1:
+                mixture_count += 1
+                results_by_index[index] = (f"{smiles}: model can't run mixtures", 400)
+                continue
+
+            results_by_index[index] = (canonical_chemicals[0], 200)
+
+        return results_by_index, mixture_count, missing_canonical_count
+
+    def _normalize_standardization_batch_results(self, chemicals, smiles_list, model):
+        if not isinstance(chemicals, list):
+            diagnostic = f"type={type(chemicals).__name__} preview={self._preview_log_value(chemicals)}"
+            return None, diagnostic, {}, list(range(len(smiles_list)))
+
+        if (
+            len(chemicals) == len(smiles_list)
+            and all(isinstance(chemical, dict) and "canonicalSmiles" in chemical for chemical in chemicals)
+        ):
+            positional_mismatch_reasons = []
+            for index, (smiles, chemical) in enumerate(zip(smiles_list, chemicals)):
+                response_match_keys = self._get_standardization_response_match_keys(chemical)
+                expected_id = str(index)
+                if response_match_keys:
+                    if not any(response_key == expected_id for _, response_key in response_match_keys):
+                        positional_mismatch_reasons.append(
+                            f"index={index} expected_id={expected_id} response_keys={response_match_keys}"
+                        )
+                    continue
+
+                input_inchi_key = self._get_inchi_key_from_smiles(smiles)
+                chemical_with_inchi = self._ensure_chemical_inchi_key(
+                    chemical,
+                    fallback_smiles=chemical.get("chemId"),
+                )
+                chemical_inchi_key = self._normalize_inchi_key(chemical_with_inchi.get("inchiKey"))
+                if (
+                    input_inchi_key
+                    and chemical_inchi_key
+                    and not inchi_keys_match_connectivity(input_inchi_key, chemical_inchi_key)
+                ):
+                    positional_mismatch_reasons.append(
+                        f"index={index} input_inchi={input_inchi_key} response_inchi={chemical_inchi_key}"
+                    )
+
+            if positional_mismatch_reasons:
+                logging.warning(
+                    "Standardization response length matched request but positional mapping was unsafe; "
+                    "retrying id/fallback matching; workflow=%s batch_size=%s reasons=%s",
+                    model.qsarReadyRuleSet,
+                    len(smiles_list),
+                    positional_mismatch_reasons[:10],
+                )
+            else:
+                normalized_results = []
+                missing_canonical_count = 0
+                mixture_count = 0
+
+                for smiles, chemical in zip(smiles_list, chemicals):
+                    canonical_smiles = chemical.get("canonicalSmiles")
+                    if not canonical_smiles:
+                        missing_canonical_count += 1
+                        normalized_results.append((f"{smiles} failed standardization", 400))
+                        continue
+
+                    if model.omitSalts and "." in canonical_smiles:
+                        mixture_count += 1
+                        normalized_results.append((f"{smiles}: model can't run mixtures", 400))
+                        continue
+
+                    normalized_results.append((chemical, 200))
+
+                if missing_canonical_count or mixture_count:
+                    diagnostic_parts = [
+                        f"direct_response_len={len(chemicals)} expected_len={len(smiles_list)}",
+                    ]
+                    if missing_canonical_count:
+                        diagnostic_parts.append(f"missing_canonicalSmiles={missing_canonical_count}")
+                    if mixture_count:
+                        diagnostic_parts.append(f"mixture_groups={mixture_count}")
+                    diagnostic_parts.append(f"preview={self._preview_log_value(chemicals)}")
+                    return normalized_results, " ".join(diagnostic_parts), None, []
+
+                return normalized_results, None, None, []
+
+        expected_id_map = self._build_standardization_expected_id_map(smiles_list)
+        expected_ids = [str(index) for index, _ in enumerate(smiles_list)]
+        grouped_by_id = {}
+        unidentified_count = 0
+        matched_by = {}
+        response_key_presence = {}
+        unmatched_chemicals = []
+
+        for chemical in chemicals:
+            response_match_keys = self._get_standardization_response_match_keys(chemical)
+
+            for field_name, _ in response_match_keys:
+                response_key_presence[field_name] = response_key_presence.get(field_name, 0) + 1
+
+            matched_id = None
+            matched_key_name = None
+            for field_name, response_key in response_match_keys:
+                if response_key not in expected_id_map:
+                    continue
+                matched_id = response_key
+                matched_key_name = field_name
+                break
+
+            if matched_id is None:
+                unmatched_chemicals.append(chemical)
+                continue
+            grouped_by_id.setdefault(matched_id, []).append(chemical)
+            if matched_key_name:
+                matched_by[matched_key_name] = matched_by.get(matched_key_name, 0) + 1
+
+        missing_ids = [
+            expected_id
+            for expected_id in expected_ids
+            if expected_id not in grouped_by_id
+        ]
+
+        if missing_ids and unmatched_chemicals:
+            expected_fallback_maps = self._build_standardization_expected_fallback_maps(smiles_list)
+            fallback_unidentified_count = 0
+
+            for chemical in unmatched_chemicals:
+                response_match_keys = self._get_standardization_response_fallback_match_keys(chemical)
+
+                for field_name, _ in response_match_keys:
+                    response_key_presence[field_name] = response_key_presence.get(field_name, 0) + 1
+
+                matched_id = None
+                matched_key_name = None
+                for field_name, response_key in response_match_keys:
+                    expected_map = expected_fallback_maps.get(field_name, {})
+                    expected_candidates = expected_map.get(response_key)
+                    if not expected_candidates:
+                        continue
+                    matched_id = self._select_standardization_expected_id(
+                        expected_candidates,
+                        grouped_by_id,
+                    )
+                    matched_key_name = field_name
+                    break
+
+                if matched_id is None:
+                    fallback_unidentified_count += 1
+                    continue
+
+                grouped_by_id.setdefault(matched_id, []).append(chemical)
+                if matched_key_name:
+                    matched_by[matched_key_name] = matched_by.get(matched_key_name, 0) + 1
+
+            unidentified_count = fallback_unidentified_count
+        else:
+            unidentified_count = len(unmatched_chemicals)
+
+        missing_ids = [
+            expected_id
+            for expected_id in expected_ids
+            if expected_id not in grouped_by_id
+        ]
+        missing_indices = [
+            index
+            for index, expected_id in enumerate(expected_ids)
+            if expected_id not in grouped_by_id
+        ]
+        results_by_index, mixture_count, missing_canonical_count = self._build_standardization_results_by_index(
+            grouped_by_id,
+            expected_ids,
+            smiles_list,
+            model,
+        )
+
+        if grouped_by_id and not missing_ids:
+            normalized_results = [
+                results_by_index.get(index, (f"{smiles} failed standardization", 400))
+                for index, smiles in enumerate(smiles_list)
+            ]
+
+            diagnostic_parts = [
+                f"expanded_response_grouped result_len={len(chemicals)} expected_len={len(smiles_list)}",
+                f"grouped_ids={len(grouped_by_id)}",
+            ]
+
+            if unidentified_count:
+                diagnostic_parts.append(f"unidentified_items={unidentified_count}")
+            if matched_by:
+                diagnostic_parts.append(f"matched_by={matched_by}")
+            if response_key_presence:
+                diagnostic_parts.append(f"response_key_presence={response_key_presence}")
+            if mixture_count:
+                diagnostic_parts.append(f"mixture_groups={mixture_count}")
+            if missing_canonical_count:
+                diagnostic_parts.append(f"missing_canonical_groups={missing_canonical_count}")
+
+            return normalized_results, " ".join(diagnostic_parts), None, []
+
+        standardization_reason_parts = [f"result_len={len(chemicals)} expected_len={len(smiles_list)}"]
+        if missing_canonical_count:
+            standardization_reason_parts.append(
+                f"missing_canonicalSmiles={missing_canonical_count}"
+            )
+
+        if grouped_by_id:
+            standardization_reason_parts.append(f"grouped_ids={len(grouped_by_id)}")
+        if missing_ids:
+            standardization_reason_parts.append(f"missing_ids={missing_ids[:10]}")
+        if unidentified_count:
+            standardization_reason_parts.append(f"unidentified_items={unidentified_count}")
+        if matched_by:
+            standardization_reason_parts.append(f"matched_by={matched_by}")
+        if response_key_presence:
+            standardization_reason_parts.append(f"response_key_presence={response_key_presence}")
+
+        if model.omitSalts:
+            mixture_count = sum(
+                1 for chemical in chemicals
+                if isinstance(chemical, dict) and "." in chemical.get("canonicalSmiles", "")
+            )
+            if mixture_count:
+                standardization_reason_parts.append(
+                    f"mixtures_with_omitSalts={mixture_count}"
+                )
+
+        standardization_reason_parts.append(
+            f"preview={self._preview_log_value(chemicals)}"
+        )
+        return None, " ".join(standardization_reason_parts), results_by_index, missing_indices
+
+    def _standardize_smiles_individually(self, stdizer_api, smiles_list, model):
+        results = []
+
+        for smiles in smiles_list:
+            try:
+                results.append(self.standardizeStructure(stdizer_api, smiles, model))
+            except Exception as exc:
+                logging.exception(
+                    "Single-smiles standardization failed; workflow=%s smiles=%s",
+                    model.qsarReadyRuleSet,
+                    smiles,
+                )
+                results.append((f"{smiles}: standardization request failed: {exc}", 500))
+
+        return results
+
+    def _retry_missing_standardization_subset(self, stdizer_api, smiles_list, model, split_depth=0):
+        if not smiles_list:
+            return []
+
+        try:
+            chemicals, code = QsarSmilesAPI.call_qsar_ready_standardize_post(
+                stdizer_api,
+                smiles=smiles_list,
+                full=False,
+                workflow=model.qsarReadyRuleSet,
+            )
+        except Exception as exc:
+            logging.warning(
+                "Retry batch standardization for missing items raised %s; falling back to single requests; "
+                "workflow=%s batch_size=%s split_depth=%s error=%s",
+                type(exc).__name__,
+                model.qsarReadyRuleSet,
+                len(smiles_list),
+                split_depth,
+                self._preview_log_value(exc),
+            )
+            return self._standardize_smiles_individually(stdizer_api, smiles_list, model)
+
+        if code != 200:
+            logging.warning(
+                "Retry batch standardization for missing items failed; falling back to single requests; "
+                "code=%s workflow=%s batch_size=%s split_depth=%s response=%s",
+                code,
+                model.qsarReadyRuleSet,
+                len(smiles_list),
+                split_depth,
+                self._preview_log_value(chemicals),
+            )
+            return self._standardize_smiles_individually(stdizer_api, smiles_list, model)
+
+        normalized_results, normalization_diagnostic, partial_results_by_index, missing_indices = (
+            self._normalize_standardization_batch_results(
+                chemicals,
+                smiles_list,
+                model,
+            )
+        )
+
+        if normalized_results is not None:
+            if normalization_diagnostic:
+                logging.info(
+                    "Standardization retry batch response normalized; workflow=%s batch_size=%s detail=%s",
+                    model.qsarReadyRuleSet,
+                    len(smiles_list),
+                    normalization_diagnostic,
+                )
+            return normalized_results
+
+        merged_results = [None] * len(smiles_list)
+        partial_results_by_index = partial_results_by_index or {}
+        for index, result in partial_results_by_index.items():
+            merged_results[index] = result
+
+        if missing_indices:
+            logging.warning(
+                "Retry batch standardization still missing items; falling back to single requests; "
+                "workflow=%s batch_size=%s missing_count=%s split_depth=%s reason=%s",
+                model.qsarReadyRuleSet,
+                len(smiles_list),
+                len(missing_indices),
+                split_depth,
+                normalization_diagnostic,
+            )
+            single_results = self._standardize_smiles_individually(
+                stdizer_api,
+                [smiles_list[index] for index in missing_indices],
+                model,
+            )
+            for index, result in zip(missing_indices, single_results):
+                merged_results[index] = result
+
+        return [
+            result if result is not None else (f"{smiles_list[index]} failed standardization", 400)
+            for index, result in enumerate(merged_results)
+        ]
+
+    def _build_neighbor_cache(self, model, df_set):
+        if df_set is None or df_set.empty or not model.embedding:
+            return None
+
+        if not set(model.embedding).issubset(df_set.columns):
+            return None
+
+        n_neighbors = min(10, len(df_set))
+        if n_neighbors < 1:
+            return None
+
+        train_set = df_set[model.embedding]
+        scaler = StandardScaler().fit(train_set)
+        train_x = scaler.transform(train_set)
+        nbrs = NearestNeighbors(n_neighbors=n_neighbors, algorithm='brute', metric='euclidean')
+        nbrs.fit(train_x)
+
+        return {
+            "scaler": scaler,
+            "nbrs": nbrs,
+            "ids": df_set.iloc[:, 0].tolist(),
+        }
+
+    def _ensure_model_runtime_cache(self, model: Model):
+        if getattr(model, "_runtime_cache_ready", False):
+            return
+
+        with lock:
+            if getattr(model, "_runtime_cache_ready", False):
+                return
+
+            model._training_property_by_id = {}
+            model._prediction_property_by_id = {}
+
+            if model.df_training is not None and not model.df_training.empty:
+                if {'ID', 'Property'}.issubset(model.df_training.columns):
+                    model._training_property_by_id = model.df_training.set_index('ID')['Property'].to_dict()
+
+            if model.df_prediction is not None and not model.df_prediction.empty:
+                if {'ID', 'Property'}.issubset(model.df_prediction.columns):
+                    model._prediction_property_by_id = model.df_prediction.set_index('ID')['Property'].to_dict()
+
+            model._dsstox_by_smiles = self._to_lookup(model.df_dsstoxRecords, 'canonicalSmiles')
+                    
+            model._preds_test_by_id = self._to_lookup(model.df_preds_test, 'id', ['exp', 'pred'])
+            model._preds_training_cv_by_id = self._to_lookup(model.df_preds_training_cv, 'id', ['exp', 'pred'])
+
+            model._neighbors_prediction_cache = self._build_neighbor_cache(model, model.df_prediction)
+            model._neighbors_training_cache = self._build_neighbor_cache(model, model.df_training)
+            model._ad_runtime_cache = {}
+
+            model._runtime_cache_ready = True
+
+    @staticmethod
+    def _iter_applicability_domains(model: Model):
+        return [name for name in (model.applicabilityDomainName or "").split(" and ") if name]
+
+    def _get_test_embedding_ad_runtime(self, model: Model):
+        self._ensure_model_runtime_cache(model)
+
+        runtime_cache = getattr(model, "_ad_runtime_cache", None)
+        if runtime_cache is None:
+            runtime_cache = {}
+            model._ad_runtime_cache = runtime_cache
+
+        cache_key = pc.Applicability_Domain_TEST_Embedding_Euclidean
+        if cache_key in runtime_cache:
+            return runtime_cache[cache_key]
+
+        precomputed = getattr(model, "_neighbors_training_cache", None)
+        if precomputed is None:
+            return None
+
+        train_set = model.df_training[model.embedding]
+        if train_set is None or train_set.empty:
+            return None
+
+        cutoff = None
+        if len(train_set.index) >= 4:
+            train_x = precomputed["scaler"].transform(train_set)
+            train_distances, _ = precomputed["nbrs"].kneighbors(train_x, n_neighbors=4)
+            train_mean_distances = list(np.mean(train_distances[:, 1:], axis=1))
+            cutoff = float(adu.adm.helpers.find_split_value(train_mean_distances, 0.95))
+
+        runtime = {
+            "scaler": precomputed["scaler"],
+            "nbrs": precomputed["nbrs"],
+            "ids": precomputed["ids"],
+            "cutoff": cutoff,
+            "neighbor_count": min(3, len(precomputed["ids"])),
+        }
+        runtime_cache[cache_key] = runtime
+        return runtime
+
+    def _resolve_model_context(self, model_id, fileAPI):
+        mi = ModelInitializer()
+        model = mi.init_model(model_id)
+
+        if model is None or hasattr(model, 'modelId') is False:
+            logging.error("Returning Invalid model_id for model_id=%s: model failed to initialize", model_id)
+            return None, None, f"Invalid model_id: {model_id}"
+
+        self._ensure_model_runtime_cache(model)
+
+        # TODO: inject stdizer workflow
+        model.qsarReadyRuleSet = 'qsar-ready_04242025'
+
+        model_details_dict = self._get_model_details_dict(model, fileAPI)
+        return model, model_details_dict, None
+
+    def get_model_details_dict_for_model_id(self, model_id, fileAPI=None):
+        fileAPI = fileAPI or os.getenv("FILE_API_SERVER", pc.URL_LOCAL_FILE_API)
+
+        cached_model_details = self._read_model_details_cache(model_id, fileAPI)
+        if cached_model_details is not None:
+            return cached_model_details, None
+
+        _, model_details_dict, model_error = self._resolve_model_context(model_id, fileAPI)
+        return model_details_dict, model_error
+
+    @staticmethod
+    def _read_model_details_cache(model_id, fileAPI):
+        if not model_cache.model_artifact_cache_enabled():
+            return None
+
+        try:
+            cached_model_details = model_cache.read_model_details(model_id, fileAPI)
+        except model_cache.ModelArtifactCacheUnavailableError as exc:
+            logging.warning(
+                "Predictor model details cache unavailable for model_id=%s: %s",
+                model_id,
+                exc,
+            )
+            return None
+
+        if cached_model_details is not None:
+            logging.info("Loaded modelDetails model_id=%s from Mongo model details cache", model_id)
+        return cached_model_details
+
+    @staticmethod
+    def _write_model_details_cache(model_id, fileAPI, model_details_dict):
+        if not model_cache.model_artifact_cache_enabled() or not model_details_dict:
+            return
+
+        try:
+            model_cache.write_model_details(model_id, fileAPI, model_details_dict)
+            logging.info("Stored modelDetails model_id=%s in Mongo model details cache", model_id)
+        except model_cache.ModelArtifactCacheUnavailableError as exc:
+            logging.warning(
+                "Could not store modelDetails model_id=%s in Mongo model details cache: %s",
+                model_id,
+                exc,
+            )
+        except Exception:
+            logging.exception("Could not store modelDetails model_id=%s in Mongo model details cache", model_id)
+
+    def _get_model_details_dict(self, model, fileAPI):
+        cache = getattr(model, "_model_details_cache", None)
+        if isinstance(cache, dict) and cache.get("file_api") == fileAPI:
+            return cache["payload"]
+
+        modelDetails = ModelDetails(model)
+
+        if 'reg_' in model.modelMethod or 'las_' in model.modelMethod or 'gcm_' in model.modelMethod:
+            if not hasattr(model, "_regression_coefficients"):
+                y = model.df_training[model.df_training.columns[1]]
+                X = model.df_training[model.embedding]
+                model._regression_coefficients = json.loads(model.getOriginalRegressionCoefficients2(X, y))
+            modelDetails.modelCoefficients = model._regression_coefficients
+
+        self.addLinks(modelDetails, fileAPI)
+        self.addPerformance(modelDetails)
+        
+        modelDetails.performance["train"]["N"] = model.num_training
+        modelDetails.performance["fiveFoldICV"]["N"] = model.num_training
+        modelDetails.performance["external"]["N"] = model.num_prediction  # TODO: rename to prediction 
+
+        # TODO later will have separate external set which is separate from prediction set 
+        # if model.num_external is not None:
+        #     modelDetails.performance["external"]["n"] = model.num_external
+
+        payload = dict(modelDetails.__dict__)
+        model._model_details_cache = {"file_api": fileAPI, "payload": payload}
+        self._write_model_details_cache(model.modelId, fileAPI, payload)
+        return payload
+
+    @staticmethod
+    def _build_report_dict(
+        chemical,
+        model_details_dict,
+        model_results,
+        neighbor_results_training=None,
+        neighbor_results_prediction=None,
+        standardized_chemical=None,
+    ):
+        report = {
+            "chemicalIdentifiers": _sanitize_api_chemical_identifiers(chemical),
+        }
+        if standardized_chemical is not None:
+            report["standardizedChemical"] = _sanitize_api_chemical_identifiers(standardized_chemical)
+        report.update({
+            "modelDetails": model_details_dict,
+            "modelResults": model_results.to_dict() if hasattr(model_results, "to_dict") else model_results,
+            "neighborResultsTraining": neighbor_results_training,
+            "neighborResultsPrediction": neighbor_results_prediction,
+        })
+        return report
+
+    def _build_minimal_chemical(self, smiles):
+        chemical = _build_input_chemical(smiles)
+        return self._ensure_chemical_inchi_key(chemical, fallback_smiles=smiles)
+
+    def _prepare_chemical_for_report(self, chemical):
+        chemical = dict(chemical)
+
+        cid_value = chemical.get("cid")
+        if "smiles" in chemical and (not cid_value or cid_value == "N/A"):
+            img_base64 = self.smiles_to_base64(chemical["smiles"])
+            chemical["imageSrc"] = f'data:image/png;base64,{img_base64}' if img_base64 else "N/A"
+        else:
+            chemical["imageSrc"] = (
+                build_render_image_url(
+                    get_render_smiles(chemical),
+                    width=400,
+                    height=400,
+                )
+                or "N/A"
+            )
+
+        if "sid" not in chemical:
+            chemical["sid"] = "N/A"
+            chemical["cid"] = "N/A"
+            chemical["name"] = "N/A"
+
+        return self._ensure_chemical_inchi_key(chemical)
+
+    def _build_prediction_error_report(self, chemical, model_details_dict, error, standardized_chemical=None):
+        if isinstance(chemical, dict):
+            prepared_chemical = self._prepare_chemical_for_report(chemical)
+        else:
+            prepared_chemical = self._build_minimal_chemical(chemical)
+        prepared_standardized_chemical = (
+            self._prepare_chemical_for_report(standardized_chemical)
+            if isinstance(standardized_chemical, dict)
+            else None
+        )
+        model_results = ModelResults()
+        model_results.predictionError = error
+        return self._build_report_dict(
+            prepared_chemical,
+            model_details_dict,
+            model_results,
+            standardized_chemical=prepared_standardized_chemical,
+        )
+
+    def _fast_test_embedding_euclidean_ad_batch(self, model, applicability_domain_name, df_prediction):
+        runtime = self._get_test_embedding_ad_runtime(model)
+        if runtime is None or runtime["neighbor_count"] < 1 or runtime["cutoff"] is None:
+            return None
+
+        test_set = df_prediction[model.embedding]
+        test_x = runtime["scaler"].transform(test_set)
+        test_distances, test_indices = runtime["nbrs"].kneighbors(
+            test_x,
+            n_neighbors=runtime["neighbor_count"],
+        )
+
+        results = []
+        ids = runtime["ids"]
+        ad_cutoff = runtime["cutoff"]
+
+        for distance_row, index_row in zip(test_distances, test_indices):
+            distances = list(distance_row)
+            analog_ids = [ids[idx] for idx in index_row]
+            analogs = self.setExpPredValuesForADAnalogs(model, analog_ids)
+            self.addDistances(analogs, distances)
+
+            value = float(np.mean(distance_row)) if len(distance_row) else None
+            is_inside = bool(value is not None and value <= ad_cutoff)
+            comparison = "<" if is_inside else ">"
+
+            results.append(
+                {
+                    "AD": is_inside,
+                    "analogs": analogs,
+                    "AD_Cutoff": ad_cutoff,
+                    "adMethod": {
+                        "name": applicability_domain_name,
+                        "description": "Whether or not the average Euclidean distance of the three closest training set neighbors exceeds a cutoff defined so that 95% of the training set is within the AD",
+                    },
+                    "value": value,
+                    "conclusion": "Inside" if is_inside else "Outside",
+                    "reasoning": f"Avg. distance ({value:.2f}) {comparison} {ad_cutoff:.2f}",
+                }
+            )
+
+        return results
+
+    def _build_applicability_domain_result_from_row(self, model, applicability_domain_name, row, ad_cutoff):
+        ad_value = row.get("AD")
+        if isinstance(ad_value, np.generic):
+            ad_value = ad_value.item()
+
+        results = {
+            "AD": ad_value,
+            "adMethod": {"name": applicability_domain_name},
+        }
+
+        if 'ids' in row.index and "distances" in row.index:
+            analogs_ad = list(row["ids"])
+            distances = list(row["distances"])
+            results.update({"analogs": analogs_ad, "distances": distances, "AD_Cutoff": ad_cutoff})
+
+        if applicability_domain_name == pc.Applicability_Domain_TEST_Embedding_Euclidean \
+         or applicability_domain_name == pc.Applicability_Domain_TEST_All_Descriptors_Euclidean:
+            distances = results.get("distances", [])
+            results["adMethod"]["description"] = 'Whether or not the average Euclidean distance of the three closest training set neighbors exceeds a cutoff defined so that 95% of the training set is within the AD'
+
+            if distances and ad_cutoff is not None:
+                results["value"] = sum(distances) / len(distances)
+                if ad_value is True:
+                    results["conclusion"] = "Inside"
+                    results["reasoning"] = f"Avg. distance ({results['value']:.2f}) < {ad_cutoff:.2f}"
+                else:
+                    results["conclusion"] = "Outside"
+                    results["reasoning"] = f"Avg. distance ({results['value']:.2f}) > {ad_cutoff:.2f}"
+            else:
+                results["value"] = None
+                results["conclusion"] = "Unknown"
+                results["reasoning"] = "No neighbor distances available"
+
+            if "analogs" in results:
+                results["analogs"] = self.setExpPredValuesForADAnalogs(model, results["analogs"])
+                self.addDistances(results["analogs"], results.get("distances", []))
+                del results["distances"]
+
+        elif applicability_domain_name == pc.Applicability_Domain_TEST_Fragment_Counts:
+            results["adMethod"]["description"] = 'Whether the TEST fragments are within the training set range'
+            results["fragment_table"] = row.get("fragment_table")
+
+            if ad_value is True:
+                results["conclusion"] = "Inside"
+                results["reasoning"] = "Fragments in test chemical are within the training set ranges"
+            else:
+                results["conclusion"] = "Outside"
+                results["reasoning"] = "Fragments in test chemical are NOT within the training set ranges"
+
+            if 'gcm' in model.modelMethod:
+                have_missing_fragment_in_model = False
+                for fragment in results["fragment_table"]:
+                    if fragment["fragment"] not in model.embedding:
+                        have_missing_fragment_in_model = True
+                        fragment["fragment"] += "**"
+                if have_missing_fragment_in_model:
+                    results["conclusion"] = "Outside"
+                    results["reasoning"] = "Have fragment in test chemical that is NOT included in the model"
+
+            for fragment in results["fragment_table"]:
+                if fragment['test_value'] < fragment['training_min'] or fragment['test_value'] > fragment['training_max']:
+                    if "*" not in fragment["fragment"]:
+                        fragment["fragment"] += "*"
+
+        else:
+            print("handle " + applicability_domain_name + " in determineApplicabilityDomain()")
+
+        return results
+
+    def _determine_applicability_domain_batch(self, model, applicability_domain_name, df_prediction):
+        if df_prediction is None or df_prediction.empty:
+            return []
+
+        if applicability_domain_name == pc.Applicability_Domain_TEST_Embedding_Euclidean:
+            fast_results = self._fast_test_embedding_euclidean_ad_batch(model, applicability_domain_name, df_prediction)
+            if fast_results is not None:
+                return fast_results
+
+        output, ad_cutoff = adu.generate_applicability_domain_with_preselected_descriptors_from_dfs(
+            train_df=model.df_training,
+            test_df=df_prediction,
+            remove_log_p=model.remove_log_p_descriptors,
+            embedding=model.embedding,
+            applicability_domain=applicability_domain_name,
+            filterColumnsInBothSets=True,
+        )
+
+        return [
+            self._build_applicability_domain_result_from_row(
+                model,
+                applicability_domain_name,
+                output.iloc[row_pos],
+                ad_cutoff,
+            )
+            for row_pos in range(len(output.index))
+        ]
+
+    def _determine_applicability_domains_batch(self, model, df_prediction):
+        row_count = 0 if df_prediction is None else len(df_prediction.index)
+        results_by_row = [[] for _ in range(row_count)]
+
+        for applicability_domain in self._iter_applicability_domains(model):
+            ad_results = self._determine_applicability_domain_batch(model, applicability_domain, df_prediction)
+            for row_pos, row_result in enumerate(ad_results):
+                results_by_row[row_pos].append(row_result)
+
+        return results_by_row
+
+    def _build_reports_for_precomputed_predictions(
+        self,
+        model,
+        batch_prediction_df,
+        prediction_chemicals,
+        pred_array,
+        report_model_details,
+        generate_report,
+        response_chemicals=None,
+        standardized_chemicals_for_response=None,
+    ):
+        response_chemicals = response_chemicals if response_chemicals is not None else prediction_chemicals
+        standardized_chemicals_for_response = (
+            standardized_chemicals_for_response
+            if standardized_chemicals_for_response is not None
+            else [None] * len(prediction_chemicals)
+        )
+        ad_results_by_row = self._determine_applicability_domains_batch(model, batch_prediction_df)
+        neighbor_results_training = None
+        neighbor_results_prediction = None
+
+        if generate_report:
+            neighbor_results_training, neighbor_results_prediction = self.addNeighborsFromSets_batch(
+                model,
+                batch_prediction_df,
+                model.unitsModel,
+            )
+
+        prepared_chemicals = [
+            self._prepare_chemical_for_report(chemical)
+            for chemical in prediction_chemicals
+        ]
+        prepared_response_chemicals = [
+            self._prepare_chemical_for_report(chemical)
+            for chemical in response_chemicals
+        ]
+        prepared_standardized_chemicals_for_response = [
+            self._prepare_chemical_for_report(chemical) if isinstance(chemical, dict) else None
+            for chemical in standardized_chemicals_for_response
+        ]
+
+        reports = []
+        for row_pos, chemical in enumerate(prediction_chemicals):
+            reports.append(
+                self._finalize_prediction_report(
+                    model,
+                    report_model_details,
+                    chemical,
+                    None,
+                    pred_array[row_pos],
+                    generate_report=generate_report,
+                    ad_results=ad_results_by_row[row_pos],
+                    neighbor_results_training=None if neighbor_results_training is None else neighbor_results_training[row_pos],
+                    neighbor_results_prediction=None if neighbor_results_prediction is None else neighbor_results_prediction[row_pos],
+                    prepared_chemical=prepared_chemicals[row_pos],
+                    prepared_response_chemical=prepared_response_chemicals[row_pos],
+                    prepared_standardized_chemical=prepared_standardized_chemicals_for_response[row_pos],
+                )
+            )
+
+        return reports
+
+    def _build_reports_for_precomputed_predictions_parallel(
+        self,
+        model,
+        batch_prediction_df,
+        prediction_chemicals,
+        pred_array,
+        report_model_details,
+        generate_report,
+        response_chemicals=None,
+        standardized_chemicals_for_response=None,
+    ):
+        row_count = len(prediction_chemicals)
+        if row_count == 0:
+            return []
+
+        response_chemicals = response_chemicals if response_chemicals is not None else prediction_chemicals
+        standardized_chemicals_for_response = (
+            standardized_chemicals_for_response
+            if standardized_chemicals_for_response is not None
+            else [None] * len(prediction_chemicals)
+        )
+
+        worker_count = self._get_postprocess_process_count()
+        if row_count <= 1 or worker_count <= 1:
+            return self._build_reports_for_precomputed_predictions(
+                model,
+                batch_prediction_df,
+                prediction_chemicals,
+                pred_array,
+                report_model_details,
+                generate_report,
+                response_chemicals=response_chemicals,
+                standardized_chemicals_for_response=standardized_chemicals_for_response,
+            )
+
+        chunk_size = self._calculate_dynamic_chunk_size(row_count, worker_count)
+        chunk_tasks = []
+        executor_kind = self._get_postprocess_executor_kind()
+
+        if executor_kind == "thread":
+            self._ensure_model_runtime_cache(model)
+            for start, chemicals_chunk in _chunk_sequence(prediction_chemicals, chunk_size):
+                stop = start + len(chemicals_chunk)
+                chunk_tasks.append(
+                    (
+                        batch_prediction_df.iloc[start:stop].copy(),
+                        list(chemicals_chunk),
+                        np.asarray(pred_array[start:stop]).reshape(-1),
+                        list(response_chemicals[start:stop]),
+                        list(standardized_chemicals_for_response[start:stop]),
+                    )
+                )
+
+            max_workers = min(worker_count, len(chunk_tasks))
+            logging.info(
+                "Running prediction post-processing with threads; rows=%s chunk_size=%s threads=%s",
+                row_count,
+                chunk_size,
+                max_workers,
+            )
+
+            def _process_chunk_thread(task):
+                (
+                    chunk_prediction_df,
+                    chunk_prediction_chemicals,
+                    chunk_pred_array,
+                    chunk_response_chemicals,
+                    chunk_standardized_chemicals_for_response,
+                ) = task
+                return self._build_reports_for_precomputed_predictions(
+                    model,
+                    chunk_prediction_df,
+                    chunk_prediction_chemicals,
+                    chunk_pred_array,
+                    report_model_details,
+                    generate_report,
+                    response_chemicals=chunk_response_chemicals,
+                    standardized_chemicals_for_response=chunk_standardized_chemicals_for_response,
+                )
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                chunk_results = list(executor.map(_process_chunk_thread, chunk_tasks))
+
+            finalized_reports = []
+            for chunk_result in chunk_results:
+                finalized_reports.extend(chunk_result)
+            return finalized_reports
+
+        chunk_tasks = []
+        for start, chemicals_chunk in _chunk_sequence(prediction_chemicals, chunk_size):
+            stop = start + len(chemicals_chunk)
+            chunk_tasks.append(
+                (
+                    str(model.modelId),
+                    batch_prediction_df.iloc[start:stop].copy(),
+                    list(chemicals_chunk),
+                    np.asarray(pred_array[start:stop]).reshape(-1).tolist(),
+                    report_model_details,
+                    generate_report,
+                    list(response_chemicals[start:stop]),
+                    list(standardized_chemicals_for_response[start:stop]),
+                )
+            )
+
+        max_workers = min(worker_count, len(chunk_tasks))
+        logging.info(
+            "Running prediction post-processing with processes; rows=%s chunk_size=%s processes=%s",
+            row_count,
+            chunk_size,
+            max_workers,
+        )
+        with concurrent.futures.ProcessPoolExecutor(
+            max_workers=max_workers,
+            initializer=init_postprocess_predictor,
+            mp_context=mp.get_context("spawn"),
+        ) as executor:
+            chunk_results = list(executor.map(_postprocess_prediction_chunk, chunk_tasks))
+
+        finalized_reports = []
+        for chunk_result in chunk_results:
+            finalized_reports.extend(chunk_result)
+        return finalized_reports
+
+    def _finalize_prediction_report(
+        self,
+        model,
+        model_details_dict,
+        chemical,
+        df_prediction,
+        pred_value,
+        generate_report=True,
+        ad_results=None,
+        neighbor_results_training=None,
+        neighbor_results_prediction=None,
+        prepared_chemical=None,
+        prepared_response_chemical=None,
+        prepared_standardized_chemical=None,
+    ):
+        chemical = prepared_chemical if prepared_chemical is not None else self._prepare_chemical_for_report(chemical)
+        model_results = ModelResults()
+
+        if ad_results is not None:
+            model_results.adEstimates.extend(ad_results)
+        elif model.applicabilityDomainName:
+            for applicability_domain in self._iter_applicability_domains(model):
+                ad_result = self.determineApplicabilityDomain(model, applicability_domain, df_prediction)
+                model_results.adEstimates.append(ad_result)
+        else:
+            print('AD method for model was not set:', model.modelId)
+
+        if isinstance(pred_value, np.generic):
+            pred_value = pred_value.item()
+
+        model_results.predictionValueUnitsModel = pred_value
+        model_results.unitsModel = model.unitsModel
+
+        if generate_report and (neighbor_results_training is None or neighbor_results_prediction is None):
+            neighbor_results_training, neighbor_results_prediction = self.addNeighborsFromSets(model, model_results, df_prediction)
+
+        self.setExpValue(chemical, model, model_results, neighbor_results_training, neighbor_results_prediction)
+
+        uc = self._units_converter
+        average_mass = chemical.get("averageMass")
+
+        if model_results.experimentalValueUnitsModel:
+            model_results.experimentalValueUnitsDisplay = uc.convert_units(
+                model.propertyName,
+                model_results.experimentalValueUnitsModel,
+                model.unitsModel,
+                model.unitsDisplay,
+                chemical["sid"],
+                average_mass,
+            )
+
+        model_results.predictionValueUnitsDisplay = uc.convert_units(
+            model.propertyName,
+            pred_value,
+            model.unitsModel,
+            model.unitsDisplay,
+            chemical["sid"],
+            average_mass,
+        )
+        model_results.unitsDisplay = model.unitsDisplay
+
+        return self._build_report_dict(
+            prepared_response_chemical if prepared_response_chemical is not None else chemical,
+            model_details_dict,
+            model_results,
+            neighbor_results_training=neighbor_results_training,
+            neighbor_results_prediction=neighbor_results_prediction,
+            standardized_chemical=prepared_standardized_chemical,
+        )
+
+    def _standardize_smiles_batch_subset(self, stdizer_api, smiles_list, model, split_depth=0):
+        if len(smiles_list) == 1:
+            return self._standardize_smiles_individually(stdizer_api, smiles_list, model)
+
+        try:
+            chemicals, code = QsarSmilesAPI.call_qsar_ready_standardize_post(
+                stdizer_api,
+                smiles=smiles_list,
+                full=False,
+                workflow=model.qsarReadyRuleSet,
+            )
+            if code == 200:
+                normalized_results, normalization_diagnostic, partial_results_by_index, missing_indices = (
+                    self._normalize_standardization_batch_results(
+                        chemicals,
+                        smiles_list,
+                        model,
+                    )
+                )
+                if normalized_results is not None:
+                    if normalization_diagnostic:
+                        logging.info(
+                            "Standardization batch response normalized; workflow=%s batch_size=%s detail=%s",
+                            model.qsarReadyRuleSet,
+                            len(smiles_list),
+                            normalization_diagnostic,
+                        )
+                    return normalized_results
+
+                merged_results = [None] * len(smiles_list)
+                partial_results_by_index = partial_results_by_index or {}
+                for index, result in partial_results_by_index.items():
+                    merged_results[index] = result
+
+                if missing_indices:
+                    missing_smiles = [smiles_list[index] for index in missing_indices]
+                    logging.warning(
+                        "Standardization batch returned partial matches, retrying only missing items; "
+                        "workflow=%s batch_size=%s missing_count=%s split_depth=%s reason=%s",
+                        model.qsarReadyRuleSet,
+                        len(smiles_list),
+                        len(missing_indices),
+                        split_depth,
+                        normalization_diagnostic,
+                    )
+                    retried_results = self._retry_missing_standardization_subset(
+                        stdizer_api,
+                        missing_smiles,
+                        model,
+                        split_depth + 1,
+                    )
+                    for index, result in zip(missing_indices, retried_results):
+                        merged_results[index] = result
+
+                    return [
+                        result if result is not None else (f"{smiles_list[index]} failed standardization", 400)
+                        for index, result in enumerate(merged_results)
+                    ]
+
+                standardization_reason = normalization_diagnostic
+            else:
+                standardization_reason = (
+                    f"type={type(chemicals).__name__} "
+                    f"preview={self._preview_log_value(chemicals)}"
+                )
+
+            logging.warning(
+                "Standardization batch call failed or returned unexpected shape, falling back to single requests; "
+                "code=%s workflow=%s batch_size=%s split_depth=%s reason=%s",
+                code,
+                model.qsarReadyRuleSet,
+                len(smiles_list),
+                split_depth,
+                standardization_reason,
+            )
+            return self._standardize_smiles_individually(stdizer_api, smiles_list, model)
+        except Exception as exc:
+            logging.warning(
+                "Batch standardization request raised %s, falling back to single requests; "
+                "workflow=%s batch_size=%s split_depth=%s error=%s",
+                type(exc).__name__,
+                model.qsarReadyRuleSet,
+                len(smiles_list),
+                split_depth,
+                self._preview_log_value(exc),
+            )
+            return self._standardize_smiles_individually(stdizer_api, smiles_list, model)
+
+    def _standardize_smiles_batch(self, stdizer_api, smiles_list, model):
+        if not smiles_list:
+            return []
+
+        worker_count = self._get_standardize_thread_count()
+        if len(smiles_list) <= 1 or worker_count <= 1:
+            return self._standardize_smiles_batch_subset(stdizer_api, smiles_list, model)
+
+        chunk_size = self._calculate_dynamic_chunk_size(len(smiles_list), worker_count)
+        active_workers = min(worker_count, math.ceil(len(smiles_list) / chunk_size))
+        logging.info(
+            "Running batch standardization with threads; batch_size=%s chunk_size=%s threads=%s",
+            len(smiles_list),
+            chunk_size,
+            active_workers,
+        )
+        return self._run_threaded_chunked(
+            list(smiles_list),
+            chunk_size,
+            worker_count,
+            lambda chunk: self._standardize_smiles_batch_subset(stdizer_api, chunk, model),
+        )
+
+    def _calculate_descriptors_batch_subset(self, descriptors_api, qsar_smiles_subset, descriptor_service, split_depth=0):
+        if not qsar_smiles_subset:
+            return []
+
+        if len(qsar_smiles_subset) == 1:
+            return [self._descriptor_api.calculate_descriptors(descriptors_api, qsar_smiles_subset[0], descriptor_service)]
+
+        df_batch, code = self._descriptor_api.calculate_descriptors_batch(descriptors_api, qsar_smiles_subset, descriptor_service)
+        if code == 200 and isinstance(df_batch, pd.DataFrame) and len(df_batch.index) == len(qsar_smiles_subset):
+            return [(df_batch.iloc[[row_pos]].copy(), 200) for row_pos in range(len(qsar_smiles_subset))]
+
+        if code == 400 and len(qsar_smiles_subset) > 1:
+            mid = len(qsar_smiles_subset) // 2
+            left_subset = qsar_smiles_subset[:mid]
+            right_subset = qsar_smiles_subset[mid:]
+            logging.warning(
+                "Descriptor batch returned HTTP 400; splitting batch and retrying; "
+                "descriptor_service=%s batch_size=%s split_depth=%s left_size=%s right_size=%s smiles=%s",
+                descriptor_service,
+                len(qsar_smiles_subset),
+                split_depth,
+                len(left_subset),
+                len(right_subset),
+                self._preview_smiles_batch(qsar_smiles_subset),
+            )
+            return (
+                self._calculate_descriptors_batch_subset(descriptors_api, left_subset, descriptor_service, split_depth + 1)
+                +self._calculate_descriptors_batch_subset(descriptors_api, right_subset, descriptor_service, split_depth + 1)
+            )
+
+        if isinstance(df_batch, pd.DataFrame):
+            batch_reason = (
+                f"rows={len(df_batch.index)} expected_rows={len(qsar_smiles_subset)} "
+                f"columns={list(df_batch.columns[:10])}"
+            )
+        else:
+            batch_reason = (
+                f"type={type(df_batch).__name__} "
+                f"preview={self._preview_log_value(df_batch)}"
+            )
+
+        logging.warning(
+            "Descriptor batch call failed or returned unexpected shape for subset, "
+            "falling back to per-smiles calls; code=%s descriptor_service=%s batch_size=%s split_depth=%s smiles=%s reason=%s",
+            code,
+            descriptor_service,
+            len(qsar_smiles_subset),
+            split_depth,
+            self._preview_smiles_batch(qsar_smiles_subset),
+            batch_reason,
+        )
+
+        max_workers = int(os.getenv("PREDICT_DESCRIPTOR_FALLBACK_WORKERS", min(32, (os.cpu_count() or 1) * 5)))
+        max_workers = max(1, min(max_workers, len(qsar_smiles_subset)))
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
+            return list(pool.map(
+                lambda smiles: self._descriptor_api.calculate_descriptors(descriptors_api, smiles, descriptor_service),
+                qsar_smiles_subset,
+            ))
+
+    def _calculate_descriptors_batch(self, descriptors_api, qsar_smiles_list, descriptor_service):
+        if not qsar_smiles_list:
+            return []
+
+        worker_count = self._get_descriptor_thread_count()
+        if len(qsar_smiles_list) <= 1 or worker_count <= 1:
+            return self._calculate_descriptors_batch_subset(descriptors_api, list(qsar_smiles_list), descriptor_service)
+
+        chunk_size = self._calculate_dynamic_chunk_size(len(qsar_smiles_list), worker_count)
+        active_workers = min(worker_count, math.ceil(len(qsar_smiles_list) / chunk_size))
+        logging.info(
+            "Running descriptor batches with threads; batch_size=%s chunk_size=%s threads=%s descriptor_service=%s",
+            len(qsar_smiles_list),
+            chunk_size,
+            active_workers,
+            descriptor_service,
+        )
+        return self._run_threaded_chunked(
+            list(qsar_smiles_list),
+            chunk_size,
+            worker_count,
+            lambda chunk: self._calculate_descriptors_batch_subset(descriptors_api, chunk, descriptor_service),
+        )
+
+    def _predict_model_smiles_batch_from_standardized_results(
+        self,
+        model,
+        descriptors_api,
+        smiles_list,
+        standardized_results,
+        report_model_details=None,
+        generate_report=True,
+    ):
+        results = [None] * len(smiles_list)
+        standardized_indices = []
+        standardized_smiles = []
+        standardized_chemicals = []
+        response_chemicals = []
+        standardized_chemicals_for_response = []
+
+        for idx, (chemical, code) in enumerate(standardized_results):
+            if code != 200:
+                error_chemical = self._build_minimal_chemical(smiles_list[idx])
+                results[idx] = self._build_prediction_error_report(error_chemical, report_model_details, chemical)
+                continue
+
+            canonical_smiles = chemical.get("canonicalSmiles") if isinstance(chemical, dict) else None
+            if not canonical_smiles:
+                error_chemical = self._build_minimal_chemical(smiles_list[idx])
+                results[idx] = self._build_prediction_error_report(
+                    error_chemical,
+                    report_model_details,
+                    "Standardization returned empty canonicalSmiles",
+                )
+                continue
+
+            standardized_indices.append(idx)
+            standardized_smiles.append(canonical_smiles)
+            standardized_chemical = dict(chemical)
+            standardized_chemicals.append(standardized_chemical)
+
+            if _standardized_chemical_changes_identity(smiles_list[idx], standardized_chemical):
+                response_chemicals.append(_build_input_chemical(smiles_list[idx]))
+                standardized_chemicals_for_response.append(standardized_chemical)
+            else:
+                response_chemicals.append(standardized_chemical)
+                standardized_chemicals_for_response.append(None)
+
+        descriptor_results = self._calculate_descriptors_batch(descriptors_api, standardized_smiles, model.descriptorService)
+
+        prediction_frames = []
+        prediction_indices = []
+        prediction_chemicals = []
+        prediction_response_chemicals = []
+        prediction_standardized_chemicals_for_response = []
+
+        for offset, descriptor_result in enumerate(descriptor_results):
+            original_idx = standardized_indices[offset]
+            chemical = standardized_chemicals[offset]
+            response_chemical = response_chemicals[offset]
+            standardized_chemical_for_response = standardized_chemicals_for_response[offset]
+
+            if descriptor_result is None:
+                results[original_idx] = self._build_prediction_error_report(
+                    response_chemical,
+                    report_model_details,
+                    "Descriptor calculation did not return a result",
+                    standardized_chemical=standardized_chemical_for_response,
+                )
+                continue
+
+            df_prediction, code = descriptor_result
+            if code != 200:
+                results[original_idx] = self._build_prediction_error_report(
+                    response_chemical,
+                    report_model_details,
+                    df_prediction,
+                    standardized_chemical=standardized_chemical_for_response,
+                )
+                continue
+
+            prediction_frames.append(df_prediction)
+            prediction_indices.append(original_idx)
+            prediction_chemicals.append(chemical)
+            prediction_response_chemicals.append(response_chemical)
+            prediction_standardized_chemicals_for_response.append(standardized_chemical_for_response)
+
+        if prediction_frames:
+            batch_prediction_df = pd.concat(prediction_frames, ignore_index=True)
+            predictions = model.do_predictions(batch_prediction_df)
+
+            if predictions is None:
+                for idx, response_chemical, standardized_chemical_for_response in zip(
+                    prediction_indices,
+                    prediction_response_chemicals,
+                    prediction_standardized_chemicals_for_response,
+                ):
+                    results[idx] = self._build_prediction_error_report(
+                        response_chemical,
+                        report_model_details,
+                        "Model could not generate predictions",
+                        standardized_chemical=standardized_chemical_for_response,
+                    )
+            else:
+                pred_array = np.asarray(predictions).reshape(-1)
+                if pred_array.size != len(prediction_indices):
+                    for idx, response_chemical, standardized_chemical_for_response in zip(
+                        prediction_indices,
+                        prediction_response_chemicals,
+                        prediction_standardized_chemicals_for_response,
+                    ):
+                        results[idx] = self._build_prediction_error_report(
+                            response_chemical,
+                            report_model_details,
+                            "Model returned an unexpected number of predictions",
+                            standardized_chemical=standardized_chemical_for_response,
+                        )
+                else:
+                    finalized_reports = self._build_reports_for_precomputed_predictions_parallel(
+                        model,
+                        batch_prediction_df,
+                        prediction_chemicals,
+                        pred_array,
+                        report_model_details,
+                        generate_report,
+                        response_chemicals=prediction_response_chemicals,
+                        standardized_chemicals_for_response=prediction_standardized_chemicals_for_response,
+                    )
+
+                    for row_pos, idx in enumerate(prediction_indices):
+                        results[idx] = finalized_reports[row_pos]
+
+        for idx, prediction in enumerate(results):
+            if prediction is None:
+                results[idx] = {"smiles": smiles_list[idx], "error": "Prediction failed unexpectedly"}
+
+        return results
+
     @timer
-    def predictFromDB(self, model_id, smiles):
+    def predict_model_smiles_batch(self, model_id, smiles_list, generate_report=True, include_model_details=True):
+        print(f"Predicting with model {model_id} and {STDIZER_API}, {DESCRIPTORS_API} for {len(smiles_list)} SMILES")
+
+        fileAPI = os.getenv("FILE_API_SERVER", pc.URL_LOCAL_FILE_API)
+
+        model, model_details_dict, model_error = self._resolve_model_context(model_id, fileAPI)
+        if model is None:
+            return [{"smiles": smiles, "error": model_error} for smiles in smiles_list]
+
+        report_model_details = model_details_dict if include_model_details else None
+        standardized_results = self._standardize_smiles_batch(STDIZER_API, smiles_list, model)
+        return self._predict_model_smiles_batch_from_standardized_results(
+            model,
+            DESCRIPTORS_API,
+            smiles_list,
+            standardized_results,
+            report_model_details=report_model_details,
+            generate_report=generate_report,
+        )
+
+    def _predict_from_db_batch(self, model_id, smiles_list, include_model_details=True):
+
+        print(f"_predict_from_db_batch: {model_id} and {STDIZER_API}, {DESCRIPTORS_API} for {len(smiles_list)} SMILES")
+
+        if not smiles_list:
+            return []
+
+        cache_keys = [self._build_prediction_cache_key(model_id, smiles=smiles) for smiles in smiles_list]
+        lookup_keys_by_index = [
+            self._build_prediction_cache_lookup_keys(model_id, smiles=smiles)
+            for smiles in smiles_list
+        ]
+        lookup_keys = []
+        for candidate_keys in lookup_keys_by_index:
+            lookup_keys.extend(key for key in candidate_keys if key and key not in lookup_keys)
+        cached_predictions = get_cached_predictions(lookup_keys)
+
+        results = [None] * len(smiles_list)
+        missing_indices = []
+        missing_smiles = []
+        missing_cache_keys = []
+
+        for idx, cache_key in enumerate(cache_keys):
+            matched_cache_key = None
+            prediction = None
+            for lookup_key in lookup_keys_by_index[idx]:
+                prediction = cached_predictions.get(lookup_key)
+                if prediction is not None:
+                    matched_cache_key = lookup_key
+                    break
+            if prediction is not None:
+                prediction_obj = self._prediction_from_cached_value(prediction)
+                if matched_cache_key is not None and self._cached_prediction_conflicts_with_cache_key(matched_cache_key, prediction_obj):
+                    logging.warning(
+                        "Ignoring cached prediction whose chemicalIdentifiers conflict with cache key; "
+                        "key=%s smiles=%s",
+                        matched_cache_key,
+                        smiles_list[idx],
+                    )
+                else:
+                    results[idx] = self._ensure_cached_prediction_uses_input_chemical(
+                        prediction_obj,
+                        smiles_list[idx],
+                    )
+                    continue
+
+            missing_indices.append(idx)
+            missing_smiles.append(smiles_list[idx])
+            missing_cache_keys.append(cache_key)
+
+        model = None
+        model_details_dict = None
+        fileAPI = os.getenv("FILE_API_SERVER", pc.URL_LOCAL_FILE_API)
+
+        if include_model_details:
+            model_details_dict = self._read_model_details_cache(model_id, fileAPI)
+
+        if missing_indices or (include_model_details and model_details_dict is None):
+            model, resolved_model_details_dict, model_error = self._resolve_model_context(model_id, fileAPI)
+            if model_details_dict is None:
+                model_details_dict = resolved_model_details_dict
+            if model is None:
+                for idx, smiles in zip(missing_indices, missing_smiles):
+                    results[idx] = self._build_prediction_error_report(smiles, None, model_error)
+
+                if include_model_details and model_details_dict:
+                    results = [
+                        self._attach_model_details_to_prediction(prediction, model_details_dict)
+                        if prediction is not None else prediction
+                        for prediction in results
+                    ]
+                return results
+
+        if missing_indices:
+            standardized_results = self._standardize_smiles_batch(STDIZER_API, missing_smiles, model)
+            generated_results = self._predict_model_smiles_batch_from_standardized_results(
+                model,
+                DESCRIPTORS_API,
+                missing_smiles,
+                standardized_results,
+                report_model_details=None,
+                generate_report=True,
+            )
+            cache_entries = []
+
+            for idx, cache_key, prediction in zip(missing_indices, missing_cache_keys, generated_results):
+                prediction_obj = self._prediction_from_cached_value(prediction)
+                results[idx] = prediction_obj
+                if cache_key is not None:
+                    cache_entries.append((cache_key, prediction_obj))
+
+            cache_predictions(cache_entries)
+
+        if include_model_details and model_details_dict:
+            results = [
+                self._attach_model_details_to_prediction(prediction, model_details_dict)
+                if prediction is not None else prediction
+                for prediction in results
+            ]
+
+        return results
+
+    @timer
+    def predictFromDB(self, model_id, smiles, include_model_details=True):
         """
         Runs whole workflow: standardize, descriptors, prediction, applicability domain
         :param model_id:
@@ -988,49 +3155,23 @@ class ModelPredictor:
         :param mwu:
         :return:
         """
-    
+
+        print(f"predictFromDB: {model_id} and {STDIZER_API}, {DESCRIPTORS_API} for {len(smiles)} SMILES")
+
         if isinstance(smiles, str):
-            key = f"{smiles}-{model_id}"
-            prediction = get_cached_prediction(key)
-            if prediction:
-                return prediction
-            else:
-                prediction, code = self.predict_model_smiles(model_id, smiles)
-                cache_prediction(key, prediction)
-                return prediction
-        else:
-            smiles_list = list(smiles)
-            if not smiles_list:
-                return []
+            predictions = self._predict_from_db_batch(
+                model_id,
+                [smiles],
+                include_model_details=include_model_details,
+            )
+            return predictions[0] if predictions else {"smiles": smiles, "error": "Prediction failed unexpectedly"}
 
-            result = [None] * len(smiles_list)
-            missing = []
-
-            for idx, smi in enumerate(smiles_list):
-                key = f"{smi}-{model_id}"
-                prediction = get_cached_prediction(key)
-                if prediction is not None:
-                    result[idx] = prediction
-                else:
-                    missing.append((idx, smi))
-
-            if missing:
-                max_workers = int(os.getenv("PREDICT_THREAD_WORKERS", min(32, (os.cpu_count() or 1) * 5)))
-                max_workers = max(1, min(max_workers, len(missing)))
-
-                def _predict_one(item):
-                    idx, smi = item
-                    prediction, code = self.predict_model_smiles(model_id, smi)
-                    if code != 200:
-                        prediction = dict(smiles=smi, error=prediction)
-                    cache_prediction(f"{smi}-{model_id}", prediction)
-                    return idx, prediction
-
-                with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
-                    for idx, prediction in pool.map(_predict_one, missing):
-                        result[idx] = prediction
-
-            return result
+        smiles_list = list(smiles)
+        return self._predict_from_db_batch(
+            model_id,
+            smiles_list,
+            include_model_details=include_model_details,
+        )
 
     def addPerformance(self, md: ModelDetails):
         ms = md.modelStatistics or {}
@@ -1091,22 +3232,7 @@ class ModelPredictor:
         TODO: move to utility class
         :param smiles_string:
         '''
-        
-        indigo = Indigo()
-        renderer = IndigoRenderer(indigo)
-        
-        try:
-            mol = indigo.loadMolecule(smiles_string)
-            indigo.setOption("render-output-format", "png") 
-            indigo.setOption("render-image-width", width)
-            indigo.setOption("render-image-height", height)
-            img_bytes = renderer.renderToBuffer(mol)
-            base64_string = base64.b64encode(img_bytes).decode('utf-8')
-            return base64_string
-    
-        except Exception as e:
-            # print(f"An error occurred while loading the molecule: {e}")
-            return None
+        return _render_smiles_to_base64_cached(smiles_string, width=width, height=height)
     
     def setExpValue(self, chemical, model, modelResults:ModelResults, neighborResultsTraining, neighborResultsPrediction):
 
@@ -1116,181 +3242,228 @@ class ModelPredictor:
         # there are multiple instances where it didnt detect an experimental value because the smiles was written differently 
         #  TODO look up by inchiKey as well?
         
-        matching_row_training = model.df_training[model.df_training['ID'] == qsarSmiles]
-        matching_row_test = model.df_prediction[model.df_prediction['ID'] == qsarSmiles]
-        
-        if not matching_row_training.empty:
-            modelResults.experimentalValueUnitsModel = matching_row_training['Property'].values[0]
+        training_lookup = getattr(model, "_training_property_by_id", None)
+        if training_lookup and qsarSmiles in training_lookup:  # TMM why do we need both training_lookup and df_training?
+            modelResults.experimentalValueUnitsModel = training_lookup[qsarSmiles]
             modelResults.experimentalValueSet = "Training"
-            
-        if not matching_row_test.empty:
-            modelResults.experimentalValueUnitsModel = matching_row_test['Property'].values[0]
+        else:
+            matching_row_training = model.df_training[model.df_training['ID'] == qsarSmiles]
+            if not matching_row_training.empty:
+                modelResults.experimentalValueUnitsModel = matching_row_training['Property'].values[0]
+                modelResults.experimentalValueSet = "Training"
+
+        prediction_lookup = getattr(model, "_prediction_property_by_id", None)
+        if prediction_lookup and qsarSmiles in prediction_lookup:
+            modelResults.experimentalValueUnitsModel = prediction_lookup[qsarSmiles]
             modelResults.experimentalValueSet = "Test"
-            
+        else:
+            matching_row_test = model.df_prediction[model.df_prediction['ID'] == qsarSmiles]
+            if not matching_row_test.empty:
+                modelResults.experimentalValueUnitsModel = matching_row_test['Property'].values[0]
+                modelResults.experimentalValueSet = "Test"
+                
         if modelResults.experimentalValueSet is None: 
             if neighborResultsTraining is not None:
-                if neighborResultsTraining["neighbors"][0]["cid"] ==  chemical["cid"]:
+                if neighborResultsTraining["neighbors"][0]["cid"] == chemical["cid"]:
                         modelResults.experimentalValueSet = "Training"
                         modelResults.experimentalValueUnitsModel = neighborResultsTraining["neighbors"][0]["exp"]
-                elif neighborResultsPrediction["neighbors"][0]["cid"] ==  chemical["cid"]:
+                elif neighborResultsPrediction["neighbors"][0]["cid"] == chemical["cid"]:
                         modelResults.experimentalValueSet = "Test"
                         modelResults.experimentalValueUnitsModel = neighborResultsPrediction["neighbors"][0]["exp"]
-
         
         logging.info(f"experimentalValueSet={modelResults.experimentalValueSet}")        
         logging.info(f"experimentalValueUnitsModel={ modelResults.experimentalValueUnitsModel}")
 
-
     def setExpPredValuesForADAnalogs(self, model, analogs):
-
-        analogs2 = []
-
-        df_preds = model.df_preds_training_cv
-
-        for analog in analogs:  # these are just the qsarSmiles
-
-            matching_row_dsstox = model.df_dsstoxRecords[model.df_dsstoxRecords['canonicalSmiles'] == analog]
-
-            if not matching_row_dsstox.empty:
-                row_as_dict = matching_row_dsstox.iloc[0].to_dict()
-            else:
-                row_as_dict = self.fixMissingNeighborDsstoxRecord(model.datasetName, analog)
-
-            analogs2.append(row_as_dict)
-
-            # Find the matching row in model.df_preds_test
-            matching_row_pred = df_preds[df_preds['id'] == analog]
-            if not matching_row_pred.empty:
-                # Add exp and pred values to the record
-                row_as_dict['exp'] = matching_row_pred['exp'].values[0]
-                row_as_dict['pred'] = matching_row_pred['pred'].values[0]
-        
-        # print(json.dumps(analogs2,indent=4))
-        
-        return analogs2
+        self._ensure_model_runtime_cache(model)
+        return self.setExpPredValuesForNeighbors(
+            model,
+            getattr(model, "_preds_training_cv_by_id", None),
+            analogs,
+            getattr(model, "_dsstox_by_smiles", None),
+        )
 
     def addDistances(self, analogs, distances):
         # print(len(analogs), len(distances))
         for index, analog in enumerate(analogs):  # these are just the qsarSmiles
             analog["distance"] = distances[index] 
 
-    def fixMissingNeighborDsstoxRecord(self, datasetName, qsarSmiles):
-        row_as_dict = {
-            "canonicalSmiles":qsarSmiles}
-        mi = ModelInitializer()
-        
-        try:
-            session = getSession()
+    # def fixMissingNeighborDsstoxRecord(self, datasetName, qsarSmiles):
+    #     cache_key = (datasetName, qsarSmiles)
+    #
+    #     with _MISSING_NEIGHBOR_DSS_TOX_LOCK:
+    #         cached_record = _MISSING_NEIGHBOR_DSS_TOX_CACHE.get(cache_key)
+    #     if cached_record is not None:
+    #         return dict(cached_record)
+    #
+    #     row_as_dict = {"canonicalSmiles": qsarSmiles}
+    #     mi = ModelInitializer()
+    #
+    #     if not model_cache.postgres_fallback_enabled():
+    #         row_as_dict["name"] = qsarSmiles
+    #         with _MISSING_NEIGHBOR_DSS_TOX_LOCK:
+    #             _MISSING_NEIGHBOR_DSS_TOX_CACHE[cache_key] = dict(row_as_dict)
+    #         return dict(row_as_dict)
+    #
+    #     try:
+    #         session = getSession()
+    #
+    #         dtxcid = mi.getQsarDtxcid(qsarSmiles, datasetName, session)
+    #
+    #         if dtxcid:
+    #             row_as_dict["cid"] = dtxcid
+    #
+    #             # TMM: already fixed the ones we could using RESOLVER_API
+    #
+    #             # if dtxcid in dict_missing_dsstox_records:
+    #             #     rec = dict_missing_dsstox_records[dtxcid]
+    #             #     row_as_dict["sid"] = rec["sid"]
+    #             #     row_as_dict["name"] = rec["name"]
+    #             #     row_as_dict["smiles"] = rec["smiles"]
+    #             #     row_as_dict["casrn"] = rec["casrn"]
+    #             # else:
+    #             #     row_as_dict["name"] = dtxcid
+    #
+    #             row_as_dict["name"] = dtxcid
+    #
+    #         else:
+    #             row_as_dict["name"] = qsarSmiles
+    #
+    #         session.close()
+    #     except Exception as e:
+    #         print(e)
+    #
+    #     with _MISSING_NEIGHBOR_DSS_TOX_LOCK:
+    #         _MISSING_NEIGHBOR_DSS_TOX_CACHE[cache_key] = dict(row_as_dict)
+    #
+    #     return dict(row_as_dict)
 
-            dtxcid = mi.getQsarDtxcid(qsarSmiles, datasetName, session)
-            
-            if dtxcid:
-                row_as_dict["cid"] = dtxcid
-                
-                if dtxcid in dict_missing_dsstox_records:  # dict_missing_dsstox_records is global variable
-                    rec = dict_missing_dsstox_records[dtxcid]
-                    row_as_dict["sid"] = rec["sid"]
-                    row_as_dict["name"] = rec["name"]
-                    row_as_dict["smiles"] = rec["smiles"]
-                    row_as_dict["casrn"] = rec["casrn"]
-                    
-                else:
-                    row_as_dict["name"] = dtxcid    
-                
-            else:
-                row_as_dict["name"] = qsarSmiles
-
-            session.close()
-            
-            # print(dtxcid, dtxsid)
-
-        except Exception as e:
-            print(e)
-
-        return row_as_dict
-
-    def setExpPredValuesForNeighbors(self, model:Model, df_preds, neighbors, df_dsstoxRecords):
+    def setExpPredValuesForNeighbors(self, model:Model, pred_lookup, neighbors, dsstox_lookup):
 
         neighbors2 = []
-
+                
         for neighbor in neighbors:  # these are just the qsarSmiles
 
-            matching_row_dsstox = df_dsstoxRecords[df_dsstoxRecords['canonicalSmiles'] == neighbor]
-
-            if not matching_row_dsstox.empty:
-                row_as_dict = matching_row_dsstox.iloc[0].to_dict()
-                neighbors2.append(row_as_dict)
+            dsstox_row = dsstox_lookup.get(neighbor) if dsstox_lookup else None
+            if dsstox_row is not None:
+                row_as_dict = dict(dsstox_row)
             else:
-                logging.debug("Finding missing dsstox info for " + neighbor)  # only happens for 8 dtxcids
-                row_as_dict = self.fixMissingNeighborDsstoxRecord(model.datasetName, neighbor)
-                logging.debug(row_as_dict)
-                
-                # print(neighbor +" not in dsstox records")
-                neighbors2.append(row_as_dict)
-                
-            # Find the matching row in model.df_preds_test
-            matching_row_pred = df_preds[df_preds['id'] == neighbor]
-            if not matching_row_pred.empty:
-                # Add exp and pred values to the record
-                row_as_dict['exp'] = matching_row_pred['exp'].values[0]
-                row_as_dict['pred'] = matching_row_pred['pred'].values[0]
+                # logging.debug("Finding missing dsstox info for " + neighbor)  # only happens for 8 dtxcids
+                # row_as_dict = self.fixMissingNeighborDsstoxRecord(model.datasetName, neighbor)
+                # logging.debug(row_as_dict)
+                print("Missing dsstox info for " + neighbor)  # only happens for 8 dtxcids
+                row_as_dict={}
+
+            prediction_row = pred_lookup.get(neighbor) if pred_lookup else None
+            if prediction_row is not None:
+                row_as_dict['exp'] = prediction_row.get('exp')
+                row_as_dict['pred'] = prediction_row.get('pred')
+
+            neighbors2.append(row_as_dict)
 
         return neighbors2
 
-    @timer
-    def addNeighborsFromSets(self, model:Model, modelResults: ModelResults, df_test_chemicals):
+    def _build_neighbor_report(self, model: Model, neighbors, distances, pred_lookup, dsstox_lookup, units_model, set_name, title):
+        enriched_neighbors = self.setExpPredValuesForNeighbors(model, pred_lookup, neighbors, dsstox_lookup)
+        self.addDistances(enriched_neighbors, distances)
 
-        ng = NeighborGetter()
-        
-        neighborsTest, distances_test = ng.find_neighbors_in_set(model=model, df_set=model.df_prediction, df_test_chemicals=df_test_chemicals)
-        neighborsTraining, distances_training = ng.find_neighbors_in_set(model=model, df_set=model.df_training, df_test_chemicals=df_test_chemicals)
-
-        neighborsTraining = self.setExpPredValuesForNeighbors(model, model.df_preds_training_cv, neighborsTraining, model.df_dsstoxRecords)
-        neighborsTest = self.setExpPredValuesForNeighbors(model, model.df_preds_test, neighborsTest, model.df_dsstoxRecords)
+        df_neighbors = pd.DataFrame(enriched_neighbors)
                 
-        self.addDistances(neighborsTraining, distances_training)    
-        self.addDistances(neighborsTest, distances_test)
-                
-        df_neighborsTest = pd.DataFrame(neighborsTest)
-        df_neighborsTraining = pd.DataFrame(neighborsTraining)
+        if set_name == "Training":
+            tag = pc.TAG_TRAINING
+        else:
+            tag = pc.TAG_TEST
         
         if model.is_binary:
             binary_cutoff = 0.5
-            stats_test = stats.calculate_binary_statistics(df_neighborsTest, binary_cutoff, pc.TAG_TEST)
-            neighborsTestBA = stats_test[pc.BALANCED_ACCURACY + pc.TAG_TEST]
-            neighborsTestSN = stats_test[pc.SENSITIVITY + pc.TAG_TEST]
-            neighborsTestSP = stats_test[pc.SPECIFICITY + pc.TAG_TEST]
-                        
-            stats_training = stats.calculate_binary_statistics(df_neighborsTraining, binary_cutoff, pc.TAG_TRAINING)
-            neighborsTrainingBA = stats_training[pc.BALANCED_ACCURACY + pc.TAG_TRAINING]
-            neighborsTrainingSN = stats_training[pc.SENSITIVITY + pc.TAG_TRAINING]
-            neighborsTrainingSP = stats_training[pc.SPECIFICITY + pc.TAG_TRAINING]
-            
-            neighborResultsPrediction = {"set": "Test", "neighbors":neighborsTest, 
-                                         "BA":neighborsTestBA, "SN":neighborsTestSN, "SP":neighborsTestSP,
-                                         "unitNeighbor":modelResults.unitsModel,
-                                         "title": "Nearest Neighbors from Test Set (External Predictions)"}
-            
-            neighborResultsTraining = {"set": "Training", "neighbors":neighborsTraining, 
-                                       "BA":neighborsTrainingBA, "SN":neighborsTrainingSN, "SP":neighborsTrainingSP,
-                                       "unitNeighbor":modelResults.unitsModel,
-                                       "title": "Nearest Neighbors from Training Set (Cross Validation Predictions)"}
+            stats_test = stats.calculate_binary_statistics(df_neighbors, binary_cutoff, tag)
+            BA = stats_test[pc.BALANCED_ACCURACY + tag]
+            SN = stats_test[pc.SENSITIVITY + tag]
+            SP = stats_test[pc.SPECIFICITY + tag]
+
+            return {"set": "Training", "neighbors":enriched_neighbors, "BA":BA, "SN":SN, "SP":SP, "unitNeighbor":units_model,
+                                   "title": title}
 
         else:
-            stats_test = stats.calculate_continuous_statistics(df_neighborsTest, 0, pc.TAG_TEST)
-            neighborsTestMAE = stats_test[pc.MAE + pc.TAG_TEST]
-                        
-            stats_training = stats.calculate_continuous_statistics(df_neighborsTraining, 0, pc.TAG_TRAINING)
-            neighborsTrainingMAE = stats_training[pc.MAE + pc.TAG_TRAINING]
+            mae_value = None
+
+            try:
+                stats_result = stats.calculate_continuous_statistics(df_neighbors, 0, tag)
+                mae_value = stats_result.get(pc.MAE + tag)
             
-            neighborResultsPrediction = {"set": "Test", "neighbors":neighborsTest, "MAE":neighborsTestMAE,
-                                                    "unitNeighbor":modelResults.unitsModel,
-                                                    "title": "Nearest Neighbors from Test Set (External Predictions)"}
-            neighborResultsTraining = {"set": "Training", "neighbors":neighborsTraining, "MAE":neighborsTrainingMAE,
-                                                  "unitNeighbor":modelResults.unitsModel,
-                                                  "title": "Nearest Neighbors from Training Set (Cross Validation Predictions)"}
+            except Exception:
+                mae_value = None
         
-        return neighborResultsTraining, neighborResultsPrediction
+            return {
+                "set": set_name,
+                "neighbors": enriched_neighbors,
+                "MAE": mae_value,
+                "unitNeighbor": units_model,
+                "title": title,
+            }
+
+    def addNeighborsFromSets_batch(self, model, df_test_chemicals, units_model):
+        self._ensure_model_runtime_cache(model)
+
+        ng = NeighborGetter()
+        neighbors_test_all, distances_test_all = ng.find_neighbors_in_set(
+            model=model,
+            df_set=model.df_prediction,
+            df_test_chemicals=df_test_chemicals,
+            precomputed=getattr(model, "_neighbors_prediction_cache", None),
+            return_all=True,
+        )
+        neighbors_training_all, distances_training_all = ng.find_neighbors_in_set(
+            model=model,
+            df_set=model.df_training,
+            df_test_chemicals=df_test_chemicals,
+            precomputed=getattr(model, "_neighbors_training_cache", None),
+            return_all=True,
+        )
+
+        dsstox_lookup = getattr(model, "_dsstox_by_smiles", None)
+        pred_training_lookup = getattr(model, "_preds_training_cv_by_id", None)
+        pred_test_lookup = getattr(model, "_preds_test_by_id", None)
+
+        neighbor_results_training = []
+        neighbor_results_prediction = []
+
+        for row_pos in range(len(df_test_chemicals.index)):
+            neighbor_results_training.append(
+                self._build_neighbor_report(
+                    model,
+                    neighbors_training_all[row_pos],
+                    distances_training_all[row_pos],
+                    pred_training_lookup,
+                    dsstox_lookup,
+                    units_model,
+                    "Training",
+                    "Nearest Neighbors from Training Set (Cross Validation Predictions)",
+                )
+            )
+            neighbor_results_prediction.append(
+                self._build_neighbor_report(
+                    model,
+                    neighbors_test_all[row_pos],
+                    distances_test_all[row_pos],
+                    pred_test_lookup,
+                    dsstox_lookup,
+                    units_model,
+                    "Test",
+                    "Nearest Neighbors from Test Set (External Predictions)",
+                )
+            )
+
+        return neighbor_results_training, neighbor_results_prediction
+
+    @timer
+    def addNeighborsFromSets(self, model:Model, modelResults: ModelResults, df_test_chemicals):
+        neighbor_results_training, neighbor_results_prediction = self.addNeighborsFromSets_batch(
+            model,
+            df_test_chemicals,
+            modelResults.unitsModel,
+        )
+        return neighbor_results_training[0], neighbor_results_prediction[0]
         
     @timer
     def getFragmentAD(self, df_prediction, df_training, modelResults:ModelResults):
@@ -1342,7 +3515,7 @@ class ModelPredictor:
         modelResults.adEstimates.append(adResultsFrag)
     
     @timer
-    def predict_model_smiles(self, model_id, smiles, generate_report=True):
+    def predict_model_smiles(self, model_id, smiles, generate_report=True, include_model_details=True):
         """
         Runs whole workflow: standardize, descriptors, prediction, applicability domain
         :param model_id:
@@ -1350,150 +3523,23 @@ class ModelPredictor:
         :param mwu:
         :return:
         """
+        batch_result = self.predict_model_smiles_batch(
+            model_id,
+            [smiles],
+            generate_report=generate_report,
+            include_model_details=include_model_details,
+        )
+        if not batch_result:
+            return f"Prediction failed for {smiles}", 500
 
-        serverAPIs = os.getenv("CIM_API_SERVER", "https://cim-dev.sciencedataexperts.com")
-        fileAPI = os.getenv("FILE_API_SERVER", pc.URL_CTX_API)
+        prediction = batch_result[0]
+        if isinstance(prediction, dict) and "error" in prediction and prediction.get("modelResults") is None:
+            error = prediction.get("error")
+            if isinstance(error, str):
+                return error, 400
+            return str(error), 400
 
-        # initialize model bytes and all details from db:
-        
-        mi = ModelInitializer()
-        model = mi.init_model(model_id)
-        
-        logging.info(f"serverAPIS:{serverAPIs}")
-        logging.info(f"model.qsarReadyRuleSet:{model.qsarReadyRuleSet}")
-
-        if serverAPIs == "https://hcd.rtpnc.epa.gov/" and model.qsarReadyRuleSet == 'qsar-ready_04242025_0':
-            model.qsarReadyRuleSet = 'qsar-ready_04242025'  # latest rules arent on there yet
-        
-        if hasattr(model, 'modelId') == False:
-            return f"Invalid model_id: {model_id}", 400
-        
-        modelDetails = ModelDetails(model)
-
-        if 'reg_' in model.modelMethod or 'las_' in model.modelMethod or 'gcm_' in model.modelMethod:
-            y = model.df_training[model.df_training.columns[1]]
-            X = model.df_training[model.embedding]
-            modelDetails.modelCoefficients = json.loads(model.getOriginalRegressionCoefficients2(X, y))
-        
-        self.addLinks(modelDetails, fileAPI)
-        self.addPerformance(modelDetails)
-        
-        modelDetails.performance["train"]["N"] = model.num_training
-        modelDetails.performance["fiveFoldICV"]["N"] = model.num_training
-        modelDetails.performance["external"]["N"] = model.num_prediction  # TODO: rename to prediction 
-        
-        # TODO later will have separate external set which is separate from prediction set 
-        # if model.num_external is not None:
-        #     modelDetails.performance["external"]["n"] = model.num_external
-
-        modelResults = ModelResults()
-    
-        # Standardize smiles:
-        chemical, code = self.standardizeStructure(serverAPIs, smiles, model)
-    
-        if code != 200:
-            
-            error = chemical
-            
-            chemical = {}
-            chemical["chemId"] = smiles  # TODO add inchiKey
-            chemical["smiles"] = smiles
-            img_base64 = self.smiles_to_base64(chemical["smiles"])
-            
-            if img_base64: 
-                chemical["imageSrc"] = f'data:image/png;base64,{img_base64}'
-            else:
-                chemical["imageSrc"] = "N/A"
-            
-            modelResults.predictionError = error
-            report = Report(chemical, modelDetails, modelResults)
-            return report.to_json(), 200
-
-        if "smiles" in chemical and "cid" not in chemical:
-            img_base64 = self.smiles_to_base64(chemical["smiles"])
-            chemical["imageSrc"] = f'data:image/png;base64,{img_base64}'
-        else:
-            chemical["imageSrc"] = imgURLCid + chemical["cid"]
-
-        # TODO: right now it's letting salts through if the qsarReadySmiles isn't salt should we return error here?            
-        if model.omitSalts and "." in smiles:
-            pass
-                            
-        qsarSmiles = chemical['canonicalSmiles']
-    
-        # print("Running descriptors")
-        # Descriptor calcs:
-        descriptorAPI = DescriptorsAPI()
-        df_prediction, code = descriptorAPI.calculate_descriptors(serverAPIs, qsarSmiles,
-                                                                  model.descriptorService)
-        
-        if code != 200:
-            report = Report(chemical, modelDetails, modelResults)
-            modelResults.predictionError = df_prediction
-            return report.to_json(), 200
-                
-        json_predictions = call_do_predictions_from_df(df_prediction, model)        
-        # print(json_predictions)
-        pred_results = json.loads(json_predictions)
-        pred_value = pred_results[0]['pred']
-        
-        # applicability domain calcs:
-        if model.applicabilityDomainName:
-            applicabilityDomains = modelDetails.applicabilityDomainName.split(" and ")
-            # if pc.Applicability_Domain_TEST_Fragment_Counts not in applicabilityDomains:
-            #     applicabilityDomains.append(pc.Applicability_Domain_TEST_Fragment_Counts)
-
-            for applicabilityDomain in applicabilityDomains:
-                ad_results = self.determineApplicabilityDomain(model, applicabilityDomain, df_prediction)
-                modelResults.adEstimates.append(ad_results)
-        else:
-            print('AD method for model was not set:', model_id)
-
-        modelResults.predictionValueUnitsModel = pred_value
-        modelResults.unitsModel = model.unitsModel  # duplicated so displayed near prediction value
-
-        if generate_report:
-            neighborResultsTraining, neighborResultsPrediction = self.addNeighborsFromSets(model, modelResults, df_prediction)
-
-        # set exp value
-        self.setExpValue(chemical, model, modelResults, neighborResultsTraining, neighborResultsPrediction)
-        
-        uc = UnitsConverter()
-        
-        if "sid" not in chemical:
-            chemical["sid"] = "N/A"
-            chemical["cid"] = "N/A"
-            chemical["name"] = "N/A"
-                
-            
-        # val = modelResults.experimentalValueUnitsModel
-        
-        val = modelResults.experimentalValueUnitsModel
-        is_missing = (val is None) or (isinstance(val, float) and math.isnan(val))  # need to make more robust because if val == 0 it can behave like false
-
-        if not is_missing:
-            modelResults.experimentalValueUnitsDisplay = uc.convert_units(
-                model.propertyName, val, model.unitsModel, model.unitsDisplay,
-                chemical["sid"], chemical.get("averageMass")
-            )
-            # print('modelResults.experimentalValueUnitsDisplay', modelResults.experimentalValueUnitsDisplay)
-        # else:
-            # print("experimentalValueUnitsModel is None/NaN; skipping conversion")
-            
-            
-        modelResults.predictionValueUnitsDisplay = uc.convert_units(model.propertyName, pred_value, model.unitsModel, model.unitsDisplay,
-                                                                    chemical["sid"], chemical["averageMass"])
-        modelResults.unitsDisplay = model.unitsDisplay
-                
-        report = Report(chemical, modelDetails, modelResults)
-
-
-        if generate_report:
-            report.neighborResultsTraining=neighborResultsTraining
-            report.neighborResultsPrediction=neighborResultsPrediction
-            
-            
-        return report.to_json(), 200
+        return prediction, 200
     
     def addLinks(self, modelDetails, file_api=pc.URL_CTX_API):
         modelId = str(modelDetails.modelId)
@@ -1535,13 +3581,17 @@ class ModelPredictor:
             pass
 
     @timer
-    def standardizeStructure(self, serverAPIs, smiles, model: Model):
+    def standardizeStructure(self, stdizer_api, smiles, model: Model):
         useFullStandardize = False
-        chemicals, code = QsarSmilesAPI.call_qsar_ready_standardize_post(server_host=serverAPIs, smiles=smiles, full=useFullStandardize,
-                                                           workflow=model.qsarReadyRuleSet)
+        try:
+            chemicals, code = QsarSmilesAPI.call_qsar_ready_standardize_post(stdizer_api=stdizer_api, smiles=smiles, full=useFullStandardize,
+                                                               workflow=model.qsarReadyRuleSet)
+        except Exception as exc:
+            logging.exception("Standardization request failed for %s", smiles)
+            return f"{smiles}: standardization request failed: {exc}", 500
         logging.debug(chemicals)
         
-        if code == 400:
+        if code >= 400:
             return chemicals, code
                 
         if len(chemicals) == 0:
@@ -1554,17 +3604,26 @@ class ModelPredictor:
 
         chemical = chemicals[0]
         qsarSmiles = chemical["canonicalSmiles"]
+        if not qsarSmiles:
+            logging.warning("Standardization returned empty canonicalSmiles for %s", smiles)
+            return f"{smiles} failed standardization", 400
         logging.debug(f"qsarSmiles: {qsarSmiles}")
         return chemical, 200
         
-    def standardizeStructure2(self, serverAPIs, smiles, qsarReadyRuleSet, omitSalts):
+    def standardizeStructure2(self, stdizer_api, smiles, qsarReadyRuleSet, omitSalts):
         useFullStandardize = False
-        chemicals, code = QsarSmilesAPI.call_qsar_ready_standardize_post(server_host=serverAPIs, smiles=smiles, full=useFullStandardize,
-                                                           workflow=qsarReadyRuleSet)
+        try:
+            chemicals, code = QsarSmilesAPI.call_qsar_ready_standardize_post(stdizer_api=stdizer_api, smiles=smiles, full=useFullStandardize,
+                                                               workflow=qsarReadyRuleSet)
+        except Exception as exc:
+            logging.exception("Standardization request failed for %s", smiles)
+            return f"{smiles}: standardization request failed: {exc}", 500
         logging.debug(chemicals)
 
-        if code == 500:
+        if code >= 500:
             return smiles + ": could not generate QSAR Ready SMILES", code 
+        if code == 400:
+            return chemicals, code
                 
         if len(chemicals) == 0:
             # logging.debug('Standardization failed')
@@ -1576,6 +3635,9 @@ class ModelPredictor:
 
         chemical = chemicals[0]
         qsarSmiles = chemical["canonicalSmiles"]
+        if not qsarSmiles:
+            logging.warning("Standardization returned empty canonicalSmiles for %s", smiles)
+            return f"{smiles} failed standardization", 400
         logging.debug(f"qsarSmiles: {qsarSmiles}")
         return chemical, 200
 
@@ -1591,9 +3653,6 @@ class ModelPredictor:
         """
 
         descriptorAPI = DescriptorsAPI()
-
-        # serverAPIs = "https://hcd.rtpnc.epa.gov" #TODO: this should come from environment variable
-        serverAPIs = "https://cim-dev.sciencedataexperts.com/"
 
         mi = ModelInitializer()
 
@@ -1614,7 +3673,7 @@ class ModelPredictor:
 
             # for smiles, predOld in zip(smiles_list, pred_list):
             for smiles in smiles_list:
-                chemical, code = self.standardizeStructure(serverAPIs, smiles, model)
+                chemical, code = self.standardizeStructure(STDIZER_API, smiles, model)
 
                 qsarSmiles = chemical["canonicalSmiles"]
 
@@ -1623,12 +3682,14 @@ class ModelPredictor:
                     file.write(smiles + "\terror smiles")
                     continue
 
-                df_prediction, code = descriptorAPI.calculate_descriptors(serverAPIs, qsarSmiles, model.descriptorService)
+                df_prediction, code = descriptorAPI.calculate_descriptors(DESCRIPTORS_API, qsarSmiles, model.descriptorService)
                 if code != 200:
                     print(smiles, 'error descriptors')
                     file.write(smiles + "\terror descriptors")
 
                     continue
+
+                import model_ws_utilities as mwu
 
                 pred_results = json.loads(mwu.call_do_predictions_from_df(df_prediction, model))
                 pred_value = pred_results[0]['pred']
@@ -1652,83 +3713,55 @@ class ModelPredictor:
         :param df_prediction:
         :return:
         """
+        batch_results = self._determine_applicability_domain_batch(model, applicabilityDomainName, df_prediction)
+        if batch_results:
+            return batch_results[0]
+        return {"AD": False, "adMethod": {"name": applicabilityDomainName}}
 
-        output, ad_cutoff = adu.generate_applicability_domain_with_preselected_descriptors_from_dfs(
-            train_df=model.df_training,
-            test_df=df_prediction,
-            # test_df=model.df_prediction,  #for testing running batch type ad calc
-            remove_log_p=model.remove_log_p_descriptors,
-            embedding=model.embedding,
-            # applicability_domain=model.applicabilityDomainName,
-            applicability_domain=applicabilityDomainName,
-            filterColumnsInBothSets=True)
 
-        AD = output['AD'].tolist()[0]
-        
-        if 'ids' in output.columns and "distances" in output.columns:
-            analogsAD = output['ids'].tolist()[0]  # only use first one for singleton prediction
-            distances = list(output["distances"][0])
-            results = {"AD":AD, "analogs": analogsAD, "distances": distances, "AD_Cutoff": ad_cutoff}
-        else:
-            results = {"AD":AD}
-                
-        # print(json.dumps(analogsAD,indent=4))
-        # dictsAnalogs = [ast.literal_eval(item) for item in analogsAD]
-        
-        results["adMethod"] = {}
-        results["adMethod"]["name"] = applicabilityDomainName
-        # results["adMethod"]["description"] = model.applicabilityDomainDescription
+def _postprocess_prediction_chunk(args):
+    (
+        model_id,
+        batch_prediction_df,
+        prediction_chemicals,
+        pred_values,
+        report_model_details,
+        generate_report,
+        response_chemicals,
+        standardized_chemicals_for_response,
+    ) = args
 
-        if applicabilityDomainName == pc.Applicability_Domain_TEST_Embedding_Euclidean\
-         or applicabilityDomainName == pc.Applicability_Domain_TEST_All_Descriptors_Euclidean:
-            
-            results["value"] = sum(distances) / len(distances)
-            
-            if AD == True: 
-                results["conclusion"] = "Inside"
-                results["reasoning"] = f"Avg. distance ({results['value']:.2f}) < {ad_cutoff:.2f}" 
-            else: 
-                results["conclusion"] = "Outside"
-                results["reasoning"] = f"Avg. distance ({results['value']:.2f}) > {ad_cutoff:.2f}"
-                
-            results["analogs"] = self.setExpPredValuesForADAnalogs(model, results["analogs"])
-            results["adMethod"]["description"] = 'Whether or not the average Euclidean distance of the three closest training set neighbors exceeds a cutoff defined so that 95% of the training set is within the AD'
+    predictor = _get_postprocess_predictor()
+    mi = ModelInitializer()
+    model = mi.init_model(model_id)
+    if model is None or hasattr(model, "modelId") is False:
+        model_error = f"Invalid model_id: {model_id}"
+        return [
+            predictor._build_prediction_error_report(
+                response_chemical,
+                report_model_details,
+                model_error,
+                standardized_chemical=standardized_chemical,
+            )
+            for response_chemical, standardized_chemical in zip(
+                response_chemicals,
+                standardized_chemicals_for_response,
+            )
+        ]
 
-            self.addDistances(results["analogs"], results["distances"])        
-            del results['distances']
-                
-        elif applicabilityDomainName == pc.Applicability_Domain_TEST_Fragment_Counts:
+    predictor._ensure_model_runtime_cache(model)
+    pred_array = np.asarray(pred_values).reshape(-1)
+    return predictor._build_reports_for_precomputed_predictions(
+        model,
+        batch_prediction_df,
+        prediction_chemicals,
+        pred_array,
+        report_model_details,
+        generate_report,
+        response_chemicals=response_chemicals,
+        standardized_chemicals_for_response=standardized_chemicals_for_response,
+    )
 
-            results["adMethod"]["description"] = 'Whether the TEST fragments are within the training set range'
-            results["fragment_table"] = output["fragment_table"].tolist()[0]
-
-            if AD == True:
-                results["conclusion"] = "Inside"
-                results["reasoning"] = "Fragments in test chemical are within the training set ranges"
-            else:
-                results["conclusion"] = "Outside"
-                results["reasoning"] = "Fragments in test chemical are NOT within the training set ranges"
-
-            if 'gcm' in model.modelMethod:
-                haveMissingFragmentInModel = False
-                for fragment in results["fragment_table"]:
-                    if fragment["fragment"] not in model.embedding:
-                        haveMissingFragmentInModel = True
-                        fragment["fragment"] += "**"                                    
-                if haveMissingFragmentInModel:
-                    results["conclusion"] = "Outside"
-                    results["reasoning"] = "Have fragment in test chemical that is NOT included in the model"
-
-            for fragment in results["fragment_table"]:
-                if fragment['test_value'] < fragment['training_min'] or fragment['test_value'] > fragment['training_max']:
-                    if "*" not in fragment["fragment"]:
-                        fragment["fragment"] += "*"            
-
-        else:
-            print("handle " + applicabilityDomainName + " in determineApplicabilityDomain()")
-            
-        return results  # gives an array instead of each object on separate line
-            
 
 def main():
     

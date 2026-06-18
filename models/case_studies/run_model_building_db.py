@@ -34,6 +34,7 @@ import re
 import traceback
 
 from util.database_utilities import DatabaseUtilities
+from util.serialization_compat import serialize_model
 
 from models import make_test_plots as mtp 
 
@@ -430,7 +431,7 @@ class ModelLoader():
             raise        
 
     def load_model_bytes(self, user, model, fk_model_id):
-        model_bytes = pickle.dumps(model)
+        model_bytes = serialize_model(model)
         bytes_list = self.divide_array(model_bytes)
 
         created_at = datetime.now()
@@ -891,11 +892,11 @@ class EmbeddingGenerator:
 def getEngine():
     connect_url = URL.create(
         drivername='postgresql+psycopg2',
-        username=os.getenv('DEV_QSAR_USER'),
-        password=os.getenv('DEV_QSAR_PASS'),
-        host=os.getenv('DEV_QSAR_HOST', 'localhost'),
-        port=os.getenv('DEV_QSAR_PORT', 5432),
-        database=os.getenv('DEV_QSAR_DATABASE')
+        username=os.getenv('POSTGRES_USER'),
+        password=os.getenv('POSTGRES_PASSWORD'),
+        host=os.getenv('POSTGRES_HOST', 'localhost'),
+        port=os.getenv('POSTGRES_PORT', 5432),
+        database=os.getenv('POSTGRES_DB')
     )
     
     # print(connect_url)    
@@ -2556,5 +2557,4 @@ class Results:
         return html_path
 
     # pass
-    
     
