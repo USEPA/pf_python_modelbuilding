@@ -27,12 +27,13 @@ except Exception as exc:
 
 
 class TestChemicalImageUtils(TestCase):
-    def test_build_render_image_url_uses_default_and_encodes_query(self):
+    def test_build_render_image_url_uses_same_origin_default_and_encodes_query(self):
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("CIM_RENDER_URL", None)
             image_url = build_render_image_url("C/C=C\\C", width=150, height=120)
 
         self.assertIsNotNone(image_url)
+        self.assertTrue(image_url.startswith("/api/resolver/render?"))
         self.assertTrue(image_url.startswith(DEFAULT_CIM_RENDER_URL + "?"))
         self.assertIn("smiles=C%2FC%3DC%5CC", image_url)
         self.assertIn("format=PNG", image_url)
