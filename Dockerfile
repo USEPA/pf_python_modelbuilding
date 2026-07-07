@@ -25,7 +25,8 @@ RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-reco
     fonts-dejavu-core \
     libstdc++6 \
     libgomp1 \
-    && apt-get remove --allow-remove-essential -y perl perl-base libsqlite3-0 ncurses-base ncurses-bin libncursesw6 gzip attr expat  \
+    && apt-get purge --allow-remove-essential --ignore-missing -y perl perl-base openssl libsqlite3-0 ncurses-base ncurses-bin libncursesw6 gzip attr expat libexpat1 bash util-linux libtinfo6 || true  \
+    && apt-get autoremove -y --purge || true \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
