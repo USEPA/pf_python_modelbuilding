@@ -36,7 +36,7 @@ import numpy as np
 
 from util.units_converter import UnitsConverter
 from util.indigo_utils import IndigoUtils
-from util.serialization_compat import refresh_legacy_serialized_model
+from util.serialization_compat import deserialize_model, refresh_legacy_serialized_model
 from util.prediction_cache_key_utils import (
     build_prediction_cache_lookup_keys,
     build_prediction_cache_key,
@@ -492,9 +492,8 @@ class ModelInitializer:
                 logging.error(f"Couldnt load model_id={model_id} from model bytes")
                 return None
 
-            import pickle
             try:
-                model = pickle.loads(model_bytes)
+                model = deserialize_model(model_bytes)
             except Exception:
                 logging.exception(f"Failed to deserialize model bytes for model_id={model_id}")
                 return None

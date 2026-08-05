@@ -11,7 +11,6 @@ from __future__ import annotations
 import argparse
 import logging
 import os
-import pickle
 import sys
 import warnings
 from datetime import datetime
@@ -28,7 +27,7 @@ load_dotenv(PROJECT_ROOT / ".env")
 
 
 from util.database_utilities import getSession
-from util.serialization_compat import refresh_legacy_serialized_model, serialize_model
+from util.serialization_compat import deserialize_model, refresh_legacy_serialized_model, serialize_model
 
 
 CHUNK_SIZE = 26214400
@@ -109,10 +108,10 @@ def chunk_bytes(data: bytes, chunk_size: int = CHUNK_SIZE) -> list[bytes]:
     return [data[idx:idx + chunk_size] for idx in range(0, len(data), chunk_size)]
 
 
-def deserialize_model(payload: bytes, model_id: int):
+def deserialize_model_with_warnings(payload: bytes, model_id: int):
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        model = pickle.loads(payload)
+        model = deserialize_model(payload)
 
     for warning_item in caught:
         LOGGER.warning("model_id=%s load warning: %s", model_id, warning_item.message)
@@ -180,7 +179,7 @@ def migrate_model(session, model_id: int, *, write: bool, updated_by: str) -> in
         len(old_payload),
     )
 
-    model = deserialize_model(old_payload, model_id)
+    model = deserialize_model_with_warnings(old_payload, model_id)
     model, stats = refresh_legacy_serialized_model(model, logger=LOGGER)
     new_payload = serialize_model(model)
 

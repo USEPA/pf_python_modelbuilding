@@ -110,6 +110,21 @@ paths:
             example6:
               summary: MP-XGB Martin 2024
               value: 1070
+            example7:
+              summary: KOC-RF Martin 2026
+              value: 1754
+            example8:
+              summary: KOC-XGB Martin 2026
+              value: 1756
+            example9:
+              summary: KOC-REG Martin 2026
+              value: 1757
+            example10:
+              summary: KOC-KNN Martin 2026
+              value: 1758
+            example11:
+              summary: KOC-GCM Martin 2026
+              value: 1763
         - name: report_format
           in: query
           description: which format to return
