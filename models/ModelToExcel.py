@@ -1549,7 +1549,7 @@ class DataQuerier:
         training = pd.merge(model.df_training, df_gmd, left_on="ID", right_on="canon_qsar_smiles", how="left")
         training = pd.merge(training, df_preds_training_cv, left_on="ID", right_on="id", how="left")
 
-        training["Set"] = training.cv_fold_x.apply(lambda x: f"Training CV, Fold {x}")
+        training["Set"] = "Training"
 
         df_preds_test = model.df_preds_test.rename(columns={"canon_qsar_smiles": "id"})
 
@@ -1618,16 +1618,16 @@ class DataQuerier:
         training_cv_predictions_dict = {
             "Exp Prop ID": temp["qsar_exp_prop_property_values_id_first"],
             "Canon QSAR SMILES": temp["canon_qsar_smiles"],
-            "Exp": temp["exp"],
-            "Pred": temp["pred"],
-            "Absolute Error": abs(temp["exp"] - temp["pred"]),
-            "CV Fold": temp["cv_fold"],
             "DTXCID": temp["dtxcid"],
             "DTXSID": temp["dtxsid"],
             "CASRN": temp["casrn"],
             "Preferred Name": temp["preferred_name"],
             "SMILES": temp["smiles"],
-            "Mol Weight": temp["mol_weight"]
+            "Mol Weight": temp["mol_weight"],
+            "Exp": temp["exp"],
+            "Pred": temp["pred"],
+            "Absolute Error": abs(temp["exp"] - temp["pred"]),
+            "CV Fold": temp["cv_fold"]
         }
         training_cv_predictions_df = pd.DataFrame(training_cv_predictions_dict)
 
@@ -1668,16 +1668,16 @@ class DataQuerier:
         test_predictions_dict = {
             "Exp Prop ID": temp["qsar_exp_prop_property_values_id_first"],
             "Canon QSAR SMILES": temp["canon_qsar_smiles"],
-            "Exp": temp["exp"],
-            "Pred": temp["pred"],
-            "Absolute Error": abs(temp["exp"] - temp["pred"]),
-            **ad_test_columns,
             "DTXCID": temp["dtxcid"],
             "DTXSID": temp["dtxsid"],
             "CASRN": temp["casrn"],
             "Preferred Name": temp["preferred_name"],
             "SMILES": temp["smiles"],
-            "Mol Weight": temp["mol_weight"]
+            "Mol Weight": temp["mol_weight"],
+            "Exp": temp["exp"],
+            "Pred": temp["pred"],
+            "Absolute Error": abs(temp["exp"] - temp["pred"]),
+            **ad_test_columns
         }
         test_set_predictions_df = pd.DataFrame(test_predictions_dict)
 
@@ -1721,16 +1721,16 @@ class DataQuerier:
         external_predictions_dict = {
             "Exp Prop ID": temp["qsar_exp_prop_property_values_id_first"],
             "Canon QSAR SMILES": temp["canon_qsar_smiles"],
-            "Exp": temp["exp"],
-            "Pred": temp["pred"],
-            "Absolute Error": abs(temp["exp"] - temp["pred"]),
-            **ad_test_columns,
             "DTXCID": temp["dtxcid"],
             "DTXSID": temp["dtxsid"],
             "CASRN": temp["casrn"],
             "Preferred Name": temp["preferred_name"],
             "SMILES": temp["smiles"],
-            "Mol Weight": temp["mol_weight"]
+            "Mol Weight": temp["mol_weight"],
+            "Exp": temp["exp"],
+            "Pred": temp["pred"],
+            "Absolute Error": abs(temp["exp"] - temp["pred"]),
+            **ad_test_columns
         }
         external_predictions_df = pd.DataFrame(external_predictions_dict)
         external_predictions_df.dropna(axis=0, subset=["Exp Prop ID", "Exp", "Pred"], how="any", inplace=True)
@@ -2139,11 +2139,6 @@ class DataTransformer:
         records_df = {
             "Exp Prop ID": df_pv.get("prop_value_id", None),
             "Canon QSAR SMILES": df_pv.get("canon_qsar_smiles", None),
-            "Page URL": df_pv.get("direct_url", None),
-            "Public Source Name": df_pv.get("public_source_name", None),
-            "Public Source URL": df_pv.get("public_source_url", None),
-            "Literature Source Citation": df_pv.get("literature_source_citation", None),
-            "Literature Source DOI": df_pv.get("literature_source_doi", None),
             "Source DTXRID": df_pv.get("source_dtxrid", None),
             "Source DTXSID": df_pv.get("source_dtxsid", None),
             "Source CASRN": df_pv.get("source_casrn", None),
@@ -2155,6 +2150,13 @@ class DataTransformer:
             "Mapped Chemical Name": df_pv.get("mapped_chemical_name", None),
             "Mapped SMILES": df_pv.get("mapped_smiles", None),
             "Mapped Molweight": df_pv.get("mapped_mol_weight", None),
+            "Page URL": df_pv.get("direct_url", None),
+            "Public Source Name": df_pv.get("public_source_name", None),
+            "Public Source URL": df_pv.get("public_source_url", None),
+            "Public Source Original Name": df_pv.get("public_source_original_name", None),
+            "Public Source Original URL": df_pv.get("public_source_original_url", None),
+            "Literature Source Citation": df_pv.get("literature_source_citation", None),
+            "Literature Source DOI": df_pv.get("literature_source_doi", None),
             "Value Original": df_pv.get("prop_value_original", None),
             "Value Max": df_pv.get("value_max", None),
             "Value Min": df_pv.get("value_min", None),
@@ -2191,7 +2193,7 @@ class DataTransformer:
 
         superheaders = {
             "Identifiers": ["Exp Prop ID", "Canon QSAR SMILES"],
-            "Literature Source Metadata": ["Page URL", "Public Source Name", "Public Source URL", "Literature Source Citation", "Literature Source DOI"],
+            "Literature Source Metadata": ["Page URL", "Public Source Name", "Public Source URL", "Public Source Original Name", "Public Source Original URL", "Literature Source Citation", "Literature Source DOI"],
             "Source Chemical Metadata": ["Source DTXRID", "Source DTXSID", "Source CASRN", "Source Chemical Name", "Source SMILES"],
             "Mapped DSSTox Record Metadata": ["Mapped DTXCID", "Mapped DTXSID", "Mapped CAS", "Mapped Chemical Name", "Mapped SMILES", "Mapped Molweight"],
             "Property Value Data": ["Value Original", "Value Max", "Value Min", "Value Point Estimate", "Value Units", "QSAR Property Value", "QSAR Property Units"],
@@ -2309,7 +2311,7 @@ class DataTransformer:
         test["Set"] = "Test"
 
         training = df_pred_cv.loc[:, columns]
-        training["Set"] = df_pred_cv.cv_fold.apply(lambda x: f"Training CV, Fold {x}")
+        training["Set"] = "Training"
 
         full = pd.concat([test, training], ignore_index=True)
         full["canon_qsar_smiles"] = full["canon_qsar_smiles"].astype(str)
@@ -2352,6 +2354,7 @@ class DataTransformer:
         df_training_cv.insert(0, "Exp Prop ID", exp_prop_id)
         df_training_cv.rename(columns={col: ExcelFormatter.clean_col_titles(col) for col in df_training_cv.columns}, inplace=True)
         df_training_cv.insert(df_training_cv.columns.get_loc("Pred") + 1, "Absolute Error", abs(df_training_cv["Exp"] - df_training_cv["Pred"]))
+        df_training_cv.reindex(columns=["Exp Prop ID", "Canon QSAR SMILES", "DTXCID", "DTXSID", "CASRN", "Preferred Name", "SMILES", "Mol Weight", "Exp", "Pred", "Absolute Error", "CV Fold"], axis=1)
         return df_training_cv
 
     @staticmethod
@@ -2378,6 +2381,7 @@ class DataTransformer:
         
         df_test.rename(columns={col: ExcelFormatter.clean_col_titles(col) for col in df_test.columns}, inplace=True)
         df_test.insert(df_test.columns.get_loc("Pred") + 1, "Absolute Error", abs(df_test["Exp"] - df_test["Pred"]))
+        df_test.reindex(columns=["Exp Prop ID", "Canon QSAR SMILES", "DTXCID", "DTXSID", "CASRN", "Preferred Name", "SMILES", "Mol Weight", "Exp", "Pred", "Absolute Error", *[col for col in df_test.columns if col.startswith("AD")]], axis=1)
         return df_test
 
     @staticmethod
@@ -2418,6 +2422,7 @@ class DataTransformer:
         df_ext.rename(columns={col: ExcelFormatter.clean_col_titles(col) for col in df_ext.columns}, inplace=True)
         df_ext.dropna(axis=0, subset=["Exp Prop ID", "Exp", "Pred"], how="any", inplace=True)
         df_ext.insert(df_ext.columns.get_loc("Pred") + 1, "Absolute Error", abs(df_ext["Exp"] - df_ext["Pred"]))
+        df_ext.reindex(columns=["Exp Prop ID", "Canon QSAR SMILES", "DTXCID", "DTXSID", "CASRN", "Preferred Name", "SMILES", "Mol Weight", "Exp", "Pred", "Absolute Error", *[col for col in df_ext.columns if col.startswith("AD")]], axis=1)
         return df_ext
     
     @staticmethod
@@ -3361,7 +3366,7 @@ def query_example() -> None:
     """
     logging.info("Running query_example()")
     # model_id = 1753
-    model_id = 1847
+    model_id = 1886
     try:
         file_path = os.path.join(PROJECT_ROOT, "data", "excel_summaries", f"{model_id}_summary.xlsx")
 
