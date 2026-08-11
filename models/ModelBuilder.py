@@ -202,6 +202,7 @@ class Model:
         self.df_dsstoxRecords = None
         self.df_training = df_training
         self.df_prediction = None
+        self.logp_columns = None
         
         self.num_training = None
         self.num_prediction = None
@@ -751,7 +752,11 @@ class Model:
             
             if self.regressor_name == 'gcm':
                 train_ids, train_labels, train_features, train_column_names, self.is_binary = \
-                    DFU.prepare_instances_with_preselected_descriptors_gcm(self.df_training, "training")
+                    DFU.prepare_instances_with_preselected_descriptors_gcm(
+                        self.df_training,
+                        "training",
+                        logp_columns=self.logp_columns,
+                    )
                 # print(len(train_column_names))
             else:
                 train_ids, train_labels, train_features, train_column_names, self.is_binary = \

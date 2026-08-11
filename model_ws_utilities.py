@@ -119,6 +119,9 @@ def call_build_model_with_preselected_descriptors_from_df(params, df_training, d
                              use_pmml_pipeline=params.use_pmml_pipeline, 
                              include_standardization_in_pmml=params.include_standardization_in_pmml)
 
+    if hasattr(params, 'logp_columns') and params.logp_columns:
+        model.logp_columns = list(params.logp_columns)
+
     if params.hyperparameter_grid:
         model.hyperparameter_grid=params.hyperparameter_grid
         

@@ -79,6 +79,7 @@ class ModelDataObjects:
     df_gmd: Optional[pd.DataFrame] = None
     df_gmd_external: Optional[pd.DataFrame] = None
     experimental_parameters: Optional[pd.DataFrame] = None
+    results_dict: Optional[Dict[str, Any]] = None
 
     # Pre-constructed dataframes for Excel sheets
     cover_sheet_df: Optional[pd.DataFrame] = None
@@ -119,6 +120,7 @@ class ModelDataObjects:
             self.df_gmd = data_querier.df_gmd
             self.df_gmd_external = data_querier.df_gmd_external
             self.experimental_parameters = data_querier.experimental_parameters
+            self.results_dict = data_querier.results_dict
 
             self.cover_sheet_df = data_querier.query_cover_sheet_df()
             self.statistics_df = data_querier.query_statistics_df()
@@ -1000,6 +1002,7 @@ class DataQuerier:
         self.df_pv_external = df_pv_external
         self.df_gmd = df_gmd
         self.df_gmd_external = df_gmd_external
+        self.results_dict = None
 
         self.experimental_parameters = experimental_parameters
 
@@ -1019,6 +1022,11 @@ class DataQuerier:
         self.query_df_gmd(external=False)
         self.query_df_gmd(external=True)
         self.query_experimental_parameters()
+        try:
+            if self.model_id is not None:
+                self.query_results_dict()
+        except Exception as e:
+            logging.error(f"Failed to query results dictionary: {e}")
 
     @staticmethod
     def getEngine(connect_args: Optional[dict] = {}) -> Engine:
@@ -1249,6 +1257,72 @@ class DataQuerier:
 
         return self.experimental_parameters
 
+    def query_results_dict(self) -> dict:
+        """Query database for model results and return as a dictionary.
+        
+        Returns:
+            dict: Dictionary containing model results, including predictions and statistics.
+        """
+        if self.results_dict is not None:
+            return self.results_dict
+        
+        logging.debug(f"Building Results Dictionary from Model (model_id = {self.model_id})")
+        model = self.query_model()
+        model_statistics = getattr(model, "modelStatistics", {})
+
+        qsar_method = getattr(model, "qsar_method", None)
+        feature_selection = getattr(model, "feature_selection", False)
+        descriptor_set_name = getattr(model, "descriptorSetName", None)
+        splitting_name = getattr(model, "splittingName", None)
+        dataset_name = getattr(model, "datasetName", None)
+        ad_measure_model = getattr(model, "applicabilityDomainName", None)
+        ad_measures = ad_measure_model.split(" and ") if ad_measure_model else None
+
+        params = set_hyper_parameters(qsar_method, feature_selection, descriptor_set_name, splitting_name, dataset_name, ad_measures)
+        # params = params.to_dict()
+
+        training_stats = {
+            "MAE_Training": model_statistics.get("MAE_Training"),
+            "PearsonRSQ_Training": model_statistics.get("PearsonRSQ_Training"),
+            "RMSE_Training": model_statistics.get("RMSE_Training"),
+            "R2_Training": model_statistics.get("R2_Training")
+        }
+        test_stats = {
+            "MAE_Test": model_statistics.get("MAE_Test"),
+            "PearsonRSQ_Test": model_statistics.get("PearsonRSQ_Test"),
+            "RMSE_Test": model_statistics.get("RMSE_Test"),
+            "Q2_Test": model_statistics.get("Q2_Test")
+        }
+        cv_stats = {
+            "MAE_CV_Training": model_statistics.get("MAE_CV_Training"),
+            "PearsonRSQ_CV_Training": model_statistics.get("PearsonRSQ_CV_Training"),
+            "RMSE_CV_Training": model_statistics.get("RMSE_CV_Training"),
+        }
+        ext_stats = {
+            "MAE_External": model_statistics.get("MAE_External"),
+            "PearsonRSQ_External": model_statistics.get("PearsonRSQ_External"),
+            "RMSE_External": model_statistics.get("RMSE_External"),
+            "Q2_External": model_statistics.get("Q2_External")
+        }
+
+        results_dict = DataTransformer.create_results_dict(
+            ad_measure_model=ad_measures,
+            df_training=getattr(model, "df_training", None),
+            params=params,
+            model=model,
+            training_stats=training_stats,
+            test_stats=test_stats,
+            cv_stats=cv_stats,
+            ext_stats=ext_stats,
+            stats_dict=getattr(model, "modelStatistics", {}).get("test_stats_all_AD", None),
+            ext_stats_dict=getattr(model, "modelStatistics", {}).get("ext_stats_all_AD", None)
+        )
+
+        self.results_dict = results_dict
+        
+        logging.debug(f"Finished building Results Dictionary from Model (model_id = {self.model_id})")
+        return results_dict
+    
     def query_cover_sheet_df(self) -> pd.DataFrame:
         """Query database for model summary information to populate the cover sheet.
         
@@ -2071,18 +2145,18 @@ class DataTransformer:
         if len(stats_dict) > 0:
             ms["test_stats_all_AD"] = stats_dict
 
-        training_stats.pop("Coverage_Training")
+        training_stats.pop("Coverage_Training", None)
         ms["training_stats"] = training_stats
         
         if cv_stats:
-            cv_stats.pop("Coverage_CV_Training")
+            cv_stats.pop("Coverage_CV_Training", None)
             ms["cv_stats"] = cv_stats
 
         if ext_stats:
-            ext_stats.pop("Coverage_External")
+            ext_stats.pop("Coverage_External", None)
             ms["ext_stats"] = ext_stats
 
-        test_stats.pop("Coverage_Test")
+        test_stats.pop("Coverage_Test", None)
         ms["test_stats"] = test_stats
 
         if len(stats_dict) > 0:
@@ -2213,7 +2287,7 @@ class DataTransformer:
                 empty_superheaders.append(superheader)
         for superheader in empty_superheaders:
             logging.debug(f"Removing empty superheader: {superheader}")
-            superheaders.pop(superheader)
+            superheaders.pop(superheader, None)
 
         return superheaders
 
@@ -2457,6 +2531,89 @@ class DataTransformer:
             logging.error(f"Error retrieving coefficients: {e}")
             traceback.print_exc()
             return None
+
+    @staticmethod
+    def create_results_dict(ad_measure_model, df_training, params, model, training_stats, test_stats, cv_stats, ext_stats, stats_dict, ext_stats_dict) -> dict:
+        """Create a results_dict dictionary in the same way as in run_model_building_db.Results.
+        
+        Args:
+            ad_measure_model: 
+            df_training: 
+            params: 
+            model: Model object.
+            training_stats: 
+            test_stats: 
+            cv_stats: 
+            ext_stats: 
+            stats_dict: 
+            ext_stats_dict: 
+        
+        Returns:
+            Optional[dict]: Dictionary with model information exactly like the result.json saved when creating models locally.
+        """
+        results_dict = {"params":params.to_dict()}
+        
+        md = model.get_model_description_dict()
+        results_dict["model_details"] = md
+
+        # Store the embedding length safely (handles None)
+        embedding = getattr(model, "embedding", None)
+        md["embedding_len"] = len(embedding) if embedding is not None else 0
+        
+        md["qsar_method_description"] = md.pop("description", None)
+        md["qsar_method_description_url"] = md.pop("description_url", None)
+        md.pop("embedding", None)
+        md["embedding"] = embedding
+        
+        md.pop("descriptorService", None)
+        
+        md.pop("training_descriptor_std_devs", None)
+        md.pop("training_descriptor_means", None)
+        
+        md["splittingName"] = params.splitting_name
+        
+        md["descriptor_set_name"] = params.descriptor_set_name
+            
+        qsar_method = params.qsar_method
+        
+        if qsar_method == 'reg' or qsar_method == 'las' or qsar_method == 'gcm':
+            # results_dict['model_coefficients'] = json.loads(model.getOriginalRegressionCoefficients())
+            y = df_training[df_training.columns[1]]
+            X = df_training[model.embedding]
+            results_dict["model_details"]['model_coefficients'] = json.loads(model.getOriginalRegressionCoefficients2(X, y))
+        
+        ms = {}
+        results_dict["model_statistics"] = ms
+
+        if stats_dict is not None and len(stats_dict) > 0:
+            ms["test_stats_all_AD"] = stats_dict
+
+        training_stats.pop("Coverage_Training", None)
+        ms["training_stats"] = training_stats
+        
+        if cv_stats:
+            cv_stats.pop("Coverage_CV_Training", None)
+            ms["cv_stats"] = cv_stats
+
+        if ext_stats:
+            # print('ext_stats', json.dumps(ext_stats))
+            ext_stats.pop("Coverage_External", None)
+            ms["ext_stats"] = ext_stats
+
+        test_stats.pop("Coverage_Test", None)
+        ms["test_stats"] = test_stats
+
+        if stats_dict is not None and len(stats_dict) > 0:
+            str_ad_measure_final = " and ".join(ad_measure_model)                        
+            ms["test_stats_AD"] = stats_dict[str_ad_measure_final]
+            ms["test_stats_all_AD"] = stats_dict
+        
+        if stats_dict is not None and len(stats_dict) > 0 and ext_stats:
+            external_ad = str_ad_measure_final + " External"
+            ms["ext_stats_AD"] = ext_stats_dict[external_ad]
+            ms["ext_stats_all_AD"] = ext_stats_dict
+        
+        return results_dict
 
 
 # ============================================================

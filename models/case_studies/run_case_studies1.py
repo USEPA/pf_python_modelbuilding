@@ -5,6 +5,8 @@ Created on Feb 3, 2026
 '''
 
 
+import pickle
+
 from dotenv import load_dotenv
 load_dotenv('../../personal.env')
 
@@ -151,6 +153,90 @@ def run_Koc_knn_ga():
     print(json.dumps(stats_dict, indent=4))
 
 
+def query_Koc_gcm_models():
+    logging.info("Running query_Koc_gcm_models()")
+    model_ids = [1763]
+    for model_id in model_ids:
+        try:
+            folder_path = os.path.join(PROJECT_ROOT, "data", "models_gcm_logp", "KOC v1 modeling", f"{model_id}")
+            file_path = os.path.join(folder_path, "detailed_summary.xlsx")
+            model_path = os.path.join(folder_path, "model.pkl")
+            results_path = os.path.join(folder_path, "results.json")
+            mdo = ModelDataObjects(model_id=model_id)
+
+            model = mdo.model
+            with open(model_path, "wb") as f:
+                f.write(pickle.dumps(model))
+
+            with open(results_path, 'w') as f:
+                json.dump(mdo.results_dict, f, indent=4)
+
+            mte = ModelToExcel(mdo, file_path)
+            mte.create_excel()
+        except Exception as e:
+            logging.error(f"Error occurred while processing model_id {model_id}: {e}")
+
+
+def run_Koc_gcm_alogp():
+    write_to_db = False
+    user = "murdock.weston"
+    dataset_name = "KOC v1 modeling"
+    descriptor_set_name = "WebTEST-default"
+    splitting_name = "RND_REPRESENTATIVE"
+    append_to_models_folder = "_gcm_logp"
+    logp_columns = ["ALOGP", "ALOGP2"]
+
+    ad_measure_model = [
+        pc.Applicability_Domain_TEST_Embedding_Euclidean,
+        pc.Applicability_Domain_TEST_Fragment_Counts,
+    ]
+
+    run_dataset(
+        dataset_name=dataset_name,
+        qsar_method="gcm",
+        feature_selection=False,
+        ad_measure_model=ad_measure_model,
+        add_LOGP_Martin=True,
+        logp_columns=logp_columns,
+        write_to_db=write_to_db,
+        append_to_models_folder=append_to_models_folder
+    )
+
+    Results.summarize_model_stats(dataset_name, excel_name="model_stats_rmse.xlsx", append_to_models_folder=append_to_models_folder, continuous_stat_name='RMSE')
+    Results.summarize_model_stats(dataset_name, excel_name="model_stats_mae.xlsx", append_to_models_folder=append_to_models_folder, continuous_stat_name='MAE')
+    Results.summarize_model_stats(dataset_name, excel_name="model_stats_r2.xlsx", append_to_models_folder=append_to_models_folder, continuous_stat_name='PearsonRSQ')
+
+
+def run_Koc_gcm_xlogp():
+    write_to_db = False
+    user = "murdock.weston"
+    dataset_name = "KOC v1 modeling"
+    descriptor_set_name = "WebTEST-default"
+    splitting_name = "RND_REPRESENTATIVE"
+    append_to_models_folder = "_gcm_logp"
+    logp_columns = ["XLOGP", "XLOGP2"]
+
+    ad_measure_model = [
+        pc.Applicability_Domain_TEST_Embedding_Euclidean,
+        pc.Applicability_Domain_TEST_Fragment_Counts,
+    ]
+
+    run_dataset(
+        dataset_name=dataset_name,
+        qsar_method="gcm",
+        feature_selection=False,
+        ad_measure_model=ad_measure_model,
+        add_LOGP_Martin=True,
+        logp_columns=logp_columns,
+        write_to_db=write_to_db,
+        append_to_models_folder=append_to_models_folder
+    )
+
+    Results.summarize_model_stats(dataset_name, excel_name="model_stats_rmse.xlsx", append_to_models_folder=append_to_models_folder, continuous_stat_name='RMSE')
+    Results.summarize_model_stats(dataset_name, excel_name="model_stats_mae.xlsx", append_to_models_folder=append_to_models_folder, continuous_stat_name='MAE')
+    Results.summarize_model_stats(dataset_name, excel_name="model_stats_r2.xlsx", append_to_models_folder=append_to_models_folder, continuous_stat_name='PearsonRSQ')
+
+
 def run_fish_tox():
     
     dataset_name = 'ECOTOX_2024_12_12_96HR_Fish_LC50_v3a modeling'
@@ -169,8 +255,8 @@ def run_fish_tox():
     ad_measure_model = [pc.Applicability_Domain_TEST_Embedding_Euclidean, pc.Applicability_Domain_TEST_Fragment_Counts]
 
     run_dataset(dataset_name=dataset_name, qsar_method='gcm', feature_selection=False, ad_measure_model=ad_measure_model,
-                write_to_db=write_to_db, unique_identifier=unique_identifier,
-                append_to_models_folder=append_to_models_folder)  # OK
+                add_LOGP_Martin=True, logp_columns=['LOGP_Martin'], write_to_db=write_to_db,
+                unique_identifier=unique_identifier, append_to_models_folder=append_to_models_folder)  # OK
 
     # for method in ['rf']:
     # for method in ['xgb']:
@@ -835,6 +921,10 @@ def full_test_mte():
 
 
 def main():
+
+    # query_Koc_gcm_models()
+    # run_Koc_gcm_alogp()
+    # run_Koc_gcm_xlogp()
     
     # run_example()
     # run_Koc_knn_ga()
@@ -850,7 +940,7 @@ def main():
     
     # run_continuous_model_on_test_set()
     
-    lookAtModelCoefficients()
+    # lookAtModelCoefficients()
     # testCoefficientFromScratch()
     
     # run_RIFM_model_on_ECHA_test_set()

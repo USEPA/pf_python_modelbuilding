@@ -117,6 +117,7 @@ class ParametersImportance:
     include_standardization_in_pmml: bool = False
     use_pmml_pipeline: bool = False
     n_threads: Optional[int] = 4  # Set to n/2 where n is the number of logical processors on your computer
+    logp_columns: Optional[List[str]] = None
 
     # Derived value (set in __post_init__)
     fraction_of_max_importance: float = field(init=False)
@@ -1520,23 +1521,41 @@ def runAD(df_training, df_prediction, params, embedding, df_predictions, ad_meas
 # from your_metrics_script import calculate_continuous_statistics, calculate_binary_statistics
 
 
-def add_log_p_martin_columns(df_training, df_prediction, cross_validate, df_cv_dict=None):
+def add_log_p_martin_columns(
+    df_training,
+    df_prediction,
+    cross_validate,
+    df_cv_dict=None,
+    df_external=None,
+    logp_columns=None,
+):
     """
-    Does adding columns for my LOGP prediction work better than ALOGP and XLOGP?    
+    Adds LOGP_Martin descriptors to training, prediction, and external dataframes.
+    This uses the existing pre-trained logP model only, so it does not leak
+    target-property information from the training/prediction/external sets.
     """
     model_id = str(1069)
     pred_name = 'LOGP_Martin'
     from models.db_utilities.dataset_utilities_db import add_model_prediction_to_df as add_mp
-    df_prediction = add_mp(df_prediction, model_id, pred_name)  # will generate some XGB warnings
-    df_training = add_mp(df_training, model_id, pred_name)
-    
+
+    def _add_columns(frame):
+        if frame is None:
+            return None
+        return add_mp(frame, model_id, pred_name)
+
+    df_training = _add_columns(df_training)
+    df_prediction = _add_columns(df_prediction)
+
+    if df_external is not None:
+        df_external = _add_columns(df_external)
+
     if cross_validate:
         for fold_num in df_cv_dict:
             fold = df_cv_dict[fold_num]
-            fold["train"] = add_mp(fold["train"], model_id, pred_name)
-            fold["pred"] = add_mp(fold["pred"], model_id, pred_name)
-    
-    return df_training, df_prediction
+            fold["train"] = _add_columns(fold["train"])
+            fold["pred"] = _add_columns(fold["pred"])
+
+    return df_training, df_prediction, df_external
 
 
 def add_source_chemical_info(df_pred, df_dps):
@@ -1631,11 +1650,25 @@ def log_stats(model, params, cv_stats, test_stats, ext_stats):
         logging.info(f"all stats:\tN/A\t{test_stats['BA_Test']:.3f}\t{cv_stats['BA_CV_Training']:.3f}\t{ext_stats['BA_External']:.3f}\t{len(model.embedding)}")
 
 @staticmethod
+def build_output_subfolder(params, folder_embedding=None, logp_columns=None):
+    selected_columns = [c for c in (logp_columns or []) if c]
+
+    if selected_columns:
+        subfolder = f"{params.qsar_method}_{'_'.join(selected_columns)}"
+    else:
+        subfolder = f"{params.qsar_method}_{params.descriptor_set_name}_fs={str(params.feature_selection)}"
+
+    if folder_embedding is not None:
+        subfolder = f"{subfolder}_{folder_embedding}"
+
+    return subfolder
+
+@staticmethod
 def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None, cross_validate=True,
                 run_AD=True, feature_selection=True, fs_previous_embedding=True, params=None,
                 descriptor_set_name="WebTEST-default", splitting_name="RND_REPRESENTATIVE",
-                ad_measure_model=None, add_LOGP_Martin=False, write_to_db=False, user="tmarti02",
-                unique_identifier=None, append_to_models_folder=""):
+                ad_measure_model=None, add_LOGP_Martin=False, logp_columns=None, write_to_db=False, user="tmarti02",
+                unique_identifier=None, append_to_models_folder="", subfolder=None):
     # TODO: reg model using descriptors from XGB or RF model
     # TODO: gcm model that uses reg with fragment descriptors such that it deletes rows with less than 3 instances and the associated rows
     # TODO does add the LOGP predicted from my LOGP model improve the results?
@@ -1760,7 +1793,26 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
             X, y, cv, feature_cols = du.make_cv_for_base_training(df_training, df_cv_dict, "ID", "Property")  # get cv for use in RFE and SFS so that will use CV folds as the final stat reported as RMSE_CV_TRAINING
         
         if add_LOGP_Martin:
-            df_training, df_prediction = add_log_p_martin_columns(df_training, df_prediction, cross_validate, df_cv_dict)
+            df_training, df_prediction, df_prediction_ext = add_log_p_martin_columns(
+                df_training,
+                df_prediction,
+                cross_validate,
+                df_cv_dict,
+                df_external=df_prediction_ext,
+                logp_columns=logp_columns,
+            )
+            df_external = df_prediction_ext.copy() if df_prediction_ext is not None else None
+
+        if qsar_method == 'gcm' and logp_columns is not None:
+            if params is None:
+                params = set_hyper_parameters(
+                    qsar_method=qsar_method,
+                    feature_selection=feature_selection,
+                    descriptor_set_name=descriptor_set_name,
+                    splitting_name=splitting_name,
+                    dataset_name=dataset_name,
+                    ad_measure=ad_measure_model)
+            params.logp_columns = list(logp_columns)
         
         # print(df_cv_dict)
         
@@ -1902,6 +1954,9 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
             stats_dict=stats_dict,
             ext_stats_dict=ext_stats_dict
             )
+
+        # TODO: check what is in stats_dict and ext_stats_dict, to put into the query_results_dict func in MTE
+        # breakpoint()
                 
         if model.embedding:
             columns = model.embedding.copy()
@@ -1979,11 +2034,13 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         # with open("local_model_data.pkl", "wb") as f:
         #     pickle.dump({"model": model, "df_pv": df_pv, "df_gmd": df_dps, "df_gmd_external": df_dps_ext}, f)
 
-        subfolder = params.qsar_method + "_" + params.descriptor_set_name + "_fs=" + str(params.feature_selection)
+        # subfolder = params.qsar_method + "_" + params.descriptor_set_name + "_fs=" + str(params.feature_selection)
     
-        if folder_embedding is not None:
-            subfolder = subfolder + "_" + folder_embedding
-            
+        # if folder_embedding is not None:
+        #     subfolder = subfolder + "_" + folder_embedding
+
+        subfolder = subfolder if subfolder is not None else build_output_subfolder(params, folder_embedding, logp_columns)
+        
         model.subfolder=subfolder
                         
         path_segments = [PROJECT_ROOT, "data", "models" + append_to_models_folder, params.dataset_name, subfolder]
@@ -2010,16 +2067,16 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
 
         if write_to_db:
             ml.load_model(user, model, results_dict, df_pred_training, df_pred_test, df_pred_cv, folder_path, df_pred_external=df_pred_ext)
-
-        #build excel after loading model so have model id number set:
-        mdo = ModelDataObjects(model=model, df_pv=df_pv, df_gmd=df_dps, df_gmd_external=df_dps_ext)
-        mte = ModelToExcel(mdo, detailed_summary_path)
-        mte.create_excel()
         
-        #need to load model separately from rest of model objects since need to load model into db to get id then create the excel file that displays that id in the summary:
-        filePathOutExcelSummary = os.path.join(folder_path, "detailed_summary.xlsx")
-        image_id = ml.load_model_file(filePathOutExcelSummary, user, model.modelId, 2)
-        logging.info(f"Excel summary loaded to db with id: {image_id}")
+            # build excel after loading model so have model id number set:
+            mdo = ModelDataObjects(model=model, df_pv=df_pv, df_gmd=df_dps, df_gmd_external=df_dps_ext)
+            mte = ModelToExcel(mdo, detailed_summary_path)
+            mte.create_excel()
+            
+            # need to load model separately from rest of model objects since need to load model into db to get id then create the excel file that displays that id in the summary:
+            filePathOutExcelSummary = os.path.join(folder_path, "detailed_summary.xlsx")
+            image_id = ml.load_model_file(filePathOutExcelSummary, user, model.modelId, 2)
+            logging.info(f"Excel summary loaded to db with id: {image_id}")
         
         return model
 
@@ -2093,19 +2150,19 @@ class Results:
         if len(stats_dict) > 0:
             ms["test_stats_all_AD"] = stats_dict
 
-        training_stats.pop("Coverage_Training")
+        training_stats.pop("Coverage_Training", None)
         ms["training_stats"] = training_stats
         
         if cv_stats:
-            cv_stats.pop("Coverage_CV_Training")
+            cv_stats.pop("Coverage_CV_Training", None)
             ms["cv_stats"] = cv_stats
 
         if ext_stats:
             # print('ext_stats', json.dumps(ext_stats))
-            ext_stats.pop("Coverage_External")
+            ext_stats.pop("Coverage_External", None)
             ms["ext_stats"] = ext_stats
 
-        test_stats.pop("Coverage_Test")
+        test_stats.pop("Coverage_Test", None)
         ms["test_stats"] = test_stats
 
         if len(stats_dict) > 0:
@@ -2140,7 +2197,6 @@ class Results:
         os.makedirs(folder, exist_ok=True)
     
         print(folder)
-        print(f"\n\nStats for all models for {dataset_name}")
     
         rows = []
     
@@ -2220,6 +2276,8 @@ class Results:
             df_stats.to_excel(excel_path, index=False)
             print(f"No models found. Created empty summary: {excel_path}")
             return df_stats, excel_path
+
+        print(f"{stat} for all models for {dataset_name}")
     
         # Decide homogeneous vs mixed and print header once
         metrics_in_rows = sorted(set(r["Metric"] for r in rows))
