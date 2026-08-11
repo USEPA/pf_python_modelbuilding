@@ -35,6 +35,10 @@ from sklearn.neighbors import NearestNeighbors
 import numpy as np
 
 from util.units_converter import UnitsConverter
+from util.model_result_units import (
+    normalize_log_koc_model_details,
+    normalize_log_koc_prediction,
+)
 from util.indigo_utils import IndigoUtils
 from util.serialization_compat import deserialize_model, refresh_legacy_serialized_model
 from util.prediction_cache_key_utils import (
@@ -1910,7 +1914,7 @@ class ModelPredictor:
 
         if cached_model_details is not None:
             logging.info("Loaded modelDetails model_id=%s from Mongo model details cache", model_id)
-        return cached_model_details
+        return normalize_log_koc_model_details(cached_model_details, model_id)
 
     @staticmethod
     def _write_model_details_cache(model_id, fileAPI, model_details_dict):
@@ -1932,7 +1936,7 @@ class ModelPredictor:
     def _get_model_details_dict(self, model, fileAPI):
         cache = getattr(model, "_model_details_cache", None)
         if isinstance(cache, dict) and cache.get("file_api") == fileAPI:
-            return cache["payload"]
+            return normalize_log_koc_model_details(cache["payload"], model.modelId)
 
         modelDetails = ModelDetails(model)
 
@@ -1947,6 +1951,7 @@ class ModelPredictor:
         self.addPerformance(modelDetails)
 
         payload = dict(modelDetails.__dict__)
+        payload = normalize_log_koc_model_details(payload, model.modelId)
         model._model_details_cache = {"file_api": fileAPI, "payload": payload}
         self._write_model_details_cache(model.modelId, fileAPI, payload)
         return payload
@@ -2394,7 +2399,7 @@ class ModelPredictor:
         uc = self._units_converter
         average_mass = chemical.get("averageMass")
 
-        if model_results.experimentalValueUnitsModel:
+        if model_results.experimentalValueUnitsModel is not None:
             model_results.experimentalValueUnitsDisplay = uc.convert_units(
                 model.propertyName,
                 model_results.experimentalValueUnitsModel,
@@ -2417,7 +2422,7 @@ class ModelPredictor:
         if generate_report and (neighbor_results_training is None or neighbor_results_prediction is None):
             neighbor_results_training, neighbor_results_prediction = self.addNeighborsFromSets(model, model_results, df_prediction)
 
-        return self._build_report_dict(
+        report = self._build_report_dict(
             prepared_response_chemical if prepared_response_chemical is not None else chemical,
             model_details_dict,
             model_results,
@@ -2425,6 +2430,7 @@ class ModelPredictor:
             neighbor_results_prediction=neighbor_results_prediction,
             standardized_chemical=prepared_standardized_chemical,
         )
+        return normalize_log_koc_prediction(report, model.modelId)
 
     def _standardize_smiles_batch_subset(self, stdizer_api, smiles_list, model, split_depth=0):
         if len(smiles_list) == 1:
@@ -2877,7 +2883,7 @@ class ModelPredictor:
                 for prediction in results
             ]
 
-        return results
+        return [normalize_log_koc_prediction(prediction, model_id) for prediction in results]
 
     @timer
     def predictFromDB(self, model_id, smiles, include_model_details=True):

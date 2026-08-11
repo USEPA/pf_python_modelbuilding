@@ -25,6 +25,7 @@ from starlette.responses import JSONResponse, StreamingResponse
 
 from model_service_common.monitoring import install_monitoring
 import util.get_model_file as gmf
+from util.model_result_units import LOG_KOC_MODEL_IDS
 from util.helpers import (
     collect_model_details_for_metadata,
     make_predictdb_post_response,
@@ -106,14 +107,11 @@ def get_version():
                 build_id=BUILD_NUMBER)
 
 
-METADATA_MODEL_IDS = (
-    *range(1065, 1071),
-    1754,
-    1756,
-    1757,
-    1758,
-    1763,
-)
+METADATA_MODEL_BUILD_YEARS = {
+    **dict.fromkeys(range(1065, 1071), 2024),
+    **dict.fromkeys(LOG_KOC_MODEL_IDS, 2026),
+}
+METADATA_MODEL_IDS = tuple(METADATA_MODEL_BUILD_YEARS)
 
 _metadata = None
 
@@ -123,6 +121,13 @@ def get_metadata():
     if _metadata is None:
         model_ids = list(METADATA_MODEL_IDS)
         model_details_array = collect_model_details_for_metadata(model_ids)
+        model_details_array = [
+            {
+                **model_details,
+                "built_at": METADATA_MODEL_BUILD_YEARS[int(model_details["modelId"])],
+            }
+            for model_details in model_details_array
+        ]
         metadata = dict(
             version=get_version(),
             endpoints=model_details_array

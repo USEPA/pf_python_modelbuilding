@@ -9,7 +9,7 @@ class TestMetadata(TestCase):
         app._metadata = None
 
     def test_get_metadata_uses_collected_model_details(self):
-        model_details = [{"modelId": 1065}, {"modelId": 1066}]
+        model_details = [{"modelId": 1065}, {"modelId": "1754"}]
 
         with patch("app.collect_model_details_for_metadata", return_value=model_details) as collect:
             app._metadata = None
@@ -28,4 +28,11 @@ class TestMetadata(TestCase):
             1758,
             1763,
         ])
-        self.assertEqual(model_details, metadata["endpoints"])
+        self.assertEqual(
+            [
+                {"modelId": 1065, "built_at": 2024},
+                {"modelId": "1754", "built_at": 2026},
+            ],
+            metadata["endpoints"],
+        )
+        self.assertNotIn("built_at", model_details[0])
