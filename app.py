@@ -106,13 +106,22 @@ def get_version():
                 build_id=BUILD_NUMBER)
 
 
+METADATA_MODEL_IDS = (
+    *range(1065, 1071),
+    1754,
+    1756,
+    1757,
+    1758,
+    1763,
+)
+
 _metadata = None
 
 
 def get_metadata():
     global _metadata
     if _metadata is None:
-        model_ids = list(range(1065, 1071))
+        model_ids = list(METADATA_MODEL_IDS)
         model_details_array = collect_model_details_for_metadata(model_ids)
         metadata = dict(
             version=get_version(),

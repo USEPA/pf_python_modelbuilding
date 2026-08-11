@@ -15,5 +15,17 @@ class TestMetadata(TestCase):
             app._metadata = None
             metadata = app.get_metadata()
 
-        collect.assert_called_once_with(list(range(1065, 1071)))
+        collect.assert_called_once_with([
+            1065,
+            1066,
+            1067,
+            1068,
+            1069,
+            1070,
+            1754,
+            1756,
+            1757,
+            1758,
+            1763,
+        ])
         self.assertEqual(model_details, metadata["endpoints"])
