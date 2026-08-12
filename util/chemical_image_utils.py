@@ -2,7 +2,7 @@ import os
 from urllib.parse import urlencode
 
 
-DEFAULT_CIM_RENDER_URL = "https://cim-dev.sciencedataexperts.com/api/resolver/render"
+DEFAULT_CIM_RENDER_URL = "/api/resolver/render"
 DEFAULT_CIM_RENDER_FORMAT = "PNG"
 LEGACY_IMAGE_URL_PREFIXES = (
     "https://comptox.epa.gov/dashboard-api/ccdapp1/chemical-files/image/by-dtxcid/",

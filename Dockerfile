@@ -1,4 +1,4 @@
-FROM python:3.12-slim AS builder
+FROM python:3.12-slim-bookworm AS builder
 
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_CACHE_DIR=1
@@ -12,20 +12,21 @@ WORKDIR /build
 COPY requirements.txt .
 RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 
-FROM python:3.12-slim
+FROM python:3.12-slim-bookworm
 
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_CACHE_DIR=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
     libfreetype6 \
     libfontconfig1 \
     fonts-dejavu-core \
     libstdc++6 \
     libgomp1 \
-    && rm -rf /var/lib/apt/lists/*
+    && apt-get purge --allow-remove-essential --ignore-missing -y perl perl-base openssl libsqlite3-0 ncurses-base ncurses-bin libncursesw6 gzip attr expat libexpat1 libattr1 bash util-linux libtinfo6 || true  \
+    && apt-get autoremove -y --purge || true
 
 WORKDIR /app
 

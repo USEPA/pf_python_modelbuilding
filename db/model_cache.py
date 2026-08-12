@@ -8,6 +8,8 @@ import zlib
 from datetime import datetime, timezone
 from typing import Any
 
+from util.serialization_compat import deserialize_model
+
 try:
     from pymongo import ASCENDING, MongoClient, ReplaceOne
     from pymongo.errors import PyMongoError
@@ -352,7 +354,7 @@ def read_model_snapshot(model_id: int | str):
         )
         if payload is None:
             return None
-        return pickle.loads(payload)
+        return deserialize_model(payload)
     except PyMongoError as exc:
         raise ModelArtifactCacheUnavailableError(f"Mongo model artifact cache unavailable: {exc}") from exc
     except Exception as exc:

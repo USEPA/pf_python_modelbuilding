@@ -5,6 +5,7 @@ Helpers for migrating legacy pickled model objects to the current runtime.
 from __future__ import annotations
 
 import copy
+import io
 import inspect
 import logging
 import os
@@ -13,6 +14,30 @@ import tempfile
 from typing import Any
 
 from xgboost import Booster, XGBModel
+
+
+_PICKLE_MODULE_ALIASES = {
+    # Keep NumPy 2 pickles loadable in runtimes that expose the implementation
+    # modules through the legacy numpy.core aliases.
+    "numpy._core.multiarray": "numpy.core.multiarray",
+    "numpy._core.numeric": "numpy.core.numeric",
+}
+
+
+class _CompatibilityUnpickler(pickle.Unpickler):
+    def find_class(self, module: str, name: str):
+        try:
+            return super().find_class(module, name)
+        except (ImportError, ModuleNotFoundError):
+            alias = _PICKLE_MODULE_ALIASES.get(module)
+            if alias is None:
+                raise
+            return super().find_class(alias, name)
+
+
+def deserialize_model(payload: bytes) -> Any:
+    """Deserialize model bytes across supported NumPy pickle module layouts."""
+    return _CompatibilityUnpickler(io.BytesIO(payload)).load()
 
 
 def serialize_model(model: Any) -> bytes:
