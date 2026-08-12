@@ -1,4 +1,4 @@
-openapi: '3.0.3'
+openapi: 3.0.3
 
 info:
   title: EPA Predictor
@@ -6,7 +6,6 @@ info:
   description: API gateway to EPA predictions
 
 paths:
-
   /api/predictor_models/version:
     get:
       operationId: app.get_version
@@ -41,7 +40,7 @@ paths:
         '200':
           description: File
           content:
-            '*/*':
+            application/octet-stream:
               schema:
                 type: string
                 format: binary
@@ -60,7 +59,7 @@ paths:
           examples:
             example0:
               summary: Empty
-              value:
+              value: ""
             example1:
               summary: 2-Isopropylthioxanthone
               value: CC(C)c1ccc2sc3ccccc3c(=O)c2c1
@@ -75,7 +74,7 @@ paths:
           examples:
             example0:
               summary: Empty
-              value:
+              value: ""
             example1:
               summary: CASRN
               value: 71-43-2
@@ -128,6 +127,7 @@ paths:
         '200':
           description: Success
           content: {}
+
     post:
       operationId: app.predictDB_POST
       summary: Generate predictions for multiple molecules
@@ -137,12 +137,58 @@ paths:
           application/json:
             schema:
               oneOf:
-                - $ref: "#/components/schemas/RequestLegacy"
-                - $ref: "#/components/schemas/RequestWithChemicals"
+                - $ref: '#/components/schemas/RequestLegacy'
+                - $ref: '#/components/schemas/RequestWithChemicals'
       responses:
         '200':
           description: Success
           content: {}
+
+  /api/experimental:
+    get:
+      summary: Retrieve experimental database results
+      description: Returns experimental database data for a given identifier in JSON or HTML format.
+      operationId: app.experimentalDB
+      parameters:
+        - name: identifier
+          in: query
+          required: true
+          description: Identifier to look up
+          schema:
+            type: string
+          example: benzene
+        - name: report_format
+          in: query
+          required: false
+          description: Output format for the report
+          schema:
+            type: string
+            enum: [json, html]
+            default: json
+          example: json
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  json:
+                    type: string
+                  html:
+                    type: string
+                  data:
+                    type: object
+            text/html:
+              schema:
+                type: string
+        '400':
+          description: Invalid request
+        '404':
+          description: Identifier not found
+        '500':
+          description: Server error
 
 components:
   schemas:
@@ -163,6 +209,7 @@ components:
           - FC(C(C(C1OC(=O)C2C(=CC=CC=2)N=1)(F)F)(F)F)(F)F
           - CCCCN
         model_id: 1065
+
     RequestWithChemicals:
       type: object
       properties:

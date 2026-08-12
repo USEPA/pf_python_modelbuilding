@@ -28,7 +28,7 @@ import util.get_model_file as gmf
 from util.helpers import (
     collect_model_details_for_metadata,
     make_predictdb_post_response,
-    make_predictdb_response,
+    make_predictdb_response, make_experimental_db_response,
 )
 
 
@@ -186,6 +186,13 @@ def predictDB(model_id, smiles=None, identifier=None, report_format='json'):
         identifier=identifier,
         report_format=report_format
     )
+
+
+def experimentalDB(identifier, report_format='json'):
+    """Gets experimental data from res_qsar postgres db"""
+    return make_experimental_db_response(identifier, report_format) 
+    
+
 
 
 if __name__ == '__main__':

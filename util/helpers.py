@@ -628,3 +628,60 @@ def make_predictdb_response(model_id, smiles=None, identifier=None, report_forma
 
     single_payload = build_predictdb_single_payload(normalized_pred)
     return JSONResponse(content=single_payload, status_code=_error_status_code(normalized_pred))
+
+
+
+
+def make_experimental_db_response(identifier, report_format="json"):
+
+    if not identifier:
+        return JSONResponse(
+            build_error_response("", "bad_request", "'identifier' is required"),
+            status_code=400,
+        )
+
+    try:
+        chemicals, code = SearchAPI.call_resolver_get(RESOLVER_API, identifier)
+        
+    except Exception as exc:
+        logging.exception("Resolver lookup failed for identifier=%s", identifier)
+        return JSONResponse(
+            build_error_response(identifier, "resolver_error", "Resolver lookup failed", str(exc)),
+            status_code=500,
+        )
+
+    if code != 200 or not chemicals:
+        return JSONResponse(
+            build_error_response(identifier, "not_found", f"Could not find {identifier}"),
+            status_code=404,
+        )
+        
+    sid = (chemicals[0].get("chemical") or {}).get("sid")
+    sids=[]
+    sids.append(sid)
+        
+    from util.exp_prop import fetch_property_values_grouped_by_chemical, write_results_to_html
+    from model_ws_db_utilities import getSession
+    session = getSession()
+    
+    data = fetch_property_values_grouped_by_chemical(session, sids)
+    
+    # print(json.dumps(data,indent=4))
+    
+
+    report_format = (report_format or "json").lower()
+    if report_format not in ("json", "html"):
+        report_format = "json"
+
+
+    if report_format == "html":
+        html = write_results_to_html(data, write_to_file=False)
+        return HTMLResponse(content=html)
+
+    # single_payload = build_predictdb_single_payload(normalized_pred)
+    # single_payload={}
+    return JSONResponse(content=data, status_code=200)
+    
+    
+
+

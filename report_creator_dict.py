@@ -81,7 +81,7 @@ def get_formatted_value(format_as_integer: bool, dvalue: float, nsig: int):
             return format(dvalue, ".2f")
 
         # If dvalue is outside the range for scientific notation
-        if dvalue != 0 and (abs(dvalue) < 0.01 or abs(dvalue) > 1e3):
+        if dvalue != 0 and (abs(dvalue) < 0.1 or abs(dvalue) > 1e3):
             return format(dvalue, ".2E")
 
         return set_significant_digits(dvalue, nsig)
