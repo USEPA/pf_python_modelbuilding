@@ -64,7 +64,7 @@ matplotlib-inline==0.1.7
 mdurl==0.1.2
 mistune==3.0.2
 ml_dtypes==0.5.4
-mordred
+mordred==1.2.0
 msgpack==1.1.2
 namex==0.1.0
 nbclient==0.10.0
@@ -72,7 +72,8 @@ nbconvert==7.17.0
 nbformat==5.10.4
 networkx==2.8.8
 numba==0.63.1
-numpy
+numpy==1.26.4
+nvidia-nccl-cu12==2.29.7
 optree==0.18.0
 packageurl-python==0.17.6
 packaging==25.0
@@ -86,7 +87,7 @@ pillow==12.1.1
 pip-api==0.0.34
 pip-requirements-parser==32.0.1
 pip_audit==2.10.0
-pipreqs
+pipreqs==0.5.0
 platformdirs==4.5.1
 prompt_toolkit==3.0.47
 psycopg2-binary==2.9.11
@@ -106,14 +107,14 @@ python-dotenv==1.2.1
 python-multipart==0.0.22
 pytz==2025.2
 PyYAML==6.0.3
-pyzmq
+pyzmq==26.1.0
 rdkit==2025.3.5
 referencing==0.37.0
 requests==2.32.5
 rich==14.2.0
 rpds-py==0.30.0
 scikit-learn==1.8.0
-scipy
+scipy==1.13.1
 setuptools==80.9.0
 six==1.17.0
 sklearn-genetic-opt==0.12.0
