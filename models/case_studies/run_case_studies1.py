@@ -5,12 +5,15 @@ Created on Feb 3, 2026
 '''
 
 
+from itertools import combinations
 import pickle
 
 from dotenv import load_dotenv
 load_dotenv('../../personal.env')
 
+from models.case_studies.run_model_building import ParametersGeneric, ParametersGroupContribution
 from models.case_studies.run_model_building_db import run_dataset, ParametersGeneticAlgorithm, set_hyper_parameters, Results, ParametersImportance
+from models.db_utilities.dataset_utilities_db import getLogKowPredictionsForDataset
 
 from util import predict_constants as pc
 from model_ws_db_utilities import getEngine, getSession
@@ -22,6 +25,10 @@ from sqlalchemy import text
 import os
 from pathlib import Path
 from sqlalchemy.exc import SQLAlchemyError
+import matplotlib.pyplot as plt
+from sklearn.metrics import r2_score
+from scipy.stats import loguniform
+import numpy as np
 
 
 import models.db_utilities.dataset_utilities_db as du  
@@ -129,7 +136,7 @@ def run_Koc_knn_ga():
     grid = {'estimator__n_neighbors': [3], 'estimator__weights': ['distance']}  # matches AD in terms of using 3
     params = ParametersGeneticAlgorithm(qsar_method='knn', hyperparameter_grid=grid,
                                         descriptor_set_name=descriptor_set_name, dataset_name=dataset_name,
-                                        run_rfe=True)
+                                        run_rfe=True) # type: ignore
     params.num_optimizers = 100
     params.num_generations = 100
     
@@ -155,10 +162,12 @@ def run_Koc_knn_ga():
 
 def query_Koc_gcm_models():
     logging.info("Running query_Koc_gcm_models()")
-    model_ids = [1763]
+    model_ids = [1763, 1754]
     for model_id in model_ids:
         try:
-            folder_path = os.path.join(PROJECT_ROOT, "data", "models_gcm_logp", "KOC v1 modeling", f"{model_id}")
+            folder_path = os.path.join(PROJECT_ROOT, "data", "models_gcm_logp", "KOC v1 modeling", f"{model_id}") # type: ignore
+            Path(folder_path).mkdir(parents=True, exist_ok=True)
+
             file_path = os.path.join(folder_path, "detailed_summary.xlsx")
             model_path = os.path.join(folder_path, "model.pkl")
             results_path = os.path.join(folder_path, "results.json")
@@ -235,6 +244,197 @@ def run_Koc_gcm_xlogp():
     Results.summarize_model_stats(dataset_name, excel_name="model_stats_rmse.xlsx", append_to_models_folder=append_to_models_folder, continuous_stat_name='RMSE')
     Results.summarize_model_stats(dataset_name, excel_name="model_stats_mae.xlsx", append_to_models_folder=append_to_models_folder, continuous_stat_name='MAE')
     Results.summarize_model_stats(dataset_name, excel_name="model_stats_r2.xlsx", append_to_models_folder=append_to_models_folder, continuous_stat_name='PearsonRSQ')
+
+
+def run_Koc_logp_custom(logp_columns: list[str], qsar_method: str="gcm", write_to_db: bool=False, hyperparameters: dict=None):
+    user = "murdock.weston"
+    dataset_name = "KOC v1 modeling"
+    descriptor_set_name = "WebTEST-default"
+    splitting_name = "RND_REPRESENTATIVE"
+    append_to_models_folder = "_gcm_logp"
+
+    ad_measure_model = [
+        pc.Applicability_Domain_TEST_Embedding_Euclidean,
+        pc.Applicability_Domain_TEST_Fragment_Counts,
+    ]
+
+    if isinstance(logp_columns, str):
+        logp_columns = [logp_columns]
+
+    params = set_hyper_parameters(
+        qsar_method=qsar_method,
+        feature_selection=True,
+        descriptor_set_name=descriptor_set_name,
+        splitting_name=splitting_name,
+        dataset_name=dataset_name,
+        ad_measure=ad_measure_model
+    )
+
+    if hyperparameters is not None:
+            for key, value in hyperparameters.items():
+                params.hyperparameter_grid[key] = value
+
+    run_dataset(
+        dataset_name=params.dataset_name,
+        qsar_method=params.qsar_method,
+        feature_selection=params.feature_selection,
+        ad_measure_model=ad_measure_model,
+        add_LOGP_Martin=True,
+        logp_columns=logp_columns,
+        write_to_db=write_to_db,
+        append_to_models_folder=append_to_models_folder,
+        params=params,
+        user=user
+    )
+
+    Results.summarize_model_stats(dataset_name, excel_name="model_stats_rmse.xlsx", append_to_models_folder=append_to_models_folder, continuous_stat_name='RMSE', sort_by_stat="External", sort_ascending=True)
+    Results.summarize_model_stats(dataset_name, excel_name="model_stats_mae.xlsx", append_to_models_folder=append_to_models_folder, continuous_stat_name='MAE', sort_by_stat="External", sort_ascending=True)
+    Results.summarize_model_stats(dataset_name, excel_name="model_stats_r2.xlsx", append_to_models_folder=append_to_models_folder, continuous_stat_name='PearsonRSQ', sort_by_stat="External", sort_ascending=False)
+
+
+def run_Koc_gcm_logp_singles():
+    logp_columns = ["ALOGP", "ALOGP2", "XLOGP", "XLOGP2", "LOGP_Martin", "LOGP_Martin2"]
+    for combo in logp_columns:
+        print(f"Running KOC GCM with logP variables: {combo}")
+        run_Koc_logp_custom([combo])
+
+
+def run_Koc_gcm_logp_pairs():
+    logp_columns = [["ALOGP", "ALOGP2"], ["XLOGP", "XLOGP2"], ["LOGP_Martin", "LOGP_Martin2"]]
+    for combo in logp_columns:
+        print(f"Running KOC GCM with logP variables: {', '.join(combo)}")
+        run_Koc_logp_custom(list(combo))
+
+
+def run_Koc_gcm_logp_all():
+    logp_columns = ["ALOGP", "ALOGP2", "XLOGP", "XLOGP2", "LOGP_Martin", "LOGP_Martin2"]
+    logp_combos1 = list(combinations(logp_columns, 1))
+    logp_combos2 = list(combinations(logp_columns, 2))
+    for combo in logp_combos1 + logp_combos2:
+        cols = list(combo)
+        print(f"Running KOC GCM with logP variables: {', '.join(cols)}")
+        run_Koc_logp_custom(cols)
+
+
+def report_Koc_gcm_logp():
+    dataset_name = "KOC v1 modeling"
+    append_to_models_folder = "_gcm_logp"
+
+    Results.summarize_model_stats(dataset_name, excel_name="model_stats_rmse.xlsx", append_to_models_folder=append_to_models_folder, continuous_stat_name='RMSE', sort_by_stat="External", sort_ascending=True)
+    Results.summarize_model_stats(dataset_name, excel_name="model_stats_mae.xlsx", append_to_models_folder=append_to_models_folder, continuous_stat_name='MAE', sort_by_stat="External", sort_ascending=True)
+    Results.summarize_model_stats(dataset_name, excel_name="model_stats_r2.xlsx", append_to_models_folder=append_to_models_folder, continuous_stat_name='PearsonRSQ', sort_by_stat="External", sort_ascending=False)
+
+
+def run_Koc_huber_logp():
+    qsar_method = "huber"
+    write_to_db = False
+    logp_columns = [
+        None,
+        "ALOGP",
+        "ALOGP2",
+        "XLOGP",
+        "XLOGP2",
+        "LOGP_Martin",
+        "LOGP_Martin2",
+        ["ALOGP", "ALOGP2"],
+        ["XLOGP", "XLOGP2"],
+        ["LOGP_Martin", "LOGP_Martin2"]
+    ]
+    hyperparameters = {
+        "estimator__epsilon": [1.2, 1.35, 1.5],
+        "estimator__alpha": [1e-5, 1e-4, 1e-3],
+        "estimator__fit_intercept": [True],
+        "estimator__max_iter": [10000],
+        "estimator__tol": [1e-3]
+    }
+
+    for item in logp_columns:
+        if item is None:
+            print(f"Running KOC Huber with no logP variables")
+            run_Koc_logp_custom(logp_columns=[], qsar_method=qsar_method, hyperparameters=hyperparameters, write_to_db=write_to_db)
+        else:
+            print(f"Running KOC Huber with logP variable: {item}")
+            run_Koc_logp_custom(logp_columns=[item], qsar_method=qsar_method, hyperparameters=hyperparameters, write_to_db=write_to_db)
+
+
+def run_Koc_ransac_logp():
+    qsar_method = "ransac"
+    write_to_db = False
+    logp_columns = [
+        None,
+        "ALOGP",
+        "ALOGP2",
+        "XLOGP",
+        "XLOGP2",
+        "LOGP_Martin",
+        "LOGP_Martin2",
+        ["ALOGP", "ALOGP2"],
+        ["XLOGP", "XLOGP2"],
+        ["LOGP_Martin", "LOGP_Martin2"]
+    ]
+    hyperparameters = {
+        "": []
+    }
+
+    for item in logp_columns:
+        if item is None:
+            print(f"Running KOC RANSAC with no logP variables")
+            run_Koc_logp_custom(logp_columns=[], qsar_method=qsar_method, hyperparameters=hyperparameters, write_to_db=write_to_db)
+        else:
+            print(f"Running KOC RANSAC with logP variable: {item}")
+            run_Koc_logp_custom(logp_columns=[item], qsar_method=qsar_method, hyperparameters=hyperparameters, write_to_db=write_to_db)
+
+
+def run_Koc_theil_sen_logp():
+    qsar_method = "theil_sen"
+    write_to_db = False
+    logp_columns = [
+        None,
+        "ALOGP",
+        "ALOGP2",
+        "XLOGP",
+        "XLOGP2",
+        "LOGP_Martin",
+        "LOGP_Martin2",
+        ["ALOGP", "ALOGP2"],
+        ["XLOGP", "XLOGP2"],
+        ["LOGP_Martin", "LOGP_Martin2"]
+    ]
+    hyperparameters = {
+        "": []
+    }
+
+    for item in logp_columns:
+        if item is None:
+            print(f"Running KOC Theil-Sen with no logP variables")
+            run_Koc_logp_custom(logp_columns=[], qsar_method=qsar_method, hyperparameters=hyperparameters, write_to_db=write_to_db)
+        else:
+            print(f"Running KOC Theil-Sen with logP variable: {item}")
+            run_Koc_logp_custom(logp_columns=[item], qsar_method=qsar_method, hyperparameters=hyperparameters, write_to_db=write_to_db)
+
+
+# def query_Bcf_rf_models():
+#     logging.info("Running query_Bcf_rf_models()")
+#     model_ids = []
+#     for model_id in model_ids:
+#         try:
+#             folder_path = os.path.join(PROJECT_ROOT, "data", "models_rf_logp", "exp_prop_BCF_v1_modeling", f"{model_id}") # type: ignore
+#             file_path = os.path.join(folder_path, "detailed_summary.xlsx")
+#             model_path = os.path.join(folder_path, "model.pkl")
+#             results_path = os.path.join(folder_path, "results.json")
+#             mdo = ModelDataObjects(model_id=model_id)
+
+#             model = mdo.model
+#             with open(model_path, "wb") as f:
+#                 f.write(pickle.dumps(model))
+
+#             with open(results_path, 'w') as f:
+#                 json.dump(mdo.results_dict, f, indent=4)
+
+#             mte = ModelToExcel(mdo, file_path)
+#             mte.create_excel()
+#         except Exception as e:
+#             logging.error(f"Error occurred while processing model_id {model_id}: {e}")
 
 
 def run_fish_tox():
@@ -386,21 +586,21 @@ def run_RIFM_model_on_ECHA_test_set():
         model=mi.initModel(model_id)
         
         # print(model.qsar_method, len(model.embedding))
-    
-        if len(model.embedding)>100:
-            use_fs=False
-        else:
-            use_fs=True
-    
-        run = model.qsar_method+"_WebTEST-default_fs="+str(use_fs)
+        if model is not None:
+            if len(model.embedding)>100:
+                use_fs=False
+            else:
+                use_fs=True
         
-        json_predictions = call_do_predictions_from_df(df_prediction, model)
-        df_predictions_test = pd.read_json(StringIO(json_predictions), orient="records")
-        
-        # print(df_predictions_test)
-        
-        test_stats = calculate_binary_statistics(df_predictions_test, 0.5, "_Test")
-        print(f"{run}\t{test_stats['BA_Test']:.3f}")
+            run = model.qsar_method+"_WebTEST-default_fs="+str(use_fs)
+            
+            json_predictions = call_do_predictions_from_df(df_prediction, model)
+            df_predictions_test = pd.read_json(StringIO(json_predictions), orient="records")
+            
+            # print(df_predictions_test)
+            
+            test_stats = calculate_binary_statistics(df_predictions_test, 0.5, "_Test")
+            print(f"{run}\t{test_stats['BA_Test']:.3f}")
     
 def lookAtModelCoefficients():
     
@@ -414,13 +614,14 @@ def lookAtModelCoefficients():
     
     mi = ModelInitializer()
     model=mi.initModel(model_id)
-    
-    y = model.df_training[model.df_training.columns[1]]
-    X = model.df_training[model.embedding]
 
-    modelCoefficients = json.loads(model.getOriginalRegressionCoefficients2(X, y))
-    
-    print(json.dumps(modelCoefficients, indent=4))
+    if model is not None:
+        y = model.df_training[model.df_training.columns[1]]
+        X = model.df_training[model.embedding]
+
+        modelCoefficients = json.loads(model.getOriginalRegressionCoefficients2(X, y))
+        
+        print(json.dumps(modelCoefficients, indent=4))
 
 
 
@@ -450,10 +651,10 @@ def testCoefficientFromScratch():
         
     
     self_like = type("T", (), {})()
-    self_like.get_model = lambda: pipe
-    self_like.embedding = list(df.columns)
+    self_like.get_model = lambda: pipe # type: ignore
+    self_like.embedding = list(df.columns) # type: ignore
     
-    print(Model.getOriginalRegressionCoefficients2(self_like, df, y))
+    print(Model.getOriginalRegressionCoefficients2(self_like, df, y)) # type: ignore
     
     
 
@@ -481,22 +682,22 @@ def run_continuous_model_on_test_set():
         model=mi.initModel(model_id)
         
         # print(model.qsar_method, len(model.embedding))
-    
-        if len(model.embedding)>100:
-            use_fs=False
-        else:
-            use_fs=True
-    
-        run = model.qsar_method+"_WebTEST-default_fs="+str(use_fs)
+        if model is not None:
+            if len(model.embedding)>100:
+                use_fs=False
+            else:
+                use_fs=True
         
-        json_predictions = call_do_predictions_from_df(df_prediction, model)
-        df_predictions_test = pd.read_json(StringIO(json_predictions), orient="records")
-        
-        df_predictions_test["pred"] = (df_predictions_test["pred"] >= 60).astype(int)
+            run = model.qsar_method+"_WebTEST-default_fs="+str(use_fs)
+            
+            json_predictions = call_do_predictions_from_df(df_prediction, model)
+            df_predictions_test = pd.read_json(StringIO(json_predictions), orient="records")
+            
+            df_predictions_test["pred"] = (df_predictions_test["pred"] >= 60).astype(int)
 
-        # print(df_predictions_test)
-        test_stats = calculate_binary_statistics(df_predictions_test, 0.5, "_Test")
-        print(f"{run}\t{test_stats['BA_Test']:.3f}")
+            # print(df_predictions_test)
+            test_stats = calculate_binary_statistics(df_predictions_test, 0.5, "_Test")
+            print(f"{run}\t{test_stats['BA_Test']:.3f}")
     
 
 def get_model_ids(session, dataset_name: str):
@@ -560,7 +761,7 @@ def run_percentage_biodegradation():
     append_to_models_folder = "_0.001"
     
     PROJECT_ROOT = os.getenv("PROJECT_ROOT")
-    log_path= os.path.join(PROJECT_ROOT, "data", "models" + append_to_models_folder, dataset_name,"binary_test_stats.log")
+    log_path= os.path.join(PROJECT_ROOT, "data", "models" + append_to_models_folder, dataset_name,"binary_test_stats.log") # type: ignore
 
     model = run_dataset(dataset_name=dataset_name, qsar_method='gcm', feature_selection=False,
                 ad_measure_model=ad_measure_model, write_to_db=write_to_db, unique_identifier=unique_identifier, append_to_models_folder=append_to_models_folder)  # OK
@@ -574,11 +775,13 @@ def run_percentage_biodegradation():
     for method in ['rf', 'xgb', 'reg','knn']:
         params = set_hyper_parameters(qsar_method=method, feature_selection=True, descriptor_set_name=descriptor_set_name, 
                                       splitting_name=splitting_name, dataset_name=dataset_name, ad_measure=ad_measure_model)
-        params.descriptor_coefficient = 0.001
-        model = run_dataset(dataset_name=dataset_name, qsar_method=params.qsar_method, feature_selection=params.feature_selection,
-            params = params, ad_measure_model=ad_measure_model, write_to_db=write_to_db, 
-            unique_identifier=unique_identifier, append_to_models_folder=append_to_models_folder) 
-        calculate_stats_for_binary_test_set(df_prediction_binary, model, log_path)
+        if params is not None:
+            if not isinstance(params, ParametersGroupContribution) and not isinstance(params, ParametersGeneric):
+                params.descriptor_coefficient = 0.001 # type: ignore
+            model = run_dataset(dataset_name=dataset_name, qsar_method=params.qsar_method, feature_selection=params.feature_selection,
+                params = params, ad_measure_model=ad_measure_model, write_to_db=write_to_db, 
+                unique_identifier=unique_identifier, append_to_models_folder=append_to_models_folder) 
+            calculate_stats_for_binary_test_set(df_prediction_binary, model, log_path)
     
     Results.summarize_model_stats(dataset_name, append_to_models_folder=append_to_models_folder)
 
@@ -676,16 +879,18 @@ def run_biodeg_301F():
     for method in ['rf', 'xgb', 'reg','knn']:
         params = set_hyper_parameters(qsar_method=method, feature_selection=True, descriptor_set_name=descriptor_set_name, 
                                       splitting_name=splitting_name, dataset_name=dataset_name, ad_measure=ad_measure_model)
-        params.descriptor_coefficient = 0.001
-        run_dataset(dataset_name=dataset_name, qsar_method=params.qsar_method, feature_selection=params.feature_selection,
-            params = params, ad_measure_model=ad_measure_model, write_to_db=write_to_db, 
-            unique_identifier=unique_identifier, append_to_models_folder=append_to_models_folder) 
+        if params is not None:
+            if not isinstance(params, ParametersGroupContribution) and not isinstance(params, ParametersGeneric):
+                params.descriptor_coefficient = 0.001 # type: ignore
+            run_dataset(dataset_name=dataset_name, qsar_method=params.qsar_method, feature_selection=params.feature_selection,
+                params = params, ad_measure_model=ad_measure_model, write_to_db=write_to_db, 
+                unique_identifier=unique_identifier, append_to_models_folder=append_to_models_folder) 
     
     
     Results.summarize_model_stats(dataset_name, append_to_models_folder=append_to_models_folder)
     
     dataset_name_subset='exp_prop_RBIODEG_RIFM_CHEMREG'
-    folder = Path(os.getenv("PROJECT_ROOT")) / "data" / "models" / dataset_name
+    folder = Path(os.getenv("PROJECT_ROOT")) / "data" / "models" / dataset_name # type: ignore
     
     session = getSession()
     df_smiles_subset = fetch_test_set_qsar_smiles(session, dataset_name_subset)
@@ -697,7 +902,7 @@ def run_biodeg_301F():
     
     
 def getQsarSmilesFromFragranceSpreadsheet():
-    excel_path = Path(os.getenv("PROJECT_ROOT")) / "data" / "models" / "exp_prop_RBIODEG_301F v1 modeling" / "DSSTox_FRAGRANCEBB_20260413_qsar_ready.xlsx"
+    excel_path = Path(os.getenv("PROJECT_ROOT")) / "data" / "models" / "exp_prop_RBIODEG_301F v1 modeling" / "DSSTox_FRAGRANCEBB_20260413_qsar_ready.xlsx" # type: ignore
     df=pd.read_excel(excel_path)
     df = df.rename(columns={'Structure_qsar_ready': 'canon_qsar_smiles'})
     unique_df = df[['canon_qsar_smiles']].dropna().drop_duplicates().reset_index(drop=True)
@@ -844,7 +1049,7 @@ def run_rifm_rf_models():
             
             params.min_descriptor_count = i*10
             params.max_descriptor_count = (i+1)*10
-            params.descriptor_coefficient = descriptor_coefficient
+            params.descriptor_coefficient = descriptor_coefficient # type: ignore
 
             logging.info(f"Running iteration {i}:\n\tmin_descriptor_count: {params.min_descriptor_count},\n\tmax_descriptor_count: {params.max_descriptor_count},\n\tdescriptor_coefficient: {params.descriptor_coefficient}")
 
@@ -900,31 +1105,75 @@ def full_test_mte():
 
     # DATABASE/BINARY/EXTERNAL
     model_id = 1831
-    file_path = os.path.join(PROJECT_ROOT, "data", f"models{append_to_models_folder}", "database_models", f"binary_external.xlsx")
+    file_path = os.path.join(PROJECT_ROOT, "data", f"models{append_to_models_folder}", "database_models", f"binary_external.xlsx") # type: ignore
     mdo = ModelDataObjects(model_id=model_id)
     mte = ModelToExcel(mdo, file_path)
     mte.create_excel()
 
     # DATABASE/CONTINUOUS/NO EXTERNAL
     model_id = 1065
-    file_path = os.path.join(PROJECT_ROOT, "data", f"models{append_to_models_folder}", "database_models", f"continuous_no_external.xlsx")
+    file_path = os.path.join(PROJECT_ROOT, "data", f"models{append_to_models_folder}", "database_models", f"continuous_no_external.xlsx") # type: ignore
     mdo = ModelDataObjects(model_id=model_id)
     mte = ModelToExcel(mdo, file_path)
     mte.create_excel()
 
     # DATABASE/CONTINUOUS/EXTERNAL (external stats not saved in database)
     model_id = 1753
-    file_path = os.path.join(PROJECT_ROOT, "data", f"models{append_to_models_folder}", "database_models", f"continuous_no_external.xlsx")
+    file_path = os.path.join(PROJECT_ROOT, "data", f"models{append_to_models_folder}", "database_models", f"continuous_no_external.xlsx") # type: ignore
     mdo = ModelDataObjects(model_id=model_id)
     mte = ModelToExcel(mdo, file_path)
     mte.create_excel()
 
 
+def compare_logp_descriptors_to_koc(logp_descriptor, save_plot=True):
+    df_training, df_prediction = getLogKowPredictionsForDataset()
+    df = pd.concat([df_training, df_prediction], ignore_index=True)
+
+    x = df[logp_descriptor]
+    y = df.Property
+
+    r2 = r2_score(x, y)
+
+    plt.figure(figsize=(7, 7))
+    plt.scatter(x, y, color="blue", label=f"KOC vs. {logp_descriptor}")
+
+    min_val = min(np.min(x), np.min(y))
+    max_val = max(np.max(x), np.max(y))
+    plt.plot([min_val, max_val], [min_val, max_val], color="red", label="y = x")
+    plt.xlabel(logp_descriptor)
+    plt.ylabel("log KOC")
+    plt.title(f"R² = {r2:.3f}")
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    if save_plot:
+        folder_path = os.path.join(PROJECT_ROOT, "data", "logp_vs_koc")
+        Path(folder_path).mkdir(parents=True, exist_ok=True)
+        file_path = os.path.join(folder_path, f"{logp_descriptor}_vs_koc.png")
+        plt.savefig(file_path, dpi=300, bbox_inches="tight")
+    plt.show()
+
+
+def compare_all_logp_descriptors_to_koc(save_plots=False):
+    logp_descriptors = ["ALOGP", "ALOGP2", "XLOGP", "XLOGP2", "LOGP_Martin", "LOGP_Martin2"]
+    for descriptor in logp_descriptors:
+        compare_logp_descriptors_to_koc(descriptor, save_plot=save_plots)
+
+
 def main():
 
+    # TODO: add helpers to run other combinations of logp descriptors in gcm models for Koc
     # query_Koc_gcm_models()
     # run_Koc_gcm_alogp()
     # run_Koc_gcm_xlogp()
+    run_Koc_gcm_logp_singles()
+    # run_Koc_gcm_logp_pairs()
+    # run_Koc_gcm_logp_all()
+    # compare_all_logp_descriptors_to_koc(save_plots=True)
+    # run_Koc_huber_logp()
+    # run_Koc_ransac_logp()
+    # run_Koc_theil_sen_logp()
+    # report_Koc_gcm_logp()
     
     # run_example()
     # run_Koc_knn_ga()

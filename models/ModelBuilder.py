@@ -29,7 +29,7 @@ from lightgbm import LGBMRegressor, LGBMClassifier
 from utils import to_json_safe
 
 from sklearn.svm import SVC, SVR
-from sklearn.linear_model import LogisticRegression, LinearRegression, Lasso
+from sklearn.linear_model import LogisticRegression, LinearRegression, Lasso, HuberRegressor, RANSACRegressor, TheilSenRegressor
 from xgboost import XGBRegressor, XGBClassifier
 
 from sklearn_pmml_model.ensemble import PMMLForestClassifier
@@ -120,6 +120,24 @@ def model_registry_model_obj(regressor_name, is_categorical):
             return Lasso()
         else:
             return Lasso()
+
+    elif regressor_name == "huber":
+        if is_categorical:
+            return LogisticRegression(solver="liblinear", max_iter=1000, dual=False)
+        else:
+            return HuberRegressor()
+    
+    elif regressor_name == "ransac":
+        if is_categorical:
+            return LogisticRegression(solver="liblinear", max_iter=1000, dual=False)
+        else:
+            return RANSACRegressor()
+    
+    elif regressor_name == "theil_sen":
+        if is_categorical:
+            return LogisticRegression(solve="liblinear", max_iter=1000, dual=False)
+        else:
+            return TheilSenRegressor()
 
     else:
         raise KeyError(
@@ -737,14 +755,14 @@ class Model:
             parameters[key] = self.hyperparameter_grid[key][0]
         return parameters
 
-    def build_model(self, use_pmml_pipeline, include_standardization_in_pmml, cv, descriptor_names=None):
+    def build_model(self, use_pmml_pipeline, scale_features, cv, descriptor_names=None):
         logging.debug('enter build model')
 
 
         t1 = time.time()
         
         self.use_pmml = use_pmml_pipeline
-        self.include_standardization_in_pmml = include_standardization_in_pmml
+        self.scale_features = scale_features
 
         # Call prepare_instances without removing correlated descriptors
 
@@ -772,11 +790,13 @@ class Model:
             # Use columns selected by prepare_instances (in case logp descriptors were removed)            
 
         # print(train_features)
-        if use_pmml_pipeline and include_standardization_in_pmml is False:  # need to handle scaling outside of pipeline
-            ss = StandardScaler()
-            train_features = pd.DataFrame(ss.fit_transform(train_features), columns=train_features.columns)
-            self.training_descriptor_means = ss.mean_.tolist()
-            self.training_descriptor_std_devs = (ss.var_ ** 0.5).tolist()
+
+        # TODO: see if commenting this line out suppresses feature name warnings and remove/add back if needed
+        # if use_pmml_pipeline and scale_features is False:  # need to handle scaling outside of pipeline
+        #     ss = StandardScaler()
+        #     train_features = pd.DataFrame(ss.fit_transform(train_features), columns=train_features.columns)
+        #     self.training_descriptor_means = ss.mean_.tolist()
+        #     self.training_descriptor_std_devs = (ss.var_ ** 0.5).tolist()
 
         # print(train_features)
 
@@ -874,6 +894,7 @@ class Model:
             # Use columns selected by prepare_instances (in case logp descriptors were removed)
             self.embedding = train_column_names
 
+        # TODO: see if commenting out fixes the feature scaling warnings and remove/add back in if necessary
         if use_pmml_pipeline:  # do scaling here since not part of pipeline
             ss = StandardScaler()
             train_features = pd.DataFrame(ss.fit_transform(train_features), columns=train_features.columns)
@@ -1282,6 +1303,36 @@ class GCM(Model):
         self.description_url = 'https://scikit-learn.org/stable/modules/generated/sklearn.linear_model.LinearRegression.html'
 
 
+class HUBER(Model):
+    def __init__(self, df_training=None, remove_log_p_descriptors=False, n_jobs=1):
+        Model.__init__(self, df_training, remove_log_p_descriptors, n_jobs=n_jobs)
+        self.regressor_name = 'huber'
+        self.version = '1.0'
+        self.hyperparameter_grid = {}
+        self.description = 'group contribution model trained using Huber regression to improve robustness to outliers with frag descriptors >= min_count'
+        self.description_url = 'https://scikit-learn.org/stable/modules/generated/sklearn.linear_model.HuberRegressor.html'
+
+
+class RANSAC(Model):
+    def __init__(self, df_training=None, remove_log_p_descriptors=False, n_jobs=1):
+        Model.__init__(self, df_training, remove_log_p_descriptors, n_jobs=n_jobs)
+        self.regressor_name = "ransac"
+        self.version = "1.0"
+        self.hyperparameter_grid = {}
+        self.description = "group contribution model trained using RANSAC (RANdom SAmple Consensus) to improve robustness to outliers with frag descriptors >= min_count"
+        self.description_url = "https://scikit-learn.org/stable/modules/generated/sklearn.linear_model.RANSACRegressor.html#sklearn.linear_model.RANSACRegressor"
+
+
+class THEIL_SEN(Model):
+    def __init__(self, df_training=None, remove_log_p_descriptors=False, n_jobs=1):
+        Model.__init__(self, df_training, remove_log_p_descriptors, n_jobs=n_jobs)
+        self.regressor_name = "theil_sen"
+        self.version = "1.0"
+        self.hyperparameter_grid = {}
+        self.description = "group contribution model trained using a Theil-Sen estimator to improve robustness to outliers with frag descriptors >= min_count"
+        self.description_url = "https://scikit-learn.org/stable/modules/generated/sklearn.linear_model.TheilSenRegressor.html#sklearn.linear_model.TheilSenRegressor"
+
+
 class LAS(Model):
     def __init__(self, df_training=None, remove_log_p_descriptors=False, n_jobs=1):
         Model.__init__(self, df_training, remove_log_p_descriptors, n_jobs=n_jobs)
@@ -1469,11 +1520,11 @@ class ModelDescription:
         self.numExternal = getattr(model, "num_external", None)
 
         if hasattr(model, "training_descriptor_std_devs"):
-            self.include_standardization_in_pmml = False
+            self.scale_features = False
             self.training_descriptor_std_devs = model.training_descriptor_std_devs
             self.training_descriptor_means = model.training_descriptor_means
         else:
-            self.include_standardization_in_pmml = True
+            self.scale_features = True
 
     def to_json(self):
         """Returns description as a JSON"""
@@ -1501,7 +1552,7 @@ def runExamples():
     # Demonstrate KNN usage
     print(r"Executing KNN")
     model = model_ws_utilities.instantiateModel(training_df, n_jobs=8, qsar_method='knn', remove_log_p=False,
-                                                use_pmml_pipeline=False, include_standardization_in_pmml=False)
+                                                use_pmml_pipeline=False, scale_features=False)
     model.build_model(False, False,
                       None)  # Note we now handle using an embedding by passing a descriptor_names list. By default it is a None type -- this will use all descriptors in df
     test_score = model.do_predictions(pred_df, return_score=True)
@@ -1509,21 +1560,21 @@ def runExamples():
     # Demonstrate RF usage
     print(r"Executing RF")
     model = model_ws_utilities.instantiateModel(training_df, n_jobs=8, qsar_method='rf', remove_log_p=False,
-                                                use_pmml_pipeline=False, include_standardization_in_pmml=False)
+                                                use_pmml_pipeline=False, scale_features=False)
     model.build_model(False, False, None)
     test_score = model.do_predictions(pred_df, return_score=True)
 
     # Demonstrate SVM usage
     print(r"Executing SVM")
     model = model_ws_utilities.instantiateModel(training_df, n_jobs=8, qsar_method='svm', remove_log_p=False,
-                                                use_pmml_pipeline=False, include_standardization_in_pmml=False)
+                                                use_pmml_pipeline=False, scale_features=False)
 
     model.build_model(False, False, None)
     test_score = model.do_predictions(pred_df, return_score=True)
 
     print(r"Executing XGB")
     model = model_ws_utilities.instantiateModel(training_df, n_jobs=8, qsar_method='xgb', remove_log_p=False,
-                                                use_pmml_pipeline=False, include_standardization_in_pmml=False)
+                                                use_pmml_pipeline=False, scale_features=False)
     model.build_model(False, False, None)
     test_score = model.do_predictions(pred_df, return_score=True)
 

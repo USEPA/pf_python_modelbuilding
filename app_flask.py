@@ -104,10 +104,10 @@ def train(qsar_method):
 
     # TODO we might want to have option to not use standardization at all- not needed for RF or XGB (only need for kNN)- standardization causes interoperability problems when loading pmml
 
-    if obj.get('include_standardization_in_pmml'):
-        include_standardization_in_pmml = obj.get('include_standardization_in_pmml', '').lower() == 'true'
+    if obj.get('scale_features') or obj.get("include_standardization_in_pmml"):
+        scale_features = obj.get('scale_features', '').lower() == 'true' or obj.get("include_standardization_in_pmml", "").lower() == "true"
     else:
-        abort(400, 'missing include_standardization_in_pmml')
+        abort(400, 'missing scale_features and/or include_standardization_in_pmml')
 
     if training_tsv is None:
         training_tsv = request.files.get('training_tsv').read().decode('UTF-8')
@@ -138,7 +138,7 @@ def train(qsar_method):
                                                           prediction_tsv=prediction_tsv,
                                                           remove_log_p=remove_log_p,
                                                           use_pmml_pipeline=use_pmml,
-                                                          include_standardization_in_pmml=include_standardization_in_pmml,
+                                                          scale_features=scale_features,
                                                           descriptor_names_tsv=embedding,
                                                           n_jobs=n_jobs, filterColumnsInBothSets=True)
 

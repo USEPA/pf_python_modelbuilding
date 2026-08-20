@@ -56,7 +56,7 @@ class ParametersImportance:
     descriptor_coefficient: float = 0.006  # set to None for auto penalty value
     alpha = 0.7
 
-    include_standardization_in_pmml: bool = False
+    scale_features: bool = False
     use_pmml_pipeline: bool = False
     n_threads: Optional[int] = 4  # Set to n/2 where n is the number of logical processors on your computer
 
@@ -93,7 +93,7 @@ class ParametersGroupContribution:
     min_count = 3  # minimum number of nonzero fragment values to keep a fragment column and its associated rows
     remove_log_p_descriptors: bool = False
     n_threads: int = 10
-    include_standardization_in_pmml: bool = False
+    scale_features: bool = False
     use_pmml_pipeline: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
@@ -113,7 +113,7 @@ class ParametersGeneric:
     feature_selection: bool = False
     remove_log_p_descriptors: bool = False
     n_threads: int = 10
-    include_standardization_in_pmml: bool = False
+    scale_features: bool = False
     use_pmml_pipeline: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
@@ -158,7 +158,7 @@ class ParametersGeneticAlgorithm:
     remove_fragment_descriptors: bool = True
     remove_acnt_descriptors: bool = True
 
-    include_standardization_in_pmml: bool = False
+    scale_features: bool = False
     use_pmml_pipeline: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
@@ -1038,7 +1038,7 @@ class model_parameters:
 
         self.use_wards = False
         self.use_pmml = False
-        self.include_standardization_in_pmml = True
+        self.scale_features = True
 
         # Permutative importance params:
         self.use_permutative = True
@@ -1062,7 +1062,7 @@ def buildModel(embedding, mp, training_tsv, prediction_tsv, filterColumnsInBothS
                                                               training_tsv=training_tsv, prediction_tsv=prediction_tsv,
                                                               remove_log_p=mp.remove_log_p_descriptors,
                                                               use_pmml_pipeline=mp.use_pmml,
-                                                              include_standardization_in_pmml=mp.include_standardization_in_pmml,
+                                                              scale_features=mp.scale_features,
                                                               descriptor_names_tsv=embedding,
                                                               n_jobs=mp.n_threads,
                                                               filterColumnsInBothSets=filterColumnsInBothSets)

@@ -623,7 +623,7 @@ def add_model_prediction_to_df(df, model_id, pred_name, add_squared_column=True)
     df_kow = df_kow[['ID', pred_name]]
     
     if add_squared_column:
-        df_kow[f'{pred_name}_squared'] = df_kow[pred_name] ** 2
+        df_kow[f'{pred_name}2'] = df_kow[pred_name] ** 2
     
 # print(test_set_kow[0])
     df = df.merge(df_kow, on='ID', how='left', validate='m:1')
@@ -632,8 +632,6 @@ def add_model_prediction_to_df(df, model_id, pred_name, add_squared_column=True)
 
 
 def getLogKowPredictionsForDataset():
-
-    
     dataset_name = "KOC v1 modeling"
     session = getSession()
     descriptor_set_name = "WebTEST-default"
@@ -645,6 +643,8 @@ def getLogKowPredictionsForDataset():
 
     df_prediction = add_model_prediction_to_df(df_prediction, model_id, pred_name)
     df_training = add_model_prediction_to_df(df_training, model_id, pred_name)
+
+    return df_training, df_prediction
 
 
 if __name__ == '__main__':

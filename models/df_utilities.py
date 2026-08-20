@@ -1,4 +1,5 @@
 import logging
+import traceback
 
 import numpy as np
 import pandas as pd
@@ -336,7 +337,6 @@ def prepare_instances(df, which_set, remove_logp=False, remove_corr=True,
     return ids, labels, features, column_names, is_binary
 
 
-
 def prepare_instances_with_preselected_descriptors_gcm(
     df,
     which_set,
@@ -347,108 +347,309 @@ def prepare_instances_with_preselected_descriptors_gcm(
     add_xgboost_log_p=False,
     add_squared_column=False,
     logp_columns=None,
+    protect_logp_columns_from_filtering=True
 ):
-    """Prepares a pandas df of training data by removing low-count and highly collinear descriptors.
-       Ensures labels and ids drop rows corresponding to removed feature rows.
+    """
+    Prepare a dataframe for a group contribution model using fragment count descriptors,
+    with optional inclusion of logKow-based predictors.
+
+    Workflow:
+      1. Extract IDs and labels from the first two columns.
+      2. Select fragment descriptors in the requested range.
+      3. Optionally append logP/logKow predictors.
+      4. Remove low-count columns / unsupported rows.
+      5. Iteratively remove highly collinear columns based on diag((X'X)^-1).
+      6. Keep labels and IDs aligned to the remaining feature rows.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Input dataframe. Assumes first column = ID, second column = label.
+    which_set : any
+        Present for API compatibility; not used directly here.
+    min_count : int
+        Minimum number of nonzero values required for a descriptor column.
+    inv_diag_threshold : float
+        Threshold for diag((X'X)^-1); columns above this are removed.
+    add_a_log_p : bool
+        If True, include ALOGP/ALOGP2 if present.
+    add_x_log_p : bool
+        If True, include XLOGP/XLOGP2 if present.
+    add_xgboost_log_p : bool
+        If True, include LOGP_Martin (and LOGP_Martin2 if add_squared_column is True).
+    add_squared_column : bool
+        If True, include squared logP predictor when available/requested.
+    logp_columns : list[str] or None
+        Explicit list of logP columns to include. If provided, this overrides the boolean flags.
+    protect_logp_columns_from_filtering : bool
+        If True, selected logP columns are excluded from inverse-diagonal-based removal.
+
+    Returns
+    -------
+    ids : pd.Series
+    labels : pd.Series
+    features : pd.DataFrame
+    column_names : list[str]
+    is_binary : bool
     """
     try:
-        # Labels and IDs from the first two columns
-        df_labels = df[df.columns[1]]
-        is_binary = df_labels.isin([0, 1]).all()
+        # ---------------------------------------------------------------------
+        # 1) Extract IDs and labels
+        # ---------------------------------------------------------------------
+        id_col = df.columns[0]
+        label_col = df.columns[1]
 
-        labels = df_labels.copy()
-        ids = df[df.columns[0]].copy()
+        ids = df[id_col].copy()
+        labels = df[label_col].copy()
+        is_binary = labels.isin([0, 1]).all()
 
-
+        # ---------------------------------------------------------------------
+        # 2) Select fragment descriptors
+        # ---------------------------------------------------------------------
         start = "As [+5 valence, one double bond]"
         stop = "-N=S=O"
 
-        # Keep only fragment columns in the specified range
-        features = keep_columns_between(df, start, stop, True)
+        fragment_features = keep_columns_between(df, start, stop, True)
 
-        # print(features)
-        #
-        # # Keep only fragment columns in the specified range (preselected via embedding)
-        # features = df[embedding].copy()
+        if fragment_features.empty:
+            raise ValueError(
+                f"No fragment descriptors selected between '{start}' and '{stop}'."
+            )
 
-        # Drop low nonzero columns and rows (first pass)
-        features, cols_dropped_low, rows_dropped_low = drop_low_nonzero_cols_and_rows(features, min_nonzero=min_count)
+        # ---------------------------------------------------------------------
+        # 3) Select optional logP / logKow predictors
+        # ---------------------------------------------------------------------
+        selected_logp_cols = []
 
-        # Align labels and ids to remaining feature rows
+        if logp_columns is not None:
+            # Use exactly the requested columns, if present
+            selected_logp_cols.extend([c for c in logp_columns if c in df.columns])
+        else:
+            if add_a_log_p:
+                selected_logp_cols.extend([c for c in ["ALOGP", "ALOGP2"] if c in df.columns])
+
+            if add_x_log_p:
+                selected_logp_cols.extend([c for c in ["XLOGP", "XLOGP2"] if c in df.columns])
+
+            if add_xgboost_log_p:
+                if "LOGP_Martin" in df.columns:
+                    selected_logp_cols.append("LOGP_Martin")
+                if add_squared_column and "LOGP_Martin2" in df.columns:
+                    selected_logp_cols.append("LOGP_Martin2")
+
+        # Remove duplicates while preserving order
+        selected_logp_cols = list(dict.fromkeys(selected_logp_cols))
+
+        # Keep only numeric logP columns, if any
+        selected_logp_cols = [
+            c for c in selected_logp_cols
+            if pd.api.types.is_numeric_dtype(df[c])
+        ]
+
+        # ---------------------------------------------------------------------
+        # 4) Combine fragment descriptors + logP predictors
+        # ---------------------------------------------------------------------
+        if selected_logp_cols:
+            logp_features = df.loc[fragment_features.index, selected_logp_cols]
+            features = pd.concat([fragment_features, logp_features], axis=1)
+        else:
+            features = fragment_features.copy()
+
+        # Ensure numeric-only behavior downstream
+        # (If you have a mix of numeric/non-numeric columns, filter them here.)
+        features = features.apply(pd.to_numeric, errors="coerce")
+
+        # ---------------------------------------------------------------------
+        # 5) Drop low-count columns and associated rows
+        # ---------------------------------------------------------------------
+        features, cols_dropped_low, rows_dropped_low = drop_low_nonzero_cols_and_rows(
+            features, min_nonzero=min_count
+        )
+
+        # Align labels and ids to the remaining rows
         labels = labels.loc[features.index]
         ids = ids.loc[features.index]
 
-        # Iteratively drop columns with large diag(inv(X^T X)) and any rows that had nonzero values in those columns
+        # ---------------------------------------------------------------------
+        # 6) Iteratively drop high inverse-diagonal columns
+        # ---------------------------------------------------------------------
         all_high_cols = []
         all_high_rows = pd.Index([])
 
+        # Determine columns to protect from removal if requested
+        protected_cols = set(selected_logp_cols) if protect_logp_columns_from_filtering else set()
+
         while True:
-            filtered, high_cols, high_rows, diag_df = drop_high_invdiag_cols_and_rows(
-                features, threshold=inv_diag_threshold, numeric_only=True
-            )
+            # If your helper supports exclusions, pass them in.
+            # Otherwise, see note below for how to rework it.
+            try:
+                filtered, high_cols, high_rows, diag_df = drop_high_invdiag_cols_and_rows(
+                    features,
+                    threshold=inv_diag_threshold,
+                    numeric_only=True,
+                    exclude_columns=list(protected_cols) if protected_cols else None
+                )
+            except TypeError:
+                # Backward compatibility: helper doesn't yet support exclude_columns
+                filtered, high_cols, high_rows, diag_df = drop_high_invdiag_cols_and_rows(
+                    features,
+                    threshold=inv_diag_threshold,
+                    numeric_only=True,
+                )
+
+                # If protection is enabled but helper can't exclude cols, manually preserve them
+                if protected_cols and high_cols:
+                    high_cols = [c for c in high_cols if c not in protected_cols]
 
             if not high_cols:
-                # No more problematic columns; done
                 break
 
-            # print(f"Dropping {len(high_cols)} features with inv_diag > {inv_diag_threshold}: {high_cols}")
-
-            # Accumulate dropped info and update features for the next iteration
             all_high_cols.extend(high_cols)
             all_high_rows = all_high_rows.union(high_rows)
             features = filtered
 
-            # Keep labels and ids aligned with the remaining feature rows after this iteration
+            # Re-align labels and ids after feature-row removal
             labels = labels.loc[features.index]
             ids = ids.loc[features.index]
 
-        # Add optional logP columns when present in the source dataframe.
-        # The LOGP values generated by add_log_p_martin_columns() are stored as
-        # "LOGP_Martin" and, when requested, "LOGP_Martin_squared".
-        log_p_cols = []
-        if logp_columns:
-            log_p_cols.extend([c for c in logp_columns if c in df.columns])
-        else:
-            if add_a_log_p:
-                log_p_cols.extend([c for c in ["ALOGP", "ALOGP2"] if c in df.columns])
-            if add_x_log_p:
-                log_p_cols.extend([c for c in ["XLOGP", "XLOGP2"] if c in df.columns])
-            if add_xgboost_log_p or "LOGP_Martin" in df.columns:
-                log_p_cols.append("LOGP_Martin")
-                if add_squared_column and "LOGP_Martin_squared" in df.columns:
-                    log_p_cols.append("LOGP_Martin_squared")
-
-        log_p_cols = [c for c in dict.fromkeys(log_p_cols) if c in df.columns]
-        if log_p_cols:
-            features = pd.concat([features, df.loc[features.index, log_p_cols]], axis=1)
-        
-        # Final feature list after all drops
         column_names = list(features.columns)
 
-        # Optional: report what was dropped
-        # if cols_dropped_low:
-        #     print(f"Dropped low-nonzero columns (< {min_count} nonzeros): {cols_dropped_low}")
-        # if len(rows_dropped_low) > 0:
-        #     print(f"Dropped {len(rows_dropped_low)} rows due to low-nonzero column removal.")
+        # ---------------------------------------------------------------------
+        # 7) Reporting
+        # ---------------------------------------------------------------------
+        if cols_dropped_low:
+            print(f"Dropped low-nonzero columns (< {min_count} nonzeros): {cols_dropped_low}")
+
+        if len(rows_dropped_low) > 0:
+            print(f"Dropped {len(rows_dropped_low)} rows due to low-nonzero filtering.")
 
         if all_high_cols:
             print(f"Dropped high-inv_diag columns (> {inv_diag_threshold}): {all_high_cols}")
-        
-        # if len(all_high_rows) > 0:
-        #     print(f"Dropped {len(all_high_rows)} rows due to high-inv_diag column removal.")
 
-        # If you have an ID column in the original df, you can show which IDs were dropped:
-        if 'ID' in df.columns and len(all_high_rows) > 0:
-            print(f"Dropped {len(all_high_rows)} row IDs (high-inv_diag removal):{df.loc[all_high_rows, 'ID'].tolist()}")
+        if len(all_high_rows) > 0:
+            print(f"Dropped {len(all_high_rows)} rows due to high-inv_diag filtering.")
 
         return ids, labels, features, column_names, is_binary
 
     except Exception as ex:
-        ex.with_traceback()
-        return "error finding fragments with min_count"
+        traceback.print_exc()
+        raise RuntimeError("error finding fragments with min_count") from ex
 
 
-def drop_high_invdiag_cols_and_rows(df, threshold=1000, numeric_only=True):
+# def prepare_instances_with_preselected_descriptors_gcm(
+#     df,
+#     which_set,
+#     min_count=3,
+#     inv_diag_threshold=1000,
+#     add_a_log_p=False,
+#     add_x_log_p=False,
+#     add_xgboost_log_p=False,
+#     add_squared_column=False,
+#     logp_columns=None,
+# ):
+#     """Prepares a pandas df of training data by removing low-count and highly collinear descriptors.
+#        Ensures labels and ids drop rows corresponding to removed feature rows.
+#     """
+#     try:
+#         # Labels and IDs from the first two columns
+#         df_labels = df[df.columns[1]]
+#         is_binary = df_labels.isin([0, 1]).all()
+
+#         labels = df_labels.copy()
+#         ids = df[df.columns[0]].copy()
+
+
+#         start = "As [+5 valence, one double bond]"
+#         stop = "-N=S=O"
+
+#         # Keep only fragment columns in the specified range
+#         features = keep_columns_between(df, start, stop, True)
+
+#         # TODO: reorder code so that the logp additions are done prior to the inv_diag filtering, so that the logp columns are not dropped if they are present in the source dataframe.
+#         # TODO: rework based on the fact that the XLOGP/2 and ALOGP/2 columns are in the same TSV in the database
+#         # Add optional logP columns when present in the source dataframe.
+#         # The LOGP values generated by add_log_p_martin_columns() are stored as
+#         # "LOGP_Martin" and, when requested, "LOGP_Martin_squared".
+#         log_p_cols = []
+#         if logp_columns:
+#             log_p_cols.extend([c for c in logp_columns if c in df.columns])
+#         else:
+#             if add_a_log_p:
+#                 log_p_cols.extend([c for c in ["ALOGP", "ALOGP2"] if c in df.columns])
+#             if add_x_log_p:
+#                 log_p_cols.extend([c for c in ["XLOGP", "XLOGP2"] if c in df.columns])
+#             if add_xgboost_log_p or "LOGP_Martin" in df.columns:
+#                 log_p_cols.append("LOGP_Martin")
+#                 if add_squared_column and "LOGP_Martin2" in df.columns:
+#                     log_p_cols.append("LOGP_Martin2")
+
+#         log_p_cols = [c for c in dict.fromkeys(log_p_cols) if c in df.columns]
+#         if log_p_cols:
+#             features = pd.concat([features, df.loc[features.index, log_p_cols]], axis=1)
+
+#         # print(features)
+#         #
+#         # # Keep only fragment columns in the specified range (preselected via embedding)
+#         # features = df[embedding].copy()
+
+#         # Drop low nonzero columns and rows (first pass)
+#         features, cols_dropped_low, rows_dropped_low = drop_low_nonzero_cols_and_rows(features, min_nonzero=min_count)
+
+#         # Align labels and ids to remaining feature rows
+#         labels = labels.loc[features.index]
+#         ids = ids.loc[features.index]
+
+#         # Iteratively drop columns with large diag(inv(X^T X)) and any rows that had nonzero values in those columns
+#         all_high_cols = []
+#         all_high_rows = pd.Index([])
+
+#         while True:
+#             filtered, high_cols, high_rows, diag_df = drop_high_invdiag_cols_and_rows(
+#                 features, threshold=inv_diag_threshold, numeric_only=True
+#             )
+
+#             if not high_cols:
+#                 # No more problematic columns; done
+#                 break
+
+#             # print(f"Dropping {len(high_cols)} features with inv_diag > {inv_diag_threshold}: {high_cols}")
+
+#             # Accumulate dropped info and update features for the next iteration
+#             all_high_cols.extend(high_cols)
+#             all_high_rows = all_high_rows.union(high_rows)
+#             features = filtered
+
+#             # Keep labels and ids aligned with the remaining feature rows after this iteration
+#             labels = labels.loc[features.index]
+#             ids = ids.loc[features.index]
+        
+#         # Final feature list after all drops
+#         column_names = list(features.columns)
+
+#         # Optional: report what was dropped
+#         # if cols_dropped_low:
+#         #     print(f"Dropped low-nonzero columns (< {min_count} nonzeros): {cols_dropped_low}")
+#         # if len(rows_dropped_low) > 0:
+#         #     print(f"Dropped {len(rows_dropped_low)} rows due to low-nonzero column removal.")
+
+#         if all_high_cols:
+#             print(f"Dropped high-inv_diag columns (> {inv_diag_threshold}): {all_high_cols}")
+        
+#         # if len(all_high_rows) > 0:
+#         #     print(f"Dropped {len(all_high_rows)} rows due to high-inv_diag column removal.")
+
+#         # If you have an ID column in the original df, you can show which IDs were dropped:
+#         if 'ID' in df.columns and len(all_high_rows) > 0:
+#             print(f"Dropped {len(all_high_rows)} row IDs (high-inv_diag removal):{df.loc[all_high_rows, 'ID'].tolist()}")
+
+#         return ids, labels, features, column_names, is_binary
+
+#     except Exception as ex:
+#         ex.with_traceback()
+#         return "error finding fragments with min_count"
+
+
+def drop_high_invdiag_cols_and_rows(df, threshold=1000, numeric_only=True, exclude_columns=None):
     """
     Drop columns where diag(inv(X^T X)) > threshold and remove rows that had nonzero values in those columns,
     similar to drop_low_nonzero_cols_and_rows row handling.
@@ -459,8 +660,14 @@ def drop_high_invdiag_cols_and_rows(df, threshold=1000, numeric_only=True):
     - rows_dropped_index: index of dropped rows
     - diag_df: DataFrame with per-feature inverse-diagonal values, sorted descending
     """
+    if exclude_columns is None:
+        exclude_columns = []
+
+    exclude_columns = set(exclude_columns)
+    
     # Choose numeric columns for the X^T X computation
-    cols_to_check = df.select_dtypes(include="number").columns if numeric_only else df.columns
+    numeric_columns = df.select_dtypes(include="number").columns if numeric_only else df.columns
+    cols_to_check = pd.Index([c for c in numeric_columns if c not in exclude_columns])
     if len(cols_to_check) == 0:
         # Nothing numeric to check
         return df.copy(), [], pd.Index([]), pd.DataFrame(columns=['feature', 'inv_diag'])

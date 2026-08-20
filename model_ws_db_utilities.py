@@ -802,7 +802,7 @@ class ModelInitializer:
         if "qsar_method_version" in details:
             m.qsar_method_version = details['qsar_method_version']
 
-        m.include_standardization_in_pmml = details['include_standardization_in_pmml']
+        m.scale_features = details.get("include_standardization_in_pmml", False) or details.get("scale_features", False)
 
         # Parse JSON for dsstox_mapping_strategy
         dsstox_mapping = json.loads(m.dsstox_mapping_strategy)

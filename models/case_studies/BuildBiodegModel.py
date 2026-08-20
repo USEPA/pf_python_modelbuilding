@@ -62,8 +62,8 @@ def runBiodeg():
         print(descriptor_names)
 
     print("Executing",qsar_method)
-    model = MWU.instantiateModel(df_training, n_jobs=8, qsar_method=qsar_method,remove_log_p=False, use_pmml_pipeline=False, include_standardization_in_pmml=False)
-    model.build_model(use_pmml_pipeline=False, include_standardization_in_pmml=False, descriptor_names=descriptor_names)  # Note we now handle using an embedding by passing a descriptor_names list. By default it is a None type -- this will use all descriptors in df
+    model = MWU.instantiateModel(df_training, n_jobs=8, qsar_method=qsar_method,remove_log_p=False, use_pmml_pipeline=False, scale_features=False)
+    model.build_model(use_pmml_pipeline=False, scale_features=False, descriptor_names=descriptor_names)  # Note we now handle using an embedding by passing a descriptor_names list. By default it is a None type -- this will use all descriptors in df
 
     # printModelVariables(descriptor_names, model)
     predictions = model.do_predictions(df_prediction,return_score=False)
@@ -165,15 +165,15 @@ def runBiodegNonLinearEpisuiteFrag():
     pred_df = DFU.load_df_from_file(prediction_tsv_path, sep='\t')
 
     # use_pmml_pipeline = False
-    # include_standardization_in_pmml = False
+    # scale_features = False
     #
     # qsar_method = 'reg'
     # print("Executing", qsar_method)
     # model = MWU.instantiateModel(training_df, n_jobs=8, qsar_method=qsar_method, remove_log_p=False,
-    #                              use_pmml_pipeline=use_pmml_pipeline, include_standardization_in_pmml=include_standardization_in_pmml)
+    #                              use_pmml_pipeline=use_pmml_pipeline, scale_features=scale_features)
     # descriptor_names = None
     # model.build_model(use_pmml_pipeline=use_pmml_pipeline,
-    #                   include_standardization_in_pmml=include_standardization_in_pmml,
+    #                   scale_features=scale_features,
     #                   descriptor_names=descriptor_names)  # Note we now handle using an embedding by passing a descriptor_names list. By default it is a None type -- this will use all descriptors in df
     # test_score = model.do_predictions(pred_df,return_score=True)
     #
