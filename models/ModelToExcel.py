@@ -1592,7 +1592,7 @@ class DataQuerier:
             results_dict["model_details"]["embedding"] = model.embedding
 
         method_name = getattr(model, "qsar_method", False) or getattr(model, "regressor_name", False) or ""
-        if any(method in method_name for method in ["reg", "las", "gcm"]):
+        if any(method in method_name for method in ["reg", "las", "gcm", "huber", "ransac", "theil_sen"]):
             coefficients_df = DataTransformer.get_model_coefficients(model)
             results_dict["model_details"]["model_coefficients"] = coefficients_df
         else:
@@ -1698,9 +1698,9 @@ class DataQuerier:
             "Preferred Name": temp["preferred_name"],
             "SMILES": temp["smiles"],
             "Mol Weight": temp["mol_weight"],
-            "Exp": temp["exp"],
-            "Pred": temp["pred"],
-            "Absolute Error": abs(temp["exp"] - temp["pred"]),
+            f"Observed ({model.unitsModel})": temp["exp"],
+            f"Predicted ({model.unitsModel})": temp["pred"],
+            f"Absolute Error ({model.unitsModel})": abs(temp["exp"] - temp["pred"]),
             "CV Fold": temp["cv_fold"]
         }
         training_cv_predictions_df = pd.DataFrame(training_cv_predictions_dict)
@@ -1748,9 +1748,9 @@ class DataQuerier:
             "Preferred Name": temp["preferred_name"],
             "SMILES": temp["smiles"],
             "Mol Weight": temp["mol_weight"],
-            "Exp": temp["exp"],
-            "Pred": temp["pred"],
-            "Absolute Error": abs(temp["exp"] - temp["pred"]),
+            f"Observed ({model.unitsModel})": temp["exp"],
+            f"Predicted ({model.unitsModel})": temp["pred"],
+            f"Absolute Error ({model.unitsModel})": abs(temp["exp"] - temp["pred"]),
             **ad_test_columns
         }
         test_set_predictions_df = pd.DataFrame(test_predictions_dict)
@@ -1801,9 +1801,9 @@ class DataQuerier:
             "Preferred Name": temp["preferred_name"],
             "SMILES": temp["smiles"],
             "Mol Weight": temp["mol_weight"],
-            "Exp": temp["exp"],
-            "Pred": temp["pred"],
-            "Absolute Error": abs(temp["exp"] - temp["pred"]),
+            f"Observed ({model.unitsModel})": temp["exp"],
+            f"Predicted ({model.unitsModel})": temp["pred"],
+            f"Absolute Error ({model.unitsModel})": abs(temp["exp"] - temp["pred"]),
             **ad_test_columns
         }
         external_predictions_df = pd.DataFrame(external_predictions_dict)
@@ -2231,6 +2231,7 @@ class DataTransformer:
             "Public Source Original URL": df_pv.get("public_source_original_url", None),
             "Literature Source Citation": df_pv.get("literature_source_citation", None),
             "Literature Source DOI": df_pv.get("literature_source_doi", None),
+            "Document Name": df_pv.get("brief_citation", None),
             "Value Original": df_pv.get("prop_value_original", None),
             "Value Max": df_pv.get("value_max", None),
             "Value Min": df_pv.get("value_min", None),
@@ -2267,7 +2268,7 @@ class DataTransformer:
 
         superheaders = {
             "Identifiers": ["Exp Prop ID", "Canon QSAR SMILES"],
-            "Literature Source Metadata": ["Page URL", "Public Source Name", "Public Source URL", "Public Source Original Name", "Public Source Original URL", "Literature Source Citation", "Literature Source DOI"],
+            "Literature Source Metadata": ["Page URL", "Public Source Name", "Public Source URL", "Public Source Original Name", "Public Source Original URL", "Literature Source Citation", "Literature Source DOI", "Document Name"],
             "Source Chemical Metadata": ["Source DTXRID", "Source DTXSID", "Source CASRN", "Source Chemical Name", "Source SMILES"],
             "Mapped DSSTox Record Metadata": ["Mapped DTXCID", "Mapped DTXSID", "Mapped CAS", "Mapped Chemical Name", "Mapped SMILES", "Mapped Molweight"],
             "Property Value Data": ["Value Original", "Value Max", "Value Min", "Value Point Estimate", "Value Units", "QSAR Property Value", "QSAR Property Units"],
@@ -2415,7 +2416,7 @@ class DataTransformer:
         return final
 
     @staticmethod
-    def get_training_cv_predictions_df(df_training_cv: pd.DataFrame) -> pd.DataFrame:
+    def get_training_cv_predictions_df(df_training_cv: pd.DataFrame, units: Optional[str] = "unitless") -> pd.DataFrame:
         """Format training set cross-validation predictions for Excel sheet.
         
         Args:
@@ -2428,11 +2429,11 @@ class DataTransformer:
         df_training_cv.insert(0, "Exp Prop ID", exp_prop_id)
         df_training_cv.rename(columns={col: ExcelFormatter.clean_col_titles(col) for col in df_training_cv.columns}, inplace=True)
         df_training_cv.insert(df_training_cv.columns.get_loc("Pred") + 1, "Absolute Error", abs(df_training_cv["Exp"] - df_training_cv["Pred"]))
-        df_training_cv.reindex(columns=["Exp Prop ID", "Canon QSAR SMILES", "DTXCID", "DTXSID", "CASRN", "Preferred Name", "SMILES", "Mol Weight", "Exp", "Pred", "Absolute Error", "CV Fold"], axis=1)
+        df_training_cv.reindex(columns=["Exp Prop ID", "Canon QSAR SMILES", "DTXCID", "DTXSID", "CASRN", "Preferred Name", "SMILES", "Mol Weight", f"Observed ({units})", f"Predicted ({units})", f"Absolute Error ({units})", "CV Fold"], axis=1)
         return df_training_cv
 
     @staticmethod
-    def get_test_set_predictions_df(df_test: pd.DataFrame, actual_ads: Optional[list]=None) -> pd.DataFrame:
+    def get_test_set_predictions_df(df_test: pd.DataFrame, actual_ads: Optional[list]=None, units: Optional[str] = "unitless") -> pd.DataFrame:
         """Format test set predictions for Excel sheet.
         
         Args:
@@ -2455,11 +2456,11 @@ class DataTransformer:
         
         df_test.rename(columns={col: ExcelFormatter.clean_col_titles(col) for col in df_test.columns}, inplace=True)
         df_test.insert(df_test.columns.get_loc("Pred") + 1, "Absolute Error", abs(df_test["Exp"] - df_test["Pred"]))
-        df_test.reindex(columns=["Exp Prop ID", "Canon QSAR SMILES", "DTXCID", "DTXSID", "CASRN", "Preferred Name", "SMILES", "Mol Weight", "Exp", "Pred", "Absolute Error", *[col for col in df_test.columns if col.startswith("AD")]], axis=1)
+        df_test.reindex(columns=["Exp Prop ID", "Canon QSAR SMILES", "DTXCID", "DTXSID", "CASRN", "Preferred Name", "SMILES", "Mol Weight", f"Observed ({units})", f"Pred ({units})", f"Absolute Error ({units})", *[col for col in df_test.columns if col.startswith("AD")]], axis=1)
         return df_test
 
     @staticmethod
-    def get_external_predictions_df(df_ext: pd.DataFrame, ad_columns: Optional[list|str] = None, df_training: Optional[pd.DataFrame] = None, remove_log_p_descriptors: Optional[bool] = True, embedding: Optional[list[str]] = None) -> pd.DataFrame:
+    def get_external_predictions_df(df_ext: pd.DataFrame, ad_columns: Optional[list|str] = None, df_training: Optional[pd.DataFrame] = None, remove_log_p_descriptors: Optional[bool] = True, embedding: Optional[list[str]] = None, units: Optional[str] = "unitless") -> pd.DataFrame:
         """Format external/validation set predictions for Excel sheet (DEPRECATED).
         
         This method is superseded by DataQuerier.query_external_predictions_df() which provides
@@ -2496,7 +2497,7 @@ class DataTransformer:
         df_ext.rename(columns={col: ExcelFormatter.clean_col_titles(col) for col in df_ext.columns}, inplace=True)
         df_ext.dropna(axis=0, subset=["Exp Prop ID", "Exp", "Pred"], how="any", inplace=True)
         df_ext.insert(df_ext.columns.get_loc("Pred") + 1, "Absolute Error", abs(df_ext["Exp"] - df_ext["Pred"]))
-        df_ext.reindex(columns=["Exp Prop ID", "Canon QSAR SMILES", "DTXCID", "DTXSID", "CASRN", "Preferred Name", "SMILES", "Mol Weight", "Exp", "Pred", "Absolute Error", *[col for col in df_ext.columns if col.startswith("AD")]], axis=1)
+        df_ext.reindex(columns=["Exp Prop ID", "Canon QSAR SMILES", "DTXCID", "DTXSID", "CASRN", "Preferred Name", "SMILES", "Mol Weight", f"Observed ({units})", f"Predicted ({units})", f"Absolute Error ({units})", *[col for col in df_ext.columns if col.startswith("AD")]], axis=1)
         return df_ext
     
     @staticmethod
@@ -2514,14 +2515,14 @@ class DataTransformer:
                 logging.error(f"Failed to load model")
                 return None
             method_name = getattr(model, "qsar_method", False) or getattr(model, "regressor_name", False) or ""
-            if not any(method in method_name for method in ["reg", "las", "gcm"]):
+            if not any(method in method_name for method in ["reg", "las", "gcm", "huber", "ransac", "theil_sen"]):
                 logging.warning(f"Model has QSAR method that does not support coefficient retrieval: {method_name}")
                 return None
-                        
+            
             df_training = model.df_training
             y = df_training[df_training.columns[1]]
             X = df_training[model.embedding]
-
+            
             coefficients_json = model.getOriginalRegressionCoefficients2(X, y)
             coefficients_dict = json.loads(coefficients_json)
             
@@ -3231,7 +3232,7 @@ class ModelToExcel:
             worksheet.freeze_panes(1, 0)
 
         col_widths = ExcelFormatter.set_column_width(writer, "Training CV Predictions", training_cv_predictions, min_col_width=min_col_width, col_width_pad=col_width_pad, how="header")
-        ExcelFormatter.set_sig_figs(writer, "Training CV Predictions", training_cv_predictions, columns=["Exp", "Pred", "Absolute Error", "Mol Weight"], sig_figs=3, col_widths=col_widths)
+        ExcelFormatter.set_sig_figs(writer, "Training CV Predictions", training_cv_predictions, columns=[f"Observed ({property_units})", f"Predicted ({property_units})", f"Absolute Error ({property_units})", "Mol Weight"], sig_figs=3, col_widths=col_widths)
         ExcelFormatter.add_filter(writer, "Training CV Predictions", training_cv_predictions, has_subtotals=add_subtotals)
         ChartBuilder.add_plot(writer, workbook, "Training CV Predictions", "Training CV Predictions", training_cv_predictions, is_binary=self.model.is_binary, x_col=x_col, y_col=y_col, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, log_plot=self.log_plot, yx_offset_rows=yx_offset_rows, property_name=property_name, property_units=property_units, has_subtotals=add_subtotals)
 
@@ -3277,7 +3278,7 @@ class ModelToExcel:
             worksheet.freeze_panes(1, 0)
 
         col_widths = ExcelFormatter.set_column_width(writer, "Test Set Predictions", test_set_predictions, min_col_width=min_col_width, col_width_pad=col_width_pad, how="header")
-        ExcelFormatter.set_sig_figs(writer, "Test Set Predictions", test_set_predictions, columns=["Exp", "Pred", "Absolute Error", "Mol Weight"], sig_figs=3, col_widths=col_widths)
+        ExcelFormatter.set_sig_figs(writer, "Test Set Predictions", test_set_predictions, columns=[f"Observed ({property_units})", f"Predicted ({property_units})", f"Absolute Error ({property_units})", "Mol Weight"], sig_figs=3, col_widths=col_widths)
         ExcelFormatter.add_filter(writer, "Test Set Predictions", test_set_predictions, has_subtotals=add_subtotals)
 
         ChartBuilder.add_plot(writer, workbook, "Test Set Predictions", "Test Set Predictions", test_set_predictions, is_binary=self.model.is_binary, x_col=x_col, y_col=y_col, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, log_plot=self.log_plot, yx_offset_rows=yx_offset_rows, property_name=property_name, property_units=property_units, has_subtotals=add_subtotals)
@@ -3325,7 +3326,7 @@ class ModelToExcel:
             worksheet.freeze_panes(1, 0)
 
         col_widths = ExcelFormatter.set_column_width(writer, "External Predictions", external_predictions, min_col_width=min_col_width, col_width_pad=col_width_pad, how="header")
-        ExcelFormatter.set_sig_figs(writer, "External Predictions", external_predictions, columns=["Exp", "Pred", "Absolute Error", "Mol Weight"], sig_figs=3, col_widths=col_widths)
+        ExcelFormatter.set_sig_figs(writer, "External Predictions", external_predictions, columns=[f"Observed ({property_units})", f"Predicted ({property_units})", f"Absolute Error ({property_units})", "Mol Weight"], sig_figs=3, col_widths=col_widths)
         ExcelFormatter.add_filter(writer, "External Predictions", external_predictions, has_subtotals=add_subtotals)
         
         ChartBuilder.add_plot(writer, workbook, "External Predictions", "External Predictions", external_predictions, is_binary=self.model.is_binary, x_col=x_col, y_col=y_col, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, log_plot=self.log_plot, yx_offset_rows=yx_offset_rows, property_name=property_name, property_units=property_units, has_subtotals=add_subtotals)
