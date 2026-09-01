@@ -355,8 +355,8 @@ class ModelInitializer:
                 self.row_to_model_details(m, row)
 
         except Exception as ex:
-            ex.with_traceback()
             print(f"Exception occurred: {ex}")
+            raise
 
     def replace_id_with_dsstox_record(self, df_set, df_dsstoxRecords):
 

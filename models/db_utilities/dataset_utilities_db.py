@@ -122,8 +122,8 @@ def get_dataset_details(session, dataset_name):
         return row_dict
 
     except Exception as ex:
-        ex.with_traceback()
         print(f"Exception occurred: {ex}")
+        raise
 
 
 
@@ -633,6 +633,22 @@ def add_model_prediction_to_df(df, model_id, pred_name, add_squared_column=True)
 
 def getLogKowPredictionsForDataset():
     dataset_name = "KOC v1 modeling"
+    session = getSession()
+    descriptor_set_name = "WebTEST-default"
+    splitting_name = "RND_REPRESENTATIVE"
+    df_training, df_prediction = get_training_prediction_instances(session, dataset_name, descriptor_set_name, splitting_name)
+
+    model_id = str(1069)
+    pred_name = 'LOGP_Martin'
+
+    df_prediction = add_model_prediction_to_df(df_prediction, model_id, pred_name)
+    df_training = add_model_prediction_to_df(df_training, model_id, pred_name)
+
+    return df_training, df_prediction
+
+
+def getBcfPredictionsForDataset():
+    dataset_name = "exp_prop_BCF_v1_modeling"
     session = getSession()
     descriptor_set_name = "WebTEST-default"
     splitting_name = "RND_REPRESENTATIVE"

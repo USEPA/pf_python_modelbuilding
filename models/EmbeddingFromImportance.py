@@ -249,10 +249,12 @@ def perform_recursive_feature_elimination(model, df_training, n_threads, n_steps
 #    Adding scaling
 
     #model.model_obj is PMMLPipeline which may not work, convert to Pipeline:
-    pipe = Pipeline([
-        ("scaler", model.model_obj.named_steps['standardizer']),
-        ("estimator", model.model_obj.named_steps['estimator'])
-    ])
+    pipe = build_pipeline_for_rfe(model)
+
+    # pipe = Pipeline([
+    #     ("scaler", model.model_obj.named_steps['standardizer']),
+    #     ("estimator", model.model_obj.named_steps['estimator'])
+    # ])
 
     
     estimator_name = model.regressor_name.lower() if hasattr(model, 'regressor_name') else ''
@@ -358,10 +360,12 @@ def perform_iterative_sequential_feature_selection_old(
     n_features_total = X.shape[1]
 
     # Build the same pipeline as the single-run SFS
-    pipe = Pipeline([
-        ("scaler", model.model_obj.named_steps['standardizer']),
-        ("estimator", model.model_obj.named_steps['estimator'])
-    ])
+    pipe = build_pipeline_for_rfe(model)
+
+    # pipe = Pipeline([
+    #     ("scaler", model.model_obj.named_steps['standardizer']),
+    #     ("estimator", model.model_obj.named_steps['estimator'])
+    # ])
 
     # Edge case: not enough features for SFS to run
     if n_features_total <= 1:
@@ -529,10 +533,12 @@ def perform_sequential_feature_selection(model, df_training, cv=5, n_features_to
     # Prepare inputs based on current candidate set
     _, y, X, _ = DFU.prepare_instances2(df_training, model.embedding, True)
 
-    pipe = Pipeline([
-        ("scaler", model.model_obj.named_steps['standardizer']),
-        ("estimator", model.model_obj.named_steps['estimator'])
-    ])
+    pipe = build_pipeline_for_rfe(model)
+    
+    # pipe = Pipeline([
+    #     ("scaler", model.model_obj.named_steps['standardizer']),
+    #     ("estimator", model.model_obj.named_steps['estimator'])
+    # ])
 
     frac = 0.0001  # fraction of initial score for tol
 
@@ -652,10 +658,12 @@ def perform_iterative_sequential_feature_selection(
     n_features_total = X.shape[1]
 
     # Build pipeline
-    pipe = Pipeline([
-        ("scaler", model.model_obj.named_steps['standardizer']),
-        ("estimator", model.model_obj.named_steps['estimator'])
-    ])
+    pipe = build_pipeline_for_rfe(model)
+
+    # pipe = Pipeline([
+    #     ("scaler", model.model_obj.named_steps['standardizer']),
+    #     ("estimator", model.model_obj.named_steps['estimator'])
+    # ])
 
     # Bounds
     n_min = max(1, int(n_min))
@@ -902,4 +910,16 @@ def perform_iterative_sequential_feature_selection(
         )
     
     return best_embedding
-    
+
+
+def build_pipeline_for_rfe(model):
+    steps = []
+    if hasattr(model.model_obj, "named_steps") and "standardizer" in model.model_obj.named_steps:
+        steps.append(("scaler", model.model_obj.named_steps["standardizer"]))
+    elif hasattr(model.model_obj, "named_steps") and "scaler" in model.model_obj.named_steps:
+        steps.append(("scaler", model.model_obj.named_steps["scaler"]))
+    if hasattr(model.model_obj, "named_steps") and "estimator" in model.model_obj.named_steps:
+        steps.append(("estimator", model.model_obj.named_steps["estimator"]))
+    else:
+        raise KeyError("Model pipeline does not contain an 'estimator' step.")
+    return Pipeline(steps)

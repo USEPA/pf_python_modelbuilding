@@ -789,3 +789,5 @@ XLOGP2	Wang octanol water partition coefficient squared	Molecular Properties
 AMR	Ghose-Crippen molar refractivity	Molecular Properties
 Hy	hydrophilic factor	Molecular Properties
 Ui	unsaturation index	Molecular Properties
+LOGP_Martin	Octanol water partition coefficient predicted by XGBoost	Molecular Properties
+LOGP_Martin2	Octanol water partition coefficient predicted by XGBoost	Molecular Properties

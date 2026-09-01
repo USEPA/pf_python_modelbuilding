@@ -462,6 +462,8 @@ class Model:
             raise ValueError("Expected a sklearn Pipeline in self.get_model().")
 
         reg = pipe.steps[-1][1]
+        if hasattr(reg, "estimator_"):
+            reg = reg.estimator_
 
         # Transform X through all preprocessing steps before the estimator
         if len(pipe.steps) > 1:

@@ -8,6 +8,7 @@ Public Source Original Name                 	Name of the original public source
 Public Source Original URL                  	URL of the original public source
 Literature Source Citation                  	Citation for the literature source
 Literature Source DOI                       	DOI url for the literature source
+Document Name                       	Name of the original document cited by the original public/literature source
 Source DTXRID                               	DSSTOX record id with the source chemical
 Source DTXSID                               	DSSTOX substance id associated with the source chemical
 Source CASRN                                	Source chemical CASRN

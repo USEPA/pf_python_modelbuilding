@@ -5,6 +5,7 @@ This script uses the sklearn_genetic package to perform genetic algorithm featur
 @author: TMARTI02
 '''
 import models.df_utilities as DFU
+from models.EmbeddingFromImportance import build_pipeline_for_rfe
 import logging
 from sklearn_genetic import GAFeatureSelectionCV as ga
 from sklearn.model_selection import KFold, StratifiedKFold
@@ -98,10 +99,12 @@ def runGA(df_training, model, params):
         cv = KFold(n_splits=5, shuffle=True, random_state=42)
     
     # Convert PMMLPipeline to Pipeline (otherwise it throws a lot of warnings):
-    pipe = Pipeline([
-        ("scaler", model.model_obj.named_steps['standardizer']),
-        ("reg", model.model_obj.named_steps['estimator'])
-    ])
+    pipe = build_pipeline_for_rfe(model)
+
+    # pipe = Pipeline([
+    #     ("scaler", model.model_obj.named_steps['standardizer']),
+    #     ("reg", model.model_obj.named_steps['estimator'])
+    # ])
     
     # Genetic algorithm-based feature selector
     selector = ga(
@@ -185,10 +188,12 @@ def runGA_2_stage(df_training, model, params):
         cv = KFold(n_splits=5, shuffle=True, random_state=42)
 
     # Convert PMMLPipeline to a plain Pipeline
-    pipe = Pipeline([
-        ("scaler", model.model_obj.named_steps['standardizer']),
-        ("reg", model.model_obj.named_steps['estimator'])
-    ])
+    pipe = build_pipeline_for_rfe(model)
+
+    # pipe = Pipeline([
+    #     ("scaler", model.model_obj.named_steps['standardizer']),
+    #     ("reg", model.model_obj.named_steps['estimator'])
+    # ])
 
     # Ensure DataFrame with column names
     X_full = train_features if isinstance(train_features, pd.DataFrame) \

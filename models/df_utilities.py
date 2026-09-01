@@ -644,9 +644,9 @@ def prepare_instances_with_preselected_descriptors_gcm(
 
 #         return ids, labels, features, column_names, is_binary
 
-#     except Exception as ex:
-#         ex.with_traceback()
-#         return "error finding fragments with min_count"
+    # except Exception as ex:
+        # print(f"Exception occurred: {ex}")
+        # raise
 
 
 def drop_high_invdiag_cols_and_rows(df, threshold=1000, numeric_only=True, exclude_columns=None):
@@ -664,7 +664,7 @@ def drop_high_invdiag_cols_and_rows(df, threshold=1000, numeric_only=True, exclu
         exclude_columns = []
 
     exclude_columns = set(exclude_columns)
-    
+
     # Choose numeric columns for the X^T X computation
     numeric_columns = df.select_dtypes(include="number").columns if numeric_only else df.columns
     cols_to_check = pd.Index([c for c in numeric_columns if c not in exclude_columns])
