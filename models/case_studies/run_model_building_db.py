@@ -16,11 +16,11 @@ from __future__ import annotations lets you:
 from datetime import datetime
 import os, json
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.engine import URL
 from sqlalchemy.orm import sessionmaker
 from xlsxwriter.utility import xl_rowcol_to_cell
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import SQLAlchemyError, OperationalError
 
 import numpy as np
 import pandas as pd
@@ -38,7 +38,7 @@ from util.database_utilities import DatabaseUtilities
 from models import make_test_plots as mtp 
 
 from model_ws_utilities import call_build_embedding_ga_db, call_build_model_with_preselected_descriptors_from_df, \
-    call_do_predictions_from_df, call_build_embedding_importance_from_df
+    call_do_predictions_from_df, call_build_embedding_importance_from_df, apply_outlier_filter
 
 from models.EmbeddingFromImportance import perform_iterative_recursive_feature_elimination as run_rfe
 from models.EmbeddingFromImportance import perform_iterative_sequential_feature_selection as run_sfs
@@ -107,6 +107,9 @@ class ParametersImportance:
 
     min_descriptor_count: int = 30
     max_descriptor_count: int = 40
+
+    n_min: int = 2
+    n_max: int = 20
     
     # min_descriptor_count: int = 20
     # max_descriptor_count: int = 30
@@ -167,14 +170,122 @@ class ParametersHuber:
     ad_measure: list[str]
     splitting_name: str = "RND_REPRESENTATIVE"
     
-    feature_selection_method: str = feature_selection_method_group_contribution
     hyperparameter_grid: Optional[Dict[str, Any]] = None
     feature_selection: bool = True
-    min_count = 3  # minimum number of nonzero fragment values to keep a fragment column and its associated rows
     remove_log_p_descriptors: bool = False
     n_threads: int = 10
     scale_features: bool = True
     use_pmml_pipeline: bool = False
+    
+    feature_selection_method = feature_selection_method_genetic_algorithm
+    num_generations = 100
+    num_optimizers = 100
+    num_jobs = 4
+    max_length: int = 24  # still use?
+    max_features = 25
+    min_count = 3  # minimum number of nonzero fragment values to keep a fragment column and its associated rows
+
+    use_wards: bool = False
+    run_rfe = True
+    run_sfs = True
+
+    n_features_to_select = "auto" # can be auto or an integer
+    min_descriptor_count = 5
+    remove_fragment_descriptors: bool = True
+    remove_acnt_descriptors: bool = True
+
+    alpha: float = 0.7
+    threshold: int = 1
+    elitism: bool = True
+    crossover_probability: float = 0.9
+    mutation_probability: float = 0.05
+    descriptor_coefficient: float = 0.006
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class ParametersTheilSen:
+    dataset_name: str
+    qsar_method: str
+    descriptor_set_name: str
+    ad_measure: list[str]
+    splitting_name: str = "RND_REPRESENTATIVE"
+    
+    hyperparameter_grid: Optional[Dict[str, Any]] = None
+    feature_selection: bool = True
+    remove_log_p_descriptors: bool = False
+    n_threads: int = 10
+    scale_features: bool = True
+    use_pmml_pipeline: bool = False
+    
+    feature_selection_method = feature_selection_method_genetic_algorithm
+    num_generations = 100
+    num_optimizers = 100
+    num_jobs = 4
+    max_length: int = 24  # still use?
+    max_features = 25
+    min_count = 3  # minimum number of nonzero fragment values to keep a fragment column and its associated rows
+
+    use_wards: bool = False
+    run_rfe = True
+    run_sfs = True
+
+    n_features_to_select = "auto" # can be auto or an integer
+    min_descriptor_count = 5
+    remove_fragment_descriptors: bool = True
+    remove_acnt_descriptors: bool = True
+
+    alpha: float = 0.7
+    threshold: int = 1
+    elitism: bool = True
+    crossover_probability: float = 0.9
+    mutation_probability: float = 0.05
+    descriptor_coefficient: float = 0.006
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class ParametersRansac:
+    dataset_name: str
+    qsar_method: str
+    descriptor_set_name: str
+    ad_measure: list[str]
+    splitting_name: str = "RND_REPRESENTATIVE"
+    
+    hyperparameter_grid: Optional[Dict[str, Any]] = None
+    feature_selection: bool = True
+    remove_log_p_descriptors: bool = False
+    n_threads: int = 10
+    scale_features: bool = True
+    use_pmml_pipeline: bool = False
+    
+    feature_selection_method = feature_selection_method_genetic_algorithm
+    num_generations = 100
+    num_optimizers = 100
+    num_jobs = 4
+    max_length: int = 24  # still use?
+    max_features = 25
+    min_count = 3  # minimum number of nonzero fragment values to keep a fragment column and its associated rows
+
+    use_wards: bool = False
+    run_rfe = True
+    run_sfs = True
+
+    n_features_to_select = "auto" # can be auto or an integer
+    min_descriptor_count = 5
+    remove_fragment_descriptors: bool = True
+    remove_acnt_descriptors: bool = True
+
+    alpha: float = 0.7
+    threshold: int = 1
+    elitism: bool = True
+    crossover_probability: float = 0.9
+    mutation_probability: float = 0.05
+    descriptor_coefficient: float = 0.006
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -893,7 +1004,8 @@ class EmbeddingGenerator:
                                                        ip.n_threads, ip.num_generations, ip.use_permutative, ip.run_rfe,
                                                        ip.fraction_of_max_importance, ip.min_descriptor_count, ip.max_descriptor_count,
                                                        ip.use_wards, hyperparameter_grid=ip.hyperparameter_grid, run_sfs=ip.run_sfs,
-                                                       cv=cv, descriptor_coefficient=ip.descriptor_coefficient, alpha=ip.alpha)
+                                                       cv=cv, descriptor_coefficient=ip.descriptor_coefficient, alpha=ip.alpha,
+                                                       n_min=ip.n_min, n_max=ip.n_max)
 
         elif params.feature_selection_method == feature_selection_method_group_contribution:
             # embedding = call_build_embedding_group_contribution_from_df(df_training, params.min_count)
@@ -1412,13 +1524,13 @@ def set_hyper_parameters(qsar_method, feature_selection, descriptor_set_name, sp
     
     elif qsar_method == "ransac":
         grid = {}
-        params = ParametersGroupContribution(qsar_method=qsar_method, hyperparameter_grid=grid, feature_selection=feature_selection,
+        params = ParametersRansac(qsar_method=qsar_method, hyperparameter_grid=grid, feature_selection=feature_selection,
                                             descriptor_set_name=descriptor_set_name, dataset_name=dataset_name,
                                             splitting_name=splitting_name, ad_measure=ad_measure)
     
     elif qsar_method == "theil_sen":
         grid = {}
-        params = ParametersGroupContribution(qsar_method=qsar_method, hyperparameter_grid=grid, feature_selection=feature_selection,
+        params = ParametersTheilSen(qsar_method=qsar_method, hyperparameter_grid=grid, feature_selection=feature_selection,
                                             descriptor_set_name=descriptor_set_name, dataset_name=dataset_name,
                                             splitting_name=splitting_name, ad_measure=ad_measure)
     
@@ -1574,28 +1686,39 @@ def add_log_p_martin_columns(
     This uses the existing pre-trained logP model only, so it does not leak
     target-property information from the training/prediction/external sets.
     """
-    model_id = str(1069)
-    pred_name = 'LOGP_Martin'
-    from models.db_utilities.dataset_utilities_db import add_model_prediction_to_df as add_mp
+    # Repress warnings related to old versions of XGBoost and StandardScaler being used
+    #   should fix these errors at some point by deleting the current models for LOGPMartin from the database
+    #   and then push new models built in the current version of Python to the database with the same settings
+    import warnings
+    from sklearn.exceptions import InconsistentVersionWarning
 
-    def _add_columns(frame):
-        if frame is None:
-            return None
-        return add_mp(frame, model_id, pred_name)
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", category=InconsistentVersionWarning)
+        warnings.filterwarnings("ignore", message=".*serialized model.*XGBoost.*")
+        warnings.filterwarnings("ignore", message=".*old JSON model.*XGBoost.*")
 
-    df_training = _add_columns(df_training)
-    df_prediction = _add_columns(df_prediction)
+        model_id = str(1069)
+        pred_name = 'LOGP_Martin'
+        from models.db_utilities.dataset_utilities_db import add_model_prediction_to_df as add_mp
 
-    if df_external is not None:
-        df_external = _add_columns(df_external)
+        def _add_columns(frame):
+            if frame is None:
+                return None
+            return add_mp(frame, model_id, pred_name)
 
-    if cross_validate:
-        for fold_num in df_cv_dict:
-            fold = df_cv_dict[fold_num]
-            fold["train"] = _add_columns(fold["train"])
-            fold["pred"] = _add_columns(fold["pred"])
+        df_training = _add_columns(df_training)
+        df_prediction = _add_columns(df_prediction)
 
-    return df_training, df_prediction, df_external
+        if df_external is not None:
+            df_external = _add_columns(df_external)
+
+        if cross_validate:
+            for fold_num in df_cv_dict:
+                fold = df_cv_dict[fold_num]
+                fold["train"] = _add_columns(fold["train"])
+                fold["pred"] = _add_columns(fold["pred"])
+
+        return df_training, df_prediction, df_external
 
 
 def add_source_chemical_info(df_pred, df_dps):
@@ -1691,6 +1814,9 @@ def log_stats(model, params, cv_stats, test_stats, ext_stats):
 
 @staticmethod
 def build_output_subfolder(params, folder_embedding=None, logp_columns=None):
+    if isinstance(logp_columns, str):
+        logp_columns = [logp_columns]
+    
     selected_columns = [c for c in (logp_columns or []) if c]
 
     if selected_columns:
@@ -1698,17 +1824,39 @@ def build_output_subfolder(params, folder_embedding=None, logp_columns=None):
     else:
         subfolder = f"{params.qsar_method}_{params.descriptor_set_name}_fs={str(params.feature_selection)}"
 
+    if hasattr(params, "max_descriptor_count") and params.max_descriptor_count is not None:
+        subfolder = f"{subfolder}_max_descriptor_count={str(params.max_descriptor_count)}"
+    elif hasattr(params, "max_features") and params.max_features is not None:
+        subfolder = f"{subfolder}_max_features={str(params.max_features)}"
+
+    if hasattr(params, "outlier_filter_enabled"):
+        subfolder = f"{subfolder}_outlier_filter_methods={"_".join(params.outlier_filter_methods)}"
+
     if folder_embedding is not None:
         subfolder = f"{subfolder}_{folder_embedding}"
 
     return subfolder
 
 @staticmethod
+def ensure_session(session):
+    try:
+        # cheap no-op to force a DB round trip
+        session.execute(text("SELECT 1"))
+        return session
+    except OperationalError:
+        try:
+            session.close()
+        except Exception:
+            pass
+        return getSession()
+
+@staticmethod
 def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None, cross_validate=True,
                 run_AD=True, feature_selection=True, fs_previous_embedding=True, params=None,
                 descriptor_set_name="WebTEST-default", splitting_name="RND_REPRESENTATIVE",
                 ad_measure_model=None, add_LOGP_Martin=False, logp_columns=None, write_to_db=False, user="tmarti02",
-                unique_identifier=None, append_to_models_folder="", subfolder=None, save_initial_dfs=False):
+                unique_identifier=None, append_to_models_folder="", subfolder=None, save_initial_dfs=False,
+                outlier_filter_methods=None):
     # TODO: reg model using descriptors from XGB or RF model
     # TODO: gcm model that uses reg with fragment descriptors such that it deletes rows with less than 3 instances and the associated rows
     # TODO does add the LOGP predicted from my LOGP model improve the results?
@@ -1721,7 +1869,7 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         engine = getEngine()
         session = getSession()
         
-        ml = ModelLoader(session)
+        # ml = ModelLoader(session)
 
         if qsar_method == 'gcm' or qsar_method == 'svm':
             feature_selection = False
@@ -1791,6 +1939,22 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         # params.run_rfe = False
 
         # hyperparameter_grid = None # use default
+
+        # Set parameters related to outlier handling
+        if not hasattr(params, "outlier_filter_enabled"):
+            if outlier_filter_methods is None or outlier_filter_methods == False:
+                params.outlier_filter_enabled = False
+            else:
+                params.outlier_filter_enabled = True
+        if not hasattr(params, "outlier_filter_columns"):
+            params.outlier_filter_columns = ["Property"]
+        if not hasattr(params, "outlier_filter_methods"):
+            if outlier_filter_methods is None or outlier_filter_methods == False:
+                params.outlier_filter_methods = ["iqr"]
+            else:
+                params.outlier_filter_methods = outlier_filter_methods
+        if not hasattr(params, "outlier_filter_trim_mode"):
+            params.outlier_filter_trim_mode = "remove"
         
         # ******************************************************************************************************
         # ---- Get dataframes from the database ----
@@ -1805,6 +1969,41 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         s = df_training.iloc[:, 1]
         is_binary = s.isin([0, 1]).all()
         # print('is_binary', is_binary)
+
+        # ---- Optional outlier filtering on training data only ----
+        if getattr(params, "outlier_filter_enabled", False):
+            logging.info(
+                f"Applying outlier filter: methods={params.outlier_filter_methods}, "
+                f"columns={params.outlier_filter_columns}, mode={params.outlier_filter_trim_mode}"
+            )
+
+            df_training_before = df_training.copy()
+
+            df_training, outlier_report = apply_outlier_filter(
+                df_training,
+                columns=params.outlier_filter_columns,
+                methods=params.outlier_filter_methods,
+                target_col="Property",
+                trim_mode=params.outlier_filter_trim_mode,
+                iqr_k=getattr(params, "outlier_filter_iqr_k", 1.5),
+                hampel_k=getattr(params, "outlier_filter_hampel_k", 3.0),
+                robust_z_thresh=getattr(params, "outlier_filter_robust_z_thresh", 3.5),
+                esd_alpha=getattr(params, "outlier_filter_esd_alpha", 0.05),
+                esd_max_outliers=getattr(params, "outlier_filter_esd_max_outliers", 10),
+            )
+
+            logging.info(
+                f"Outlier filter removed {len(df_training_before) - len(df_training)} rows "
+                f"out of {len(df_training_before)}"
+            )
+
+            if save_initial_dfs:
+                outlier_folder = os.path.join(
+                    PROJECT_ROOT, "data", f"models{append_to_models_folder}",
+                    dataset_name, "outlier_filter"
+                )
+                os.makedirs(outlier_folder, exist_ok=True)
+                outlier_report.to_csv(os.path.join(outlier_folder, "outlier_report.csv"), index=False)
         
         df_prediction_ext = None
         dataset_name_ext = None
@@ -1863,6 +2062,10 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
             #         fold_data["train"].to_csv(os.path.join(initial_dfs_folder, f"df_cv_train_fold_{fold_num}.csv"), index=False)
             #         fold_data["pred"].to_csv(os.path.join(initial_dfs_folder, f"df_cv_pred_fold_{fold_num}.csv"), index=False)
 
+        if logp_columns is not None:
+            if isinstance(logp_columns, str):
+                logp_columns = [logp_columns]
+
         if qsar_method == 'gcm' and logp_columns is not None:
             if params is None:
                 params = set_hyper_parameters(
@@ -1872,7 +2075,7 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
                     splitting_name=splitting_name,
                     dataset_name=dataset_name,
                     ad_measure=ad_measure_model)
-            params.logp_columns = list(logp_columns)
+            params.logp_columns = logp_columns
         
         # print(df_cv_dict)
         
@@ -1882,6 +2085,18 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         # ---- Run feature selection and build model ----
         if feature_selection:
             embedding = EmbeddingGenerator.feature_selection(df_training, df_prediction, params, cv)
+
+        if feature_selection and qsar_method == "huber":
+            original_feature_count = df_training.shape[1] - 2  # adjust if needed for ID/Property columns
+            selected_feature_count = len(embedding) if embedding is not None else 0
+
+            # print(f"Huber feature selection: {selected_feature_count} selected out of {original_feature_count}")
+
+            if embedding is None or selected_feature_count >= original_feature_count:
+                raise ValueError(
+                    f"Huber feature selection did not reduce the feature set. "
+                    f"Selected {selected_feature_count} features from {original_feature_count}."
+                )
             
         df_pred_training, df_pred_test, training_stats, test_stats, model = ModelBuilder.build_and_test_model(df_training, df_prediction, cv, params, embedding, is_binary)
                 
@@ -1985,7 +2200,7 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         # ******************************************************************************************************
         # ---- Save results ----
         # create results file:
-        
+        session = ensure_session(session)
         dataset_info = du.get_dataset_details(session, dataset_name)
         dsstox_mapping_strategy = json.loads(dataset_info["dsstox_mapping_strategy"])
         
@@ -2138,6 +2353,7 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         write_plots(df_pred_test, model, df_pred_cv, folder_path)
 
         if write_to_db:
+            ml = ModelLoader(session)
             ml.load_model(user, model, results_dict, df_pred_training, df_pred_test, df_pred_cv, folder_path, df_pred_external=df_pred_ext)
         
             # build excel after loading model so have model id number set:
