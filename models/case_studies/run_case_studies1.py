@@ -58,13 +58,12 @@ def run_example():
 def run_Koc():
     unique_identifier = None
     # write_to_db = True
-    write_to_db = True
-    # write_to_db=True
+    write_to_db = False
     dataset_name = "KOC v1 modeling"
     descriptor_set_name = "WebTEST-default"
     splitting_name = "RND_REPRESENTATIVE"  
     
-    append_to_models_folder = ""
+    append_to_models_folder = "_ad_test"
     # append_to_models_folder = "_v2.0"
     # append_to_models_folder = "_KOC_v2 external"
     
@@ -607,7 +606,7 @@ def run_Bcf_gcm_outlier_testing():
         ["iqr", "robust_z"],
         ["iqr", "esd"],
         ["hampel", "robust_z"],
-        ["hamepl", "esd"],
+        ["hampel", "esd"],
         ["robust_z", "esd"],
         ["iqr", "hampel", "robust_z"],
         ["iqr", "hampel", "esd"],
@@ -1322,8 +1321,8 @@ def test_model_summary_local():
 
 def test_load_model_with_external_set():
     unique_identifier = None
-    write_to_db = False
-    # write_to_db = True
+    # write_to_db = False
+    write_to_db = True
     dataset_name = "KOC v1 modeling"
     user = "murdock.weston"
     append_to_models_folder = "_bob"
@@ -1545,7 +1544,7 @@ def main():
     # run_Koc_theil_sen_logp()
     # report_Koc_gcm_logp()
     # run_Koc_gcm_outlier_testing()
-    run_Bcf_gcm_outlier_testing()
+    # run_Bcf_gcm_outlier_testing()
 
     # run_Bcf()
     
@@ -1584,7 +1583,7 @@ def main():
     # test_create_model()
     # test_model_summary()
     # test_model_summary_local()
-    # test_load_model_with_external_set()
+    test_load_model_with_external_set()
     # run_rifm_rf_models()
 
     # full_test_mte()

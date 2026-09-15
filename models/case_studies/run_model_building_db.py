@@ -437,22 +437,30 @@ class ModelLoader():
         
             if stat_name in stats_lookup:
                 fk_statistic_id = stats_lookup[stat_name]
-                # print(stat_name,fk_statistic_id)
+
+                stat_value = stats[stat_name]
+
+                # Convert NumPy scalars to native Python types for DB insertion
+                if isinstance(stat_value, np.generic):
+                    stat_value = stat_value.item()
+
+                # Also handle pandas missing values cleanly
+                if pd.isna(stat_value):
+                    stat_value = None
+
                 model_statistics_row = {
-                    "statistic_value":stats[stat_name],
-                    "fk_model_id":fk_model_id,
-                    "fk_statistic_id":fk_statistic_id,
-                    "created_by":user,
-                    "updated_by":user,
-                    "created_at":created_at,
-                    "updated_at":created_at}
+                    "statistic_value": stat_value,
+                    "fk_model_id": fk_model_id,
+                    "fk_statistic_id": fk_statistic_id,
+                    "created_by": user,
+                    "updated_by": user,
+                    "created_at": created_at,
+                    "updated_at": created_at
+                }
                 model_statistics_rows.append(model_statistics_row)                
-                # print(stat_name,"\n",json.dumps(to_json_safe(model_statistics_row),indent=4))
-                
-                # print(stat_name,stats[stat_name],fk_statistic_id)
-                
+        
             else:
-                if stat_name !='ba_ratio' and stat_name!='Concordance_CV_Training':                
+                if stat_name != 'ba_ratio' and stat_name != 'Concordance_CV_Training':                
                     print(stat_name, "Skipping loading stat")
 
     def load_stats(self, results, user, fk_model_id):
@@ -586,90 +594,184 @@ class ModelLoader():
     def load_predictions(
         self,
         user: str,
-        set: str,
+        set_name: str,
         df: pd.DataFrame,
         fk_model_id: int,
-        fk_splitting_id: Optional[int]=None,
-        chunk_size: int=1000,
+        fk_splitting_id: Optional[int] = None,
+        chunk_size: int = 1000,
     ) -> int:
-        """
-        Insert prediction rows into qsar_models.predictions using self.create_many_chunked.
-    
-        DataFrame must contain:
-          - id   -> mapped to canon_qsar_smiles
-          - pred -> mapped to qsar_predicted_value
-    
-        cv_fold handling:
-          - If 'cv_fold' is present in df, fk_splitting_id is set per row as (cv_fold + 1).
-          - If any cv_fold value is missing/non-numeric, it falls back to the provided fk_splitting_id.
-          - If cv_fold is absent entirely, fk_splitting_id must be provided as an argument.
-    
-        Method arguments applied uniformly:
-          - fk_model_id
-          - created_at (also used for updated_at)
-          - user (sets both created_by and updated_by)
-    
-        Returns:
-          Number of inserted rows.
-        """
-        
-        # print(f"set={set}, fk_splitting_id={fk_splitting_id}")
-        
-        # Basic validation
+        if df is None or df.empty:
+            logging.info(f"For {set_name} set, no predictions to load.")
+            return 0
+
         required_cols = ["canon_qsar_smiles", "pred"]
         missing = [c for c in required_cols if c not in df.columns]
         if missing:
             raise ValueError(f"DataFrame missing required columns: {missing}")
+
         if not user:
-            raise ValueError("A non-empty 'user' must be provided to set created_by/updated_by.")
+            raise ValueError("A non-empty user must be provided.")
         if fk_model_id is None:
             raise ValueError("fk_model_id must be provided.")
-        
+
+        total_count = 0
+
+        for start in range(0, len(df), chunk_size):
+            batch_df = df.iloc[start:start + chunk_size].copy()
+            created_at = datetime.now()
+
+            rows_df = pd.DataFrame({
+                "canon_qsar_smiles": batch_df["canon_qsar_smiles"].astype(str),
+                "qsar_predicted_value": pd.to_numeric(batch_df["pred"], errors="coerce"),
+            })
+
+            if "cv_fold" in batch_df.columns:
+                cv = pd.to_numeric(batch_df["cv_fold"], errors="coerce")
+                if cv.isna().any():
+                    raise ValueError("cv_fold contains null or non-numeric values.")
+                rows_df["fk_splitting_id"] = cv.astype(int) + 1
+            else:
+                if fk_splitting_id is None:
+                    raise ValueError("fk_splitting_id must be provided when cv_fold is not present.")
+                rows_df["fk_splitting_id"] = fk_splitting_id
+
+            rows_df["fk_model_id"] = fk_model_id
+            rows_df["created_by"] = user
+            rows_df["updated_by"] = user
+            rows_df["created_at"] = created_at
+            rows_df["updated_at"] = created_at
+
+            prediction_records = rows_df.replace({np.nan: None}).to_dict(orient="records")
+
+            prediction_ids = self.dbl.create_many(
+                table="predictions",
+                records=prediction_records,
+                commit=False,
+            )
+
+            total_count += len(prediction_ids)
+            logging.info(
+                f"For {set_name} set, loaded prediction batch {start}..{start + len(batch_df) - 1} "
+                f"({len(prediction_ids)} rows)"
+            )
+
+            ad_cols = [c for c in batch_df.columns if c.startswith("AD_")]
+            if ad_cols:
+                ad_df = self.build_predictions_ad_estimates_df(
+                    df=batch_df,
+                    prediction_ids=prediction_ids,
+                    user=user,
+                )
+
+                if ad_df is not None and not ad_df.empty:
+                    ad_records = ad_df.replace({np.nan: None}).to_dict(orient="records")
+                    self.dbl.create_many(
+                        table="predictions_ad_estimates",
+                        records=ad_records,
+                        commit=False,
+                    )
+
+            self.dbl.session.commit()
+
+        logging.info(f"For {set_name} set, # predictions loaded: {total_count}")
+        return total_count
+
+    def build_predictions_ad_estimates_df(
+        self,
+        df: pd.DataFrame,
+        prediction_ids: list[int],
+        user: str,
+    ) -> pd.DataFrame:
+        """
+        Build one row per prediction per AD method, using each AD column's
+        corresponding ad_methods.id.
+        """
+        if df is None or df.empty:
+            return pd.DataFrame()
+
+        if len(df) != len(prediction_ids):
+            raise ValueError(
+                f"Row mismatch: df has {len(df)} rows but prediction_ids has {len(prediction_ids)} ids"
+            )
+
         created_at = datetime.now()
-    
-        # Prepare per-row values (id -> canon_qsar_smiles, pred -> qsar_predicted_value)
-        rows_df = pd.DataFrame({
-            "canon_qsar_smiles": df["canon_qsar_smiles"].astype(str),
-            "qsar_predicted_value": pd.to_numeric(df["pred"], errors="coerce"),
-        })
-    
-        # Compute fk_splitting_id
-        if "cv_fold" in df.columns:
-            cv = pd.to_numeric(df["cv_fold"], errors="coerce")
-            fk_split_series = cv.add(1)  # fk_splitting_id = cv_fold + 1:            
-            # 2    RND_REPRESENTATIVE_CV1
-            # 3    RND_REPRESENTATIVE_CV2
-            # 4    RND_REPRESENTATIVE_CV3
-            # 5    RND_REPRESENTATIVE_CV4
-            # 6    RND_REPRESENTATIVE_CV5
-            
-            # If still missing, error out
-            if fk_split_series.isna().any():
-                raise ValueError("cv_fold contains null/non-numeric values")
-            rows_df["fk_splitting_id"] = fk_split_series.astype(int)
-        else:
-            if fk_splitting_id is None:
-                raise ValueError("fk_splitting_id must be provided when 'cv_fold' is not in the DataFrame.")
-            rows_df["fk_splitting_id"] = fk_splitting_id
-    
-        # Inject uniform constants; updated_at uses the same value as created_at
-        rows_df = rows_df.assign(
-            fk_model_id=fk_model_id,
-            created_at=created_at,
-            updated_at=created_at,
-            created_by=user,
-            updated_by=user,
-        )
-    
-        # Convert NaN to None for DB compatibility and to list-of-dicts
-        records = rows_df.replace({np.nan: None}).to_dict(orient="records")
-        # print_first_row(rows_df, row=0)
-    
-        # Use your chunked inserter (single atomic transaction)
-        count = self.dbl.create_many_chunked(table="predictions", records=records, chunk_size=chunk_size)        
-        logging.info(f"For {set} set, # predictions loaded: {count}")
-        
-        return count
+        rows = []
+
+        # Only treat AD flags as AD methods
+        ad_cols = [c for c in df.columns if c.startswith("AD_")]
+        if not ad_cols:
+            return pd.DataFrame()
+
+        for idx, (_, row) in enumerate(df.iterrows()):
+            fk_predictions_id = prediction_ids[idx]
+
+            for ad_col in ad_cols:
+                # Convert column name back to DB method name
+                db_ad_name = self.normalize_ad_method_name(ad_col)
+                fk_ad_method_id = self.get_ad_method_id_by_name(ad_col)
+                if fk_ad_method_id is None:
+                    continue
+
+                # Raw applicability value, if available
+                raw_value = row.get(f"{db_ad_name}_value", None)
+                if raw_value is None or pd.isna(raw_value):
+                    raw_value = row.get(ad_col, None)
+
+                # Conclusion
+                conclusion_val = row.get(f"{db_ad_name}_conclusion", None)
+                if conclusion_val is None or pd.isna(conclusion_val):
+                    conclusion_val = row.get(ad_col, None)
+
+                if isinstance(conclusion_val, (bool, np.bool_)):
+                    conclusion_text = "TRUE" if conclusion_val else "FALSE"
+                elif conclusion_val is None or pd.isna(conclusion_val):
+                    conclusion_text = None
+                else:
+                    conclusion_text = str(conclusion_val)
+
+                # Reasoning
+                reasoning = row.get(f"{db_ad_name}_reasoning", None)
+                if reasoning is None or pd.isna(reasoning):
+                    cutoff = row.get(f"{db_ad_name}_cutoff", None)
+                    if raw_value is not None and not pd.isna(raw_value) and cutoff is not None and not pd.isna(cutoff):
+                        reasoning = f"Applicability value {raw_value} compared to cutoff {cutoff} for AD '{db_ad_name}'."
+                    else:
+                        reasoning = f"Applicability domain evaluation for AD '{db_ad_name}'."
+
+                rows.append({
+                    "created_at": created_at,
+                    "created_by": user,
+                    "updated_at": created_at,
+                    "updated_by": user,
+                    "applicability_value": None if raw_value is None or pd.isna(raw_value) else float(raw_value),
+                    "conclusion": conclusion_text,
+                    "reasoning": reasoning,
+                    "fk_ad_method_id": fk_ad_method_id,
+                    "fk_predictions_id": fk_predictions_id,
+                })
+
+        return pd.DataFrame(rows)
+
+    def normalize_ad_method_name(self, ad_name: str) -> str:
+        """
+        Convert dataframe AD column naming into the database ad_methods.name format.
+
+        Examples:
+        AD_TEST_Euclidean_Distance_All_Descriptors -> TEST Euclidean Distance All Descriptors
+        TEST_Euclidean_Distance_All_Descriptors -> TEST Euclidean Distance All Descriptors
+        OPERA_Global_Index -> OPERA Global Index
+        """
+        if ad_name.startswith("AD_"):
+            ad_name = ad_name[3:]
+        return ad_name.replace("_", " ").strip()
+
+    def get_ad_method_id_by_name(self, ad_name: str):
+        db_name = self.normalize_ad_method_name(ad_name)
+        row_ad_method = self.dbl.get_row("ad_methods", name=db_name)
+        if row_ad_method is None:
+            logging.warning(f"Could not find ad_methods row for name='{db_name}' (from '{ad_name}')")
+            return None
+        return row_ad_method.id
 
     def create_method(self, user, isBinary, fullMethodName):
         logging.info(f"Creating method")
@@ -770,12 +872,34 @@ class ModelLoader():
         # print_first_row(df_pred_test, row=1)
         # print_first_row(df_pred_cv, row=1)
         
-        self.load_predictions(user, "training", df_pred_training, fk_model_id, fk_splitting_id=1)
-        self.load_predictions(user, "test", df_pred_test, fk_model_id, fk_splitting_id=1)
-        
-        self.load_predictions(user, "training cv", df_pred_cv, fk_model_id)
+        self.load_predictions(
+            user,
+            "training",
+            df_pred_training,
+            fk_model_id,
+            fk_splitting_id=1,
+        )
+        self.load_predictions(
+            user,
+            "test",
+            df_pred_test,
+            fk_model_id,
+            fk_splitting_id=1,
+        )
+        self.load_predictions(
+            user,
+            "training cv",
+            df_pred_cv,
+            fk_model_id,
+        )
         if df_pred_external is not None:
-            self.load_predictions(user, "external", df_pred_external, fk_model_id, fk_splitting_id=43)
+            self.load_predictions(
+                user,
+                "external",
+                df_pred_external,
+                fk_model_id,
+                fk_splitting_id=43,
+            )
         
         # ---- store plots in model_files table ----
         
