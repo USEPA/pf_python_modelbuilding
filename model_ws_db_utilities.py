@@ -1632,7 +1632,7 @@ class ModelPredictor:
             embedding=model.embedding,
             # applicability_domain=model.applicabilityDomainName,
             applicability_domain=applicabilityDomainName,
-            filterColumnsInBothSets=True)
+            filterColumnsInBothSets=False)
 
         AD = output['AD'].tolist()[0]
         

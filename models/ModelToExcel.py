@@ -4,6 +4,7 @@ import re
 from charset_normalizer import is_binary
 import pandas as pd
 from pandas import ExcelWriter
+from sqlalchemy.exc import OperationalError
 from xlsxwriter.format import Format
 from xlsxwriter.workbook import Workbook
 from xlsxwriter.worksheet import Worksheet
@@ -923,16 +924,20 @@ class ChartBuilder:
         data_start_row = ExcelFormatter.get_data_start_row(has_subtotals=has_subtotals, has_superheaders=has_superheaders)
         
         if x_col is None:
-            x_col = "Exp"
+            x_col = f"Observed ({property_units})"
             x_col_name = "Experimental"
         elif x_col == "Exp":
+            x_col_name = "Experimental"
+        elif x_col == f"Observed ({property_units})":
             x_col_name = "Experimental"
         else:
             x_col_name = x_col
         if y_col is None:
-            y_col = "Pred"
+            y_col = f"Predicted ({property_units})"
             y_col_name = "Predicted"
         elif y_col == "Pred":
+            y_col_name = "Predicted"
+        elif y_col == f"Predicted ({property_units})":
             y_col_name = "Predicted"
         else:
             y_col_name = y_col
@@ -1077,6 +1082,34 @@ class DataQuerier:
             user_id = "tmarti02"
         return user_id
 
+    def ensure_session(self) -> Session:
+        session = self.session
+        try:
+            # cheap no-op to force a DB round trip
+            session.execute(text("SELECT 1"))
+            return session
+        except OperationalError:
+            try:
+                session.close()
+            except Exception:
+                pass
+            session = DataQuerier.getSession(self.engine)
+            self.session = session
+            return session
+
+    @staticmethod
+    def ensure_static_session(session):
+        try:
+            # cheap no-op to force a DB round trip
+            session.execute(text("SELECT 1"))
+            return session
+        except OperationalError:
+            try:
+                session.close()
+            except Exception:
+                pass
+            return DataQuerier.getSession()
+
     def query_model(self) -> Optional[Model]:
         """Query the database for the model object.
         
@@ -1146,7 +1179,7 @@ class DataQuerier:
         try:
             logging.debug(f"Loading df_pv for {dataset_name} from database")
             edg = ExpDataGetter()
-            df_pv, _ = edg.get_mapped_property_values(self.session, dataset_name, snapshot_id, duplicate_strategy=duplicate_strategy)
+            df_pv, _ = edg.get_mapped_property_values(self.ensure_session(), dataset_name, snapshot_id, duplicate_strategy=duplicate_strategy)
             logging.debug(f"Done loading df_pv for {dataset_name} from database")
             
             if df_pv is None:
@@ -1203,7 +1236,7 @@ class DataQuerier:
         
         try:
             logging.debug(f"Loading df_gmd for {dataset_name} from database")
-            df_gmd = getMappedDatapoints(self.session, dataset_name)
+            df_gmd = getMappedDatapoints(self.ensure_session(), dataset_name)
             logging.debug(f"Done loading df_gmd for {dataset_name} from database")
             
             if df_gmd is None:
@@ -1244,7 +1277,7 @@ class DataQuerier:
             from exp_prop.parameters p;
         """)
 
-        param_rows = self.session.execute(sql).mappings().all()
+        param_rows = self.ensure_session().execute(sql).mappings().all()
         if not param_rows:
             logging.warning("No experimental parameters found in the database.")
             return None
@@ -1727,17 +1760,56 @@ class DataQuerier:
 
         temp = pd.merge(df_preds_test, df_gmd, left_on="id", right_on="canon_qsar_smiles", how="left")
 
+        # ad_test_columns = {}
+        # if model.applicabilityDomainName is not None:
+        #     ads = model.applicabilityDomainName.split(" and ")
+        #     for ad in ads:
+        #         df_ad_output, _ = adu.generate_applicability_domain_with_preselected_descriptors_from_dfs(
+        #                 train_df=model.df_training.copy(), test_df=model.df_prediction.copy(),
+        #                 remove_log_p=model.remove_log_p_descriptors,
+        #                 embedding=model.embedding, applicability_domain=ad,
+        #                 filterColumnsInBothSets=False,
+        #                 returnTrainingAD=False)
+        #         ad_test_columns[f"AD {ad}"] = df_ad_output["AD"]
+
+        # Prefer AD columns already present on the model predictions dataframe
         ad_test_columns = {}
-        if model.applicabilityDomainName is not None:
+        existing_ad_cols = {
+            col: model.df_preds_test[col]
+            for col in model.df_preds_test.columns
+            if col.startswith("AD_") or col.startswith("AD ")
+        }
+
+        if existing_ad_cols:
+            # Reuse existing values exactly as produced by run_model_building_db.py
+            ad_test_columns.update(existing_ad_cols)
+        elif model.applicabilityDomainName is not None:
+            # Fallback only if AD columns are absent
             ads = model.applicabilityDomainName.split(" and ")
             for ad in ads:
                 df_ad_output, _ = adu.generate_applicability_domain_with_preselected_descriptors_from_dfs(
-                        train_df=model.df_training.copy(), test_df=model.df_prediction.copy(),
-                        remove_log_p=model.remove_log_p_descriptors,
-                        embedding=model.embedding, applicability_domain=ad,
-                        filterColumnsInBothSets=False,
-                        returnTrainingAD=False)
-                ad_test_columns[f"AD {ad}"] = df_ad_output["AD"]
+                    train_df=model.df_training.copy(),
+                    test_df=model.df_prediction.copy(),
+                    remove_log_p=model.remove_log_p_descriptors,
+                    embedding=model.embedding,
+                    applicability_domain=ad,
+                    filterColumnsInBothSets=False,
+                    returnTrainingAD=False
+                )
+
+                ad_map = (
+                    df_ad_output
+                    .rename(columns={"idTest": "id"})
+                    .set_index("id")["AD"]
+                )
+
+                # ad_test_columns[f"AD_{ad.replace(' ', '_')}"] = df_ad_output["AD"].values
+                ad_test_columns[f"AD_{ad.replace(" ", "_")}"] = temp["id"].map(ad_map)
+
+            logging.warning(
+                "AD columns were missing from model predictions; recomputing AD as fallback. "
+                "This should not normally happen if run_model_building_db.py is the source of truth."
+            )
 
         test_predictions_dict = {
             "Exp Prop ID": temp["qsar_exp_prop_property_values_id_first"],
@@ -1781,16 +1853,55 @@ class DataQuerier:
 
         temp = pd.merge(df_preds_external, df_gmd_external, left_on="id", right_on="canon_qsar_smiles", how="left")
 
-        ads = model.applicabilityDomainName.split(" and ")
+        # ads = model.applicabilityDomainName.split(" and ")
+        # ad_test_columns = {}
+        # for ad in ads:
+        #     df_ad_output, _ = adu.generate_applicability_domain_with_preselected_descriptors_from_dfs(
+        #             train_df=model.df_training.copy(), test_df=model.df_external.copy(),
+        #             remove_log_p=model.remove_log_p_descriptors,
+        #             embedding=model.embedding, applicability_domain=ad,
+        #             filterColumnsInBothSets=False,
+        #             returnTrainingAD=False)
+        #     ad_test_columns[f"AD {ad}"] = df_ad_output["AD"]
+
+        # Prefer AD columns already present on the model predictions dataframe
         ad_test_columns = {}
-        for ad in ads:
-            df_ad_output, _ = adu.generate_applicability_domain_with_preselected_descriptors_from_dfs(
-                    train_df=model.df_training.copy(), test_df=model.df_external.copy(),
+        existing_ad_cols = {
+            col: model.df_preds_external[col]
+            for col in model.df_preds_external.columns
+            if col.startswith("AD_") or col.startswith("AD ")
+        }
+
+        if existing_ad_cols:
+            # Reuse existing values exactly as produced by run_model_building_db.py
+            ad_test_columns.update(existing_ad_cols)
+        elif model.applicabilityDomainName is not None:
+            # Fallback only if AD columns are absent
+            ads = model.applicabilityDomainName.split(" and ")
+            for ad in ads:
+                df_ad_output, _ = adu.generate_applicability_domain_with_preselected_descriptors_from_dfs(
+                    train_df=model.df_training.copy(),
+                    test_df=model.df_external.copy(),
                     remove_log_p=model.remove_log_p_descriptors,
-                    embedding=model.embedding, applicability_domain=ad,
+                    embedding=model.embedding,
+                    applicability_domain=ad,
                     filterColumnsInBothSets=False,
-                    returnTrainingAD=False)
-            ad_test_columns[f"AD {ad}"] = df_ad_output["AD"]
+                    returnTrainingAD=False
+                )
+
+                ad_map = (
+                    df_ad_output
+                    .rename(columns={"idTest": "id"})
+                    .set_index("id")["AD"]
+                )
+
+                # ad_test_columns[f"AD_{ad.replace(' ', '_')}"] = df_ad_output["AD"].values
+                ad_test_columns[f"AD_{ad.replace(" ", "_")}"] = temp["id"].map(ad_map)
+
+            logging.warning(
+                "AD columns were missing from model predictions; recomputing AD as fallback. "
+                "This should not normally happen if run_model_building_db.py is the source of truth."
+            )
 
         external_predictions_dict = {
             "Exp Prop ID": temp["qsar_exp_prop_property_values_id_first"],
@@ -1807,7 +1918,7 @@ class DataQuerier:
             **ad_test_columns
         }
         external_predictions_df = pd.DataFrame(external_predictions_dict)
-        external_predictions_df.dropna(axis=0, subset=["Exp Prop ID", "Exp", "Pred"], how="any", inplace=True)
+        external_predictions_df.dropna(axis=0, subset=["Exp Prop ID", f"Observed ({model.unitsModel})", f"Predicted ({model.unitsModel})"], how="any", inplace=True)
 
         logging.debug(f"Finished building External Predictions from Model (model_id = {self.model_id})")
 
@@ -1824,6 +1935,18 @@ class DataTransformer:
     Provides static methods for formatting numeric values, transforming experimental metadata,
     generating dataframes for all Excel sheets, and extracting/formatting model coefficients.
     """
+
+    @staticmethod
+    def _extract_existing_ad_columns(df: pd.DataFrame) -> dict:
+        """
+        Return a mapping of existing AD columns from a prediction dataframe.
+        This is used to avoid recomputing AD in report generation.
+        """
+        ad_cols = {}
+        for col in df.columns:
+            if col.startswith("AD_") or col.startswith("AD "):
+                ad_cols[col] = df[col]
+        return ad_cols
     
     @staticmethod
     def set_significant_digits(value: float, significant_digits: int) -> str:
@@ -3456,7 +3579,7 @@ class ModelToExcel:
         stats = {}
         for stat in stats_df:
             if stat not in ["nTraining", "nTest", "nExternal"]:
-                old_value, new_value = update_statistic_value(session, self.model.modelId, stat, stats_df.at[0, stat], user_id, upload_to_db)
+                old_value, new_value = update_statistic_value(DataQuerier.ensure_static_session(session), self.model.modelId, stat, stats_df.at[0, stat], user_id, upload_to_db)
                 stats[stat] = {"old": old_value, "new": new_value}
         
         logging.debug(f"Updated statistics for model {self.model.modelId}:\n{json.dumps(stats, indent=4)}")
@@ -3484,6 +3607,7 @@ def update_excel_summaries(username: str, model_ids: Optional[list[int]] = None,
     session = DataQuerier.getSession(DataQuerier.getEngine())
 
     for model_id in model_ids:
+        logging.info(f"RUNNING EXCEL SUMMARY UPDATE FOR MODEL {model_id}")
         file_path = os.path.join(PROJECT_ROOT, "data", "excel_summaries", f"{model_id}_summary.xlsx")
         mdo = ModelDataObjects(model_id=model_id)
         mte = ModelToExcel(mdo, file_path)
@@ -3498,7 +3622,9 @@ def update_excel_summaries(username: str, model_ids: Optional[list[int]] = None,
             continue
         
         if upload_to_db:
-            upload_or_update_model_file_in_db(file_bytes, username, model_id, 2, session)
+            upload_or_update_model_file_in_db(file_bytes, username, model_id, 2, DataQuerier.ensure_static_session(session))
+
+        logging.info(f"FINISHED RUNNING EXCEL SUMMARY UPDATE FOR MODEL {model_id}")
 
 
 def custom_encoder(obj: Any) -> dict:
@@ -3569,7 +3695,7 @@ def test_model_details_pv() -> None:
     engine = DataQuerier.getEngine()
     session = DataQuerier.getSession(engine)
     model_id = 1746
-    test = DataQuerier(engine=engine, session=session, model_id=model_id)
+    test = DataQuerier(engine=engine, session=DataQuerier.ensure_static_session(session), model_id=model_id)
     model = test.model
     print(f"Model:\n\t{model.__dict__}")
 
@@ -3596,13 +3722,13 @@ def test_model_details_gmd() -> None:
     engine = DataQuerier.getEngine()
     session = DataQuerier.getSession(engine)
     dataset_name = "KOC v1 modeling"
-    df_gmd = getMappedDatapoints(session, dataset_name)
+    df_gmd = getMappedDatapoints(DataQuerier.ensure_static_session(session), dataset_name)
 
     with open("test_df_gmd.pkl", "wb") as f:
         pickle.dump(df_gmd, f)
     
     dataset_name_external = "KOC v1 external"
-    df_gmd_external = getMappedDatapoints(session, dataset_name_external)
+    df_gmd_external = getMappedDatapoints(DataQuerier.ensure_static_session(session), dataset_name_external)
 
     with open("test_df_gmd_external.pkl", "wb") as f:
         pickle.dump(df_gmd_external, f)
@@ -3670,13 +3796,55 @@ def test_query_fish_models() -> None:
 
 def main():
     # update_excel_summaries(username="weston.murdock", model_ids=[1065, 1066, 1067, 1068, 1069, 1070], upload_to_db=False)
-    query_example()
+    # query_example()
     # local_example()
     # test_model_details_pv()
     # test_model_details_gmd()
     # test_query_old_models()
     # test_query_binary_models()
     # test_query_fish_models()
+
+    username = "weston.murdock"
+    model_ids = [
+        # Physchem Models
+        # 1065, # HLC-XGB Martin 2024
+		# 1066, # WS-XGB Martin 2024
+		# 1067, # VP-XGB Martin 2024
+		# 1068, # BP-XGB Martin 2024
+		# 1069, # LogP-XGB Martin 2024
+		# 1070, # MP-XGB Martin 2024
+        # Koc Models
+		1763, # Koc Tox-GCM Martin 2026
+		1754, # Koc Tox-RF Martin 2026
+		1756, # Koc Tox-XGB Martin 2026
+		1757, # Koc Tox-REG Martin 2026
+		1758, # Koc Tox-KNN Martin 2026
+        # Acute Fish Toxicity
+		1887, # Koc Tox-GCM Martin 2026
+		1892, # Koc Tox-RF Martin 2026
+		1895, # Koc Tox-XGB Martin 2026
+		1896, # Koc Tox-REG Martin 2026
+		1897, # Koc Tox-KNN Martin 2026
+        # RBIODEG 301F RIFM
+		1877, # RBIODEG RIFM-GCM Martin 2026
+		1832, # RBIODEG RIFM-RF_No_FS Martin 2026
+		1834, # RBIODEG RIFM-RF Martin 2026
+		1833, # RBIODEG RIFM-XGB_No_FS Martin 2026
+		1837, # RBIODEG RIFM-XGB Martin 2026
+		1880, # RBIODEG RIFM-REG Martin 2026
+		1845, # RBIODEG RIFM-KNN Martin 2026
+        # RBIODEG 301 RIFM+ECHA
+		1878, # RBIODEG RIFM+ECHA-GCM Martin 2026
+		1849, # RBIODEG RIFM+ECHA-RF_No_FS Martin 2026
+		1862, # RBIODEG RIFM+ECHA-RF Martin 2026
+		1852, # RBIODEG RIFM+ECHA-XGB_No_FS Martin 2026
+		1865, # RBIODEG RIFM+ECHA-XGB Martin 2026
+		1879, # RBIODEG RIFM+ECHA-REG Martin 2026
+        1869 # RBIODEG RIFM+ECHA-KNN Martin 2026
+    ]
+    upload_to_db = True
+
+    update_excel_summaries(username, model_ids, upload_to_db)
 
 if __name__ == "__main__":
     main()

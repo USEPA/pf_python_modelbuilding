@@ -1542,6 +1542,10 @@ def set_hyper_parameters(qsar_method, feature_selection, descriptor_set_name, sp
         
 
 def runAD(df_training, df_prediction, params, embedding, df_predictions, ad_measure, stats_dict, is_binary=False, is_external=False):
+    """
+    Note: This configuration for runAD should be treated as the preferred run-pattern, and anywhere the AD must be recalculated
+    should be done in accordance with this method's call pattern and behavior within this file.
+    """
     if is_external:
         tag = pc.TAG_EXTERNAL
         stat_insert = "External"
@@ -2166,6 +2170,13 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         # New Attributes
         ext_stats_dict = {}
         if dataset_name_ext is not None:
+            if run_AD:
+                for ad_measure in ad_measures:
+                    df_pred_ext = runAD(df_training, df_prediction_ext, params, model.embedding, df_pred_ext, ad_measure, ext_stats_dict, is_binary=is_binary, is_external=True)
+        
+                if len(ad_measure) > 1:
+                    adu.generate_consensus_ad(df_pred_ext, ext_stats_dict, ad_measure_model, is_binary=is_binary, is_external=True)
+
             model.external_dataset_name = dataset_name_ext if dataset_name_ext else None
             model.external_dataset_description = dataset_description_ext
             model.df_dsstoxRecords_external = df_prediction_ext
@@ -2175,12 +2186,6 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
             model.num_external = df_external.shape[0] if df_external is not None else 0        
             # model.num_external = df_prediction_ext.shape[0] if df_prediction_ext is not None else 0
 
-            if run_AD:
-                for ad_measure in ad_measures:
-                    df_pred_ext = runAD(df_training, df_prediction_ext, params, model.embedding, df_pred_ext, ad_measure, ext_stats_dict, is_binary=is_binary, is_external=True)
-        
-                if len(ad_measure) > 1:
-                    adu.generate_consensus_ad(df_pred_ext, ext_stats_dict, ad_measure_model, is_binary=is_binary, is_external=True)
         
         if cross_validate:
             
