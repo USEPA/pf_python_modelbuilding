@@ -27,6 +27,7 @@ from sqlalchemy import MetaData, create_engine, text, bindparam
 from sqlalchemy import inspect as sa_inspect, select as sa_select, update as sa_update
 from sqlalchemy.engine import URL
 from sqlalchemy.orm import sessionmaker
+from model_service_common.postgres import postgres_connect_args
 
 import os
 import json
@@ -46,11 +47,15 @@ class DatabaseUtilities:
             drivername='postgresql+psycopg2',
             username=os.getenv('POSTGRES_USER'),
             password=os.getenv('POSTGRES_PASSWORD'),
-            host=os.getenv('POSTGRES_HOST', 'localhost'),
-            port=int(os.getenv('POSTGRES_PORT', 5432)),  # ensure int
             database=os.getenv('POSTGRES_DB')
         )
-        self.engine = create_engine(connect_url, echo=False, pool_pre_ping=True, future=True)
+        self.engine = create_engine(
+            connect_url,
+            connect_args=postgres_connect_args(),
+            echo=False,
+            pool_pre_ping=True,
+            future=True,
+        )
         self.SessionLocal = sessionmaker(bind=self.engine, autoflush=False, autocommit=False, future=True)
 
         if session:
@@ -345,12 +350,10 @@ def getSession():
         drivername='postgresql+psycopg2',
         username=os.getenv('POSTGRES_USER'),
         password=os.getenv('POSTGRES_PASSWORD'),
-        host=os.getenv('POSTGRES_HOST', 'localhost'),
-        port=os.getenv('POSTGRES_PORT', 5432),
         database=os.getenv('POSTGRES_DB')
     )
     # print(connect_url)
-    engine = create_engine(connect_url, echo=False)
+    engine = create_engine(connect_url, connect_args=postgres_connect_args(), echo=False)
     Session = sessionmaker(bind=engine)
     session = Session()
     return session

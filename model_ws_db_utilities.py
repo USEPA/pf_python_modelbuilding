@@ -55,6 +55,7 @@ from util.chemical_image_utils import build_render_image_url, get_render_smiles
 from utils import timer, print_first_row
 from applicability_domain import applicability_domain_utilities as adu
 from model_service_common.config import get_env as _get_env
+from model_service_common.postgres import postgres_connect_args
 
 # debug = False
 import logging
@@ -197,12 +198,15 @@ def getEngine():
                     drivername='postgresql+psycopg2',
                     username=os.getenv('POSTGRES_USER'),
                     password=os.getenv('POSTGRES_PASSWORD'),
-                    host=os.getenv('POSTGRES_HOST', 'localhost'),
-                    port=int(os.getenv('POSTGRES_PORT', 5432)),
                     database=os.getenv('POSTGRES_DB')
                 )
 
-                _engine = create_engine(connect_url, echo=False, pool_pre_ping=True)
+                _engine = create_engine(
+                    connect_url,
+                    connect_args=postgres_connect_args(),
+                    echo=False,
+                    pool_pre_ping=True,
+                )
                 _session_factory = sessionmaker(bind=_engine)
 
     return _engine

@@ -35,6 +35,7 @@ import traceback
 from sqlalchemy.orm import Session
 from util.database_utilities import DatabaseUtilities
 from util.serialization_compat import serialize_model
+from model_service_common.postgres import postgres_connect_args
 
 from models import make_test_plots as mtp 
 
@@ -845,14 +846,12 @@ def getEngine():
         drivername='postgresql+psycopg2',
         username=os.getenv('POSTGRES_USER'),
         password=os.getenv('POSTGRES_PASSWORD'),
-        host=os.getenv('POSTGRES_HOST', 'localhost'),
-        port=os.getenv('POSTGRES_PORT', 5432),
         database=os.getenv('POSTGRES_DB')
     )
     
     # print(connect_url)    
     
-    engine = create_engine(connect_url, echo=False)
+    engine = create_engine(connect_url, connect_args=postgres_connect_args(), echo=False)
     return engine
 
 
