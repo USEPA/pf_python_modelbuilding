@@ -22,6 +22,17 @@ pipeline {
 			}
 		}
 
+		stage('Capture commit message') {
+		    steps {
+		        script {
+		            env.GIT_COMMIT_MESSAGE = sh(
+		                script: 'git log -1 --pretty=%B',
+		                returnStdout: true
+		            ).trim()
+		        }
+		    }
+		}
+
 		stage('Build API') {
 			steps {
 				sh "echo 'BUILD_TIMESTAMP = \"$BUILD_TIMESTAMP\"' > ./build_info.py"
@@ -36,6 +47,7 @@ pipeline {
 			steps {
 				withKubeConfig([credentialsId: 'k8s', serverUrl: "$K8S_API"]) {
 					sh "kubectl rollout restart deployment predictor-models -n $K8S_NAMESPACE"
+					sh "kubectl rollout status deployment predictor-models -n $K8S_NAMESPACE --timeout=10m"
 				}
 			}
 		}
@@ -46,7 +58,7 @@ pipeline {
 			emailext (
 				to: "tkachenko.valery@gmail.com",
 				subject: "${currentBuild.result}: ${JOB_NAME} - Build #${BUILD_NUMBER}",
-				body: "Build ${BUILD_NUMBER} of ${env.JOB_NAME} ${currentBuild.result}: ${JOB_NAME}: ${BUILD_URL}",
+				body: "Build ${BUILD_NUMBER} of ${env.JOB_NAME} ${currentBuild.result}: ${JOB_NAME}: ${BUILD_URL}\n\nCommit message:\n${env.GIT_COMMIT_MESSAGE ?: 'Unavailable'}",
 				attachLog: true,
 			)
 		}
@@ -58,7 +70,7 @@ pipeline {
 					[$class: 'CulpritsRecipientProvider']
 				],
 				subject: "${currentBuild.result}: ${JOB_NAME} - Build #${BUILD_NUMBER}",
-				body: "Build ${env.BUILD_NUMBER} of ${env.JOB_NAME} failed: ${BUILD_URL}. Please investigate.",
+				body: "Build ${env.BUILD_NUMBER} of ${env.JOB_NAME} failed: ${BUILD_URL}. Please investigate.\n\nCommit message:\n${env.GIT_COMMIT_MESSAGE ?: 'Unavailable'}",
 				attachLog: true,
 			)
 		}
