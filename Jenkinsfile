@@ -29,6 +29,7 @@ pipeline {
 		                script: 'git log -1 --pretty=%B',
 		                returnStdout: true
 		            ).trim()
+		            env.GIT_COMMIT_SUMMARY = env.GIT_COMMIT_MESSAGE.replaceAll(/\s+/, ' ').take(50)
 		        }
 		    }
 		}
@@ -57,7 +58,7 @@ pipeline {
 		success {
 			emailext (
 				to: "tkachenko.valery@gmail.com",
-				subject: "${currentBuild.result}: ${JOB_NAME} - Build #${BUILD_NUMBER}",
+				subject: "${currentBuild.result}: ${JOB_NAME} - ${env.GIT_COMMIT_SUMMARY ?: 'Unavailable'}",
 				body: "Build ${BUILD_NUMBER} of ${env.JOB_NAME} ${currentBuild.result}: ${JOB_NAME}: ${BUILD_URL}\n\nCommit message:\n${env.GIT_COMMIT_MESSAGE ?: 'Unavailable'}",
 				attachLog: true,
 			)
@@ -69,7 +70,7 @@ pipeline {
 					[$class: 'RequesterRecipientProvider'],
 					[$class: 'CulpritsRecipientProvider']
 				],
-				subject: "${currentBuild.result}: ${JOB_NAME} - Build #${BUILD_NUMBER}",
+				subject: "${currentBuild.result}: ${JOB_NAME} - ${env.GIT_COMMIT_SUMMARY ?: 'Unavailable'}",
 				body: "Build ${env.BUILD_NUMBER} of ${env.JOB_NAME} failed: ${BUILD_URL}. Please investigate.\n\nCommit message:\n${env.GIT_COMMIT_MESSAGE ?: 'Unavailable'}",
 				attachLog: true,
 			)
