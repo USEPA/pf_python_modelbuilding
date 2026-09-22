@@ -30,6 +30,7 @@ pipeline {
 		                returnStdout: true
 		            ).trim()
 		            env.GIT_COMMIT_SUMMARY = env.GIT_COMMIT_MESSAGE.replaceAll(/\s+/, ' ').take(50)
+		            env.GIT_COMMIT_AUTHOR = sh(script: "git log -1 --format='%an <%ae>'", returnStdout: true).trim()
 		        }
 		    }
 		}
@@ -56,24 +57,68 @@ pipeline {
 
 	post {
 		success {
-			emailext (
-				to: "tkachenko.valery@gmail.com",
-				subject: "${currentBuild.result}: ${JOB_NAME} - ${env.GIT_COMMIT_SUMMARY ?: 'Unavailable'}",
-				body: "Build ${BUILD_NUMBER} of ${env.JOB_NAME} ${currentBuild.result}: ${JOB_NAME}: ${BUILD_URL}\n\nCommit message:\n${env.GIT_COMMIT_MESSAGE ?: 'Unavailable'}",
-				attachLog: true,
-			)
+			script {
+			    def commitDiff = 'Unavailable'
+			    if (env.GIT_COMMIT_MESSAGE) {
+			        try {
+			            commitDiff = sh(script: 'git show --first-parent --format= --no-ext-diff --no-color HEAD', returnStdout: true).trim()
+			        } catch (Exception ignored) {
+			            echo 'Could not read commit diff for email.'
+			        }
+			    }
+			    def commitAuthorHtml = (env.GIT_COMMIT_AUTHOR ?: 'Unavailable').replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+			    def commitMessageHtml = (env.GIT_COMMIT_MESSAGE ?: 'Unavailable').replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+			    def commitDiffHtml = (commitDiff ?: 'No changes').replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+			    emailext (
+				    to: "tkachenko.valery@gmail.com",
+				    subject: "${currentBuild.result}: ${JOB_NAME} - ${env.GIT_COMMIT_SUMMARY ?: 'Unavailable'}",
+				    mimeType: 'text/html',
+				    body: """
+				        <h2>${env.JOB_NAME}: ${currentBuild.currentResult}</h2>
+				        <p>Build ${env.BUILD_NUMBER}: <a href="${env.BUILD_URL}">Open build</a></p>
+				        <p><strong>Commit author:</strong> ${commitAuthorHtml}</p>
+				        <h3>Commit message</h3>
+				        <pre style="font-family:Consolas,Menlo,monospace;white-space:pre-wrap">${commitMessageHtml}</pre>
+				        <h3>Commit diff</h3>
+				        <pre style="font-family:Consolas,Menlo,monospace;font-size:12px;line-height:1.4;white-space:pre;overflow-x:auto;background:#f6f8fa;padding:12px;border:1px solid #ddd">${commitDiffHtml}</pre>
+				    """.stripIndent().trim(),
+				    attachLog: true,
+			    )
+			}
 		}
 		failure {
-			emailext (
-				to: "tkachenko.valery@gmail.com",
-				recipientProviders: [
-					[$class: 'RequesterRecipientProvider'],
-					[$class: 'CulpritsRecipientProvider']
-				],
-				subject: "${currentBuild.result}: ${JOB_NAME} - ${env.GIT_COMMIT_SUMMARY ?: 'Unavailable'}",
-				body: "Build ${env.BUILD_NUMBER} of ${env.JOB_NAME} failed: ${BUILD_URL}. Please investigate.\n\nCommit message:\n${env.GIT_COMMIT_MESSAGE ?: 'Unavailable'}",
-				attachLog: true,
-			)
+			script {
+			    def commitDiff = 'Unavailable'
+			    if (env.GIT_COMMIT_MESSAGE) {
+			        try {
+			            commitDiff = sh(script: 'git show --first-parent --format= --no-ext-diff --no-color HEAD', returnStdout: true).trim()
+			        } catch (Exception ignored) {
+			            echo 'Could not read commit diff for email.'
+			        }
+			    }
+			    def commitAuthorHtml = (env.GIT_COMMIT_AUTHOR ?: 'Unavailable').replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+			    def commitMessageHtml = (env.GIT_COMMIT_MESSAGE ?: 'Unavailable').replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+			    def commitDiffHtml = (commitDiff ?: 'No changes').replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+			    emailext (
+				    to: "tkachenko.valery@gmail.com",
+				    recipientProviders: [
+					    [$class: 'RequesterRecipientProvider'],
+					    [$class: 'CulpritsRecipientProvider']
+				    ],
+				    subject: "${currentBuild.result}: ${JOB_NAME} - ${env.GIT_COMMIT_SUMMARY ?: 'Unavailable'}",
+				    mimeType: 'text/html',
+				    body: """
+				        <h2>${env.JOB_NAME}: ${currentBuild.currentResult}</h2>
+				        <p>Build ${env.BUILD_NUMBER}: <a href="${env.BUILD_URL}">Open build</a></p>
+				        <p><strong>Commit author:</strong> ${commitAuthorHtml}</p>
+				        <h3>Commit message</h3>
+				        <pre style="font-family:Consolas,Menlo,monospace;white-space:pre-wrap">${commitMessageHtml}</pre>
+				        <h3>Commit diff</h3>
+				        <pre style="font-family:Consolas,Menlo,monospace;font-size:12px;line-height:1.4;white-space:pre;overflow-x:auto;background:#f6f8fa;padding:12px;border:1px solid #ddd">${commitDiffHtml}</pre>
+				    """.stripIndent().trim(),
+				    attachLog: true,
+			    )
+			}
 		}
 	}
 }
