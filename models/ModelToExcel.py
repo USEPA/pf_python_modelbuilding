@@ -49,7 +49,7 @@ level_styles = {
 coloredlogs.install(level=logging_level, milliseconds=True, level_styles=level_styles,
                     fmt='%(asctime)s - %(name)s - %(levelname)s - %(message)s (%(filename)s:%(lineno)d)')
 
-load_dotenv("../../personal.env")
+load_dotenv("../personal.env")
 PROJECT_ROOT = os.getenv("PROJECT_ROOT")
 
 pd.options.mode.chained_assignment = None  # default='warn'
@@ -3368,15 +3368,20 @@ def query_example() -> None:
     """
     logging.info("Running query_example()")
     # model_id = 1753
-    model_id = 1847
+    # model_id = 1847
+    model_id = 1754
+    print(PROJECT_ROOT)
+    
     try:
         file_path = os.path.join(PROJECT_ROOT, "data", "excel_summaries", f"{model_id}_summary.xlsx")
+        print(file_path)
 
         mdo = ModelDataObjects(model_id=model_id)
         mte = ModelToExcel(mdo, file_path)
         mte.create_excel()
     except Exception as e:
         logging.error(f"Error occurred while processing model_id {model_id}: {e}")
+
 
 
 def local_example() -> None:
@@ -3514,7 +3519,10 @@ def test_query_fish_models() -> None:
 
 def main():
     # update_excel_summaries(username="weston.murdock", model_ids=[1065, 1066, 1067, 1068, 1069, 1070], upload_to_db=False)
-    query_example()
+    # query_example()
+    
+    update_excel_summaries(username='tmarti02', [1754], upload_to_db=False)
+    
     # local_example()
     # test_model_details_pv()
     # test_model_details_gmd()

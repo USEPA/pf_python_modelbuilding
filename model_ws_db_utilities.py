@@ -3649,7 +3649,7 @@ class ModelPredictor:
         logging.debug(f"qsarSmiles: {qsarSmiles}")
         return chemical, 200
 
-    def predictSetFromDB_SmilesFromExcel(self, model_id, excel_file_path, sheetName):
+    def predictSetFromDB_SmilesFromExcel(self, model_id, excel_file_path, sheetName,smiles_column='Smiles'):
         """
         Runs whole workflow: standardize, descriptors, prediction, applicability domain using smiles in an excel file
         Stores results in tsv file in same folder as excel file
@@ -3668,7 +3668,7 @@ class ModelPredictor:
         model = mi.init_model(model_id)
 
         df = pd.read_excel(excel_file_path, sheet_name=sheetName)
-        smiles_list = df['Smiles'].tolist()  # Extract the 'Smiles' column into a list
+        smiles_list = df[smiles_column].tolist()  # Extract the 'Smiles' column into a list
 
         directory = os.path.dirname(excel_file_path)
 
@@ -3711,6 +3711,7 @@ class ModelPredictor:
                 file.flush()
 
         return "OK", 200
+    
 
     @timer
     def determineApplicabilityDomain(self, model: Model, applicabilityDomainName, df_prediction):

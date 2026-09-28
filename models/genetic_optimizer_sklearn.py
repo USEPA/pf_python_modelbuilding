@@ -202,6 +202,9 @@ def runGA_2_stage(df_training, model, params):
     if max_features_stage1 < 1:
         raise ValueError("No features available for GA stage 1.")
 
+    # n_jobs=-1
+    n_jobs=4
+
     selector_stage1 = ga(
         estimator=pipe,
         cv=cv,
@@ -214,7 +217,7 @@ def runGA_2_stage(df_training, model, params):
         elitism=params.elitism,
         tournament_size=3,
         verbose=0,
-        n_jobs=-1
+        n_jobs=n_jobs
     )
     selector_stage1.fit(X_full, y)
     support_stage1 = selector_stage1.support_
@@ -245,7 +248,7 @@ def runGA_2_stage(df_training, model, params):
         elitism=params.elitism,
         tournament_size=3,
         verbose=0,
-        n_jobs=-1
+        n_jobs=n_jobs
     )
     selector_stage2.fit(X_stage1, y)
     support_stage2 = selector_stage2.support_
