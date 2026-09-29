@@ -42,3 +42,5 @@ contractor.env
 personal.env
 backup
 .DS_Store
+/.github
+

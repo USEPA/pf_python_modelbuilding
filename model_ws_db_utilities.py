@@ -536,8 +536,8 @@ class ModelInitializer:
                 self.row_to_model_details(m, row)
 
         except Exception as ex:
-            ex.with_traceback()
             print(f"Exception occurred: {ex}")
+            raise
 
     def replace_id_with_dsstox_record(self, df_set, df_dsstoxRecords):
 
@@ -1101,7 +1101,7 @@ class ModelInitializer:
         if "qsar_method_version" in details:
             m.qsar_method_version = details['qsar_method_version']
 
-        m.include_standardization_in_pmml = details['include_standardization_in_pmml']
+        m.scale_features = details.get("include_standardization_in_pmml", False) or details.get("scale_features", False)
 
         # Parse JSON for dsstox_mapping_strategy
         dsstox_mapping = json.loads(m.dsstox_mapping_strategy)
@@ -3727,6 +3727,15 @@ class ModelPredictor:
             return batch_results[0]
         return {"AD": False, "adMethod": {"name": applicabilityDomainName}}
 
+#         output, ad_cutoff = adu.generate_applicability_domain_with_preselected_descriptors_from_dfs(
+#             train_df=model.df_training,
+#             test_df=df_prediction,
+#             # test_df=model.df_prediction,  #for testing running batch type ad calc
+#             remove_log_p=model.remove_log_p_descriptors,
+#             embedding=model.embedding,
+#             # applicability_domain=model.applicabilityDomainName,
+#             applicability_domain=applicabilityDomainName,
+#             filterColumnsInBothSets=False)
 
 def _postprocess_prediction_chunk(args):
     (

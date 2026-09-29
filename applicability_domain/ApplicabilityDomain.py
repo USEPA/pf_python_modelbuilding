@@ -492,6 +492,10 @@ class TESTFragmentCounts(ApplicabilityDomainStrategy):
             rows = [_build_row(g) for _, g in results_df.groupby('idTest', sort=False)]
             per_chemical_df = pd.DataFrame(rows, columns=['idTest', 'fragment_table', 'AD'])
     
+        
+        pd.set_option("display.max_columns",None)
+        
+        # print(per_chemical_df[per_chemical_df.idTest=='BrC1=CC(Br)=C(C=C1)OC1C=CC(Br)=CC=1'].to_dict(orient='records'))
         return per_chemical_df
 
 # At this point:

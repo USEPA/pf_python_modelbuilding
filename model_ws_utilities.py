@@ -57,25 +57,25 @@ def get_model_info(qsar_method):
 
 
 # def call_build_model_with_preselected_descriptors(qsar_method, training_tsv, remove_log_p_descriptors, use_pmml_pipeline,
-#                                                   include_standardization_in_pmml, descriptor_names_tsv=None,
+#                                                   scale_features, descriptor_names_tsv=None,
 #                                                   n_jobs=8):
 #     """Loads TSV training data into a pandas DF and calls the appropriate training method"""
 #
 #     df_training = dfu.load_df(training_tsv)
 #     qsar_method = qsar_method.lower()
 #
-#     model = instantiateModel(df_training, n_jobs, qsar_method, remove_log_p_descriptors, use_pmml_pipeline=use_pmml_pipeline, include_standardization_in_pmml=include_standardization_in_pmml)
+#     model = instantiateModel(df_training, n_jobs, qsar_method, remove_log_p_descriptors, use_pmml_pipeline=use_pmml_pipeline, scale_features=scale_features)
 #
 #     if not model:
 #         abort(404, qsar_method + ' not implemented')
 #
-#     model.build_model(use_pmml_pipeline=use_pmml_pipeline, include_standardization_in_pmml=include_standardization_in_pmml,
+#     model.build_model(use_pmml_pipeline=use_pmml_pipeline, scale_features=scale_features,
 #                       descriptor_names=descriptor_names_tsv)
 #     # Returns trained model:
 #     return model
 
 def call_build_model_with_preselected_descriptors(qsar_method, training_tsv, prediction_tsv, remove_log_p, use_pmml_pipeline,
-                                                  include_standardization_in_pmml, descriptor_names_tsv=None,
+                                                  scale_features, descriptor_names_tsv=None,
                                                   n_jobs=8,filterColumnsInBothSets=True):
     """Loads TSV training data into a pandas DF and calls the appropriate training method"""
 
@@ -90,12 +90,12 @@ def call_build_model_with_preselected_descriptors(qsar_method, training_tsv, pre
     qsar_method = qsar_method.lower()
 
 
-    model = instantiateModel(df_training, n_jobs, qsar_method, remove_log_p, use_pmml_pipeline=use_pmml_pipeline, include_standardization_in_pmml=include_standardization_in_pmml)
+    model = instantiateModel(df_training, n_jobs, qsar_method, remove_log_p, use_pmml_pipeline=use_pmml_pipeline, scale_features=scale_features)
 
     if not model:
         abort(404, qsar_method + ' not implemented')
 
-    model.build_model(use_pmml_pipeline=use_pmml_pipeline, include_standardization_in_pmml=include_standardization_in_pmml,
+    model.build_model(use_pmml_pipeline=use_pmml_pipeline, scale_features=scale_features,
                       descriptor_names=descriptor_names_tsv)
     # Returns trained model:
     return model
@@ -118,7 +118,10 @@ def call_build_model_with_preselected_descriptors_from_df(params, df_training, d
 
     model = instantiateModel(df_training, params.n_threads, qsar_method, params.remove_log_p_descriptors, 
                              use_pmml_pipeline=params.use_pmml_pipeline, 
-                             include_standardization_in_pmml=params.include_standardization_in_pmml)
+                             scale_features=params.scale_features)
+
+    if hasattr(params, 'logp_columns') and params.logp_columns:
+        model.logp_columns = list(params.logp_columns)
 
     if params.hyperparameter_grid:
         model.hyperparameter_grid=params.hyperparameter_grid
@@ -130,7 +133,7 @@ def call_build_model_with_preselected_descriptors_from_df(params, df_training, d
         abort(404, qsar_method + ' not implemented')
 
     model.build_model(use_pmml_pipeline=params.use_pmml_pipeline, 
-                      include_standardization_in_pmml=params.include_standardization_in_pmml, cv=cv, 
+                      scale_features=params.scale_features, cv=cv, 
                       descriptor_names=descriptor_names_tsv)
     # Returns trained model:
     return model
@@ -178,7 +181,7 @@ def call_cross_validate(qsar_method, cv_training_tsv, cv_prediction_tsv, descrip
 
 
 def instantiateModel(df_training, n_jobs, qsar_method, remove_log_p, use_pmml_pipeline=False,
-                     include_standardization_in_pmml=True):
+                     scale_features=False):
     logging.debug('Instantiating ' + qsar_method.upper() + ' model in model builder, num_jobs=' + str(
         n_jobs) + ', remove_log_p_descriptors=' + str(remove_log_p))
 
@@ -202,6 +205,12 @@ def instantiateModel(df_training, n_jobs, qsar_method, remove_log_p, use_pmml_pi
         model = mb.LAS(df_training, remove_log_p, n_jobs)
     # elif qsar_method == 'dnn':
     #     model = dnn.Model(df_training, remove_log_p_descriptors)
+    elif qsar_method == "huber":
+        model = mb.HUBER(df_training, remove_log_p, n_jobs)
+    elif qsar_method == "ransac":
+        model = mb.RANSAC(df_training, remove_log_p, n_jobs)
+    elif qsar_method == "theil_sen":
+        model = mb.THEIL_SEN(df_training, remove_log_p, n_jobs)
     else:
         pass
         # 404 NOT FOUND if requested QSAR method has not been implemented
@@ -212,10 +221,26 @@ def instantiateModel(df_training, n_jobs, qsar_method, remove_log_p, use_pmml_pi
 
     obj = mb.model_registry_model_obj(qsar_method, model.is_binary)
 
-    if use_pmml_pipeline is False or include_standardization_in_pmml:
-        model.model_obj = PMMLPipeline([('standardizer', StandardScaler()), ('estimator', obj)])
+    # TODO: see if always including the StandardScaler works properly
+    # if use_pmml_pipeline is False or scale_features:
+    #     model.model_obj = PMMLPipeline([('standardizer', StandardScaler()), ('estimator', obj)])
+    # else:
+    #     model.model_obj = PMMLPipeline([('estimator', obj)])
+    needs_scaling = should_scale_model(qsar_method)
+
+    if needs_scaling or scale_features:
+        model.model_obj = PMMLPipeline(
+            [
+                ("standardizer", StandardScaler()),
+                ("estimator", obj)
+            ]
+        )
     else:
-        model.model_obj = PMMLPipeline([('estimator', obj)])
+        model.model_obj = PMMLPipeline(
+            [
+                ("estimator", obj)
+            ]
+        )
 
     # print(model.get_model_description())
     return model
@@ -385,7 +410,8 @@ def call_build_embedding_importance_from_df(qsar_method, df_training, df_predict
                                             remove_fragment_descriptors,remove_acnt_descriptors,
                                             n_threads, num_generations, use_permutative, run_rfe, fraction_of_max_importance,
                                     min_descriptor_count, max_descriptor_count, use_wards, hyperparameter_grid = None,
-                                    run_sfs=False, cv=5, descriptor_coefficient=0.002, alpha=0.7):
+                                    run_sfs=False, cv=5, descriptor_coefficient=0.002, alpha=0.7,
+                                    n_min=2, n_max=20):
     """Generates importance based embedding"""
 
 
@@ -425,7 +451,7 @@ def call_build_embedding_importance_from_df(qsar_method, df_training, df_predict
     if run_sfs:
         
         # efi.perform_sequential_feature_selection(model=model, df_training=df_training, n_features_to_select=n_features_to_select)
-        efi.perform_iterative_sequential_feature_selection(model=model, df_training=df_training, cv=cv, descriptor_coefficient=descriptor_coefficient, alpha=alpha)
+        efi.perform_iterative_sequential_feature_selection(model=model, df_training=df_training, cv=cv, descriptor_coefficient=descriptor_coefficient, alpha=alpha, n_min=n_min, n_max=n_max)
         logging.info(f"After SFS, {len(model.embedding)} descriptors: {model.embedding}")
 
     # Fit final model using final embedding:
@@ -463,7 +489,7 @@ def call_build_embedding_lasso(qsar_method, training_tsv, prediction_tsv, remove
                                                               training_tsv=training_tsv, prediction_tsv=prediction_tsv,
                                                               remove_log_p=remove_log_p_descriptors,
                                                               use_pmml_pipeline=False,
-                                                              include_standardization_in_pmml=True,
+                                                              scale_features=True,
                                                               descriptor_names_tsv=None,
                                                               n_jobs=n_threads)
 
@@ -734,3 +760,145 @@ def get_model_details(m):
     else:
         # 404 NOT FOUND if requested QSAR method has not been implemented
         abort(404, 'details for m not available')
+
+
+def should_scale_model(qsar_method: str) -> bool:
+    return qsar_method in {
+        "svm", "knn", "las", "huber", "ransac", "theil_sen", "reg", "gcm"
+    }
+
+
+def apply_outlier_filter(
+    df: pd.DataFrame,
+    columns=None,
+    methods=None,
+    target_col: str = "Property",
+    trim_mode: str = "remove",
+    iqr_k: float = 1.5,
+    hampel_k: float = 3.0,
+    robust_z_thresh: float = 3.5,
+    esd_alpha: float = 0.05,
+    esd_max_outliers: int = 10,
+    min_rows: int = 8,
+):
+    """
+    Minimal reusable outlier filter for training data.
+
+    Parameters
+    ----------
+    df : DataFrame
+        Input dataframe.
+    columns : list[str] | None
+        Columns to test. If None, uses [target_col].
+    methods : list[str] | None
+        Supported: ['iqr', 'hampel', 'robust_z', 'esd'].
+        More can be added later.
+    target_col : str
+        Default label column.
+    trim_mode : str
+        'remove' or 'flag' or 'winsorize' (winsorize can be added later).
+    iqr_k : float
+        IQR multiplier.
+    hampel_k : float
+        MAD multiplier.
+    robust_z_thresh : float
+        Threshold for robust z-score.
+    esd_alpha : float
+        Significance level for generalized ESD.
+    esd_max_outliers : int
+        Max outliers for ESD.
+    min_rows : int
+        Skip expensive tests if too few rows.
+
+    Returns
+    -------
+    df_out : DataFrame
+        Filtered or flagged dataframe.
+    report : DataFrame
+        Row-level summary with boolean flags and reasons.
+    """
+
+    if df is None or df.empty:
+        return df, pd.DataFrame()
+
+    df_out = df.copy()
+
+    if methods is None:
+        methods = ["iqr"]
+
+    if columns is None:
+        columns = [target_col]
+
+    # Keep only columns that exist and are numeric-ish
+    columns = [c for c in columns if c in df_out.columns]
+    if len(columns) == 0:
+        return df_out, pd.DataFrame()
+
+    # Build report frame
+    report = pd.DataFrame(index=df_out.index)
+    report["is_outlier"] = False
+    report["outlier_reason"] = ""
+
+    def _mark(mask, reason):
+        nonlocal report
+        report.loc[mask, "is_outlier"] = True
+        report.loc[mask, "outlier_reason"] = (
+            report.loc[mask, "outlier_reason"].astype(str).replace("nan", "")
+            + ("; " if reason else "") + reason
+        )
+
+    for col in columns:
+        x = pd.to_numeric(df_out[col], errors="coerce")
+        valid = x.dropna()
+        if len(valid) < min_rows:
+            continue
+
+        if "iqr" in methods:
+            q1 = valid.quantile(0.25)
+            q3 = valid.quantile(0.75)
+            iqr = q3 - q1
+            lo = q1 - iqr_k * iqr
+            hi = q3 + iqr_k * iqr
+            mask = (x < lo) | (x > hi)
+            _mark(mask.fillna(False), f"iqr:{col}")
+
+        if "hampel" in methods:
+            med = valid.median()
+            mad = np.median(np.abs(valid - med))
+            if mad > 0:
+                scale = 1.4826 * mad
+                lo = med - hampel_k * scale
+                hi = med + hampel_k * scale
+                mask = (x < lo) | (x > hi)
+                _mark(mask.fillna(False), f"hampel:{col}")
+
+        if "robust_z" in methods:
+            med = valid.median()
+            mad = np.median(np.abs(valid - med))
+            if mad > 0:
+                rz = 0.6745 * (x - med) / mad
+                mask = rz.abs() > robust_z_thresh
+                _mark(mask.fillna(False), f"robust_z:{col}")
+
+        if "esd" in methods:
+            # Minimal placeholder ESD:
+            # conservative first version = flag by robust z on the target column
+            # Replace with full generalized ESD later.
+            if col == target_col and len(valid) >= min_rows:
+                med = valid.median()
+                mad = np.median(np.abs(valid - med))
+                if mad > 0:
+                    rz = 0.6745 * (x - med) / mad
+                    mask = rz.abs() > robust_z_thresh
+                    _mark(mask.fillna(False), f"esd_proxy:{col}")
+
+    if trim_mode == "flag":
+        return pd.concat([df_out, report], axis=1), report
+
+    if trim_mode == "remove":
+        df_out = df_out.loc[~report["is_outlier"]].copy()
+        return df_out, report
+
+    # future extension point for winsorize
+    return df_out, report
+

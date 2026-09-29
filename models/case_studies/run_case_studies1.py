@@ -5,17 +5,28 @@ Created on Feb 3, 2026
 '''
 
 
+
 from dotenv import load_dotenv
 from models.runGA import descriptor_coefficient
 load_dotenv('../../personal.env')
 
-from models.case_studies.run_model_building_db import run_dataset, run_dataset_from_dfs, ParametersGeneticAlgorithm, set_hyper_parameters, Results, ParametersImportance
+from models.case_studies.run_model_building_db import (
+    run_dataset, 
+    run_dataset_from_dfs,
+    ParametersGeneticAlgorithm,
+    ParametersImportance,
+    ParametersGeneric,
+    ParametersGroupContribution,
+    Results,
+    set_hyper_parameters,
+)
+
+# >>>>>>> EPA_python_model_building/main
 
 from util import predict_constants as pc
-from model_ws_db_utilities import getEngine, getSession
+from model_ws_db_utilities import getSession
 from models.ModelToExcel import ModelDataObjects, ModelToExcel
 import logging
-
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -28,6 +39,8 @@ from sqlalchemy import text
 import os
 from pathlib import Path
 from sqlalchemy.exc import SQLAlchemyError
+
+from openpyxl import load_workbook
 
 
 import models.db_utilities.dataset_utilities_db as du  
@@ -42,8 +55,8 @@ def run_example():
     write_to_db = False
 
     dataset_name = "KOC v1 modeling"
-    descriptor_set_name = "WebTEST-default"
-    splitting_name = "RND_REPRESENTATIVE"
+    # descriptor_set_name = "WebTEST-default"
+    # splitting_name = "RND_REPRESENTATIVE"
     
     append_to_models_folder = "_bob"
     
@@ -55,19 +68,21 @@ def run_example():
 
 
 def run_Koc():
+    # unique_identifier = 'time'
     unique_identifier = None
     # write_to_db = True
-    write_to_db=False
-    
-    dataset_name = "KOC v1 modeling"
+    write_to_db = False
+    # dataset_name = "KOC v1 modeling"
+    dataset_name = "KOC v2 modeling"
     descriptor_set_name = "WebTEST-default"
     splitting_name = "RND_REPRESENTATIVE"  
     
-    # append_to_models_folder = ""
-    
+
+    append_to_models_folder = ""
     descriptor_coefficient = 0.006
     
-    append_to_models_folder = "_"+str(descriptor_coefficient)
+    # append_to_models_folder = "_"+str(descriptor_coefficient)
+    # append_to_models_folder = "_ad_test"
     # append_to_models_folder = "_v2.0"
     # append_to_models_folder = "_KOC_v2 external"
     
@@ -75,23 +90,23 @@ def run_Koc():
     # ad_measure_model = [pc.Applicability_Domain_TEST_Embedding_Euclidean, pc.Applicability_Domain_TEST_Fragment_Counts]
     ad_measure_model = [pc.Applicability_Domain_TEST_Embedding_Euclidean, pc.Applicability_Domain_TEST_Fragment_Counts]
 
-    run_dataset(dataset_name=dataset_name, qsar_method='gcm', feature_selection=False, ad_measure_model=ad_measure_model,
-                write_to_db=write_to_db, unique_identifier=unique_identifier,
-                append_to_models_folder=append_to_models_folder)  # OK
+    # run_dataset(dataset_name=dataset_name, qsar_method='gcm', feature_selection=False, ad_measure_model=ad_measure_model,
+    #             write_to_db=write_to_db, unique_identifier=unique_identifier,
+    #             append_to_models_folder=append_to_models_folder)  # OK
 
     # for method in ['rf', 'xgb']:
-    # for method in ['reg']:
-    #     # run_dataset(dataset_name=dataset_name, qsar_method=method, feature_selection=False,
-    #     #     ad_measure_model=ad_measure_model, write_to_db=write_to_db, unique_identifier=unique_identifier,
-    #     #     append_to_models_folder=append_to_models_folder)  
+    #     run_dataset(dataset_name=dataset_name, qsar_method=method, feature_selection=False,
+    #         ad_measure_model=ad_measure_model, write_to_db=write_to_db, unique_identifier=unique_identifier,
+    #         append_to_models_folder=append_to_models_folder)  
     #
-    #
-    #     params = set_hyper_parameters(qsar_method=method, feature_selection=True, descriptor_set_name=descriptor_set_name, 
-    #                                   splitting_name=splitting_name, dataset_name=dataset_name, ad_measure=ad_measure_model)
-    #     params.descriptor_coefficient = descriptor_coefficient
-    #     run_dataset(dataset_name=dataset_name, qsar_method=params.qsar_method, feature_selection=params.feature_selection,
-    #         params = params, ad_measure_model=ad_measure_model, write_to_db=write_to_db, 
-    #         unique_identifier=unique_identifier, append_to_models_folder=append_to_models_folder) 
+
+    
+        # params = set_hyper_parameters(qsar_method=method, feature_selection=True, descriptor_set_name=descriptor_set_name, 
+        #                               splitting_name=splitting_name, dataset_name=dataset_name, ad_measure=ad_measure_model)
+        # params.descriptor_coefficient = descriptor_coefficient
+        # run_dataset(dataset_name=dataset_name, qsar_method=params.qsar_method, feature_selection=params.feature_selection,
+        #     params = params, ad_measure_model=ad_measure_model, write_to_db=write_to_db, 
+        #     unique_identifier=unique_identifier, append_to_models_folder=append_to_models_folder) 
 
         
         
@@ -101,16 +116,18 @@ def run_Koc():
     #         append_to_models_folder=append_to_models_folder)  
     #
     #
-    # for method in ['reg', 'knn']:
-    #     params = set_hyper_parameters(qsar_method=method, feature_selection=True, descriptor_set_name=descriptor_set_name, 
-    #                                   splitting_name=splitting_name, dataset_name=dataset_name, ad_measure=ad_measure_model)
-    #     # params.max_features = 12
-    #     params.max_features = 25
-    #     params.descriptor_coefficient = 0.006
-    #     run_dataset(dataset_name=dataset_name, qsar_method=params.qsar_method, feature_selection=params.feature_selection,
-    #         params = params, ad_measure_model=ad_measure_model, write_to_db=write_to_db, 
-    #         unique_identifier=unique_identifier, 
-    #         append_to_models_folder=append_to_models_folder)  
+    for method in ['reg', 'knn']:
+        params = set_hyper_parameters(qsar_method=method, feature_selection=True, descriptor_set_name=descriptor_set_name, 
+                                      splitting_name=splitting_name, dataset_name=dataset_name, ad_measure=ad_measure_model)
+        # params.max_features = 12
+        # params.max_features = 25
+        params.max_features = 40
+        
+        params.descriptor_coefficient = 0.006
+        run_dataset(dataset_name=dataset_name, qsar_method=params.qsar_method, feature_selection=params.feature_selection,
+            params = params, ad_measure_model=ad_measure_model, write_to_db=write_to_db, 
+            unique_identifier=unique_identifier, 
+            append_to_models_folder=append_to_models_folder)  
 
 
     # for method in ['rf', 'xgb']:
@@ -220,7 +237,7 @@ def run_Koc_knn_ga():
     grid = {'estimator__n_neighbors': [3], 'estimator__weights': ['distance']}  # matches AD in terms of using 3
     params = ParametersGeneticAlgorithm(qsar_method='knn', hyperparameter_grid=grid,
                                         descriptor_set_name=descriptor_set_name, dataset_name=dataset_name,
-                                        run_rfe=True)
+                                        run_rfe=True) # type: ignore
     params.num_optimizers = 100
     params.num_generations = 100
     
@@ -244,6 +261,36 @@ def run_Koc_knn_ga():
     print(json.dumps(stats_dict, indent=4))
 
 
+
+
+
+
+
+
+# def query_Bcf_rf_models():
+#     logging.info("Running query_Bcf_rf_models()")
+#     model_ids = []
+#     for model_id in model_ids:
+#         try:
+#             folder_path = os.path.join(PROJECT_ROOT, "data", "models_rf_logp", "exp_prop_BCF_v1_modeling", f"{model_id}") # type: ignore
+#             file_path = os.path.join(folder_path, "detailed_summary.xlsx")
+#             model_path = os.path.join(folder_path, "model.pkl")
+#             results_path = os.path.join(folder_path, "results.json")
+#             mdo = ModelDataObjects(model_id=model_id)
+
+#             model = mdo.model
+#             with open(model_path, "wb") as f:
+#                 f.write(pickle.dumps(model))
+
+#             with open(results_path, 'w') as f:
+#                 json.dump(mdo.results_dict, f, indent=4)
+
+#             mte = ModelToExcel(mdo, file_path)
+#             mte.create_excel()
+#         except Exception as e:
+#             logging.error(f"Error occurred while processing model_id {model_id}: {e}")
+
+
 def run_fish_tox():
     
     # dataset_name = 'ECOTOX_2024_12_12_96HR_Fish_LC50_v3a modeling'
@@ -263,8 +310,8 @@ def run_fish_tox():
     ad_measure_model = [pc.Applicability_Domain_TEST_Embedding_Euclidean, pc.Applicability_Domain_TEST_Fragment_Counts]
 
     run_dataset(dataset_name=dataset_name, qsar_method='gcm', feature_selection=False, ad_measure_model=ad_measure_model,
-                write_to_db=write_to_db, unique_identifier=unique_identifier,
-                append_to_models_folder=append_to_models_folder)  # OK
+                add_LOGP_Martin=True, logp_columns=['LOGP_Martin'], write_to_db=write_to_db,
+                unique_identifier=unique_identifier, append_to_models_folder=append_to_models_folder)  # OK
 
     # for method in ['rf']:
     # for method in ['xgb']:
@@ -454,23 +501,24 @@ def run_biodeg_rifm():
     
     session=getSession()
     
-    # model = run_dataset(dataset_name=dataset_name, qsar_method='gcm', feature_selection=False,
-    #             ad_measure_model=ad_measure_model, write_to_db=write_to_db, unique_identifier=unique_identifier, append_to_models_folder=append_to_models_folder)  # OK
-    # subfolder='gcm_WebTEST-default_fs=False'
-    # folder = Path(PROJECT_ROOT) / "data" / f"models{append_to_models_folder}" / dataset_name / subfolder
-    # test_stats = run_test_set(df_external,model, folder)    
-    # recalc_stats(session, dataset_name, subfolder, append_to_models_folder, 'exp_prop_RBIODEG_301F v2 modeling')
+    model = run_dataset(dataset_name=dataset_name, qsar_method='gcm', feature_selection=False,
+                ad_measure_model=ad_measure_model, write_to_db=write_to_db, unique_identifier=unique_identifier, append_to_models_folder=append_to_models_folder)  # OK
+    subfolder='gcm_WebTEST-default_fs=False'
+    folder = Path(PROJECT_ROOT) / "data" / f"models{append_to_models_folder}" / dataset_name / subfolder
+    print("folder",folder)    
+    test_stats = run_test_set(df_external,model, folder)    
+    recalc_stats(session, dataset_name, subfolder, append_to_models_folder, 'exp_prop_RBIODEG_301F v2 modeling')
 
     
     # for method in ['rf', 'xgb']:        
-    # for method in ['lgb']:
+    # # for method in ['lgb']:
     #     model = run_dataset(dataset_name=dataset_name, qsar_method=method, feature_selection=False, 
     #                 ad_measure_model=ad_measure_model, write_to_db=write_to_db, unique_identifier=unique_identifier, 
     #                 append_to_models_folder=append_to_models_folder)  # OK
     #
     #     subfolder=f"{method}_WebTEST-default_fs=False"
     #     folder = Path(PROJECT_ROOT) / "data" / f"models{append_to_models_folder}" / dataset_name / subfolder
-    #     test_stats = run_test_set(df_external,model, folder)
+    #     test_stats = run_test_set(df_external, model, folder)
     #     recalc_stats(session, dataset_name, subfolder, append_to_models_folder, 'exp_prop_RBIODEG_301F v2 modeling')    
     #     print(method,test_stats)
 
@@ -479,10 +527,9 @@ def run_biodeg_rifm():
 
         
     # for method in ['rf']:
-    # # for method in ['reg']:
-    # # for method in ['xgb']:
-    
-    # for method in ['rf', 'xgb', 'reg','knn']:
+    # # # for method in ['reg']:
+    # # # for method in ['xgb']:
+    # # for method in ['rf', 'xgb', 'reg','knn']:
     #     params = set_hyper_parameters(qsar_method=method, feature_selection=True, descriptor_set_name=descriptor_set_name, 
     #                                   splitting_name=splitting_name, dataset_name=dataset_name, ad_measure=ad_measure_model)
     #     params.descriptor_coefficient = 0.001
@@ -647,7 +694,8 @@ def run_RIFM_model_on_ECHA_test_set():
     
     dataset_name = 'exp_prop_RBIODEG_RIFM_CHEMREG'
     
-    dataset_name_ECHA_RIFM = 'exp_prop_RBIODEG_301F v1 modeling'
+    # dataset_name_ECHA_RIFM = 'exp_prop_RBIODEG_301F v1 modeling'
+    dataset_name_ECHA_RIFM = 'exp_prop_RBIODEG_301F v2 modeling'
     
     descriptor_set_name = "WebTEST-default"
     splitting_name = "RND_REPRESENTATIVE"
@@ -665,21 +713,21 @@ def run_RIFM_model_on_ECHA_test_set():
         model=mi.initModel(model_id)
         
         # print(model.qsar_method, len(model.embedding))
-    
-        if len(model.embedding)>100:
-            use_fs=False
-        else:
-            use_fs=True
-    
-        run = model.qsar_method+"_WebTEST-default_fs="+str(use_fs)
+        if model is not None:
+            if len(model.embedding)>100:
+                use_fs=False
+            else:
+                use_fs=True
         
-        json_predictions = call_do_predictions_from_df(df_prediction, model)
-        df_predictions_test = pd.read_json(StringIO(json_predictions), orient="records")
-        
-        # print(df_predictions_test)
-        
-        test_stats = calculate_binary_statistics(df_predictions_test, 0.5, "_Test")
-        print(f"{run}\t{test_stats['BA_Test']:.3f}")
+            run = model.qsar_method+"_WebTEST-default_fs="+str(use_fs)
+            
+            json_predictions = call_do_predictions_from_df(df_prediction, model)
+            df_predictions_test = pd.read_json(StringIO(json_predictions), orient="records")
+            
+            # print(df_predictions_test)
+            
+            test_stats = calculate_binary_statistics(df_predictions_test, 0.5, "_Test")
+            print(f"{run}\t{test_stats['BA_Test']:.3f}")
     
 def lookAtModelCoefficients(model_id):
     
@@ -694,13 +742,14 @@ def lookAtModelCoefficients(model_id):
     
     mi = ModelInitializer()
     model=mi.initModel(model_id)
-    
-    y = model.df_training[model.df_training.columns[1]]
-    X = model.df_training[model.embedding]
 
-    modelCoefficients = json.loads(model.getOriginalRegressionCoefficients2(X, y))
-    
-    print(json.dumps(modelCoefficients, indent=4))
+    if model is not None:
+        y = model.df_training[model.df_training.columns[1]]
+        X = model.df_training[model.embedding]
+
+        modelCoefficients = json.loads(model.getOriginalRegressionCoefficients2(X, y))
+        
+        print(json.dumps(modelCoefficients, indent=4))
 
 
 
@@ -730,10 +779,10 @@ def testCoefficientFromScratch():
         
     
     self_like = type("T", (), {})()
-    self_like.get_model = lambda: pipe
-    self_like.embedding = list(df.columns)
+    self_like.get_model = lambda: pipe # type: ignore
+    self_like.embedding = list(df.columns) # type: ignore
     
-    print(Model.getOriginalRegressionCoefficients2(self_like, df, y))
+    print(Model.getOriginalRegressionCoefficients2(self_like, df, y)) # type: ignore
     
     
 
@@ -761,22 +810,22 @@ def run_continuous_model_on_test_set():
         model=mi.initModel(model_id)
         
         # print(model.qsar_method, len(model.embedding))
-    
-        if len(model.embedding)>100:
-            use_fs=False
-        else:
-            use_fs=True
-    
-        run = model.qsar_method+"_WebTEST-default_fs="+str(use_fs)
+        if model is not None:
+            if len(model.embedding)>100:
+                use_fs=False
+            else:
+                use_fs=True
         
-        json_predictions = call_do_predictions_from_df(df_prediction, model)
-        df_predictions_test = pd.read_json(StringIO(json_predictions), orient="records")
-        
-        df_predictions_test["pred"] = (df_predictions_test["pred"] >= 60).astype(int)
+            run = model.qsar_method+"_WebTEST-default_fs="+str(use_fs)
+            
+            json_predictions = call_do_predictions_from_df(df_prediction, model)
+            df_predictions_test = pd.read_json(StringIO(json_predictions), orient="records")
+            
+            df_predictions_test["pred"] = (df_predictions_test["pred"] >= 60).astype(int)
 
-        # print(df_predictions_test)
-        test_stats = calculate_binary_statistics(df_predictions_test, 0.5, "_Test")
-        print(f"{run}\t{test_stats['BA_Test']:.3f}")
+            # print(df_predictions_test)
+            test_stats = calculate_binary_statistics(df_predictions_test, 0.5, "_Test")
+            print(f"{run}\t{test_stats['BA_Test']:.3f}")
     
 
 def get_model_ids(session, dataset_name: str):
@@ -840,7 +889,7 @@ def run_percentage_biodegradation():
     append_to_models_folder = "_0.001"
     
     PROJECT_ROOT = os.getenv("PROJECT_ROOT")
-    log_path= os.path.join(PROJECT_ROOT, "data", "models" + append_to_models_folder, dataset_name,"binary_test_stats.log")
+    log_path= os.path.join(PROJECT_ROOT, "data", "models" + append_to_models_folder, dataset_name,"binary_test_stats.log") # type: ignore
 
     model = run_dataset(dataset_name=dataset_name, qsar_method='gcm', feature_selection=False,
                 ad_measure_model=ad_measure_model, write_to_db=write_to_db, unique_identifier=unique_identifier, append_to_models_folder=append_to_models_folder)  # OK
@@ -854,11 +903,13 @@ def run_percentage_biodegradation():
     for method in ['rf', 'xgb', 'reg','knn']:
         params = set_hyper_parameters(qsar_method=method, feature_selection=True, descriptor_set_name=descriptor_set_name, 
                                       splitting_name=splitting_name, dataset_name=dataset_name, ad_measure=ad_measure_model)
-        params.descriptor_coefficient = 0.001
-        model = run_dataset(dataset_name=dataset_name, qsar_method=params.qsar_method, feature_selection=params.feature_selection,
-            params = params, ad_measure_model=ad_measure_model, write_to_db=write_to_db, 
-            unique_identifier=unique_identifier, append_to_models_folder=append_to_models_folder) 
-        calculate_stats_for_binary_test_set(df_prediction_binary, model, log_path)
+        if params is not None:
+            if not isinstance(params, ParametersGroupContribution) and not isinstance(params, ParametersGeneric):
+                params.descriptor_coefficient = 0.001 # type: ignore
+            model = run_dataset(dataset_name=dataset_name, qsar_method=params.qsar_method, feature_selection=params.feature_selection,
+                params = params, ad_measure_model=ad_measure_model, write_to_db=write_to_db, 
+                unique_identifier=unique_identifier, append_to_models_folder=append_to_models_folder) 
+            calculate_stats_for_binary_test_set(df_prediction_binary, model, log_path)
     
     Results.summarize_model_stats(dataset_name, append_to_models_folder=append_to_models_folder)
 
@@ -1014,10 +1065,10 @@ def run_biodeg_301F():
     append_to_models_folder = ""
     # append_to_models_folder = "_0.001"
     
+
     tsv_file_path = Path(r"C:\Users\tmarti02\OneDrive - Environmental Protection Agency (EPA)\0 java\0 model_management\ghs-data-gathering\data\experimental\RIFM_2026_08_12\excel files\SMILES_OECD 301F_RASD_NON CBI.tsv")
     df_external = pd.read_csv(tsv_file_path, delimiter='\t')
 
-    
     dataset_name_subset='exp_prop_RBIODEG_RIFM_2026_08_12_CHEMREG'
     session = getSession()
     df_smiles_subset = fetch_test_set_qsar_smiles(session, dataset_name_subset)
@@ -1032,10 +1083,7 @@ def run_biodeg_301F():
     # test_stats = run_test_set(df_external,model, folder,df_smiles_subset)    
     # recalc_stats(session, dataset_name, subfolder, append_to_models_folder, 'exp_prop_RBIODEG_301F v2 modeling')
 
-
-
     # print('gcm',test_stats)
-
 
     # ad_measure_model = [pc.Applicability_Domain_TEST_Embedding_Euclidean]
     #
@@ -1086,7 +1134,7 @@ def run_biodeg_301F():
     
     
 def getQsarSmilesFromFragranceSpreadsheet():
-    excel_path = Path(os.getenv("PROJECT_ROOT")) / "data" / "models" / "exp_prop_RBIODEG_301F v1 modeling" / "DSSTox_FRAGRANCEBB_20260413_qsar_ready.xlsx"
+    excel_path = Path(os.getenv("PROJECT_ROOT")) / "data" / "models" / "exp_prop_RBIODEG_301F v1 modeling" / "DSSTox_FRAGRANCEBB_20260413_qsar_ready.xlsx" # type: ignore
     df=pd.read_excel(excel_path)
     df = df.rename(columns={'Structure_qsar_ready': 'canon_qsar_smiles'})
     unique_df = df[['canon_qsar_smiles']].dropna().drop_duplicates().reset_index(drop=True)
@@ -1171,8 +1219,8 @@ def test_model_summary_local():
 
 def test_load_model_with_external_set():
     unique_identifier = None
-    write_to_db = False
-    # write_to_db = True
+    # write_to_db = False
+    write_to_db = True
     dataset_name = "KOC v1 modeling"
     user = "murdock.weston"
     append_to_models_folder = "_bob"
@@ -1233,7 +1281,7 @@ def run_rifm_rf_models():
             
             params.min_descriptor_count = i*10
             params.max_descriptor_count = (i+1)*10
-            params.descriptor_coefficient = descriptor_coefficient
+            params.descriptor_coefficient = descriptor_coefficient # type: ignore
 
             logging.info(f"Running iteration {i}:\n\tmin_descriptor_count: {params.min_descriptor_count},\n\tmax_descriptor_count: {params.max_descriptor_count},\n\tdescriptor_coefficient: {params.descriptor_coefficient}")
 
@@ -1289,161 +1337,25 @@ def full_test_mte():
 
     # DATABASE/BINARY/EXTERNAL
     model_id = 1831
-    file_path = os.path.join(PROJECT_ROOT, "data", f"models{append_to_models_folder}", "database_models", f"binary_external.xlsx")
+    file_path = os.path.join(PROJECT_ROOT, "data", f"models{append_to_models_folder}", "database_models", f"binary_external.xlsx") # type: ignore
     mdo = ModelDataObjects(model_id=model_id)
     mte = ModelToExcel(mdo, file_path)
     mte.create_excel()
 
     # DATABASE/CONTINUOUS/NO EXTERNAL
     model_id = 1065
-    file_path = os.path.join(PROJECT_ROOT, "data", f"models{append_to_models_folder}", "database_models", f"continuous_no_external.xlsx")
+    file_path = os.path.join(PROJECT_ROOT, "data", f"models{append_to_models_folder}", "database_models", f"continuous_no_external.xlsx") # type: ignore
     mdo = ModelDataObjects(model_id=model_id)
     mte = ModelToExcel(mdo, file_path)
     mte.create_excel()
 
     # DATABASE/CONTINUOUS/EXTERNAL (external stats not saved in database)
     model_id = 1753
-    file_path = os.path.join(PROJECT_ROOT, "data", f"models{append_to_models_folder}", "database_models", f"continuous_no_external.xlsx")
+    file_path = os.path.join(PROJECT_ROOT, "data", f"models{append_to_models_folder}", "database_models", f"continuous_no_external.xlsx") # type: ignore
     mdo = ModelDataObjects(model_id=model_id)
     mte = ModelToExcel(mdo, file_path)
     mte.create_excel()
 
-
-
-from typing import List, Dict, Any
-from sqlalchemy import text
-from sqlalchemy.orm import Session
-
-def fetch_continuous_model_metrics_by_dataset(session: Session, dataset_name: str) -> List[Dict[str, Any]]:
-    """
-    Run the aggregated RMSE query for a given dataset_name.
-
-    Parameters
-    ----------
-    session : sqlalchemy.orm.Session
-        Active SQLAlchemy session.
-    dataset_name : str
-        Dataset name to filter on (m.dataset_name = :dataset_name).
-
-    Returns
-    -------
-    List[Dict[str, Any]]
-        Rows with keys: id, created_at, method_name, variables, rmse_test, rmse_cv, rmse_external.
-    """
-    sql = text("""
-        select
-          m.id,
-          m.created_at,
-          m2.name as method_name,
-          length(de.embedding_tsv) - length(replace(de.embedding_tsv, E'\\t', '')) + 1 as variables,
-          max(case when s.name = 'RMSE_Test'          then ms.statistic_value end) as rmse_test,
-          max(case when s.name = 'RMSE_CV_Training'  then ms.statistic_value end) as rmse_cv,
-          max(case when s.name = 'RMSE_External'      then ms.statistic_value end) as rmse_external
-        from qsar_models.models m
-        join qsar_models.methods m2 on m2.id = m.fk_method_id
-        join qsar_models.descriptor_embeddings de on de.id = m.fk_descriptor_embedding_id
-        left join qsar_models.model_statistics ms on ms.fk_model_id = m.id
-        left join qsar_models."statistics" s on s.id = ms.fk_statistic_id
-        where m.dataset_name = :dataset_name
-        group by
-          m.id,
-          m.created_at,
-          m2.name,
-          length(de.embedding_tsv) - length(replace(de.embedding_tsv, E'\\t', '')) + 1
-        order by method_name asc, variables desc
-    """)
-
-    result = session.execute(sql, {"dataset_name": dataset_name})
-    return result.mappings().all()
-
-
-def fetch_binary_model_metrics_by_dataset(session: Session, dataset_name: str) -> List[Dict[str, Any]]:
-    """
-    Run the aggregated RMSE query for a given dataset_name.
-
-    Parameters
-    ----------
-    session : sqlalchemy.orm.Session
-        Active SQLAlchemy session.
-    dataset_name : str
-        Dataset name to filter on (m.dataset_name = :dataset_name).
-
-    Returns
-    -------
-    List[Dict[str, Any]]
-        Rows with keys: id, created_at, method_name, variables, rmse_test, rmse_cv, rmse_external.
-    """
-    sql = text("""
-        select
-          m.id,
-          m.created_at,
-          m2.name as method_name,
-          length(de.embedding_tsv) - length(replace(de.embedding_tsv, E'\\t', '')) + 1 as variables,
-          max(case when s.name = 'BA_Test'          then ms.statistic_value end) as ba_test,
-          max(case when s.name = 'BA_CV_Training'  then ms.statistic_value end) as ba_cv,
-          max(case when s.name = 'BA_External'      then ms.statistic_value end) as ba_external
-        from qsar_models.models m
-        join qsar_models.methods m2 on m2.id = m.fk_method_id
-        join qsar_models.descriptor_embeddings de on de.id = m.fk_descriptor_embedding_id
-        left join qsar_models.model_statistics ms on ms.fk_model_id = m.id
-        left join qsar_models."statistics" s on s.id = ms.fk_statistic_id
-        where m.dataset_name = :dataset_name
-        group by
-          m.id,
-          m.created_at,
-          m2.name,
-          length(de.embedding_tsv) - length(replace(de.embedding_tsv, E'\\t', '')) + 1
-        order by method_name asc, variables desc
-    """)
-
-    result = session.execute(sql, {"dataset_name": dataset_name})
-    return result.mappings().all()
-
-
-def determine_analog_performance_continuous():
-
-    # dataset_name = "KOC v1 modeling"
-    dataset_name = "ECOTOX_2024_12_12_96HR_Fish_LC50_v3b modeling"
-    
-
-    from models.case_studies.run_model_building_db import run_model_embedding_as_knn
-    session = getSession()
-    
-    rows = fetch_continuous_model_metrics_by_dataset(session, dataset_name)
-    for r in rows:
-        stats, embedding = run_model_embedding_as_knn(r["id"], dataset_name, session)
-        # print(r["id"], r["method_name"], r["variables"], r["rmse_test"], r["rmse_cv"], r["rmse_external"],stats["RMSE_Test"])
-        print(r["id"], r["method_name"], len(embedding), stats["RMSE_Test"])
-
-
-def determine_analog_performance_continuous_external():
-
-    # dataset_name = "KOC v1 modeling"
-    dataset_name = "ECOTOX_2024_12_12_96HR_Fish_LC50_v3b modeling"
-    dataset_name_external = "QSAR_Toolbox_96HR_Fish_LC50_v3b modeling" 
-    
-    from models.case_studies.run_model_building_db import run_model_embedding_as_knn_external
-    session = getSession()
-    
-    rows = fetch_continuous_model_metrics_by_dataset(session, dataset_name)
-    for r in rows:
-        stats, embedding = run_model_embedding_as_knn_external(r["id"], dataset_name, dataset_name_external, session)
-        # print(r["id"], r["method_name"], r["variables"], r["rmse_test"], r["rmse_cv"], r["rmse_external"],stats["RMSE_Test"])
-        print(r["id"], r["method_name"], len(embedding), stats["RMSE_Test"])
-
-
-def determine_analog_performance_binary():
-    from models.case_studies.run_model_building_db import run_model_embedding_as_knn
-    session = getSession()
-    dataset_name = "exp_prop_RBIODEG_301F v1 modeling"
-    # dataset_name = "exp_prop_RBIODEG_RIFM_CHEMREG"
-    rows = fetch_binary_model_metrics_by_dataset(session, dataset_name)
-    
-    print(dataset_name)
-    for r in rows:
-        stats, embedding = run_model_embedding_as_knn(r["id"], dataset_name, session)
-        print(r["id"], r["method_name"], r["variables"], r["ba_test"], r["ba_cv"], r["ba_external"],stats["BA_Test"])
-        # print(r["id"], r["method_name"], len(embedding), stats["RMSE_Test"])
 
 
 
@@ -1526,7 +1438,58 @@ def run_test_datasets():
 
 
 
+def find_model_folder():
+    
+    dataset_name = 'KOC v1 modeling'    
+    data_folder = Path(PROJECT_ROOT) / "data"
+    
+    for folder in data_folder.iterdir():
+        
+        if folder.is_dir() and "models" in folder.name:
+            
+            koc_folder = folder / dataset_name
+            
+            if koc_folder.is_dir():
+                
+                for folder2 in koc_folder.iterdir():
+                    
+                    if folder2.is_dir():
+                        
+                        
+                        # results_file = folder2 / "results.json"
+                        #
+                        # if results_file.is_file():
+                        #     with results_file.open("r", encoding="utf-8") as f:
+                        #         results = json.load(f)
+                        #     # print(results)
+                        #     params = results["params"]
+                        #     model_details = results["model_details"]
+                        #     print(folder.name, params['qsar_method'], model_details["modelId"])
+                        # else:
+                        #     print("results.json not found")
+                            
+                        results_file = folder2 / "detailed_summary.xlsx"
+                        
+                        # print(results_file)
+                                                
+                        if results_file.is_file():
+                            wb = load_workbook(results_file, data_only=True)
+                            ws = wb["Summary"]
+                            print(folder.name,  folder2.name, ws["B1"].value)
+                            
+                        else:
+                            # print("detailed_summary.xlsx not found")
+                            pass
+                            
+                        
+                print('\n')
+
+
+
 def main():
+    
+    # find_model_folder()
+    
     # run_test_datasets()
     # run_example()
     # run_Koc_knn_ga()
@@ -1538,44 +1501,28 @@ def main():
     # run_biodeg_nite()
     
     run_biodeg_rifm()
-    run_biodeg_301F()
+    # run_biodeg_301F()
+    
     # run_percentage_biodegradation()
-    
-    # determine_analog_performance_continuous()
-    # determine_analog_performance_continuous_external()
-    # determine_analog_performance_binary()
-
-    
     # run_continuous_model_on_test_set()
+    # run_RIFM_model_on_ECHA_test_set()
+
     
     # lookAtModelCoefficients(1847)
     # lookAtModelCoefficients(1878)
     # testCoefficientFromScratch()
     
-    # run_RIFM_model_on_ECHA_test_set()
-         
-    
+            
     # run_pchem()
     
     # These 4 should be able to run for the gcm model
-    # run_Koc()  # OK
     # run_fish_tox()  # Takes too long to run on my machine? (E.g. started a run at 1:55, errored out at 4:53 because the SQL connection closed automatically)
     # run_fish_tox_2()  # OK
     
-    # test_create_model()
-    # test_model_summary()
-
-    # run_Koc()
-    # run_fish_tox()
-    # test_create_model()
-    # test_model_summary()
+    
     # test_model_summary_local()
     # test_load_model_with_external_set()
     # run_rifm_rf_models()
-
-
-    
-    
 
     # full_test_mte()
 

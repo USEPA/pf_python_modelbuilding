@@ -4,6 +4,7 @@ import re
 from charset_normalizer import is_binary
 import pandas as pd
 from pandas import ExcelWriter
+from sqlalchemy.exc import OperationalError
 from xlsxwriter.format import Format
 from xlsxwriter.workbook import Workbook
 from xlsxwriter.worksheet import Worksheet
@@ -79,6 +80,7 @@ class ModelDataObjects:
     df_gmd: Optional[pd.DataFrame] = None
     df_gmd_external: Optional[pd.DataFrame] = None
     experimental_parameters: Optional[pd.DataFrame] = None
+    results_dict: Optional[Dict[str, Any]] = None
 
     # Pre-constructed dataframes for Excel sheets
     cover_sheet_df: Optional[pd.DataFrame] = None
@@ -106,7 +108,7 @@ class ModelDataObjects:
     def __post_init__(self):
         logging.info("Initializing ModelDataObjects...")
         if self.model_id is not None:
-            logging.info(f"model_id provided, initializing using DataQuerier for model_id={self.model_id}...")
+            logging.debug(f"model_id provided, initializing using DataQuerier for model_id={self.model_id}...")
             if self.model is not None:
                 logging.warning(f"Both model_id and model provided, priority given to model_id, database will be queried for model_id={self.model_id}...")
             
@@ -119,6 +121,7 @@ class ModelDataObjects:
             self.df_gmd = data_querier.df_gmd
             self.df_gmd_external = data_querier.df_gmd_external
             self.experimental_parameters = data_querier.experimental_parameters
+            self.results_dict = data_querier.results_dict
 
             self.cover_sheet_df = data_querier.query_cover_sheet_df()
             self.statistics_df = data_querier.query_statistics_df()
@@ -134,7 +137,7 @@ class ModelDataObjects:
             self.external_superheaders = DataTransformer.get_superheaders(self.external_records_df, self.experimental_parameters["Field"].tolist())
 
         elif self.model is not None:
-            logging.info("Initializing with provided model and dataframes...")
+            logging.debug("Initializing with provided model and dataframes...")
             if self.df_pv is None:
                 logging.warning("df_pv is None, will be queried from the database using the provided model")
             if self.df_gmd is None:
@@ -166,7 +169,7 @@ class ModelDataObjects:
             self.external_superheaders = DataTransformer.get_superheaders(self.external_records_df, self.experimental_parameters["Field"].tolist())
 
         else:
-            logging.info("Not initialized with model_id or model, manual initialization required")
+            logging.debug("Not initialized with model_id or model, manual initialization required")
         
 
 # ============================================================
@@ -428,7 +431,7 @@ class ExcelFormatter:
             df_target: Target dataframe (used to create the mapping)
             link_column: Column name to match on (must exist in both dataframes)
         """
-        logging.info(f"Processing hyperlinks for {source_sheet}")
+        logging.debug(f"Processing hyperlinks for {source_sheet}")
         
         
         if df_source is None or df_source.empty:
@@ -510,7 +513,7 @@ class ExcelFormatter:
         except Exception as e:
             logging.error(f"Error adding hyperlinks: {e}")
         
-        logging.info(f"Added {hyperlinks_added} hyperlinks from {source_sheet} to {target_sheet} ({unmatched_count} unmatched)")
+        logging.debug(f"Added {hyperlinks_added} hyperlinks from {source_sheet} to {target_sheet} ({unmatched_count} unmatched)")
 
 
 # ============================================================
@@ -842,8 +845,8 @@ class ChartBuilder:
         count_1_0 = ((df[x_col] == 1) & (df[y_col] < 0.5)).sum()  # Exp=1, Pred=0 (incorrect)
         count_1_1 = ((df[x_col] == 1) & (df[y_col] >= 0.5)).sum()  # Exp=1, Pred=1 (correct)
 
-        # logging.info(f"Frequency counts for {sheet_name}:\n\tExp=0, Pred=0: {count_0_0}\n\tExp=0, Pred=1: {count_0_1}\n\tExp=1, Pred=0: {count_1_0}\n\tExp=1, Pred=1: {count_1_1}")
-        logging.info(f"Frequency counts for {sheet_name}:\n\t\t\tPredicted 0\t\tPredicted 1\n\tExperimental 0\t\t{count_0_0}\t\t{count_0_1}\n\tExperimental 1\t\t{count_1_0}\t\t{count_1_1}")
+        # logging.debug(f"Frequency counts for {sheet_name}:\n\tExp=0, Pred=0: {count_0_0}\n\tExp=0, Pred=1: {count_0_1}\n\tExp=1, Pred=0: {count_1_0}\n\tExp=1, Pred=1: {count_1_1}")
+        logging.debug(f"Frequency counts for {sheet_name}:\n\t\t\tPredicted 0\t\tPredicted 1\n\tExperimental 0\t\t{count_0_0}\t\t{count_0_1}\n\tExperimental 1\t\t{count_1_0}\t\t{count_1_1}")
 
         # Worksheet formats
         centered = workbook.add_format({"align": "center", "valign": "vcenter", "bold": True})
@@ -921,16 +924,20 @@ class ChartBuilder:
         data_start_row = ExcelFormatter.get_data_start_row(has_subtotals=has_subtotals, has_superheaders=has_superheaders)
         
         if x_col is None:
-            x_col = "Exp"
+            x_col = f"Observed ({property_units})"
             x_col_name = "Experimental"
         elif x_col == "Exp":
+            x_col_name = "Experimental"
+        elif x_col == f"Observed ({property_units})":
             x_col_name = "Experimental"
         else:
             x_col_name = x_col
         if y_col is None:
-            y_col = "Pred"
+            y_col = f"Predicted ({property_units})"
             y_col_name = "Predicted"
         elif y_col == "Pred":
+            y_col_name = "Predicted"
+        elif y_col == f"Predicted ({property_units})":
             y_col_name = "Predicted"
         else:
             y_col_name = y_col
@@ -1000,6 +1007,7 @@ class DataQuerier:
         self.df_pv_external = df_pv_external
         self.df_gmd = df_gmd
         self.df_gmd_external = df_gmd_external
+        self.results_dict = None
 
         self.experimental_parameters = experimental_parameters
 
@@ -1019,6 +1027,11 @@ class DataQuerier:
         self.query_df_gmd(external=False)
         self.query_df_gmd(external=True)
         self.query_experimental_parameters()
+        try:
+            if self.model_id is not None:
+                self.query_results_dict()
+        except Exception as e:
+            logging.error(f"Failed to query results dictionary: {e}")
 
     @staticmethod
     def getEngine(connect_args: Optional[dict] = {}) -> Engine:
@@ -1076,6 +1089,34 @@ class DataQuerier:
             user_id = "tmarti02"
         return user_id
 
+    def ensure_session(self) -> Session:
+        session = self.session
+        try:
+            # cheap no-op to force a DB round trip
+            session.execute(text("SELECT 1"))
+            return session
+        except OperationalError:
+            try:
+                session.close()
+            except Exception:
+                pass
+            session = DataQuerier.getSession(self.engine)
+            self.session = session
+            return session
+
+    @staticmethod
+    def ensure_static_session(session):
+        try:
+            # cheap no-op to force a DB round trip
+            session.execute(text("SELECT 1"))
+            return session
+        except OperationalError:
+            try:
+                session.close()
+            except Exception:
+                pass
+            return DataQuerier.getSession()
+
     def query_model(self) -> Optional[Model]:
         """Query the database for the model object.
         
@@ -1086,10 +1127,10 @@ class DataQuerier:
             return self.model
 
         try:            
-            logging.info(f"Loading model {self.model_id} from database")
+            logging.debug(f"Loading model {self.model_id} from database")
             initializer: ModelInitializer = ModelInitializer()
             model: Model = initializer.initModel(self.model_id)
-            logging.info(f"Done loading model {self.model_id} from database")
+            logging.debug(f"Done loading model {self.model_id} from database")
             
             if model is None:
                 logging.error(f"Failed to load model {self.model_id}")
@@ -1143,10 +1184,10 @@ class DataQuerier:
             return None
         
         try:
-            logging.info(f"Loading df_pv for {dataset_name} from database")
+            logging.debug(f"Loading df_pv for {dataset_name} from database")
             edg = ExpDataGetter()
-            df_pv, _ = edg.get_mapped_property_values(self.session, dataset_name, snapshot_id, duplicate_strategy=duplicate_strategy)
-            logging.info(f"Done loading df_pv for {dataset_name} from database")
+            df_pv, _ = edg.get_mapped_property_values(self.ensure_session(), dataset_name, snapshot_id, duplicate_strategy=duplicate_strategy)
+            logging.debug(f"Done loading df_pv for {dataset_name} from database")
             
             if df_pv is None:
                 logging.error(f"Failed to query df_pv for {dataset_name}")
@@ -1201,9 +1242,9 @@ class DataQuerier:
             return None
         
         try:
-            logging.info(f"Loading df_gmd for {dataset_name} from database")
-            df_gmd = getMappedDatapoints(self.session, dataset_name)
-            logging.info(f"Done loading df_gmd for {dataset_name} from database")
+            logging.debug(f"Loading df_gmd for {dataset_name} from database")
+            df_gmd = getMappedDatapoints(self.ensure_session(), dataset_name)
+            logging.debug(f"Done loading df_gmd for {dataset_name} from database")
             
             if df_gmd is None:
                 logging.error(f"Failed to query df_gmd for {dataset_name}")
@@ -1236,14 +1277,14 @@ class DataQuerier:
         if self.experimental_parameters is not None:
             return self.experimental_parameters
 
-        logging.info("Querying experimental parameters from database")
+        logging.debug("Querying experimental parameters from database")
 
         sql = text("""
             select p.name as "Field", p.description as "Description"
             from exp_prop.parameters p;
         """)
 
-        param_rows = self.session.execute(sql).mappings().all()
+        param_rows = self.ensure_session().execute(sql).mappings().all()
         if not param_rows:
             logging.warning("No experimental parameters found in the database.")
             return None
@@ -1256,13 +1297,79 @@ class DataQuerier:
 
         return self.experimental_parameters
 
+    def query_results_dict(self) -> dict:
+        """Query database for model results and return as a dictionary.
+        
+        Returns:
+            dict: Dictionary containing model results, including predictions and statistics.
+        """
+        if self.results_dict is not None:
+            return self.results_dict
+        
+        logging.debug(f"Building Results Dictionary from Model (model_id = {self.model_id})")
+        model = self.query_model()
+        model_statistics = getattr(model, "modelStatistics", {})
+
+        qsar_method = getattr(model, "qsar_method", None)
+        feature_selection = getattr(model, "feature_selection", False)
+        descriptor_set_name = getattr(model, "descriptorSetName", None)
+        splitting_name = getattr(model, "splittingName", None)
+        dataset_name = getattr(model, "datasetName", None)
+        ad_measure_model = getattr(model, "applicabilityDomainName", None)
+        ad_measures = ad_measure_model.split(" and ") if ad_measure_model else None
+
+        params = set_hyper_parameters(qsar_method, feature_selection, descriptor_set_name, splitting_name, dataset_name, ad_measures)
+        # params = params.to_dict()
+
+        training_stats = {
+            "MAE_Training": model_statistics.get("MAE_Training"),
+            "PearsonRSQ_Training": model_statistics.get("PearsonRSQ_Training"),
+            "RMSE_Training": model_statistics.get("RMSE_Training"),
+            "R2_Training": model_statistics.get("R2_Training")
+        }
+        test_stats = {
+            "MAE_Test": model_statistics.get("MAE_Test"),
+            "PearsonRSQ_Test": model_statistics.get("PearsonRSQ_Test"),
+            "RMSE_Test": model_statistics.get("RMSE_Test"),
+            "Q2_Test": model_statistics.get("Q2_Test")
+        }
+        cv_stats = {
+            "MAE_CV_Training": model_statistics.get("MAE_CV_Training"),
+            "PearsonRSQ_CV_Training": model_statistics.get("PearsonRSQ_CV_Training"),
+            "RMSE_CV_Training": model_statistics.get("RMSE_CV_Training"),
+        }
+        ext_stats = {
+            "MAE_External": model_statistics.get("MAE_External"),
+            "PearsonRSQ_External": model_statistics.get("PearsonRSQ_External"),
+            "RMSE_External": model_statistics.get("RMSE_External"),
+            "Q2_External": model_statistics.get("Q2_External")
+        }
+
+        results_dict = DataTransformer.create_results_dict(
+            ad_measure_model=ad_measures,
+            df_training=getattr(model, "df_training", None),
+            params=params,
+            model=model,
+            training_stats=training_stats,
+            test_stats=test_stats,
+            cv_stats=cv_stats,
+            ext_stats=ext_stats,
+            stats_dict=getattr(model, "modelStatistics", {}).get("test_stats_all_AD", None),
+            ext_stats_dict=getattr(model, "modelStatistics", {}).get("ext_stats_all_AD", None)
+        )
+
+        self.results_dict = results_dict
+        
+        logging.debug(f"Finished building Results Dictionary from Model (model_id = {self.model_id})")
+        return results_dict
+    
     def query_cover_sheet_df(self) -> pd.DataFrame:
         """Query database for model summary information to populate the cover sheet.
         
         Returns:
             pd.DataFrame: Single-row dataframe with model metadata (name, property, dataset, etc.).
         """
-        logging.info(f"Building Cover Sheet from Model (model_id = {self.model_id})")
+        logging.debug(f"Building Cover Sheet from Model (model_id = {self.model_id})")
         model = self.query_model()
         model_id = getattr(model, "modelId", None)
         model_id = int(model_id) if model_id is not None else None
@@ -1288,7 +1395,7 @@ class DataQuerier:
             summary_dict["nExternal"] = [model.num_external]
         summary = pd.DataFrame(summary_dict)
 
-        logging.info(f"Finished building Cover Sheet from Model (model_id = {self.model_id})")
+        logging.debug(f"Finished building Cover Sheet from Model (model_id = {self.model_id})")
 
         return summary
 
@@ -1301,7 +1408,7 @@ class DataQuerier:
         Returns:
             pd.DataFrame: Single-row dataframe with model performance metrics rounded to 2 decimal places.
         """
-        logging.info(f"Building Statistics from Model (model_id = {self.model_id})")
+        logging.debug(f"Building Statistics from Model (model_id = {self.model_id})")
 
         model = self.query_model()
 
@@ -1316,7 +1423,7 @@ class DataQuerier:
 
         statistics = pd.DataFrame(statistics_dict).apply(lambda x: round(x, 2) if isinstance(x, float) else x)
 
-        logging.info(f"Finished building Statistics from Model (model_id = {self.model_id})")
+        logging.debug(f"Finished building Statistics from Model (model_id = {self.model_id})")
 
         return statistics
 
@@ -1469,11 +1576,11 @@ class DataQuerier:
         Returns:
             pd.DataFrame: Records dataframe with experimental data, sources, and measurement details.
         """
-        logging.info(f"Building Records from Model (model_id = {self.model_id})")
+        logging.debug(f"Building Records from Model (model_id = {self.model_id})")
         
         df_pv = self.query_df_pv()
         records_df = DataTransformer.get_records_df(df_pv)
-        logging.info(f"Finished building Records from Model (model_id = {self.model_id})")
+        logging.debug(f"Finished building Records from Model (model_id = {self.model_id})")
         
         return records_df
     
@@ -1486,14 +1593,14 @@ class DataQuerier:
         Returns:
             pd.DataFrame: Records dataframe with experimental data, sources, and measurement details.
         """
-        logging.info(f"Building External Records from Model (model_id = {self.model_id})")
+        logging.debug(f"Building External Records from Model (model_id = {self.model_id})")
         
         df_pv = self.query_df_pv(external=True)
         if df_pv is None:
             logging.warning(f"Skipping External Records for model (model_id = {self.model_id}), as df_pv_external is None")
             return None
         external_records_df = DataTransformer.get_records_df(df_pv)
-        logging.info(f"Finished building External Records from Model (model_id = {self.model_id})")
+        logging.debug(f"Finished building External Records from Model (model_id = {self.model_id})")
         
         return external_records_df
     
@@ -1506,7 +1613,7 @@ class DataQuerier:
         Returns:
             pd.DataFrame: Model descriptors with definitions, classifications, and optional coefficients.
         """
-        logging.info(f"Building Model Descriptors from Model (model_id = {self.model_id})")
+        logging.debug(f"Building Model Descriptors from Model (model_id = {self.model_id})")
         
         model = self.query_model()
 
@@ -1525,7 +1632,7 @@ class DataQuerier:
             results_dict["model_details"]["embedding"] = model.embedding
 
         method_name = getattr(model, "qsar_method", False) or getattr(model, "regressor_name", False) or ""
-        if any(method in method_name for method in ["reg", "las", "gcm"]):
+        if any(method in method_name for method in ["reg", "las", "gcm", "huber", "ransac", "theil_sen"]):
             coefficients_df = DataTransformer.get_model_coefficients(model)
             results_dict["model_details"]["model_coefficients"] = coefficients_df
         else:
@@ -1533,7 +1640,7 @@ class DataQuerier:
         
         model_descriptors = DataTransformer.get_model_descriptors_df(results_dict)
 
-        logging.info(f"Finished building Model Descriptors from Model (model_id = {self.model_id})")
+        logging.debug(f"Finished building Model Descriptors from Model (model_id = {self.model_id})")
 
         return model_descriptors
     
@@ -1546,7 +1653,7 @@ class DataQuerier:
         Returns:
             pd.DataFrame: All compounds with observed/predicted values, fold assignments, and descriptor values.
         """
-        logging.info(f"Building Model Descriptor Values from Model (model_id = {self.model_id})")
+        logging.debug(f"Building Model Descriptor Values from Model (model_id = {self.model_id})")
 
         model = self.query_model()
         df_gmd = self.query_df_gmd(external=False)
@@ -1556,7 +1663,7 @@ class DataQuerier:
         training = pd.merge(model.df_training, df_gmd, left_on="ID", right_on="canon_qsar_smiles", how="left")
         training = pd.merge(training, df_preds_training_cv, left_on="ID", right_on="id", how="left")
 
-        training["Set"] = training.cv_fold_x.apply(lambda x: f"Training CV, Fold {x}")
+        training["Set"] = "Training"
 
         df_preds_test = model.df_preds_test.rename(columns={"canon_qsar_smiles": "id"})
 
@@ -1600,7 +1707,7 @@ class DataQuerier:
         model_descriptor_values_df = pd.DataFrame(model_descriptor_values_dict)
         model_descriptor_values_df = ExcelFormatter.handle_accidental_formulas(model_descriptor_values_df)
 
-        logging.info(f"Finished building Model Descriptor Values from Model (model_id = {self.model_id})")
+        logging.debug(f"Finished building Model Descriptor Values from Model (model_id = {self.model_id})")
 
         return model_descriptor_values_df
     
@@ -1613,7 +1720,7 @@ class DataQuerier:
         Returns:
             pd.DataFrame: Training CV predictions with compound identifiers, experimental/predicted values, and fold assignments.
         """
-        logging.info(f"Building Training CV Predictions from Model (model_id = {self.model_id})")
+        logging.debug(f"Building Training CV Predictions from Model (model_id = {self.model_id})")
 
         model = self.query_model()
         df_gmd = self.query_df_gmd(external=False)
@@ -1625,20 +1732,20 @@ class DataQuerier:
         training_cv_predictions_dict = {
             "Exp Prop ID": temp["qsar_exp_prop_property_values_id_first"],
             "Canon QSAR SMILES": temp["canon_qsar_smiles"],
-            "Exp": temp["exp"],
-            "Pred": temp["pred"],
-            "Absolute Error": abs(temp["exp"] - temp["pred"]),
-            "CV Fold": temp["cv_fold"],
             "DTXCID": temp["dtxcid"],
             "DTXSID": temp["dtxsid"],
             "CASRN": temp["casrn"],
             "Preferred Name": temp["preferred_name"],
             "SMILES": temp["smiles"],
-            "Mol Weight": temp["mol_weight"]
+            "Mol Weight": temp["mol_weight"],
+            f"Observed ({model.unitsModel})": temp["exp"],
+            f"Predicted ({model.unitsModel})": temp["pred"],
+            f"Absolute Error ({model.unitsModel})": abs(temp["exp"] - temp["pred"]),
+            "CV Fold": temp["cv_fold"]
         }
         training_cv_predictions_df = pd.DataFrame(training_cv_predictions_dict)
 
-        logging.info(f"Finished building Training CV Predictions from Model (model_id = {self.model_id})")
+        logging.debug(f"Finished building Training CV Predictions from Model (model_id = {self.model_id})")
 
         return training_cv_predictions_df
 
@@ -1651,7 +1758,7 @@ class DataQuerier:
         Returns:
             pd.DataFrame: Test set predictions with compound identifiers, experimental/predicted values, and AD membership.
         """
-        logging.info(f"Building Test Set Predictions from Model (model_id = {self.model_id})")
+        logging.debug(f"Building Test Set Predictions from Model (model_id = {self.model_id})")
 
         model = self.query_model()
         df_gmd = self.query_df_gmd(external=False)
@@ -1660,35 +1767,74 @@ class DataQuerier:
 
         temp = pd.merge(df_preds_test, df_gmd, left_on="id", right_on="canon_qsar_smiles", how="left")
 
+        # ad_test_columns = {}
+        # if model.applicabilityDomainName is not None:
+        #     ads = model.applicabilityDomainName.split(" and ")
+        #     for ad in ads:
+        #         df_ad_output, _ = adu.generate_applicability_domain_with_preselected_descriptors_from_dfs(
+        #                 train_df=model.df_training.copy(), test_df=model.df_prediction.copy(),
+        #                 remove_log_p=model.remove_log_p_descriptors,
+        #                 embedding=model.embedding, applicability_domain=ad,
+        #                 filterColumnsInBothSets=False,
+        #                 returnTrainingAD=False)
+        #         ad_test_columns[f"AD {ad}"] = df_ad_output["AD"]
+
+        # Prefer AD columns already present on the model predictions dataframe
         ad_test_columns = {}
-        if model.applicabilityDomainName is not None:
+        existing_ad_cols = {
+            col: model.df_preds_test[col]
+            for col in model.df_preds_test.columns
+            if col.startswith("AD_") or col.startswith("AD ")
+        }
+
+        if existing_ad_cols:
+            # Reuse existing values exactly as produced by run_model_building_db.py
+            ad_test_columns.update(existing_ad_cols)
+        elif model.applicabilityDomainName is not None:
+            # Fallback only if AD columns are absent
             ads = model.applicabilityDomainName.split(" and ")
             for ad in ads:
                 df_ad_output, _ = adu.generate_applicability_domain_with_preselected_descriptors_from_dfs(
-                        train_df=model.df_training.copy(), test_df=model.df_prediction.copy(),
-                        remove_log_p=model.remove_log_p_descriptors,
-                        embedding=model.embedding, applicability_domain=ad,
-                        filterColumnsInBothSets=False,
-                        returnTrainingAD=False)
-                ad_test_columns[f"AD {ad}"] = df_ad_output["AD"]
+                    train_df=model.df_training.copy(),
+                    test_df=model.df_prediction.copy(),
+                    remove_log_p=model.remove_log_p_descriptors,
+                    embedding=model.embedding,
+                    applicability_domain=ad,
+                    filterColumnsInBothSets=False,
+                    returnTrainingAD=False
+                )
+
+                ad_map = (
+                    df_ad_output
+                    .rename(columns={"idTest": "id"})
+                    .set_index("id")["AD"]
+                )
+
+                # ad_test_columns[f"AD_{ad.replace(' ', '_')}"] = df_ad_output["AD"].values
+                ad_test_columns[f"AD_{ad.replace(' ', '_')}"] = temp["id"].map(ad_map)
+
+            logging.warning(
+                "AD columns were missing from model predictions; recomputing AD as fallback. "
+                "This should not normally happen if run_model_building_db.py is the source of truth."
+            )
 
         test_predictions_dict = {
             "Exp Prop ID": temp["qsar_exp_prop_property_values_id_first"],
             "Canon QSAR SMILES": temp["canon_qsar_smiles"],
-            "Exp": temp["exp"],
-            "Pred": temp["pred"],
-            "Absolute Error": abs(temp["exp"] - temp["pred"]),
-            **ad_test_columns,
             "DTXCID": temp["dtxcid"],
             "DTXSID": temp["dtxsid"],
             "CASRN": temp["casrn"],
             "Preferred Name": temp["preferred_name"],
             "SMILES": temp["smiles"],
-            "Mol Weight": temp["mol_weight"]
+            "Mol Weight": temp["mol_weight"],
+            f"Observed ({model.unitsModel})": temp["exp"],
+            f"Predicted ({model.unitsModel})": temp["pred"],
+            f"Absolute Error ({model.unitsModel})": abs(temp["exp"] - temp["pred"]),
+            **ad_test_columns
         }
         test_set_predictions_df = pd.DataFrame(test_predictions_dict)
 
-        logging.info(f"Finished building Test Set Predictions from Model (model_id = {self.model_id})")
+        logging.debug(f"Finished building Test Set Predictions from Model (model_id = {self.model_id})")
 
         return test_set_predictions_df
     
@@ -1702,10 +1848,10 @@ class DataQuerier:
             Optional[pd.DataFrame]: External predictions with compound identifiers and AD membership, or None if no external dataset.
         """
         if self.dataset_name_external is None:
-            logging.info(f"External dataset name is None for provided Model (model_id = {self.model_id}), skipping External Predictions sheet")
+            logging.debug(f"External dataset name is None for provided Model (model_id = {self.model_id}), skipping External Predictions sheet")
             return None
         
-        logging.info(f"Building External Predictions from Model (model_id = {self.model_id})")
+        logging.debug(f"Building External Predictions from Model (model_id = {self.model_id})")
 
         model = self.query_model()
         df_gmd_external = self.query_df_gmd(external=True)
@@ -1714,35 +1860,75 @@ class DataQuerier:
 
         temp = pd.merge(df_preds_external, df_gmd_external, left_on="id", right_on="canon_qsar_smiles", how="left")
 
-        ads = model.applicabilityDomainName.split(" and ")
+        # ads = model.applicabilityDomainName.split(" and ")
+        # ad_test_columns = {}
+        # for ad in ads:
+        #     df_ad_output, _ = adu.generate_applicability_domain_with_preselected_descriptors_from_dfs(
+        #             train_df=model.df_training.copy(), test_df=model.df_external.copy(),
+        #             remove_log_p=model.remove_log_p_descriptors,
+        #             embedding=model.embedding, applicability_domain=ad,
+        #             filterColumnsInBothSets=False,
+        #             returnTrainingAD=False)
+        #     ad_test_columns[f"AD {ad}"] = df_ad_output["AD"]
+
+        # Prefer AD columns already present on the model predictions dataframe
         ad_test_columns = {}
-        for ad in ads:
-            df_ad_output, _ = adu.generate_applicability_domain_with_preselected_descriptors_from_dfs(
-                    train_df=model.df_training.copy(), test_df=model.df_external.copy(),
+        existing_ad_cols = {
+            col: model.df_preds_external[col]
+            for col in model.df_preds_external.columns
+            if col.startswith("AD_") or col.startswith("AD ")
+        }
+
+        if existing_ad_cols:
+            # Reuse existing values exactly as produced by run_model_building_db.py
+            ad_test_columns.update(existing_ad_cols)
+        elif model.applicabilityDomainName is not None:
+            # Fallback only if AD columns are absent
+            ads = model.applicabilityDomainName.split(" and ")
+            for ad in ads:
+                df_ad_output, _ = adu.generate_applicability_domain_with_preselected_descriptors_from_dfs(
+                    train_df=model.df_training.copy(),
+                    test_df=model.df_external.copy(),
                     remove_log_p=model.remove_log_p_descriptors,
-                    embedding=model.embedding, applicability_domain=ad,
+                    embedding=model.embedding,
+                    applicability_domain=ad,
                     filterColumnsInBothSets=False,
-                    returnTrainingAD=False)
-            ad_test_columns[f"AD {ad}"] = df_ad_output["AD"]
+                    returnTrainingAD=False
+                )
+
+                ad_map = (
+                    df_ad_output
+                    .rename(columns={"idTest": "id"})
+                    .set_index("id")["AD"]
+                )
+
+                # ad_test_columns[f"AD_{ad.replace(' ', '_')}"] = df_ad_output["AD"].values
+                # ad_test_columns[f"AD_{ad.replace(" ", "_")}"] = temp["id"].map(ad_map)
+                ad_test_columns[f"AD_{ad.replace(' ', '_')}"] = temp["id"].map(ad_map)
+
+            logging.warning(
+                "AD columns were missing from model predictions; recomputing AD as fallback. "
+                "This should not normally happen if run_model_building_db.py is the source of truth."
+            )
 
         external_predictions_dict = {
             "Exp Prop ID": temp["qsar_exp_prop_property_values_id_first"],
             "Canon QSAR SMILES": temp["canon_qsar_smiles"],
-            "Exp": temp["exp"],
-            "Pred": temp["pred"],
-            "Absolute Error": abs(temp["exp"] - temp["pred"]),
-            **ad_test_columns,
             "DTXCID": temp["dtxcid"],
             "DTXSID": temp["dtxsid"],
             "CASRN": temp["casrn"],
             "Preferred Name": temp["preferred_name"],
             "SMILES": temp["smiles"],
-            "Mol Weight": temp["mol_weight"]
+            "Mol Weight": temp["mol_weight"],
+            f"Observed ({model.unitsModel})": temp["exp"],
+            f"Predicted ({model.unitsModel})": temp["pred"],
+            f"Absolute Error ({model.unitsModel})": abs(temp["exp"] - temp["pred"]),
+            **ad_test_columns
         }
         external_predictions_df = pd.DataFrame(external_predictions_dict)
-        external_predictions_df.dropna(axis=0, subset=["Exp Prop ID", "Exp", "Pred"], how="any", inplace=True)
+        external_predictions_df.dropna(axis=0, subset=["Exp Prop ID", f"Observed ({model.unitsModel})", f"Predicted ({model.unitsModel})"], how="any", inplace=True)
 
-        logging.info(f"Finished building External Predictions from Model (model_id = {self.model_id})")
+        logging.debug(f"Finished building External Predictions from Model (model_id = {self.model_id})")
 
         return external_predictions_df
 
@@ -1757,6 +1943,18 @@ class DataTransformer:
     Provides static methods for formatting numeric values, transforming experimental metadata,
     generating dataframes for all Excel sheets, and extracting/formatting model coefficients.
     """
+
+    @staticmethod
+    def _extract_existing_ad_columns(df: pd.DataFrame) -> dict:
+        """
+        Return a mapping of existing AD columns from a prediction dataframe.
+        This is used to avoid recomputing AD in report generation.
+        """
+        ad_cols = {}
+        for col in df.columns:
+            if col.startswith("AD_") or col.startswith("AD "):
+                ad_cols[col] = df[col]
+        return ad_cols
     
     @staticmethod
     def set_significant_digits(value: float, significant_digits: int) -> str:
@@ -2078,18 +2276,18 @@ class DataTransformer:
         if len(stats_dict) > 0:
             ms["test_stats_all_AD"] = stats_dict
 
-        training_stats.pop("Coverage_Training")
+        training_stats.pop("Coverage_Training", None)
         ms["training_stats"] = training_stats
         
         if cv_stats:
-            cv_stats.pop("Coverage_CV_Training")
+            cv_stats.pop("Coverage_CV_Training", None)
             ms["cv_stats"] = cv_stats
 
         if ext_stats:
-            ext_stats.pop("Coverage_External")
+            ext_stats.pop("Coverage_External", None)
             ms["ext_stats"] = ext_stats
 
-        test_stats.pop("Coverage_Test")
+        test_stats.pop("Coverage_Test", None)
         ms["test_stats"] = test_stats
 
         if len(stats_dict) > 0:
@@ -2146,11 +2344,6 @@ class DataTransformer:
         records_df = {
             "Exp Prop ID": df_pv.get("prop_value_id", None),
             "Canon QSAR SMILES": df_pv.get("canon_qsar_smiles", None),
-            "Page URL": df_pv.get("direct_url", None),
-            "Public Source Name": df_pv.get("public_source_name", None),
-            "Public Source URL": df_pv.get("public_source_url", None),
-            "Literature Source Citation": df_pv.get("literature_source_citation", None),
-            "Literature Source DOI": df_pv.get("literature_source_doi", None),
             "Source DTXRID": df_pv.get("source_dtxrid", None),
             "Source DTXSID": df_pv.get("source_dtxsid", None),
             "Source CASRN": df_pv.get("source_casrn", None),
@@ -2162,6 +2355,14 @@ class DataTransformer:
             "Mapped Chemical Name": df_pv.get("mapped_chemical_name", None),
             "Mapped SMILES": df_pv.get("mapped_smiles", None),
             "Mapped Molweight": df_pv.get("mapped_mol_weight", None),
+            "Page URL": df_pv.get("direct_url", None),
+            "Public Source Name": df_pv.get("public_source_name", None),
+            "Public Source URL": df_pv.get("public_source_url", None),
+            "Public Source Original Name": df_pv.get("public_source_original_name", None),
+            "Public Source Original URL": df_pv.get("public_source_original_url", None),
+            "Literature Source Citation": df_pv.get("literature_source_citation", None),
+            "Literature Source DOI": df_pv.get("literature_source_doi", None),
+            "Document Name": df_pv.get("brief_citation", None),
             "Value Original": df_pv.get("prop_value_original", None),
             "Value Max": df_pv.get("value_max", None),
             "Value Min": df_pv.get("value_min", None),
@@ -2198,7 +2399,7 @@ class DataTransformer:
 
         superheaders = {
             "Identifiers": ["Exp Prop ID", "Canon QSAR SMILES"],
-            "Literature Source Metadata": ["Page URL", "Public Source Name", "Public Source URL", "Literature Source Citation", "Literature Source DOI"],
+            "Literature Source Metadata": ["Page URL", "Public Source Name", "Public Source URL", "Public Source Original Name", "Public Source Original URL", "Literature Source Citation", "Literature Source DOI", "Document Name"],
             "Source Chemical Metadata": ["Source DTXRID", "Source DTXSID", "Source CASRN", "Source Chemical Name", "Source SMILES"],
             "Mapped DSSTox Record Metadata": ["Mapped DTXCID", "Mapped DTXSID", "Mapped CAS", "Mapped Chemical Name", "Mapped SMILES", "Mapped Molweight"],
             "Property Value Data": ["Value Original", "Value Max", "Value Min", "Value Point Estimate", "Value Units", "QSAR Property Value", "QSAR Property Units"],
@@ -2217,8 +2418,8 @@ class DataTransformer:
             else:
                 empty_superheaders.append(superheader)
         for superheader in empty_superheaders:
-            logging.info(f"Removing empty superheader: {superheader}")
-            superheaders.pop(superheader)
+            logging.debug(f"Removing empty superheader: {superheader}")
+            superheaders.pop(superheader, None)
 
         return superheaders
 
@@ -2316,7 +2517,7 @@ class DataTransformer:
         test["Set"] = "Test"
 
         training = df_pred_cv.loc[:, columns]
-        training["Set"] = df_pred_cv.cv_fold.apply(lambda x: f"Training CV, Fold {x}")
+        training["Set"] = "Training"
 
         full = pd.concat([test, training], ignore_index=True)
         full["canon_qsar_smiles"] = full["canon_qsar_smiles"].astype(str)
@@ -2346,7 +2547,7 @@ class DataTransformer:
         return final
 
     @staticmethod
-    def get_training_cv_predictions_df(df_training_cv: pd.DataFrame) -> pd.DataFrame:
+    def get_training_cv_predictions_df(df_training_cv: pd.DataFrame, units: Optional[str] = "unitless") -> pd.DataFrame:
         """Format training set cross-validation predictions for Excel sheet.
         
         Args:
@@ -2359,10 +2560,11 @@ class DataTransformer:
         df_training_cv.insert(0, "Exp Prop ID", exp_prop_id)
         df_training_cv.rename(columns={col: ExcelFormatter.clean_col_titles(col) for col in df_training_cv.columns}, inplace=True)
         df_training_cv.insert(df_training_cv.columns.get_loc("Pred") + 1, "Absolute Error", abs(df_training_cv["Exp"] - df_training_cv["Pred"]))
+        df_training_cv.reindex(columns=["Exp Prop ID", "Canon QSAR SMILES", "DTXCID", "DTXSID", "CASRN", "Preferred Name", "SMILES", "Mol Weight", f"Observed ({units})", f"Predicted ({units})", f"Absolute Error ({units})", "CV Fold"], axis=1)
         return df_training_cv
 
     @staticmethod
-    def get_test_set_predictions_df(df_test: pd.DataFrame, actual_ads: Optional[list]=None) -> pd.DataFrame:
+    def get_test_set_predictions_df(df_test: pd.DataFrame, actual_ads: Optional[list]=None, units: Optional[str] = "unitless") -> pd.DataFrame:
         """Format test set predictions for Excel sheet.
         
         Args:
@@ -2385,10 +2587,11 @@ class DataTransformer:
         
         df_test.rename(columns={col: ExcelFormatter.clean_col_titles(col) for col in df_test.columns}, inplace=True)
         df_test.insert(df_test.columns.get_loc("Pred") + 1, "Absolute Error", abs(df_test["Exp"] - df_test["Pred"]))
+        df_test.reindex(columns=["Exp Prop ID", "Canon QSAR SMILES", "DTXCID", "DTXSID", "CASRN", "Preferred Name", "SMILES", "Mol Weight", f"Observed ({units})", f"Pred ({units})", f"Absolute Error ({units})", *[col for col in df_test.columns if col.startswith("AD")]], axis=1)
         return df_test
 
     @staticmethod
-    def get_external_predictions_df(df_ext: pd.DataFrame, ad_columns: Optional[list|str] = None, df_training: Optional[pd.DataFrame] = None, remove_log_p_descriptors: Optional[bool] = True, embedding: Optional[list[str]] = None) -> pd.DataFrame:
+    def get_external_predictions_df(df_ext: pd.DataFrame, ad_columns: Optional[list|str] = None, df_training: Optional[pd.DataFrame] = None, remove_log_p_descriptors: Optional[bool] = True, embedding: Optional[list[str]] = None, units: Optional[str] = "unitless") -> pd.DataFrame:
         """Format external/validation set predictions for Excel sheet (DEPRECATED).
         
         This method is superseded by DataQuerier.query_external_predictions_df() which provides
@@ -2425,6 +2628,7 @@ class DataTransformer:
         df_ext.rename(columns={col: ExcelFormatter.clean_col_titles(col) for col in df_ext.columns}, inplace=True)
         df_ext.dropna(axis=0, subset=["Exp Prop ID", "Exp", "Pred"], how="any", inplace=True)
         df_ext.insert(df_ext.columns.get_loc("Pred") + 1, "Absolute Error", abs(df_ext["Exp"] - df_ext["Pred"]))
+        df_ext.reindex(columns=["Exp Prop ID", "Canon QSAR SMILES", "DTXCID", "DTXSID", "CASRN", "Preferred Name", "SMILES", "Mol Weight", f"Observed ({units})", f"Predicted ({units})", f"Absolute Error ({units})", *[col for col in df_ext.columns if col.startswith("AD")]], axis=1)
         return df_ext
     
     @staticmethod
@@ -2442,14 +2646,14 @@ class DataTransformer:
                 logging.error(f"Failed to load model")
                 return None
             method_name = getattr(model, "qsar_method", False) or getattr(model, "regressor_name", False) or ""
-            if not any(method in method_name for method in ["reg", "las", "gcm"]):
+            if not any(method in method_name for method in ["reg", "las", "gcm", "huber", "ransac", "theil_sen"]):
                 logging.warning(f"Model has QSAR method that does not support coefficient retrieval: {method_name}")
                 return None
-                        
+            
             df_training = model.df_training
             y = df_training[df_training.columns[1]]
             X = df_training[model.embedding]
-
+            
             coefficients_json = model.getOriginalRegressionCoefficients2(X, y)
             coefficients_dict = json.loads(coefficients_json)
             
@@ -2459,6 +2663,89 @@ class DataTransformer:
             logging.error(f"Error retrieving coefficients: {e}")
             traceback.print_exc()
             return None
+
+    @staticmethod
+    def create_results_dict(ad_measure_model, df_training, params, model, training_stats, test_stats, cv_stats, ext_stats, stats_dict, ext_stats_dict) -> dict:
+        """Create a results_dict dictionary in the same way as in run_model_building_db.Results.
+        
+        Args:
+            ad_measure_model: 
+            df_training: 
+            params: 
+            model: Model object.
+            training_stats: 
+            test_stats: 
+            cv_stats: 
+            ext_stats: 
+            stats_dict: 
+            ext_stats_dict: 
+        
+        Returns:
+            Optional[dict]: Dictionary with model information exactly like the result.json saved when creating models locally.
+        """
+        results_dict = {"params":params.to_dict()}
+        
+        md = model.get_model_description_dict()
+        results_dict["model_details"] = md
+
+        # Store the embedding length safely (handles None)
+        embedding = getattr(model, "embedding", None)
+        md["embedding_len"] = len(embedding) if embedding is not None else 0
+        
+        md["qsar_method_description"] = md.pop("description", None)
+        md["qsar_method_description_url"] = md.pop("description_url", None)
+        md.pop("embedding", None)
+        md["embedding"] = embedding
+        
+        md.pop("descriptorService", None)
+        
+        md.pop("training_descriptor_std_devs", None)
+        md.pop("training_descriptor_means", None)
+        
+        md["splittingName"] = params.splitting_name
+        
+        md["descriptor_set_name"] = params.descriptor_set_name
+            
+        qsar_method = params.qsar_method
+        
+        if qsar_method == 'reg' or qsar_method == 'las' or qsar_method == 'gcm':
+            # results_dict['model_coefficients'] = json.loads(model.getOriginalRegressionCoefficients())
+            y = df_training[df_training.columns[1]]
+            X = df_training[model.embedding]
+            results_dict["model_details"]['model_coefficients'] = json.loads(model.getOriginalRegressionCoefficients2(X, y))
+        
+        ms = {}
+        results_dict["model_statistics"] = ms
+
+        if stats_dict is not None and len(stats_dict) > 0:
+            ms["test_stats_all_AD"] = stats_dict
+
+        training_stats.pop("Coverage_Training", None)
+        ms["training_stats"] = training_stats
+        
+        if cv_stats:
+            cv_stats.pop("Coverage_CV_Training", None)
+            ms["cv_stats"] = cv_stats
+
+        if ext_stats:
+            # print('ext_stats', json.dumps(ext_stats))
+            ext_stats.pop("Coverage_External", None)
+            ms["ext_stats"] = ext_stats
+
+        test_stats.pop("Coverage_Test", None)
+        ms["test_stats"] = test_stats
+
+        if stats_dict is not None and len(stats_dict) > 0:
+            str_ad_measure_final = " and ".join(ad_measure_model)                        
+            ms["test_stats_AD"] = stats_dict[str_ad_measure_final]
+            ms["test_stats_all_AD"] = stats_dict
+        
+        if stats_dict is not None and len(stats_dict) > 0 and ext_stats:
+            external_ad = str_ad_measure_final + " External"
+            ms["ext_stats_AD"] = ext_stats_dict[external_ad]
+            ms["ext_stats_all_AD"] = ext_stats_dict
+        
+        return results_dict
 
 
 # ============================================================
@@ -3076,7 +3363,7 @@ class ModelToExcel:
             worksheet.freeze_panes(1, 0)
 
         col_widths = ExcelFormatter.set_column_width(writer, "Training CV Predictions", training_cv_predictions, min_col_width=min_col_width, col_width_pad=col_width_pad, how="header")
-        ExcelFormatter.set_sig_figs(writer, "Training CV Predictions", training_cv_predictions, columns=["Exp", "Pred", "Absolute Error", "Mol Weight"], sig_figs=3, col_widths=col_widths)
+        ExcelFormatter.set_sig_figs(writer, "Training CV Predictions", training_cv_predictions, columns=[f"Observed ({property_units})", f"Predicted ({property_units})", f"Absolute Error ({property_units})", "Mol Weight"], sig_figs=3, col_widths=col_widths)
         ExcelFormatter.add_filter(writer, "Training CV Predictions", training_cv_predictions, has_subtotals=add_subtotals)
         ChartBuilder.add_plot(writer, workbook, "Training CV Predictions", "Training CV Predictions", training_cv_predictions, is_binary=self.model.is_binary, x_col=x_col, y_col=y_col, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, log_plot=self.log_plot, yx_offset_rows=yx_offset_rows, property_name=property_name, property_units=property_units, has_subtotals=add_subtotals)
 
@@ -3122,7 +3409,7 @@ class ModelToExcel:
             worksheet.freeze_panes(1, 0)
 
         col_widths = ExcelFormatter.set_column_width(writer, "Test Set Predictions", test_set_predictions, min_col_width=min_col_width, col_width_pad=col_width_pad, how="header")
-        ExcelFormatter.set_sig_figs(writer, "Test Set Predictions", test_set_predictions, columns=["Exp", "Pred", "Absolute Error", "Mol Weight"], sig_figs=3, col_widths=col_widths)
+        ExcelFormatter.set_sig_figs(writer, "Test Set Predictions", test_set_predictions, columns=[f"Observed ({property_units})", f"Predicted ({property_units})", f"Absolute Error ({property_units})", "Mol Weight"], sig_figs=3, col_widths=col_widths)
         ExcelFormatter.add_filter(writer, "Test Set Predictions", test_set_predictions, has_subtotals=add_subtotals)
 
         ChartBuilder.add_plot(writer, workbook, "Test Set Predictions", "Test Set Predictions", test_set_predictions, is_binary=self.model.is_binary, x_col=x_col, y_col=y_col, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, log_plot=self.log_plot, yx_offset_rows=yx_offset_rows, property_name=property_name, property_units=property_units, has_subtotals=add_subtotals)
@@ -3170,7 +3457,7 @@ class ModelToExcel:
             worksheet.freeze_panes(1, 0)
 
         col_widths = ExcelFormatter.set_column_width(writer, "External Predictions", external_predictions, min_col_width=min_col_width, col_width_pad=col_width_pad, how="header")
-        ExcelFormatter.set_sig_figs(writer, "External Predictions", external_predictions, columns=["Exp", "Pred", "Absolute Error", "Mol Weight"], sig_figs=3, col_widths=col_widths)
+        ExcelFormatter.set_sig_figs(writer, "External Predictions", external_predictions, columns=[f"Observed ({property_units})", f"Predicted ({property_units})", f"Absolute Error ({property_units})", "Mol Weight"], sig_figs=3, col_widths=col_widths)
         ExcelFormatter.add_filter(writer, "External Predictions", external_predictions, has_subtotals=add_subtotals)
         
         ChartBuilder.add_plot(writer, workbook, "External Predictions", "External Predictions", external_predictions, is_binary=self.model.is_binary, x_col=x_col, y_col=y_col, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, log_plot=self.log_plot, yx_offset_rows=yx_offset_rows, property_name=property_name, property_units=property_units, has_subtotals=add_subtotals)
@@ -3211,25 +3498,25 @@ class ModelToExcel:
             workbook = writer.book
             workbook.nan_inf_to_errors = True
 
-            logging.info("Creating Cover Sheet...")
+            logging.debug("Creating Cover Sheet...")
             self.cover_sheet(writer, self.cover_sheet_df)
 
-            logging.info("Creating Statistics...")
+            logging.debug("Creating Statistics...")
             self.statistics(writer, self.statistics_df, self.model.is_binary)
 
-            logging.info("Creating Records...")
+            logging.debug("Creating Records...")
             df = self.records(writer, self.records_df, external=False, add_subtotals=self.add_subtotals, exclude_blank_columns=self.exclude_blank_columns, include_qc_columns=self.include_qc_columns, include_value_original=self.include_value_original)
 
-            logging.info("Creating External Records...")
+            logging.debug("Creating External Records...")
             df = self.records(writer, self.external_records_df, external=True, add_subtotals=self.add_subtotals, exclude_blank_columns=self.exclude_blank_columns, include_qc_columns=self.include_qc_columns, include_value_original=self.include_value_original)
 
-            logging.info("Creating Records Field Descriptions...")
+            logging.debug("Creating Records Field Descriptions...")
             df = self.records_field_descriptions(writer, self.records_field_descriptions_df)
 
-            logging.info("Creating Model Descriptors...")
+            logging.debug("Creating Model Descriptors...")
             df = self.model_descriptors(writer, self.model_descriptors_df, add_subtotals=self.add_subtotals)
 
-            logging.info("Creating Model Descriptor Values...")
+            logging.debug("Creating Model Descriptor Values...")
             df = self.model_descriptor_values(writer, self.model_descriptor_values_df, add_subtotals=self.add_subtotals)
 
             try:
@@ -3243,21 +3530,21 @@ class ModelToExcel:
             except Exception as e:
                 property_units = None
 
-            logging.info("Creating Training CV Predictions...")
+            logging.debug("Creating Training CV Predictions...")
             df = self.training_cv_predictions(writer, self.training_cv_predictions_df, add_subtotals=self.add_subtotals, x_col=x_col, y_col=y_col, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, yx_offset_rows=yx_offset_rows, col_width_pad=col_width_pad, min_col_width=min_col_width, property_name=property_name, property_units=property_units)
 
-            logging.info("Creating Test Set Predictions...")
+            logging.debug("Creating Test Set Predictions...")
             df = self.test_set_predictions(writer, self.test_set_predictions_df, add_subtotals=self.add_subtotals, x_col=x_col, y_col=y_col, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, yx_offset_rows=yx_offset_rows, col_width_pad=col_width_pad, min_col_width=min_col_width, property_name=property_name, property_units=property_units)
 
             if self.external_predictions_df is not None:
-                logging.info("Creating External Predictions...")
+                logging.debug("Creating External Predictions...")
                 df = self.external_predictions(writer, self.external_predictions_df, add_subtotals=self.add_subtotals, x_col=x_col, y_col=y_col, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, yx_offset_rows=yx_offset_rows, col_width_pad=col_width_pad, min_col_width=min_col_width, property_name=property_name, property_units=property_units)
 
-            # logging.info("Done creating detailed Excel!")
-            # logging.info("Done with initial passthrough of all sheets!")
+            # logging.debug("Done creating detailed Excel!")
+            # logging.debug("Done with initial passthrough of all sheets!")
 
             # Add Hyperlinks
-            logging.info("Adding hyperlinks...")
+            logging.debug("Adding hyperlinks...")
             try:
                 ExcelFormatter.add_hyperlinks_to_sheet(writer, "Records", "Training CV Predictions", self.records_df, self.training_cv_predictions_df, has_subtotals=self.add_subtotals, source_has_superheaders=self.create_records_superheaders)
             except Exception as e:
@@ -3300,10 +3587,10 @@ class ModelToExcel:
         stats = {}
         for stat in stats_df:
             if stat not in ["nTraining", "nTest", "nExternal"]:
-                old_value, new_value = update_statistic_value(session, self.model.modelId, stat, stats_df.at[0, stat], user_id, upload_to_db)
+                old_value, new_value = update_statistic_value(DataQuerier.ensure_static_session(session), self.model.modelId, stat, stats_df.at[0, stat], user_id, upload_to_db)
                 stats[stat] = {"old": old_value, "new": new_value}
         
-        logging.info(f"Updated statistics for model {self.model.modelId}:\n{json.dumps(stats, indent=4)}")
+        logging.debug(f"Updated statistics for model {self.model.modelId}:\n{json.dumps(stats, indent=4)}")
         
         return stats
 
@@ -3328,6 +3615,7 @@ def update_excel_summaries(username: str, model_ids: Optional[list[int]] = None,
     session = DataQuerier.getSession(DataQuerier.getEngine())
 
     for model_id in model_ids:
+        logging.info(f"RUNNING EXCEL SUMMARY UPDATE FOR MODEL {model_id}")
         file_path = os.path.join(PROJECT_ROOT, "data", "excel_summaries", f"{model_id}_summary.xlsx")
         mdo = ModelDataObjects(model_id=model_id)
         mte = ModelToExcel(mdo, file_path)
@@ -3335,14 +3623,16 @@ def update_excel_summaries(username: str, model_ids: Optional[list[int]] = None,
 
         with open(file_path, "rb") as file:
             file_bytes = file.read()
-            logging.info(f"Model #: {model_id}, Length of Summary: {len(file_bytes)}")
+            logging.debug(f"Model #: {model_id}, Length of Summary: {len(file_bytes)}")
         
         if len(file_bytes) == 0:
             logging.warning(f"Model {model_id} summary has 0 bytes")
             continue
         
         if upload_to_db:
-            upload_or_update_model_file_in_db(file_bytes, username, model_id, 2, session)
+            upload_or_update_model_file_in_db(file_bytes, username, model_id, 2, DataQuerier.ensure_static_session(session))
+
+        logging.info(f"FINISHED RUNNING EXCEL SUMMARY UPDATE FOR MODEL {model_id}")
 
 
 def custom_encoder(obj: Any) -> dict:
@@ -3369,8 +3659,8 @@ def query_example() -> None:
     logging.info("Running query_example()")
     # model_id = 1753
     # model_id = 1847
+    # model_id = 1886
     model_id = 1754
-    print(PROJECT_ROOT)
     
     try:
         file_path = os.path.join(PROJECT_ROOT, "data", "excel_summaries", f"{model_id}_summary.xlsx")
@@ -3418,7 +3708,7 @@ def test_model_details_pv() -> None:
     engine = DataQuerier.getEngine()
     session = DataQuerier.getSession(engine)
     model_id = 1746
-    test = DataQuerier(engine=engine, session=session, model_id=model_id)
+    test = DataQuerier(engine=engine, session=DataQuerier.ensure_static_session(session), model_id=model_id)
     model = test.model
     print(f"Model:\n\t{model.__dict__}")
 
@@ -3445,13 +3735,13 @@ def test_model_details_gmd() -> None:
     engine = DataQuerier.getEngine()
     session = DataQuerier.getSession(engine)
     dataset_name = "KOC v1 modeling"
-    df_gmd = getMappedDatapoints(session, dataset_name)
+    df_gmd = getMappedDatapoints(DataQuerier.ensure_static_session(session), dataset_name)
 
     with open("test_df_gmd.pkl", "wb") as f:
         pickle.dump(df_gmd, f)
     
     dataset_name_external = "KOC v1 external"
-    df_gmd_external = getMappedDatapoints(session, dataset_name_external)
+    df_gmd_external = getMappedDatapoints(DataQuerier.ensure_static_session(session), dataset_name_external)
 
     with open("test_df_gmd_external.pkl", "wb") as f:
         pickle.dump(df_gmd_external, f)
@@ -3517,11 +3807,59 @@ def test_query_fish_models() -> None:
             logging.error(f"Error occurred while processing model_id {model_id}: {e}")
 
 
+def update_models_in_db():
+    upload_to_db = True
+    username = "weston.murdock"
+    
+    model_ids = [
+        # Physchem Models
+        # 1065, # HLC-XGB Martin 2024
+        # 1066, # WS-XGB Martin 2024
+        # 1067, # VP-XGB Martin 2024
+        # 1068, # BP-XGB Martin 2024
+        # 1069, # LogP-XGB Martin 2024
+        # 1070, # MP-XGB Martin 2024
+        # Koc Models
+        1763, # Koc Tox-GCM Martin 2026
+        1754, # Koc Tox-RF Martin 2026
+        1756, # Koc Tox-XGB Martin 2026
+        1757, # Koc Tox-REG Martin 2026
+        1758, # Koc Tox-KNN Martin 2026
+        # Acute Fish Toxicity
+        1887, # Koc Tox-GCM Martin 2026
+        1892, # Koc Tox-RF Martin 2026
+        1895, # Koc Tox-XGB Martin 2026
+        1896, # Koc Tox-REG Martin 2026
+        1897, # Koc Tox-KNN Martin 2026
+        # RBIODEG 301F RIFM
+        1877, # RBIODEG RIFM-GCM Martin 2026
+        1832, # RBIODEG RIFM-RF_No_FS Martin 2026
+        1834, # RBIODEG RIFM-RF Martin 2026
+        1833, # RBIODEG RIFM-XGB_No_FS Martin 2026
+        1837, # RBIODEG RIFM-XGB Martin 2026
+        1880, # RBIODEG RIFM-REG Martin 2026
+        1845, # RBIODEG RIFM-KNN Martin 2026
+        # RBIODEG 301 RIFM+ECHA
+        1878, # RBIODEG RIFM+ECHA-GCM Martin 2026
+        1849, # RBIODEG RIFM+ECHA-RF_No_FS Martin 2026
+        1862, # RBIODEG RIFM+ECHA-RF Martin 2026
+        1852, # RBIODEG RIFM+ECHA-XGB_No_FS Martin 2026
+        1865, # RBIODEG RIFM+ECHA-XGB Martin 2026
+        1879, # RBIODEG RIFM+ECHA-REG Martin 2026
+        1869 # RBIODEG RIFM+ECHA-KNN Martin 2026
+    ]
+    update_excel_summaries(username, model_ids, upload_to_db)
+    
+    
+
+
 def main():
     # update_excel_summaries(username="weston.murdock", model_ids=[1065, 1066, 1067, 1068, 1069, 1070], upload_to_db=False)
     # query_example()
+
     
-    update_excel_summaries(username='tmarti02', [1754], upload_to_db=False)
+    # update_excel_summaries(username='tmarti02', [1754], upload_to_db=False)
+    update_models_in_db()
     
     # local_example()
     # test_model_details_pv()
@@ -3529,6 +3867,7 @@ def main():
     # test_query_old_models()
     # test_query_binary_models()
     # test_query_fish_models()
+
 
 if __name__ == "__main__":
     main()

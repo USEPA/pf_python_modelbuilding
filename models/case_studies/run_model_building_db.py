@@ -3,11 +3,11 @@
 Created on Dec 30, 2025
 @author: TMARTI02
 '''
-from numba.cuda import descriptor
-from models.runGA import descriptor_coefficient
+
+
 from charset_normalizer.api import is_binary
-from numba.core.types import none
-from models.df_utilities import do_remove_fragment_descriptors
+
+
 """
 from __future__ import annotations lets you:
 -Use forward references without quotes (refer to classes not yet defined)
@@ -18,11 +18,11 @@ from __future__ import annotations lets you:
 from datetime import datetime
 import os, json
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.engine import URL
 from sqlalchemy.orm import sessionmaker
 from xlsxwriter.utility import xl_rowcol_to_cell
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import SQLAlchemyError, OperationalError
 
 import numpy as np
 import pandas as pd
@@ -31,7 +31,6 @@ import math
 import time
 from pathlib import Path
 
-import pickle 
 import re
 import traceback
 
@@ -41,7 +40,7 @@ from util.serialization_compat import serialize_model
 from models import make_test_plots as mtp 
 
 from model_ws_utilities import call_build_embedding_ga_db, call_build_model_with_preselected_descriptors_from_df, \
-    call_do_predictions_from_df, call_build_embedding_importance_from_df
+    call_do_predictions_from_df, call_build_embedding_importance_from_df, apply_outlier_filter
 
 from models.EmbeddingFromImportance import perform_iterative_recursive_feature_elimination as run_rfe
 from models.EmbeddingFromImportance import perform_iterative_sequential_feature_selection as run_sfs
@@ -110,6 +109,9 @@ class ParametersImportance:
 
     min_descriptor_count: int = 30
     max_descriptor_count: int = 40
+
+    n_min: int = 2
+    n_max: int = 20
     
     # min_descriptor_count: int = 20
     # max_descriptor_count: int = 30
@@ -117,9 +119,10 @@ class ParametersImportance:
     descriptor_coefficient: float = 0.006  # set to None for auto penalty value
     alpha = 0.7
 
-    include_standardization_in_pmml: bool = False
+    scale_features: bool = False
     use_pmml_pipeline: bool = False
     n_threads: Optional[int] = 4  # Set to n/2 where n is the number of logical processors on your computer
+    logp_columns: Optional[List[str]] = None
 
     # Derived value (set in __post_init__)
     fraction_of_max_importance: float = field(init=False)
@@ -158,8 +161,137 @@ class ParametersGroupContribution:
     min_count = 3  # minimum number of nonzero fragment values to keep a fragment column and its associated rows
     remove_log_p_descriptors: bool = False
     n_threads: int = 10
-    include_standardization_in_pmml: bool = False
+    scale_features: bool = False
     use_pmml_pipeline: bool = False
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class ParametersHuber:
+    dataset_name: str
+    qsar_method: str
+    descriptor_set_name: str
+    ad_measure: list[str]
+    splitting_name: str = "RND_REPRESENTATIVE"
+    
+    hyperparameter_grid: Optional[Dict[str, Any]] = None
+    feature_selection: bool = True
+    remove_log_p_descriptors: bool = False
+    n_threads: int = 10
+    scale_features: bool = True
+    use_pmml_pipeline: bool = False
+    
+    feature_selection_method = feature_selection_method_genetic_algorithm
+    num_generations = 100
+    num_optimizers = 100
+    num_jobs = 4
+    max_length: int = 24  # still use?
+    max_features = 25
+    min_count = 3  # minimum number of nonzero fragment values to keep a fragment column and its associated rows
+
+    use_wards: bool = False
+    run_rfe = True
+    run_sfs = True
+
+    n_features_to_select = "auto" # can be auto or an integer
+    min_descriptor_count = 5
+    remove_fragment_descriptors: bool = True
+    remove_acnt_descriptors: bool = True
+
+    alpha: float = 0.7
+    threshold: int = 1
+    elitism: bool = True
+    crossover_probability: float = 0.9
+    mutation_probability: float = 0.05
+    descriptor_coefficient: float = 0.006
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class ParametersTheilSen:
+    dataset_name: str
+    qsar_method: str
+    descriptor_set_name: str
+    ad_measure: list[str]
+    splitting_name: str = "RND_REPRESENTATIVE"
+    
+    hyperparameter_grid: Optional[Dict[str, Any]] = None
+    feature_selection: bool = True
+    remove_log_p_descriptors: bool = False
+    n_threads: int = 10
+    scale_features: bool = True
+    use_pmml_pipeline: bool = False
+    
+    feature_selection_method = feature_selection_method_genetic_algorithm
+    num_generations = 100
+    num_optimizers = 100
+    num_jobs = 4
+    max_length: int = 24  # still use?
+    max_features = 25
+    min_count = 3  # minimum number of nonzero fragment values to keep a fragment column and its associated rows
+
+    use_wards: bool = False
+    run_rfe = True
+    run_sfs = True
+
+    n_features_to_select = "auto" # can be auto or an integer
+    min_descriptor_count = 5
+    remove_fragment_descriptors: bool = True
+    remove_acnt_descriptors: bool = True
+
+    alpha: float = 0.7
+    threshold: int = 1
+    elitism: bool = True
+    crossover_probability: float = 0.9
+    mutation_probability: float = 0.05
+    descriptor_coefficient: float = 0.006
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class ParametersRansac:
+    dataset_name: str
+    qsar_method: str
+    descriptor_set_name: str
+    ad_measure: list[str]
+    splitting_name: str = "RND_REPRESENTATIVE"
+    
+    hyperparameter_grid: Optional[Dict[str, Any]] = None
+    feature_selection: bool = True
+    remove_log_p_descriptors: bool = False
+    n_threads: int = 10
+    scale_features: bool = True
+    use_pmml_pipeline: bool = False
+    
+    feature_selection_method = feature_selection_method_genetic_algorithm
+    num_generations = 100
+    num_optimizers = 100
+    num_jobs = 4
+    max_length: int = 24  # still use?
+    max_features = 25
+    min_count = 3  # minimum number of nonzero fragment values to keep a fragment column and its associated rows
+
+    use_wards: bool = False
+    run_rfe = True
+    run_sfs = True
+
+    n_features_to_select = "auto" # can be auto or an integer
+    min_descriptor_count = 5
+    remove_fragment_descriptors: bool = True
+    remove_acnt_descriptors: bool = True
+
+    alpha: float = 0.7
+    threshold: int = 1
+    elitism: bool = True
+    crossover_probability: float = 0.9
+    mutation_probability: float = 0.05
+    descriptor_coefficient: float = 0.006
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -176,9 +308,10 @@ class ParametersGeneric:
     
     hyperparameter_grid: Optional[Dict[str, Any]] = None
     feature_selection: bool = False
+    feature_selection_method: str = feature_selection_method_group_contribution
     remove_log_p_descriptors: bool = False
     n_threads: int = 10
-    include_standardization_in_pmml: bool = False
+    scale_features: bool = False
     use_pmml_pipeline: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
@@ -223,7 +356,7 @@ class ParametersGeneticAlgorithm:
     remove_fragment_descriptors: bool = True
     remove_acnt_descriptors: bool = True
 
-    include_standardization_in_pmml: bool = False
+    scale_features: bool = False
     use_pmml_pipeline: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
@@ -310,22 +443,30 @@ class ModelLoader():
         
             if stat_name in stats_lookup:
                 fk_statistic_id = stats_lookup[stat_name]
-                # print(stat_name,fk_statistic_id)
+
+                stat_value = stats[stat_name]
+
+                # Convert NumPy scalars to native Python types for DB insertion
+                if isinstance(stat_value, np.generic):
+                    stat_value = stat_value.item()
+
+                # Also handle pandas missing values cleanly
+                if pd.isna(stat_value):
+                    stat_value = None
+
                 model_statistics_row = {
-                    "statistic_value":stats[stat_name],
-                    "fk_model_id":fk_model_id,
-                    "fk_statistic_id":fk_statistic_id,
-                    "created_by":user,
-                    "updated_by":user,
-                    "created_at":created_at,
-                    "updated_at":created_at}
+                    "statistic_value": stat_value,
+                    "fk_model_id": fk_model_id,
+                    "fk_statistic_id": fk_statistic_id,
+                    "created_by": user,
+                    "updated_by": user,
+                    "created_at": created_at,
+                    "updated_at": created_at
+                }
                 model_statistics_rows.append(model_statistics_row)                
-                # print(stat_name,"\n",json.dumps(to_json_safe(model_statistics_row),indent=4))
-                
-                # print(stat_name,stats[stat_name],fk_statistic_id)
-                
+        
             else:
-                if stat_name !='ba_ratio' and stat_name!='Concordance_CV_Training':                
+                if stat_name != 'ba_ratio' and stat_name != 'Concordance_CV_Training':                
                     print(stat_name, "Skipping loading stat")
 
     def load_stats(self, results, user, fk_model_id):
@@ -363,7 +504,7 @@ class ModelLoader():
 
     from typing import List, Union
     
-    def divide_array(self, source: Union[bytes, bytearray], chunksize: int=26214400) -> List[Union[bytes, bytearray]]:
+    def divide_array(self, source: Union[bytes, bytearray], chunksize: int=26214400) -> List[Union[bytes, bytearray]] | None:
         """
         Split a bytes-like object into chunks of size `chunksize`.
         Returns a list of slices (copies). Last chunk may be shorter.
@@ -459,90 +600,184 @@ class ModelLoader():
     def load_predictions(
         self,
         user: str,
-        set: str,
+        set_name: str,
         df: pd.DataFrame,
         fk_model_id: int,
-        fk_splitting_id: Optional[int]=None,
-        chunk_size: int=1000,
+        fk_splitting_id: Optional[int] = None,
+        chunk_size: int = 1000,
     ) -> int:
-        """
-        Insert prediction rows into qsar_models.predictions using self.create_many_chunked.
-    
-        DataFrame must contain:
-          - id   -> mapped to canon_qsar_smiles
-          - pred -> mapped to qsar_predicted_value
-    
-        cv_fold handling:
-          - If 'cv_fold' is present in df, fk_splitting_id is set per row as (cv_fold + 1).
-          - If any cv_fold value is missing/non-numeric, it falls back to the provided fk_splitting_id.
-          - If cv_fold is absent entirely, fk_splitting_id must be provided as an argument.
-    
-        Method arguments applied uniformly:
-          - fk_model_id
-          - created_at (also used for updated_at)
-          - user (sets both created_by and updated_by)
-    
-        Returns:
-          Number of inserted rows.
-        """
-        
-        # print(f"set={set}, fk_splitting_id={fk_splitting_id}")
-        
-        # Basic validation
+        if df is None or df.empty:
+            logging.info(f"For {set_name} set, no predictions to load.")
+            return 0
+
         required_cols = ["canon_qsar_smiles", "pred"]
         missing = [c for c in required_cols if c not in df.columns]
         if missing:
             raise ValueError(f"DataFrame missing required columns: {missing}")
+
         if not user:
-            raise ValueError("A non-empty 'user' must be provided to set created_by/updated_by.")
+            raise ValueError("A non-empty user must be provided.")
         if fk_model_id is None:
             raise ValueError("fk_model_id must be provided.")
-        
+
+        total_count = 0
+
+        for start in range(0, len(df), chunk_size):
+            batch_df = df.iloc[start:start + chunk_size].copy()
+            created_at = datetime.now()
+
+            rows_df = pd.DataFrame({
+                "canon_qsar_smiles": batch_df["canon_qsar_smiles"].astype(str),
+                "qsar_predicted_value": pd.to_numeric(batch_df["pred"], errors="coerce"),
+            })
+
+            if "cv_fold" in batch_df.columns:
+                cv = pd.to_numeric(batch_df["cv_fold"], errors="coerce")
+                if cv.isna().any():
+                    raise ValueError("cv_fold contains null or non-numeric values.")
+                rows_df["fk_splitting_id"] = cv.astype(int) + 1
+            else:
+                if fk_splitting_id is None:
+                    raise ValueError("fk_splitting_id must be provided when cv_fold is not present.")
+                rows_df["fk_splitting_id"] = fk_splitting_id
+
+            rows_df["fk_model_id"] = fk_model_id
+            rows_df["created_by"] = user
+            rows_df["updated_by"] = user
+            rows_df["created_at"] = created_at
+            rows_df["updated_at"] = created_at
+
+            prediction_records = rows_df.replace({np.nan: None}).to_dict(orient="records")
+
+            prediction_ids = self.dbl.create_many(
+                table="predictions",
+                records=prediction_records,
+                commit=False,
+            )
+
+            total_count += len(prediction_ids)
+            logging.info(
+                f"For {set_name} set, loaded prediction batch {start}..{start + len(batch_df) - 1} "
+                f"({len(prediction_ids)} rows)"
+            )
+
+            ad_cols = [c for c in batch_df.columns if c.startswith("AD_")]
+            if ad_cols:
+                ad_df = self.build_predictions_ad_estimates_df(
+                    df=batch_df,
+                    prediction_ids=prediction_ids,
+                    user=user,
+                )
+
+                if ad_df is not None and not ad_df.empty:
+                    ad_records = ad_df.replace({np.nan: None}).to_dict(orient="records")
+                    self.dbl.create_many(
+                        table="predictions_ad_estimates",
+                        records=ad_records,
+                        commit=False,
+                    )
+
+            self.dbl.session.commit()
+
+        logging.info(f"For {set_name} set, # predictions loaded: {total_count}")
+        return total_count
+
+    def build_predictions_ad_estimates_df(
+        self,
+        df: pd.DataFrame,
+        prediction_ids: list[int],
+        user: str,
+    ) -> pd.DataFrame:
+        """
+        Build one row per prediction per AD method, using each AD column's
+        corresponding ad_methods.id.
+        """
+        if df is None or df.empty:
+            return pd.DataFrame()
+
+        if len(df) != len(prediction_ids):
+            raise ValueError(
+                f"Row mismatch: df has {len(df)} rows but prediction_ids has {len(prediction_ids)} ids"
+            )
+
         created_at = datetime.now()
-    
-        # Prepare per-row values (id -> canon_qsar_smiles, pred -> qsar_predicted_value)
-        rows_df = pd.DataFrame({
-            "canon_qsar_smiles": df["canon_qsar_smiles"].astype(str),
-            "qsar_predicted_value": pd.to_numeric(df["pred"], errors="coerce"),
-        })
-    
-        # Compute fk_splitting_id
-        if "cv_fold" in df.columns:
-            cv = pd.to_numeric(df["cv_fold"], errors="coerce")
-            fk_split_series = cv.add(1)  # fk_splitting_id = cv_fold + 1:            
-            # 2    RND_REPRESENTATIVE_CV1
-            # 3    RND_REPRESENTATIVE_CV2
-            # 4    RND_REPRESENTATIVE_CV3
-            # 5    RND_REPRESENTATIVE_CV4
-            # 6    RND_REPRESENTATIVE_CV5
-            
-            # If still missing, error out
-            if fk_split_series.isna().any():
-                raise ValueError("cv_fold contains null/non-numeric values")
-            rows_df["fk_splitting_id"] = fk_split_series.astype(int)
-        else:
-            if fk_splitting_id is None:
-                raise ValueError("fk_splitting_id must be provided when 'cv_fold' is not in the DataFrame.")
-            rows_df["fk_splitting_id"] = fk_splitting_id
-    
-        # Inject uniform constants; updated_at uses the same value as created_at
-        rows_df = rows_df.assign(
-            fk_model_id=fk_model_id,
-            created_at=created_at,
-            updated_at=created_at,
-            created_by=user,
-            updated_by=user,
-        )
-    
-        # Convert NaN to None for DB compatibility and to list-of-dicts
-        records = rows_df.replace({np.nan: None}).to_dict(orient="records")
-        # print_first_row(rows_df, row=0)
-    
-        # Use your chunked inserter (single atomic transaction)
-        count = self.dbl.create_many_chunked(table="predictions", records=records, chunk_size=chunk_size)        
-        logging.info(f"For {set} set, # predictions loaded: {count}")
-        
-        return count
+        rows = []
+
+        # Only treat AD flags as AD methods
+        ad_cols = [c for c in df.columns if c.startswith("AD_")]
+        if not ad_cols:
+            return pd.DataFrame()
+
+        for idx, (_, row) in enumerate(df.iterrows()):
+            fk_predictions_id = prediction_ids[idx]
+
+            for ad_col in ad_cols:
+                # Convert column name back to DB method name
+                db_ad_name = self.normalize_ad_method_name(ad_col)
+                fk_ad_method_id = self.get_ad_method_id_by_name(ad_col)
+                if fk_ad_method_id is None:
+                    continue
+
+                # Raw applicability value, if available
+                raw_value = row.get(f"{db_ad_name}_value", None)
+                if raw_value is None or pd.isna(raw_value):
+                    raw_value = row.get(ad_col, None)
+
+                # Conclusion
+                conclusion_val = row.get(f"{db_ad_name}_conclusion", None)
+                if conclusion_val is None or pd.isna(conclusion_val):
+                    conclusion_val = row.get(ad_col, None)
+
+                if isinstance(conclusion_val, (bool, np.bool_)):
+                    conclusion_text = "TRUE" if conclusion_val else "FALSE"
+                elif conclusion_val is None or pd.isna(conclusion_val):
+                    conclusion_text = None
+                else:
+                    conclusion_text = str(conclusion_val)
+
+                # Reasoning
+                reasoning = row.get(f"{db_ad_name}_reasoning", None)
+                if reasoning is None or pd.isna(reasoning):
+                    cutoff = row.get(f"{db_ad_name}_cutoff", None)
+                    if raw_value is not None and not pd.isna(raw_value) and cutoff is not None and not pd.isna(cutoff):
+                        reasoning = f"Applicability value {raw_value} compared to cutoff {cutoff} for AD '{db_ad_name}'."
+                    else:
+                        reasoning = f"Applicability domain evaluation for AD '{db_ad_name}'."
+
+                rows.append({
+                    "created_at": created_at,
+                    "created_by": user,
+                    "updated_at": created_at,
+                    "updated_by": user,
+                    "applicability_value": None if raw_value is None or pd.isna(raw_value) else float(raw_value),
+                    "conclusion": conclusion_text,
+                    "reasoning": reasoning,
+                    "fk_ad_method_id": fk_ad_method_id,
+                    "fk_predictions_id": fk_predictions_id,
+                })
+
+        return pd.DataFrame(rows)
+
+    def normalize_ad_method_name(self, ad_name: str) -> str:
+        """
+        Convert dataframe AD column naming into the database ad_methods.name format.
+
+        Examples:
+        AD_TEST_Euclidean_Distance_All_Descriptors -> TEST Euclidean Distance All Descriptors
+        TEST_Euclidean_Distance_All_Descriptors -> TEST Euclidean Distance All Descriptors
+        OPERA_Global_Index -> OPERA Global Index
+        """
+        if ad_name.startswith("AD_"):
+            ad_name = ad_name[3:]
+        return ad_name.replace("_", " ").strip()
+
+    def get_ad_method_id_by_name(self, ad_name: str):
+        db_name = self.normalize_ad_method_name(ad_name)
+        row_ad_method = self.dbl.get_row("ad_methods", name=db_name)
+        if row_ad_method is None:
+            logging.warning(f"Could not find ad_methods row for name='{db_name}' (from '{ad_name}')")
+            return None
+        return row_ad_method.id
 
     def create_method(self, user, isBinary, fullMethodName):
         logging.info(f"Creating method")
@@ -645,12 +880,34 @@ class ModelLoader():
         # print_first_row(df_pred_test, row=1)
         # print_first_row(df_pred_cv, row=1)
         
-        self.load_predictions(user, "training", df_pred_training, fk_model_id, fk_splitting_id=1)
-        self.load_predictions(user, "test", df_pred_test, fk_model_id, fk_splitting_id=1)
-        
-        self.load_predictions(user, "training cv", df_pred_cv, fk_model_id)
+        self.load_predictions(
+            user,
+            "training",
+            df_pred_training,
+            fk_model_id,
+            fk_splitting_id=1,
+        )
+        self.load_predictions(
+            user,
+            "test",
+            df_pred_test,
+            fk_model_id,
+            fk_splitting_id=1,
+        )
+        self.load_predictions(
+            user,
+            "training cv",
+            df_pred_cv,
+            fk_model_id,
+        )
         if df_pred_external is not None:
-            self.load_predictions(user, "external", df_pred_external, fk_model_id, fk_splitting_id=43)
+            self.load_predictions(
+                user,
+                "external",
+                df_pred_external,
+                fk_model_id,
+                fk_splitting_id=43,
+            )
         
         # ---- store plots in model_files table ----
         
@@ -804,8 +1061,8 @@ class ModelBuilder:
     #     '''
     #
     #     # df_training, df_prediction = self.get_training_prediction_instances(session, dataset_name, descriptorSetName, splittingName)
-    #     # self.build_and_test_model(qsar_method, include_standardization_in_pmml, use_pmml_pipeline, df_training, df_prediction, params, embedding_name, embedding)
-    #     # self.crossvalidate(session, dataset_name, descriptorSetName, qsar_method, include_standardization_in_pmml, use_pmml_pipeline, params, embedding_name, embedding)
+    #     # self.build_and_test_model(qsar_method, scale_features, use_pmml_pipeline, df_training, df_prediction, params, embedding_name, embedding)
+    #     # self.crossvalidate(session, dataset_name, descriptorSetName, qsar_method, scale_features, use_pmml_pipeline, params, embedding_name, embedding)
     #
     #     params = ParametersNoEmbedding(qsar_method, hyperparameter_grid)
     #
@@ -881,7 +1138,8 @@ class EmbeddingGenerator:
                                                        ip.n_threads, ip.num_generations, ip.use_permutative, ip.run_rfe,
                                                        ip.fraction_of_max_importance, ip.min_descriptor_count, ip.max_descriptor_count,
                                                        ip.use_wards, hyperparameter_grid=ip.hyperparameter_grid, run_sfs=ip.run_sfs,
-                                                       cv=cv, descriptor_coefficient=ip.descriptor_coefficient, alpha=ip.alpha)
+                                                       cv=cv, descriptor_coefficient=ip.descriptor_coefficient, alpha=ip.alpha,
+                                                       n_min=ip.n_min, n_max=ip.n_max)
 
         elif params.feature_selection_method == feature_selection_method_group_contribution:
             # embedding = call_build_embedding_group_contribution_from_df(df_training, params.min_count)
@@ -1391,6 +1649,25 @@ def set_hyper_parameters(qsar_method, feature_selection, descriptor_set_name, sp
         params = ParametersGeneric(qsar_method=qsar_method, hyperparameter_grid=grid, feature_selection=feature_selection,
                                              descriptor_set_name=descriptor_set_name, dataset_name=dataset_name,
                                              splitting_name=splitting_name, ad_measure=ad_measure)
+
+    elif qsar_method == "huber":
+        grid = {}
+        params = ParametersHuber(qsar_method=qsar_method, hyperparameter_grid=grid, feature_selection=feature_selection,
+                                            descriptor_set_name=descriptor_set_name, dataset_name=dataset_name,
+                                            splitting_name=splitting_name, ad_measure=ad_measure)
+    
+    elif qsar_method == "ransac":
+        grid = {}
+        params = ParametersRansac(qsar_method=qsar_method, hyperparameter_grid=grid, feature_selection=feature_selection,
+                                            descriptor_set_name=descriptor_set_name, dataset_name=dataset_name,
+                                            splitting_name=splitting_name, ad_measure=ad_measure)
+    
+    elif qsar_method == "theil_sen":
+        grid = {}
+        params = ParametersTheilSen(qsar_method=qsar_method, hyperparameter_grid=grid, feature_selection=feature_selection,
+                                            descriptor_set_name=descriptor_set_name, dataset_name=dataset_name,
+                                            splitting_name=splitting_name, ad_measure=ad_measure)
+    
     else:
         print('qsar_method not handled:', qsar_method)
         return None
@@ -1399,7 +1676,11 @@ def set_hyper_parameters(qsar_method, feature_selection, descriptor_set_name, sp
         
 
 def runAD(df_training, df_prediction, params, embedding, df_predictions, ad_measure, stats_dict, is_binary=False, is_external=False):
-    
+    """
+    Note: This configuration for runAD should be treated as the preferred run-pattern, and anywhere the AD must be recalculated
+    should be done in accordance with this method's call pattern and behavior within this file.
+    """
+
     if is_external:
         tag = pc.TAG_EXTERNAL
         stat_insert = "External"
@@ -1532,23 +1813,51 @@ def runAD(df_training, df_prediction, params, embedding, df_predictions, ad_meas
 # from your_metrics_script import calculate_continuous_statistics, calculate_binary_statistics
 
 
-def add_log_p_martin_columns(df_training, df_prediction, cross_validate, df_cv_dict=None):
+def add_log_p_martin_columns(
+    df_training,
+    df_prediction,
+    cross_validate,
+    df_cv_dict=None,
+    df_external=None,
+):
     """
-    Does adding columns for my LOGP prediction work better than ALOGP and XLOGP?    
+    Adds LOGP_Martin descriptors to training, prediction, and external dataframes.
+    This uses the existing pre-trained logP model only, so it does not leak
+    target-property information from the training/prediction/external sets.
     """
-    model_id = str(1069)
-    pred_name = 'LOGP_Martin'
-    from models.db_utilities.dataset_utilities_db import add_model_prediction_to_df as add_mp
-    df_prediction = add_mp(df_prediction, model_id, pred_name)  # will generate some XGB warnings
-    df_training = add_mp(df_training, model_id, pred_name)
-    
-    if cross_validate:
-        for fold_num in df_cv_dict:
-            fold = df_cv_dict[fold_num]
-            fold["train"] = add_mp(fold["train"], model_id, pred_name)
-            fold["pred"] = add_mp(fold["pred"], model_id, pred_name)
-    
-    return df_training, df_prediction
+    # Repress warnings related to old versions of XGBoost and StandardScaler being used
+    #   should fix these errors at some point by deleting the current models for LOGPMartin from the database
+    #   and then push new models built in the current version of Python to the database with the same settings
+    import warnings
+    from sklearn.exceptions import InconsistentVersionWarning
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", category=InconsistentVersionWarning)
+        warnings.filterwarnings("ignore", message=".*serialized model.*XGBoost.*")
+        warnings.filterwarnings("ignore", message=".*old JSON model.*XGBoost.*")
+
+        model_id = str(1069)
+        pred_name = 'LOGP_Martin'
+        from models.db_utilities.dataset_utilities_db import add_model_prediction_to_df as add_mp
+
+        def _add_columns(frame):
+            if frame is None:
+                return None
+            return add_mp(frame, model_id, pred_name)
+
+        df_training = _add_columns(df_training)
+        df_prediction = _add_columns(df_prediction)
+
+        if df_external is not None:
+            df_external = _add_columns(df_external)
+
+        if cross_validate:
+            for fold_num in df_cv_dict:
+                fold = df_cv_dict[fold_num]
+                fold["train"] = _add_columns(fold["train"])
+                fold["pred"] = _add_columns(fold["pred"])
+
+        return df_training, df_prediction, df_external
 
 
 def add_source_chemical_info(df_pred, df_dps):
@@ -1646,23 +1955,63 @@ def log_stats(model, params, cv_stats, test_stats, ext_stats):
         logging.info(f"all stats:\tN/A\t{test_stats['BA_Test']:.3f}\t{cv_stats['BA_CV_Training']:.3f}\t{ext_stats['BA_External']:.3f}\t{len(model.embedding)}")
 
 @staticmethod
+def build_output_subfolder(params, folder_embedding=None, logp_columns=None):
+    if isinstance(logp_columns, str):
+        logp_columns = [logp_columns]
+    
+    selected_columns = [c for c in (logp_columns or []) if c]
+
+    if selected_columns:
+        subfolder = f"{params.qsar_method}_{'_'.join(selected_columns)}"
+    else:
+        subfolder = f"{params.qsar_method}_{params.descriptor_set_name}_fs={str(params.feature_selection)}"
+
+    if hasattr(params, "max_descriptor_count") and params.max_descriptor_count is not None:
+        subfolder = f"{subfolder}_max_descriptor_count={str(params.max_descriptor_count)}"
+    elif hasattr(params, "max_features") and params.max_features is not None:
+        subfolder = f"{subfolder}_max_features={str(params.max_features)}"
+
+    if hasattr(params, "outlier_filter_enabled"):
+        subfolder = f"{subfolder}_outlier_filter_methods={'_'.join(params.outlier_filter_methods)}"
+    
+    if folder_embedding is not None:
+        subfolder = f"{subfolder}_{folder_embedding}"
+
+    return subfolder
+
+@staticmethod
+def ensure_session(session):
+    try:
+        # cheap no-op to force a DB round trip
+        session.execute(text("SELECT 1"))
+        return session
+    except OperationalError:
+        try:
+            session.close()
+        except Exception:
+            pass
+        return getSession()
+
+@staticmethod
 def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None, cross_validate=True,
                 run_AD=True, feature_selection=True, fs_previous_embedding=True, params=None,
                 descriptor_set_name="WebTEST-default", splitting_name="RND_REPRESENTATIVE",
-                ad_measure_model=None, add_LOGP_Martin=False, write_to_db=False, user="tmarti02",
-                unique_identifier=None, append_to_models_folder=""):
+                ad_measure_model=None, add_LOGP_Martin=False, logp_columns=None, write_to_db=False, user="tmarti02",
+                unique_identifier=None, append_to_models_folder="", subfolder=None, save_initial_dfs=False,
+                outlier_filter_methods=None):
     # TODO: reg model using descriptors from XGB or RF model
     # TODO: gcm model that uses reg with fragment descriptors such that it deletes rows with less than 3 instances and the associated rows
     # TODO does add the LOGP predicted from my LOGP model improve the results?
-    splitting_name = "RND_REPRESENTATIVE"
+    if splitting_name is None:
+        splitting_name = "RND_REPRESENTATIVE"
     
     # print(dataset_name)
     
     try:
-        engine = getEngine()
+        # engine = getEngine()
         session = getSession()
         
-        ml = ModelLoader(session)
+        # ml = ModelLoader(session)
 
         if qsar_method == 'gcm' or qsar_method == 'svm':
             feature_selection = False
@@ -1736,6 +2085,22 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         # params.run_rfe = False
 
         # hyperparameter_grid = None # use default
+
+        # Set parameters related to outlier handling
+        if not hasattr(params, "outlier_filter_enabled"):
+            if outlier_filter_methods is None or outlier_filter_methods == False:
+                params.outlier_filter_enabled = False
+            else:
+                params.outlier_filter_enabled = True
+        if not hasattr(params, "outlier_filter_columns"):
+            params.outlier_filter_columns = ["Property"]
+        if not hasattr(params, "outlier_filter_methods"):
+            if outlier_filter_methods is None or outlier_filter_methods == False:
+                params.outlier_filter_methods = ["iqr"]
+            else:
+                params.outlier_filter_methods = outlier_filter_methods
+        if not hasattr(params, "outlier_filter_trim_mode"):
+            params.outlier_filter_trim_mode = "remove"
         
         # ******************************************************************************************************
         # ---- Get dataframes from the database ----
@@ -1751,11 +2116,46 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         s = df_training.iloc[:, 1]
         is_binary = s.isin([0, 1]).all()
         # print('is_binary', is_binary)
+
+        # ---- Optional outlier filtering on training data only ----
+        if getattr(params, "outlier_filter_enabled", False):
+            logging.info(
+                f"Applying outlier filter: methods={params.outlier_filter_methods}, "
+                f"columns={params.outlier_filter_columns}, mode={params.outlier_filter_trim_mode}"
+            )
+
+            df_training_before = df_training.copy()
+
+            df_training, outlier_report = apply_outlier_filter(
+                df_training,
+                columns=params.outlier_filter_columns,
+                methods=params.outlier_filter_methods,
+                target_col="Property",
+                trim_mode=params.outlier_filter_trim_mode,
+                iqr_k=getattr(params, "outlier_filter_iqr_k", 1.5),
+                hampel_k=getattr(params, "outlier_filter_hampel_k", 3.0),
+                robust_z_thresh=getattr(params, "outlier_filter_robust_z_thresh", 3.5),
+                esd_alpha=getattr(params, "outlier_filter_esd_alpha", 0.05),
+                esd_max_outliers=getattr(params, "outlier_filter_esd_max_outliers", 10),
+            )
+
+            logging.info(
+                f"Outlier filter removed {len(df_training_before) - len(df_training)} rows "
+                f"out of {len(df_training_before)}"
+            )
+
+            if save_initial_dfs:
+                outlier_folder = os.path.join(
+                    PROJECT_ROOT, "data", f"models{append_to_models_folder}",
+                    dataset_name, "outlier_filter"
+                )
+                os.makedirs(outlier_folder, exist_ok=True)
+                outlier_report.to_csv(os.path.join(outlier_folder, "outlier_report.csv"), index=False)
         
         df_prediction_ext = None
         dataset_name_ext = None
         
-        if dataset_name == 'KOC v1 modeling':
+        if dataset_name == 'KOC v1 modeling' or dataset_name == 'KOC v2 modeling':
             dataset_name_ext = 'KOC v2 external'
             # dataset_name_ext = 'Koc eChemPortal v1'
         elif dataset_name == 'ECOTOX_2024_12_12_96HR_Fish_LC50_v3a modeling':
@@ -1783,7 +2183,46 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
             X, y, cv, feature_cols = du.make_cv_for_base_training(df_training, df_cv_dict, "ID", "Property")  # get cv for use in RFE and SFS so that will use CV folds as the final stat reported as RMSE_CV_TRAINING
         
         if add_LOGP_Martin:
-            df_training, df_prediction = add_log_p_martin_columns(df_training, df_prediction, cross_validate, df_cv_dict)
+            df_training, df_prediction, df_prediction_ext = add_log_p_martin_columns(
+                df_training,
+                df_prediction,
+                cross_validate,
+                df_cv_dict,
+                df_external=df_prediction_ext
+            )
+            df_external = df_prediction_ext.copy() if df_prediction_ext is not None else None
+
+        if save_initial_dfs:
+            # Save initial dataframes to CSV files for debugging purposes
+            df_training_initial = df_training.copy()
+            df_prediction_initial = df_prediction.copy()
+            df_prediction_ext_initial = df_prediction_ext.copy() if df_prediction_ext is not None else None
+
+            initial_dfs_folder = os.path.join(PROJECT_ROOT, "data", f"models{append_to_models_folder}", dataset_name, "initial_dfs")
+            os.makedirs(initial_dfs_folder, exist_ok=True)
+            df_training_initial.to_csv(os.path.join(initial_dfs_folder, "df_training.csv"), index=False)
+            df_prediction_initial.to_csv(os.path.join(initial_dfs_folder, "df_prediction.csv"), index=False)
+            if df_prediction_ext_initial is not None:
+                df_prediction_ext_initial.to_csv(os.path.join(initial_dfs_folder, "df_prediction_ext.csv"), index=False)
+            # if df_cv_dict is not None:
+            #     for fold_num, fold_data in df_cv_dict.items():
+            #         fold_data["train"].to_csv(os.path.join(initial_dfs_folder, f"df_cv_train_fold_{fold_num}.csv"), index=False)
+            #         fold_data["pred"].to_csv(os.path.join(initial_dfs_folder, f"df_cv_pred_fold_{fold_num}.csv"), index=False)
+
+        if logp_columns is not None:
+            if isinstance(logp_columns, str):
+                logp_columns = [logp_columns]
+
+        if qsar_method == 'gcm' and logp_columns is not None:
+            if params is None:
+                params = set_hyper_parameters(
+                    qsar_method=qsar_method,
+                    feature_selection=feature_selection,
+                    descriptor_set_name=descriptor_set_name,
+                    splitting_name=splitting_name,
+                    dataset_name=dataset_name,
+                    ad_measure=ad_measure_model)
+            params.logp_columns = logp_columns
         
         # print(df_cv_dict)
         
@@ -1794,6 +2233,18 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         
         if feature_selection:
             embedding = EmbeddingGenerator.feature_selection(df_training, df_prediction, params, cv)
+
+        if feature_selection and qsar_method == "huber":
+            original_feature_count = df_training.shape[1] - 2  # adjust if needed for ID/Property columns
+            selected_feature_count = len(embedding) if embedding is not None else 0
+
+            # print(f"Huber feature selection: {selected_feature_count} selected out of {original_feature_count}")
+
+            if embedding is None or selected_feature_count >= original_feature_count:
+                raise ValueError(
+                    f"Huber feature selection did not reduce the feature set. "
+                    f"Selected {selected_feature_count} features from {original_feature_count}."
+                )
             
         df_pred_training, df_pred_test, training_stats, test_stats, model = ModelBuilder.build_and_test_model(df_training, df_prediction, cv, params, embedding, is_binary)
                 
@@ -1826,6 +2277,18 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
             df_pred_ext, ext_stats = ModelBuilder.predict(model, df_prediction_ext, '_External', is_binary)
             # print('external stats',json.dumps(ext_stats, indent=4))
 
+        if save_initial_dfs:
+            # Save modified dataframes to CSV files for debugging purposes
+            df_training_modified = df_training.copy()
+            df_prediction_modified = df_prediction.copy()
+            df_prediction_ext_modified = df_prediction_ext.copy() if df_prediction_ext is not None else None
+
+            modified_dfs_folder = os.path.join(PROJECT_ROOT, "data", f"models{append_to_models_folder}", dataset_name, "modified_dfs")
+            os.makedirs(modified_dfs_folder, exist_ok=True)
+            df_training_modified.to_csv(os.path.join(modified_dfs_folder, "df_training_modified.csv"), index=False)
+            df_prediction_modified.to_csv(os.path.join(modified_dfs_folder, "df_prediction_modified.csv"), index=False)
+            if df_prediction_ext_modified is not None:
+                df_prediction_ext_modified.to_csv(os.path.join(modified_dfs_folder, "df_prediction_ext_modified.csv"), index=False)
         
         # ******************************************************************************************************
         # ---- Run applicability domain calculations ----
@@ -1851,6 +2314,13 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         # New Attributes
         ext_stats_dict = {}
         if dataset_name_ext is not None:
+            if run_AD:
+                for ad_measure in ad_measures:
+                    df_pred_ext = runAD(df_training, df_prediction_ext, params, model.embedding, df_pred_ext, ad_measure, ext_stats_dict, is_binary=is_binary, is_external=True)
+        
+                if len(ad_measure) > 1:
+                    adu.generate_consensus_ad(df_pred_ext, ext_stats_dict, ad_measure_model, is_binary=is_binary, is_external=True)
+
             model.external_dataset_name = dataset_name_ext if dataset_name_ext else None
             model.external_dataset_description = dataset_description_ext
             model.df_dsstoxRecords_external = df_prediction_ext
@@ -1860,12 +2330,6 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
             model.num_external = df_external.shape[0] if df_external is not None else 0        
             # model.num_external = df_prediction_ext.shape[0] if df_prediction_ext is not None else 0
 
-            if run_AD:
-                for ad_measure in ad_measures:
-                    df_pred_ext = runAD(df_training, df_prediction_ext, params, model.embedding, df_pred_ext, ad_measure, ext_stats_dict, is_binary=is_binary, is_external=True)
-        
-                if len(ad_measure) > 1:
-                    adu.generate_consensus_ad(df_pred_ext, ext_stats_dict, ad_measure_model, is_binary=is_binary, is_external=True)
         
         if cross_validate:
             
@@ -1885,7 +2349,7 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         # ******************************************************************************************************
         # ---- Save results ----
         # create results file:
-        
+        session = ensure_session(session)
         dataset_info = du.get_dataset_details(session, dataset_name)
         dsstox_mapping_strategy = json.loads(dataset_info["dsstox_mapping_strategy"])
         
@@ -1926,6 +2390,9 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
             stats_dict=stats_dict,
             ext_stats_dict=ext_stats_dict
             )
+
+        # TODO: check what is in stats_dict and ext_stats_dict, to put into the query_results_dict func in MTE
+        # breakpoint()
                 
         if model.embedding:
             columns = model.embedding.copy()
@@ -2003,12 +2470,18 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         # with open("local_model_data.pkl", "wb") as f:
         #     pickle.dump({"model": model, "df_pv": df_pv, "df_gmd": df_dps, "df_gmd_external": df_dps_ext}, f)
 
-        subfolder = params.qsar_method + "_" + params.descriptor_set_name + "_fs=" + str(params.feature_selection)
+        # subfolder = params.qsar_method + "_" + params.descriptor_set_name + "_fs=" + str(params.feature_selection)
     
-        if folder_embedding is not None:
-            subfolder = subfolder + "_" + folder_embedding
-            
+        # if folder_embedding is not None:
+        #     subfolder = subfolder + "_" + folder_embedding
+
+        subfolder = subfolder if subfolder is not None else build_output_subfolder(params, folder_embedding, logp_columns)
+        
         model.subfolder=subfolder
+        
+        print("model.subfolder", subfolder)
+        print("params",json.dumps(params.to_dict(), indent=4))
+        
                         
         path_segments = [PROJECT_ROOT, "data", "models" + append_to_models_folder, params.dataset_name, subfolder]
         
@@ -2030,22 +2503,28 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         write_plots(df_pred_test, model, df_pred_cv, folder_path)
 
         if write_to_db:
+            ml = ModelLoader(session)
             ml.load_model(user, model, results_dict, df_pred_training, df_pred_test, df_pred_cv, folder_path, df_pred_external=df_pred_ext)
+        
+            # build excel after loading model so have model id number set:
+            mdo = ModelDataObjects(model=model, df_pv=df_pv, df_gmd=df_dps, df_gmd_external=df_dps_ext)
+            mte = ModelToExcel(mdo, detailed_summary_path)
+            mte.create_excel()
+            
+            # need to load model separately from rest of model objects since need to load model into db to get id then create the excel file that displays that id in the summary:
+            filePathOutExcelSummary = os.path.join(folder_path, "detailed_summary.xlsx")
+            image_id = ml.load_model_file(filePathOutExcelSummary, user, model.modelId, 2)
+            logging.info(f"Excel summary loaded to db with id: {image_id}")
+        else:
+            # build excel without loading model, so no id number will be set:
+            mdo = ModelDataObjects(model=model, df_pv=df_pv, df_gmd=df_dps, df_gmd_external=df_dps_ext)
+            mte = ModelToExcel(mdo, detailed_summary_path)
+            mte.create_excel()
+
 
         with open(json_path, 'w') as json_file:
             json.dump(results_dict, json_file, indent=4)
 
-        #build excel after loading model so have model id number set:
-        mdo = ModelDataObjects(model=model, df_pv=df_pv, df_gmd=df_dps, df_gmd_external=df_dps_ext)
-        mte = ModelToExcel(mdo, detailed_summary_path)
-        mte.create_excel()
-        
-        if write_to_db:
-            #need to load model separately from rest of model objects since need to load model into db to get id then create the excel file that displays that id in the summary:
-            filePathOutExcelSummary = os.path.join(folder_path, "detailed_summary.xlsx")
-            image_id = ml.load_model_file(filePathOutExcelSummary, user, model.modelId, 2)
-            logging.info(f"Excel summary loaded to db with id: {image_id}")
-        
         return model
 
     except Exception:
@@ -2657,19 +3136,19 @@ class Results:
         if len(stats_dict) > 0:
             ms["test_stats_all_AD"] = stats_dict
 
-        training_stats.pop("Coverage_Training")
+        training_stats.pop("Coverage_Training", None)
         ms["training_stats"] = training_stats
         
         if cv_stats:
-            cv_stats.pop("Coverage_CV_Training")
+            cv_stats.pop("Coverage_CV_Training", None)
             ms["cv_stats"] = cv_stats
 
         if ext_stats:
             # print('ext_stats', json.dumps(ext_stats))
-            ext_stats.pop("Coverage_External")
+            ext_stats.pop("Coverage_External", None)
             ms["ext_stats"] = ext_stats
 
-        test_stats.pop("Coverage_Test")
+        test_stats.pop("Coverage_Test", None)
         ms["test_stats"] = test_stats
 
         if len(stats_dict) > 0:
@@ -2693,21 +3172,22 @@ class Results:
         min_col_width=5,
         append_to_models_folder="",
         continuous_stat_name="MAE",
-        binary_stat_name="BA"
+        binary_stat_name="BA",
+        sort_by_stat="auto",      # "auto", "Test", "Training_CV", "External", or None
+        sort_ascending=None       # True/False, or None to auto-pick by metric
     ):
         from pathlib import Path
         import os, json
         import numpy as np
         import pandas as pd
-    
+
         folder = os.path.join(PROJECT_ROOT, "data", "models" + append_to_models_folder, dataset_name)
         os.makedirs(folder, exist_ok=True)
-    
+
         print(folder)
-        print(f"\n\nStats for all models for {dataset_name}")
-    
+
         rows = []
-    
+
         def to_float(v):
             try:
                 f = float(v)
@@ -2716,7 +3196,7 @@ class Results:
                 return f
             except Exception:
                 return None
-    
+
         def fmt3(v):
             try:
                 if v is None:
@@ -2727,8 +3207,19 @@ class Results:
                 return f"{f:.3f}"
             except Exception:
                 return "N/A"
-    
-        # Collect rows (don’t print yet so we can decide header once)
+
+        def metric_sort_ascending(metric_name):
+            """
+            Default convention:
+            - continuous metrics like MAE: lower is better => ascending
+            - binary metrics like BA: higher is better => descending
+            Adjust this if you have other metric types.
+            """
+            if metric_name == binary_stat_name:
+                return False
+            return True
+
+        # Collect rows
         for json_path in Path(folder).glob("*/results*.json"):
             try:
                 with json_path.open("r", encoding="utf-8") as f:
@@ -2736,18 +3227,18 @@ class Results:
             except json.JSONDecodeError as e:
                 print(f"Skipping {json_path}: invalid JSON ({e})")
                 continue
-    
+
             model_statistics = results.get("model_statistics", {})
             model_details = results.get("model_details", {})
             run_name = json_path.parent.name
-    
+
             is_binary = bool(model_details.get("is_binary", False))
             stat = binary_stat_name if is_binary else continuous_stat_name
-    
+
             test_val = to_float(model_statistics.get("test_stats", {}).get(f"{stat}_Test"))
             cv_val = to_float(model_statistics.get("cv_stats", {}).get(f"{stat}_CV_Training"))
             ext_val = to_float(model_statistics.get("ext_stats", {}).get(f"{stat}_External"))
-    
+
             # Embedding length and optional short embedding string
             if "embedding_len" in model_details:
                 len_embedding = model_details["embedding_len"]
@@ -2755,84 +3246,132 @@ class Results:
                 len_embedding = len(model_details["embedding"])
             else:
                 len_embedding = None
-    
+
             embedding_str = None
-            
             if isinstance(len_embedding, int):
                 emb = model_details.get("embedding", [])
                 embedding_str = ", ".join(emb) if isinstance(emb, (list, tuple)) else str(emb)
-    
-            if len(embedding_str) > 100:
+
+            if embedding_str is not None and len(embedding_str) > 100:
                 embedding_str = embedding_str[:100] + "..."
-    
+
             rows.append({
                 "Run": run_name,
-                "Metric": stat,  # which metric these numbers represent (MAE or BA)
+                "Metric": stat,
                 f"{stat}_Test": test_val,
                 f"{stat}_Training_CV": cv_val,
                 f"{stat}_External": ext_val,
                 "#_variables": int(len_embedding) if isinstance(len_embedding, int) else None,
                 "Embedding": embedding_str
             })
-    
+
         if not rows:
             df_stats = pd.DataFrame(columns=[
                 "Run", f"{continuous_stat_name}_Test", f"{continuous_stat_name}_Training_CV",
-                f"{continuous_stat_name}_External", "#_variables", "Embedding", "Metric"
+                f"{continuous_stat_name}_External", f"{binary_stat_name}_Test",
+                f"{binary_stat_name}_Training_CV", f"{binary_stat_name}_External",
+                "#_variables", "Embedding", "Metric"
             ])
             excel_path = os.path.join(folder, excel_name)
             df_stats.to_excel(excel_path, index=False)
             print(f"No models found. Created empty summary: {excel_path}")
             return df_stats, excel_path
-    
-        # Decide homogeneous vs mixed and print header once
+
+        # Decide homogeneous vs mixed
         metrics_in_rows = sorted(set(r["Metric"] for r in rows))
+
+        # Determine which metric/stat column to sort by
+        if sort_by_stat == "auto":
+            if len(metrics_in_rows) == 1:
+                sort_by_stat = "Test"
+            else:
+                sort_by_stat = None  # mixed metrics: do not force a single stat column sort
+        elif sort_by_stat is not None:
+            valid_sort_cols = {"Test", "Training_CV", "External"}
+            if sort_by_stat not in valid_sort_cols:
+                raise ValueError(f"sort_by_stat must be one of {valid_sort_cols}, 'auto', or None")
+
+        # Sort rows once here so console / Excel / HTML all match
+        if sort_by_stat is not None:
+            def row_sort_key(r):
+                metric = r["Metric"]
+                if sort_ascending is None:
+                    ascending = metric_sort_ascending(metric)
+                else:
+                    ascending = sort_ascending
+
+                colname = f"{metric}_{sort_by_stat}"
+                val = r.get(colname)
+
+                # None/NaN at the end
+                if val is None:
+                    return (1, float("inf")) if ascending else (1, float("-inf"))
+
+                try:
+                    v = float(val)
+                except Exception:
+                    return (1, float("inf")) if ascending else (1, float("-inf"))
+
+                # For descending, negate the value in the key
+                return (0, v) if ascending else (0, -v)
+
+            rows = sorted(rows, key=row_sort_key)
+
+        print(f"{sort_by_stat or 'unsorted'} {stat} for all models for {dataset_name}")
+
+        # Print and build DataFrame
         if len(metrics_in_rows) == 1:
             stat = metrics_in_rows[0]
-            # print(f"Run\t{stat}_Test\t{stat}_Training_CV\t{stat}_External\t#_variables")
             print(f"{'Run':<40} {'Test':<10} {'Training_CV':<15} {'External':<10} {'#_variables':<15}")
             for r in rows:
-                # print(f"{r['Run']}\t{fmt3(r.get(f'{stat}_Test'))}\t{fmt3(r.get(f'{stat}_Training_CV'))}\t"
-                #       f"{fmt3(r.get(f'{stat}_External'))}\t{r.get('#_variables', 'N/A')}")
-                print(f"{r['Run']:<40} {fmt3(r.get(f'{stat}_Test')):<10} {fmt3(r.get(f'{stat}_Training_CV')):<15} {fmt3(r.get(f'{stat}_External')):<10} {r.get('#_variables', 'N/A'):<15}")
-            # Build homogeneous DataFrame (only the active metric’s columns)
-            columns = ["Run", f"{stat}_Test", f"{stat}_Training_CV", f"{stat}_External", "#_variables", "Embedding"]
+                print(
+                    f"{r['Run']:<40} "
+                    f"{fmt3(r.get(f'{stat}_Test')):<10} "
+                    f"{fmt3(r.get(f'{stat}_Training_CV')):<15} "
+                    f"{fmt3(r.get(f'{stat}_External')):<10} "
+                    f"{str(r.get('#_variables', 'N/A')):<15}"
+                )
+
+            columns = ["Run", f"{stat}_Test", f"{stat}_Training_CV", f"{stat}_External", "#_variables", "Embedding", "Metric"]
             df_stats = pd.DataFrame(rows).reindex(columns=columns)
+
         else:
-            # Mixed: print generic header once, include Metric column
-            # print("Run\tMetric\tTest\tTraining_CV\tExternal\t#_variables")
             print(f"{'Run':<40} {'Metric':<10} {'Test':<10} {'Training_CV':<15} {'External':<10} {'#_variables':<15}")
             for r in rows:
-                stat_row = r["Metric"]
-                # print(f"{r['Run']}\t{stat_row}\t{fmt3(r.get(f'{stat_row}_Test'))}\t"
-                #       f"{fmt3(r.get(f'{stat_row}_Training_CV'))}\t{fmt3(r.get(f'{stat_row}_External'))}\t"
-                #       f"{r.get('#_variables', 'N/A')}")
-                print(f"{r['Run']:<40} {stat_row:<10} {fmt3(r.get(f'{stat_row}_Test')):<10} {fmt3(r.get(f'{stat_row}_Training_CV')):<15} {fmt3(r.get(f'{stat_row}_External')):<10} {r.get('#_variables', 'N/A'):<15}")
-            # Include both MAE_* and BA_* columns in DataFrame; fill whichever applies per row
+                stat = r["Metric"]
+                print(
+                    f"{r['Run']:<40} "
+                    f"{stat:<10} "
+                    f"{fmt3(r.get(f'{stat}_Test')):<10} "
+                    f"{fmt3(r.get(f'{stat}_Training_CV')):<15} "
+                    f"{fmt3(r.get(f'{stat}_External')):<10} "
+                    f"{str(r.get('#_variables', 'N/A')):<15}"
+                )
+
             columns = [
                 "Run",
                 f"{continuous_stat_name}_Test", f"{continuous_stat_name}_Training_CV", f"{continuous_stat_name}_External",
                 f"{binary_stat_name}_Test", f"{binary_stat_name}_Training_CV", f"{binary_stat_name}_External",
                 "#_variables", "Embedding", "Metric"
             ]
-            # Ensure all expected keys exist in each row
+
             for r in rows:
                 for c in columns:
                     r.setdefault(c, None)
+
             df_stats = pd.DataFrame(rows).reindex(columns=columns)
-    
+
         excel_path = os.path.join(folder, excel_name)
-    
-        # Write with 3-decimal display. Simple approach: float_format writes strings with 3 decimals.
+
+        # Write Excel
         with pd.ExcelWriter(excel_path, engine="xlsxwriter") as writer:
             df_stats.to_excel(writer, sheet_name=sheet_name, index=False, float_format="%.3f")
-    
+
             ws = writer.sheets[sheet_name]
             nrows, ncols = df_stats.shape
             ws.autofilter(0, 0, nrows, ncols - 1)
             ws.freeze_panes(1, 0)
-    
-            # Set column widths (if your helper does this)
+
             ExcelCreator.set_column_width(
                 writer,
                 sheet_name=sheet_name,
@@ -2841,8 +3380,8 @@ class Results:
                 min_col_width=min_col_width,
                 how="full"
             )
-    
-        # Write HTML summary using your helper
+
+        # Write HTML
         html_path = Results.write_model_stats_html(
             df_stats=df_stats,
             dataset_name=dataset_name,
@@ -2857,6 +3396,180 @@ class Results:
         print(f"Saved summary to: {excel_path}")
         print(f"Saved HTML summary to: {html_path}")
         return df_stats, excel_path
+
+    # @staticmethod
+    # def summarize_model_stats(
+    #     dataset_name,
+    #     excel_name="model_stats.xlsx",
+    #     sheet_name="Statistics",
+    #     col_width_pad=4,
+    #     min_col_width=5,
+    #     append_to_models_folder="",
+    #     continuous_stat_name="MAE",
+    #     binary_stat_name="BA",
+    #     sort_by_stat=None,
+    #     sort_ascending=True
+    # ):
+    #     from pathlib import Path
+    #     import os, json
+    #     import numpy as np
+    #     import pandas as pd
+    
+    #     folder = os.path.join(PROJECT_ROOT, "data", "models" + append_to_models_folder, dataset_name)
+    #     os.makedirs(folder, exist_ok=True)
+    
+    #     print(folder)
+    
+    #     rows = []
+    
+    #     def to_float(v):
+    #         try:
+    #             f = float(v)
+    #             if np.isnan(f):
+    #                 return None
+    #             return f
+    #         except Exception:
+    #             return None
+    
+    #     def fmt3(v):
+    #         try:
+    #             if v is None:
+    #                 return "N/A"
+    #             f = float(v)
+    #             if np.isnan(f):
+    #                 return "N/A"
+    #             return f"{f:.3f}"
+    #         except Exception:
+    #             return "N/A"
+    
+    #     # Collect rows (don’t print yet so we can decide header once)
+    #     for json_path in Path(folder).glob("*/results*.json"):
+    #         try:
+    #             with json_path.open("r", encoding="utf-8") as f:
+    #                 results = json.load(f)
+    #         except json.JSONDecodeError as e:
+    #             print(f"Skipping {json_path}: invalid JSON ({e})")
+    #             continue
+    
+    #         model_statistics = results.get("model_statistics", {})
+    #         model_details = results.get("model_details", {})
+    #         run_name = json_path.parent.name
+    
+    #         is_binary = bool(model_details.get("is_binary", False))
+    #         stat = binary_stat_name if is_binary else continuous_stat_name
+    
+    #         test_val = to_float(model_statistics.get("test_stats", {}).get(f"{stat}_Test"))
+    #         cv_val = to_float(model_statistics.get("cv_stats", {}).get(f"{stat}_CV_Training"))
+    #         ext_val = to_float(model_statistics.get("ext_stats", {}).get(f"{stat}_External"))
+    
+    #         # Embedding length and optional short embedding string
+    #         if "embedding_len" in model_details:
+    #             len_embedding = model_details["embedding_len"]
+    #         elif isinstance(model_details.get("embedding"), (list, tuple)):
+    #             len_embedding = len(model_details["embedding"])
+    #         else:
+    #             len_embedding = None
+    
+    #         embedding_str = None
+            
+    #         if isinstance(len_embedding, int):
+    #             emb = model_details.get("embedding", [])
+    #             embedding_str = ", ".join(emb) if isinstance(emb, (list, tuple)) else str(emb)
+    
+    #         if len(embedding_str) > 100:
+    #             embedding_str = embedding_str[:100] + "..."
+    
+    #         rows.append({
+    #             "Run": run_name,
+    #             "Metric": stat,  # which metric these numbers represent (MAE or BA)
+    #             f"{stat}_Test": test_val,
+    #             f"{stat}_Training_CV": cv_val,
+    #             f"{stat}_External": ext_val,
+    #             "#_variables": int(len_embedding) if isinstance(len_embedding, int) else None,
+    #             "Embedding": embedding_str
+    #         })
+    
+    #     if not rows:
+    #         df_stats = pd.DataFrame(columns=[
+    #             "Run", f"{continuous_stat_name}_Test", f"{continuous_stat_name}_Training_CV",
+    #             f"{continuous_stat_name}_External", "#_variables", "Embedding", "Metric"
+    #         ])
+    #         excel_path = os.path.join(folder, excel_name)
+    #         df_stats.to_excel(excel_path, index=False)
+    #         print(f"No models found. Created empty summary: {excel_path}")
+    #         return df_stats, excel_path
+
+    #     print(f"{stat} for all models for {dataset_name}")
+    
+    #     # Decide homogeneous vs mixed and print header once
+    #     metrics_in_rows = sorted(set(r["Metric"] for r in rows))
+    #     if len(metrics_in_rows) == 1:
+    #         stat = metrics_in_rows[0]
+    #         # print(f"Run\t{stat}_Test\t{stat}_Training_CV\t{stat}_External\t#_variables")
+    #         print(f"{'Run':<40} {'Test':<10} {'Training_CV':<15} {'External':<10} {'#_variables':<15}")
+    #         for r in rows:
+    #             # print(f"{r['Run']}\t{fmt3(r.get(f'{stat}_Test'))}\t{fmt3(r.get(f'{stat}_Training_CV'))}\t"
+    #             #       f"{fmt3(r.get(f'{stat}_External'))}\t{r.get('#_variables', 'N/A')}")
+    #             print(f"{r['Run']:<40} {fmt3(r.get(f'{stat}_Test')):<10} {fmt3(r.get(f'{stat}_Training_CV')):<15} {fmt3(r.get(f'{stat}_External')):<10} {r.get('#_variables', 'N/A'):<15}")
+    #         # Build homogeneous DataFrame (only the active metric’s columns)
+    #         columns = ["Run", f"{stat}_Test", f"{stat}_Training_CV", f"{stat}_External", "#_variables", "Embedding"]
+    #         df_stats = pd.DataFrame(rows).reindex(columns=columns)
+    #     else:
+    #         # Mixed: print generic header once, include Metric column
+    #         # print("Run\tMetric\tTest\tTraining_CV\tExternal\t#_variables")
+    #         print(f"{'Run':<40} {'Metric':<10} {'Test':<10} {'Training_CV':<15} {'External':<10} {'#_variables':<15}")
+    #         for r in rows:
+    #             stat_row = r["Metric"]
+    #             # print(f"{r['Run']}\t{stat_row}\t{fmt3(r.get(f'{stat_row}_Test'))}\t"
+    #             #       f"{fmt3(r.get(f'{stat_row}_Training_CV'))}\t{fmt3(r.get(f'{stat_row}_External'))}\t"
+    #             #       f"{r.get('#_variables', 'N/A')}")
+    #             print(f"{r['Run']:<40} {stat_row:<10} {fmt3(r.get(f'{stat_row}_Test')):<10} {fmt3(r.get(f'{stat_row}_Training_CV')):<15} {fmt3(r.get(f'{stat_row}_External')):<10} {r.get('#_variables', 'N/A'):<15}")
+    #         # Include both MAE_* and BA_* columns in DataFrame; fill whichever applies per row
+    #         columns = [
+    #             "Run",
+    #             f"{continuous_stat_name}_Test", f"{continuous_stat_name}_Training_CV", f"{continuous_stat_name}_External",
+    #             f"{binary_stat_name}_Test", f"{binary_stat_name}_Training_CV", f"{binary_stat_name}_External",
+    #             "#_variables", "Embedding", "Metric"
+    #         ]
+    #         # Ensure all expected keys exist in each row
+    #         for r in rows:
+    #             for c in columns:
+    #                 r.setdefault(c, None)
+    #         df_stats = pd.DataFrame(rows).reindex(columns=columns)
+    
+    #     excel_path = os.path.join(folder, excel_name)
+    
+    #     # Write with 3-decimal display. Simple approach: float_format writes strings with 3 decimals.
+    #     with pd.ExcelWriter(excel_path, engine="xlsxwriter") as writer:
+    #         df_stats.to_excel(writer, sheet_name=sheet_name, index=False, float_format="%.3f")
+    
+    #         ws = writer.sheets[sheet_name]
+    #         nrows, ncols = df_stats.shape
+    #         ws.autofilter(0, 0, nrows, ncols - 1)
+    #         ws.freeze_panes(1, 0)
+    
+    #         # Set column widths (if your helper does this)
+    #         ExcelCreator.set_column_width(
+    #             writer,
+    #             sheet_name=sheet_name,
+    #             df=df_stats,
+    #             col_width_pad=col_width_pad,
+    #             min_col_width=min_col_width,
+    #             how="full"
+    #         )
+    
+    #     # Write HTML summary using your helper
+    #     html_path = Results.write_model_stats_html(
+    #         df_stats=df_stats,
+    #         dataset_name=dataset_name,
+    #         output_folder=folder,
+    #         excel_path=excel_path,
+    #         html_name=None
+    #     )
+    
+    #     print(f"Saved summary to: {excel_path}")
+    #     print(f"Saved HTML summary to: {html_path}")
+    #     return df_stats, excel_path
 
     @staticmethod
     def write_model_stats_html(df_stats, dataset_name, output_folder, excel_path, html_name=None):

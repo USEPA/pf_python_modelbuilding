@@ -28,6 +28,9 @@ from sqlalchemy import inspect as sa_inspect, select as sa_select, update as sa_
 from sqlalchemy.engine import URL
 from sqlalchemy.orm import sessionmaker
 
+import numpy as np
+import pandas as pd
+
 import os
 import json
 
@@ -234,6 +237,13 @@ class DatabaseUtilities:
         if len(identity) == 1:
             return identity[0]
         return {col.key: val for col, val in zip(mapper.primary_key, identity)}
+
+    def _normalize_value(self, value):
+        if isinstance(value, np.generic):
+            return value.item()
+        if pd.isna(value):
+            return None
+        return value
     
     # ---- public API --------------------------------------------------------
     
@@ -279,38 +289,68 @@ class DatabaseUtilities:
     ) -> int:
         """
         Insert records into `table` in chunks using self.create_many.
-    
+
         Transaction behavior:
-          - If no transaction is active on the Session, open one and commit on success.
-          - If a transaction is already active, do not start a new one; rely on the outer transaction.
-    
+        - If no transaction is active on the Session, open one and commit on success.
+        - If a transaction is already active, do not start a new one; rely on the outer transaction.
+
         Returns the total number of inserted records.
         """
         if chunk_size <= 0:
             raise ValueError("chunk_size must be positive")
-    
+
         if records is None:
             return 0
-    
-        # We don't manually commit at the end; the context manager (or outer tx) handles it.
+
         try:
+            total = 0
             if self.session.in_transaction():
-                # print("session_in_transaction")
-                # Execute within the existing transaction doesnt auto-commits on success- need to force it but can cause issues
                 for batch in self.chunked(records, chunk_size):
-                    self.create_many(table=table, records=batch, commit=False)
+                    uploaded_ids = self.create_many(table=table, records=batch, commit=False)
+                    total += len(uploaded_ids)
             else:
-                # print("not session_in_transaction")
-                # Manage our own transaction; it auto-commits on success.
                 with self.session.begin():
                     for batch in self.chunked(records, chunk_size):
-                        self.create_many(table=table, records=batch, commit=False)
-    
-            return len(records)
-    
+                        uploaded_ids = self.create_many(table=table, records=batch, commit=False)
+                        total += len(uploaded_ids)
+
+            return total
+
         except SQLAlchemyError:
-            # If we started a transaction with `begin()`, it will auto-rollback on exception.
-            # If a caller started the transaction, let them decide how to handle rollback.
+            raise
+
+    def create_many_chunked_return_ids(
+        self,
+        table: str,
+        records: Sequence[Mapping[str, Any]],
+        chunk_size: int = 1000,
+    ) -> List[Any]:
+        """
+        Insert records into `table` in chunks using self.create_many and return
+        the inserted primary keys in the same order as the input records.
+        """
+        if chunk_size <= 0:
+            raise ValueError("chunk_size must be positive")
+
+        if records is None:
+            return []
+
+        all_ids: List[Any] = []
+
+        try:
+            if self.session.in_transaction():
+                for batch in self.chunked(records, chunk_size):
+                    batch_ids = self.create_many(table=table, records=batch, commit=False)
+                    all_ids.extend(batch_ids)
+            else:
+                with self.session.begin():
+                    for batch in self.chunked(records, chunk_size):
+                        batch_ids = self.create_many(table=table, records=batch, commit=False)
+                        all_ids.extend(batch_ids)
+
+            return all_ids
+
+        except SQLAlchemyError:
             raise
 
     def create_many(

@@ -1390,13 +1390,16 @@ if __name__ == '__main__':
     # dataset_name = 'KOC v1 modeling'
     # dataset_name = 'exp_prop_RBIODEG_RIFM_BY_DTXSID'    
     # dataset_name = 'exp_prop_RBIODEG_NITE_OPPT v1.0'
-    # dataset_name = 'ECOTOX_2024_12_12_96HR_Fish_LC50_v3a modeling'
+    # dataset_name = 'ECOTOX_2024_12_12_96HR_Fish_LC50_v3b modeling'
+    # dataset_name = 'exp_prop_BCF_v1_modeling'
+        
     # create_splittings(dataset_name)
     
     # create_inner_splittings(dataset_name)
                       
     # run_deletes()
                           
-    dataset_name = 'exp_prop_RBIODEG_301F v1 modeling'
-    dataset_name2 = 'exp_prop_RBIODEG_RIFM_CHEMREG'
+                                                    
+    dataset_name = 'exp_prop_RBIODEG_301F v2 modeling'
+    dataset_name2 = 'exp_prop_RBIODEG_RIFM_2026_08_12_CHEMREG'
     create_splittings(dataset_name, datasetName2=dataset_name2)

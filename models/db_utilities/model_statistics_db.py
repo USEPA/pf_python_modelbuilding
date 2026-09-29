@@ -85,7 +85,7 @@ def determineApplicabilityDomainBatch(model: Model, applicabilityDomainName, df_
         embedding=model.embedding,
         # applicability_domain=model.applicabilityDomainName,
         applicability_domain=applicabilityDomainName,
-        filterColumnsInBothSets=True)
+        filterColumnsInBothSets=False)
     return output
 
 
