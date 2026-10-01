@@ -1173,7 +1173,7 @@ def prepare_df(df):
     if not required_cols.issubset(df.columns):
         missing = list(required_cols - set(df.columns))
         raise ValueError(f"Missing required columns: {missing}")
-# Ensure numeric, compute abs_diff, and sort descending by abs_diff
+    # Ensure numeric, compute abs_diff, and sort descending by abs_diff
     df = df.copy()
     df["exp"] = pd.to_numeric(df["exp"], errors="coerce")
     df["pred"] = pd.to_numeric(df["pred"], errors="coerce")
@@ -1188,6 +1188,60 @@ def prepare_df(df):
     # statistics_AD = None
     # if doAD:
     #     df_results, statistics_AD = runAD(mp.is_binary, adMeasure, df_results, model, training_tsv, prediction_tsv)
+
+def _make_xgb_safe_column_name(name, existing):
+    """
+    XGBoost disallows [, ] and < in feature names.
+    Also ensure uniqueness after renaming.
+    """
+    safe = str(name).replace("[", "_").replace("]", "_").replace("<", "_")
+    safe = safe.replace(" ", "_")
+
+    base = safe
+    i = 1
+    while safe in existing:
+        safe = f"{base}_{i}"
+        i += 1
+
+    return safe
+
+
+def xgb_sanitize_feature_names(df):
+    """
+    Return a renamed copy of df plus a mapping:
+      safe_name -> original_name
+
+    Only descriptor/feature columns should be renamed; keep ID/Property/etc. unchanged
+    if you want, but for the simplest patch we rename only columns after the first 2.
+    """
+    df2 = df.copy()
+    mapping = {}
+
+    # Assumes first two columns are ID and Property, which matches the current code style
+    # in run_dataset() where df_training.iloc[:, 1] is used for labels.
+    cols_to_rename = list(df2.columns[2:])
+
+    used = set(df2.columns[:2])
+    rename_map = {}
+
+    for col in cols_to_rename:
+        safe = _make_xgb_safe_column_name(col, used)
+        used.add(safe)
+        if safe != col:
+            rename_map[col] = safe
+            mapping[safe] = col
+
+    df2 = df2.rename(columns=rename_map)
+    return df2, mapping
+
+
+def xgb_restore_feature_names(df, safe_to_original):
+    """
+    Rename safe columns back to original names.
+    """
+    if not safe_to_original:
+        return df
+    return df.rename(columns=safe_to_original)
 
 
 class ExcelCreator:
@@ -2050,7 +2104,7 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         logging.info(f"cross_validate={cross_validate}")
         # ******************************************************************************************************
         
-        if params is None: 
+        if params is None:
             params = set_hyper_parameters(
                 qsar_method=qsar_method,
                 feature_selection=feature_selection,
@@ -2058,7 +2112,7 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
                 splitting_name=splitting_name,
                 dataset_name=dataset_name,
                 ad_measure=ad_measure_model)
-            
+        
         # print(params.n_features_to_select)
         
         # make sure they match
@@ -2069,19 +2123,14 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         # hyperparameter_grid = None # use default
 
         # Set parameters related to outlier handling
-        if not hasattr(params, "outlier_filter_enabled"):
-            if outlier_filter_methods is None or outlier_filter_methods == False:
-                params.outlier_filter_enabled = False
-            else:
-                params.outlier_filter_enabled = True
-        if not hasattr(params, "outlier_filter_columns"):
+        if not hasattr(params, "outlier_filter_methods") and outlier_filter_methods is not None and outlier_filter_methods != False:
+            # outlier_filter_methods = ["iqr", "hampel", "robust_z", "esd"]
+            params.outlier_filter_methods = outlier_filter_methods
+
+        if getattr(params, "outlier_filter_methods", False) and not hasattr(params, "outlier_filter_columns"):
             params.outlier_filter_columns = ["Property"]
-        if not hasattr(params, "outlier_filter_methods"):
-            if outlier_filter_methods is None or outlier_filter_methods == False:
-                params.outlier_filter_methods = ["iqr"]
-            else:
-                params.outlier_filter_methods = outlier_filter_methods
-        if not hasattr(params, "outlier_filter_trim_mode"):
+
+        if getattr(params, "outlier_filter_methods", False) and not hasattr(params, "outlier_filter_trim_mode"):
             params.outlier_filter_trim_mode = "remove"
         
         # ******************************************************************************************************
@@ -2094,12 +2143,18 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
             logging.error("Failed to retrieve training or prediction dataframes from the database. Ending execution of run_dataset.")
             return
 
+        # --- XGB feature-name sanitization ---
+        xgb_feature_name_map = None
+        if qsar_method == "xgb":
+            df_training, xgb_feature_name_map = xgb_sanitize_feature_names(df_training)
+            df_prediction, _ = xgb_sanitize_feature_names(df_prediction)
+
         s = df_training.iloc[:, 1]
         is_binary = s.isin([0, 1]).all()
         # print('is_binary', is_binary)
 
         # ---- Optional outlier filtering on training data only ----
-        if getattr(params, "outlier_filter_enabled", False):
+        if getattr(params, "outlier_filter_methods", False) and params.outlier_filter_methods is not None and len(params.outlier_filter_methods) > 0:
             logging.info(
                 f"Applying outlier filter: methods={params.outlier_filter_methods}, "
                 f"columns={params.outlier_filter_columns}, mode={params.outlier_filter_trim_mode}"
@@ -2152,6 +2207,11 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
             dataset_description_ext = du.get_dataset_details(session, dataset_name_ext).get('dataset_description')
             df_prediction_ext = du.get_instances_excluding(session, dataset_name_ext, dataset_name, descriptor_set_name)
             df_external = df_prediction_ext.copy()
+
+        # --- XGB feature-name sanitization ---
+        xgb_feature_name_map = None
+        if qsar_method == "xgb" and df_prediction_ext is not None:
+            df_prediction_ext, _ = xgb_sanitize_feature_names(df_prediction_ext)
         
         # check_for_inchi_key_matches(df_training, df_prediction_ext)
         
@@ -2162,6 +2222,13 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         if cross_validate:  # TODO we should probably always run these calculations
             df_cv_dict = du.get_training_cv_instances(session, dataset_name, descriptor_set_name)
             X, y, cv, feature_cols = du.make_cv_for_base_training(df_training, df_cv_dict, "ID", "Property")  # get cv for use in RFE and SFS so that will use CV folds as the final stat reported as RMSE_CV_TRAINING
+
+        # --- XGB feature-name sanitization ---
+        xgb_feature_name_map = None
+        if qsar_method == "xgb" and df_cv_dict is not None:
+            for fold_num in df_cv_dict:
+                df_cv_dict[fold_num]["train"], _ = xgb_sanitize_feature_names(df_cv_dict[fold_num]["train"])
+                df_cv_dict[fold_num]["pred"], _ = xgb_sanitize_feature_names(df_cv_dict[fold_num]["pred"])
         
         if add_LOGP_Martin:
             df_training, df_prediction, df_prediction_ext = add_log_p_martin_columns(
@@ -2301,15 +2368,30 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
                 if len(ad_measure) > 1:
                     adu.generate_consensus_ad(df_pred_ext, ext_stats_dict, ad_measure_model, is_binary=is_binary, is_external=True)
 
-            model.external_dataset_name = dataset_name_ext if dataset_name_ext else None
-            model.external_dataset_description = dataset_description_ext
-            model.df_dsstoxRecords_external = df_prediction_ext
-            model.df_preds_external = df_pred_ext
+        if qsar_method == "xgb" and xgb_feature_name_map is not None:
+            restore_map = {safe: original for safe, original in xgb_feature_name_map.items()}
 
-            model.df_external = df_external
-            model.num_external = df_external.shape[0] if df_external is not None else 0        
-            # model.num_external = df_prediction_ext.shape[0] if df_prediction_ext is not None else 0
+            if df_pred_test is not None:
+                df_pred_test = xgb_restore_feature_names(df_pred_test, restore_map)
 
+            if df_pred_training is not None:
+                df_pred_training = xgb_restore_feature_names(df_pred_training, restore_map)
+
+            if df_pred_cv is not None:
+                df_pred_cv = xgb_restore_feature_names(df_pred_cv, restore_map)
+
+            if df_pred_ext is not None:
+                df_pred_ext = xgb_restore_feature_names(df_pred_ext, restore_map)
+
+            if df_prediction_ext is not None:
+                df_prediction_ext = xgb_restore_feature_names(df_prediction_ext, restore_map)
+
+            if df_external is not None:
+                df_external = xgb_restore_feature_names(df_external, restore_map)
+
+            # restore model embedding names too, if needed for reporting / DB / Excel
+            if hasattr(model, "embedding") and model.embedding is not None:
+                model.embedding = [restore_map.get(c, c) for c in model.embedding]
         
         if cross_validate:
             
@@ -2350,12 +2432,20 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         model.datasetName = dataset_name
         model.datasetDescription = dataset_info["dataset_description"]
         model.omitSalts = dsstox_mapping_strategy["omitSalts"]
-        model.applicabilityDomainName = " and ".join(params.ad_measure)
+        model.applicabilityDomainName = " and ".join(params.ad_measure) if run_AD else None
         model.num_training = df_training.shape[0]
         model.num_prediction = df_prediction.shape[0]
         model.descriptorSetName = descriptor_set_name
         model.df_preds_training_cv = df_pred_cv
         model.df_preds_test = df_pred_test
+        if dataset_name_ext is not None:
+            model.external_dataset_name = dataset_name_ext if dataset_name_ext else None
+            model.external_dataset_description = dataset_description_ext
+            model.df_dsstoxRecords_external = df_prediction_ext
+            model.df_preds_external = df_pred_ext
+            model.df_external = df_external
+            model.num_external = df_external.shape[0] if df_external is not None else 0        
+            # model.num_external = df_prediction_ext.shape[0] if df_prediction_ext is not None else 0
         
         # Check what happens with ext_stats and how to add new things to the results_dict under the model_details
         results_dict = Results.create_results_dict(
@@ -2405,8 +2495,13 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         logging.info(f"test set stats={json.dumps(test_stats, indent=4)}")
         logging.info(f"external set stats={json.dumps(ext_stats, indent=4)}")
 
-        logging.info(f"training cross validation stats={json.dumps(cv_stats, indent=4)}")   
-        logging.info(f"test set AD stats={json.dumps( results_dict['model_statistics']['test_stats_AD'] , indent=4)}")
+        logging.info(f"training cross validation stats={json.dumps(cv_stats, indent=4)}")
+
+        if run_AD:
+            logging.info(f"test set AD stats={json.dumps(results_dict['model_statistics']['test_stats_AD'], indent=4)}")
+            if dataset_name_ext is not None:
+                logging.info(f"external set AD stats={json.dumps(results_dict['model_statistics']['ext_stats_AD'], indent=4)}")
+        # logging.info(f"test set AD stats={json.dumps( results_dict['model_statistics']['test_stats_AD'] , indent=4)}")
         
         logging.info("run_data_set completed\n")
 
@@ -2612,11 +2707,6 @@ class Results:
         sort_by_stat="auto",      # "auto", "Test", "Training_CV", "External", or None
         sort_ascending=None       # True/False, or None to auto-pick by metric
     ):
-        from pathlib import Path
-        import os, json
-        import numpy as np
-        import pandas as pd
-
         folder = os.path.join(PROJECT_ROOT, "data", "models" + append_to_models_folder, dataset_name)
         os.makedirs(folder, exist_ok=True)
 

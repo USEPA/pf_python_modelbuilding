@@ -402,11 +402,14 @@ class TESTFragmentCounts(ApplicabilityDomainStrategy):
     def evaluate(self, embedding):
         # Define the fragment range
         start_column = "As [+5 valence, one double bond]"
+        xgboost_start_column = "As__+5_valence,_one_double_bond_"
         stop_column = "-N=S=O"
-    
         # Robustly get the slice between start and stop by position (inclusive),
         # regardless of column order
         cols = self.TestSet.columns
+        # breakpoint()
+        if start_column not in cols and xgboost_start_column in cols:
+            start_column = xgboost_start_column
         if start_column not in cols or stop_column not in cols:
             raise KeyError("Start or stop column not found in TestSet.")
         lo = cols.get_loc(start_column)
