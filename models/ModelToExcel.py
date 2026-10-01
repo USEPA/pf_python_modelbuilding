@@ -704,7 +704,8 @@ class ChartBuilder:
         title = f"{sheet_name} for {property_name}" if property_name is not None else f"{y_col.capitalize()} vs {x_col.capitalize()}"
         title_len = len(title)
         title_font_size = 18 - 2*(title_len // 20)
-        series_name = f"{y_col.capitalize()} vs {x_col.capitalize()}"
+        # series_name = f"{y_col.capitalize()} vs {x_col.capitalize()}"
+        series_name = f"Predicted vs Observed"
         chart.set_title({
             "name": title,
             "overlay": False,
