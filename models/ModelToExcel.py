@@ -27,6 +27,7 @@ from models.db_utilities.plot_db import upload_or_update_model_file_in_db
 from models.db_utilities.model_statistics_db import update_statistic_value
 from StatsCalculator import calculate_continuous_statistics, calculate_binary_statistics, calculate_mean_exp_training
 from util import predict_constants as pc
+from util.units_converter import UnitsConverter
 import applicability_domain.applicability_domain_utilities as adu
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -1109,6 +1110,77 @@ class DataQuerier:
             except Exception:
                 pass
             return DataQuerier.getSession()
+    
+    @staticmethod
+    def get_average_within_chemical_std(
+        df_pv: pd.DataFrame,
+        property_name: str,
+        smiles_col: str = "canon_qsar_smiles",
+        value_col: str = "prop_value",
+        units_col: str = "prop_unit",
+        qsar_units_col: str = "qsar_property_unit",
+        mol_weight_col: str = "mapped_mol_weight"
+    ) -> float:
+        """
+        Compute the average standard deviation of prop_value across chemicals.
+
+        For each unique chemical (identified by canon_qsar_smiles), this computes the
+        standard deviation of prop_value, then returns the mean of those
+        standard deviations across all chemicals.
+
+        Chemicals with fewer than 2 non-null values are ignored because std cannot
+        be computed meaningfully for them.
+
+        Args:
+            df_pv: Property-values dataframe.
+            smiles_col: Column identifying each chemical.
+            value_col: Column containing the property values.
+            units_col: Column containing the property units.
+            qsar_units_col: Column containing the QSAR units.
+        Returns:
+            float: Average within-chemical standard deviation, or np.nan if not computable.
+        """
+        if df_pv is None or df_pv.empty:
+            return np.nan
+
+        required_cols = {smiles_col, value_col, units_col, qsar_units_col}
+        missing = required_cols - set(df_pv.columns)
+        if missing:
+            raise ValueError(f"df_pv is missing required columns: {missing}")
+
+        # Ensure numeric values and drop rows where key fields are missing
+        temp = df_pv[[smiles_col, value_col, units_col, qsar_units_col, mol_weight_col]].copy()
+        temp[value_col] = pd.to_numeric(temp[value_col], errors="coerce")
+        temp = temp.dropna(subset=[smiles_col, value_col, units_col, qsar_units_col])
+
+        # temp[value_col] = temp.groupby(smiles_col, group_keys=False).apply(
+        #     lambda g: DataQuerier._convert_series_to_qsar_units(
+        #         g[value_col], g[units_col].iloc[0], g[qsar_units_col].iloc[0]
+        #     )
+        # )
+
+        uc = UnitsConverter()
+        temp[value_col] = temp.apply(
+            lambda row: uc.convert_units(
+                property_name=property_name,
+                value=row[value_col],
+                unit_name=row[units_col],
+                final_unit_name=row[qsar_units_col],
+                chemical_id=row[smiles_col],
+                molecular_weight=row[mol_weight_col]
+            ), axis=1
+        )
+
+        temp = temp.dropna(subset=[value_col])
+
+        # Compute std dev per chemical; ignore groups with fewer than 2 values
+        per_chem_std = (
+            temp.groupby(smiles_col)[value_col]
+            .std(ddof=1)
+            .dropna()
+        )
+
+        return float(per_chem_std.mean()) if not per_chem_std.empty else np.nan
 
     def query_model(self) -> Optional[Model]:
         """Query the database for the model object.
@@ -1366,6 +1438,11 @@ class DataQuerier:
         model = self.query_model()
         model_id = getattr(model, "modelId", None)
         model_id = int(model_id) if model_id is not None else None
+        
+        df_pv = self.query_df_pv(external=False)
+        avg_std = DataQuerier.get_average_within_chemical_std(df_pv, property_name=model.propertyName) if df_pv is not None else float("nan")
+        if avg_std is not None and not np.isnan(avg_std):
+            avg_std = round(avg_std, 3)
 
         summary_dict = {
             "Model ID": [model_id],
@@ -1377,6 +1454,7 @@ class DataQuerier:
             "Dataset Description": [model.datasetDescription],
             "nTraining": [model.num_training],
             "nTest": [model.num_prediction],
+            "Average Standard Deviation of Property Value": [avg_std],
             "Method Name": [model.modelMethod],
             "Method Description": [model.modelMethodDescription],
             "Number of Variables": [len(model.embedding)],
@@ -2087,15 +2165,20 @@ class DataTransformer:
         return df_result
 
     @staticmethod
-    def get_cover_sheet_df(results_dict: Dict[str, Any]) -> pd.DataFrame:
+    def get_cover_sheet_df(results_dict: Dict[str, Any], df_pv: pd.DataFrame = None) -> pd.DataFrame:
         """Generate cover sheet dataframe from model results dictionary.
         
         Args:
             results_dict: Dictionary with 'model_details' key containing model metadata.
+            df_pv: DataFrame with chemical data.
         
         Returns:
             pd.DataFrame: Single-row dataframe with model summary information.
         """
+        avg_std = DataQuerier.get_average_within_chemical_std(df_pv, property_name=results_dict["model_details"].get("propertyName", None)) if df_pv is not None else float("nan")
+        if avg_std is not None and not np.isnan(avg_std):
+            avg_std = round(avg_std, 3)
+
         cover_sheet_df = {
             "Model ID": [results_dict["model_details"].get("modelId", None)],
             "Model Name": [results_dict["model_details"].get("modelName", None)],
@@ -2106,6 +2189,7 @@ class DataTransformer:
             "Dataset Description": [results_dict["model_details"].get("datasetDescription", None)],
             "nTraining": [results_dict["model_details"].get("numTraining", None)],
             "nTest": [results_dict["model_details"].get("numPrediction", None)],
+            "Average Standard Deviation of Property Value": [avg_std],
             "Method Name": [results_dict["model_details"].get("qsar_method", None)],
             "Method Description": [results_dict["model_details"].get("qsar_method_description", None)],
             "Number of Variables": [len(results_dict["model_details"].get("embedding", []))],
