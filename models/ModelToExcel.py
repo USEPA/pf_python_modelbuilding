@@ -3892,12 +3892,12 @@ def main():
     username = "weston.murdock"
     model_ids = [
         # Physchem Models
-        # 1065, # HLC-XGB Martin 2024
-		# 1066, # WS-XGB Martin 2024
-		# 1067, # VP-XGB Martin 2024
-		# 1068, # BP-XGB Martin 2024
-		# 1069, # LogP-XGB Martin 2024
-		# 1070, # MP-XGB Martin 2024
+        1065, # HLC-XGB Martin 2024
+		1066, # WS-XGB Martin 2024
+		1067, # VP-XGB Martin 2024
+		1068, # BP-XGB Martin 2024
+		1069, # LogP-XGB Martin 2024
+		1070, # MP-XGB Martin 2024
         # Koc Models
 		1763, # Koc Tox-GCM Martin 2026
 		1754, # Koc Tox-RF Martin 2026

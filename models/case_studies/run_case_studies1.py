@@ -60,31 +60,41 @@ def run_Koc():
     # write_to_db = True
     write_to_db = False
     dataset_name = "KOC v1 modeling"
-    descriptor_set_name = "WebTEST-default"
-    splitting_name = "RND_REPRESENTATIVE"  
+    # descriptor_set_name = "WebTEST-default"
+    # descriptor_set_name = "Mordred-default"
+    # descriptor_set_name = "ToxPrints-default"
+    # descriptor_set_name = "RDKit-default"
+    descriptor_set_name = "PaDEL-default"
+    splitting_name = "RND_REPRESENTATIVE"
     
-    append_to_models_folder = "_ad_test"
+    # append_to_models_folder = "_ad_test"
     # append_to_models_folder = "_v2.0"
     # append_to_models_folder = "_KOC_v2 external"
+    append_to_models_folder = "_descriptor_set_test"
     
-
-    # ad_measure_model = [pc.Applicability_Domain_TEST_Embedding_Euclidean, pc.Applicability_Domain_TEST_Fragment_Counts]
     ad_measure_model = [pc.Applicability_Domain_TEST_Embedding_Euclidean, pc.Applicability_Domain_TEST_Fragment_Counts]
 
-    run_dataset(dataset_name=dataset_name, qsar_method='gcm', feature_selection=False, ad_measure_model=ad_measure_model,
-                write_to_db=write_to_db, unique_identifier=unique_identifier,
-                append_to_models_folder=append_to_models_folder)  # OK
+    if descriptor_set_name == "WebTEST-default":
+        run_AD = True
+        run_dataset(dataset_name=dataset_name, qsar_method='gcm', feature_selection=False, ad_measure_model=ad_measure_model,
+                    write_to_db=write_to_db, unique_identifier=unique_identifier, run_AD=run_AD,
+                    append_to_models_folder=append_to_models_folder, descriptor_set_name=descriptor_set_name)  # OK
 
-    # for method in ['rf', 'xgb']:
-    #     run_dataset(dataset_name=dataset_name, qsar_method=method, feature_selection=False,
-    #         ad_measure_model=ad_measure_model, write_to_db=write_to_db, unique_identifier=unique_identifier,
-    #         append_to_models_folder=append_to_models_folder)  
-    # #
-    #     run_dataset(dataset_name=dataset_name, qsar_method=method, feature_selection=True,
-    #         ad_measure_model=ad_measure_model, write_to_db=write_to_db, unique_identifier=unique_identifier,
-    #         append_to_models_folder=append_to_models_folder)  
-    #
-    #
+    else:
+        run_AD = False
+
+    method = "rf"
+    for feature_selection in [False, True]:
+        run_dataset(dataset_name=dataset_name, qsar_method=method, feature_selection=feature_selection,
+            ad_measure_model=ad_measure_model, write_to_db=write_to_db, unique_identifier=unique_identifier, run_AD=run_AD,
+            append_to_models_folder=append_to_models_folder, descriptor_set_name=descriptor_set_name)
+
+    method = "xgb"
+    for feature_selection in [False, True]:
+        run_dataset(dataset_name=dataset_name, qsar_method=method, feature_selection=feature_selection,
+            ad_measure_model=ad_measure_model, write_to_db=write_to_db, unique_identifier=unique_identifier, run_AD=run_AD,
+            append_to_models_folder=append_to_models_folder, descriptor_set_name=descriptor_set_name)
+
     # for method in ['reg', 'knn']:
     #     params = set_hyper_parameters(qsar_method=method, feature_selection=True, descriptor_set_name=descriptor_set_name, 
     #                                   splitting_name=splitting_name, dataset_name=dataset_name, ad_measure=ad_measure_model)
@@ -123,8 +133,8 @@ def run_Koc():
 
 
     Results.summarize_model_stats(dataset_name, append_to_models_folder=append_to_models_folder, continuous_stat_name='RMSE')
-    # Results.summarize_model_stats(dataset_name, append_to_models_folder=append_to_models_folder, continuous_stat_name='MAE')
-    # Results.summarize_model_stats(dataset_name, append_to_models_folder=append_to_models_folder, continuous_stat_name='PearsonRSQ')
+    Results.summarize_model_stats(dataset_name, append_to_models_folder=append_to_models_folder, continuous_stat_name='MAE')
+    Results.summarize_model_stats(dataset_name, append_to_models_folder=append_to_models_folder, continuous_stat_name='PearsonRSQ')
     
 
 def run_Koc_knn_ga():
@@ -1578,12 +1588,12 @@ def main():
     # test_create_model()
     # test_model_summary()
 
-    # run_Koc()
+    run_Koc()
     # run_fish_tox()
     # test_create_model()
     # test_model_summary()
     # test_model_summary_local()
-    test_load_model_with_external_set()
+    # test_load_model_with_external_set()
     # run_rifm_rf_models()
 
     # full_test_mte()
