@@ -1,8 +1,13 @@
 import pandas as pd
 import numpy as np
 import scipy
-import matplotlib.pyplot as plt
 from scipy import stats
+
+
+def _get_plt():
+    """Lazy-import matplotlib.pyplot to avoid heavy startup cost."""
+    import matplotlib.pyplot as plt
+    return plt
 
 
 def calcStats(predictions, df_prediction, excelPath):
@@ -45,6 +50,7 @@ def calc_MAE(predictions, targets):
 
 
 def generatePlot(fileOut, property_name, title, exp, pred):
+    plt = _get_plt()
     m, b, r_value, p_value, std_err = scipy.stats.linregress(exp, pred)
 
     r2 = r_value * r_value
@@ -82,6 +88,7 @@ def generatePlot(fileOut, property_name, title, exp, pred):
 
 
 def generateTrainingPredictionPlot(fileOut, property_name, figtitle, title, exp_training, pred_training,exp_prediction, pred_prediction,showPlot=False):
+    plt = _get_plt()
 
     #    fig, ax = plt.subplots()
     fig, (ax1, ax2) = plt.subplots(1, 2,figsize=(12, 6))
@@ -124,6 +131,7 @@ def createSubplot(exp, pred, property_name, ax1, set):
 
 
 def generatePlot2(fileOut, property_name, title, exp, pred):
+    plt = _get_plt()
 
     m, b, r_value, p_value, std_err = scipy.stats.linregress(exp, pred)
     r2 = r_value * r_value

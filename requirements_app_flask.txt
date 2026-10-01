@@ -1,0 +1,10 @@
+-r requirements.txt
+Flask==3.1.2
+lightgbm==4.6.0
+pypmml==0.9.17
+python-dotenv==1.2.1
+psycopg2-binary==2.9.11
+sklearn-genetic-opt==0.12.0
+sklearn-pmml-model==1.0.7
+sklearn2pmml==0.125.0
+SQLAlchemy==2.0.45

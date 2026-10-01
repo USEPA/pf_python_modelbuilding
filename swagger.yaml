@@ -1,4 +1,4 @@
-openapi: '3.0.3'
+openapi: 3.0.3
 
 info:
   title: EPA Predictor
@@ -6,10 +6,16 @@ info:
   description: API gateway to EPA predictions
 
 paths:
-
   /api/predictor_models/version:
     get:
       operationId: app.get_version
+      responses:
+        '200':
+          description: Success
+
+  /api/predictor_models/metadata:
+    get:
+      operationId: app.get_metadata
       responses:
         '200':
           description: Success
@@ -34,19 +40,12 @@ paths:
         '200':
           description: File
           content:
-            '*/*':
+            application/octet-stream:
               schema:
                 type: string
                 format: binary
         '404':
           description: Not found
-
-  /api/predictor_models/metadata:
-    get:
-      operationId: app.get_metadata
-      responses:
-        '200':
-          description: Success
 
   /api/predictor_models/predict:
     get:
@@ -60,7 +59,7 @@ paths:
           examples:
             example0:
               summary: Empty
-              value:
+              value: ""
             example1:
               summary: 2-Isopropylthioxanthone
               value: CC(C)c1ccc2sc3ccccc3c(=O)c2c1
@@ -75,7 +74,7 @@ paths:
           examples:
             example0:
               summary: Empty
-              value:
+              value: ""
             example1:
               summary: CASRN
               value: 71-43-2
@@ -110,6 +109,21 @@ paths:
             example6:
               summary: MP-XGB Martin 2024
               value: 1070
+            example7:
+              summary: KOC-RF Martin 2026
+              value: 1754
+            example8:
+              summary: KOC-XGB Martin 2026
+              value: 1756
+            example9:
+              summary: KOC-REG Martin 2026
+              value: 1757
+            example10:
+              summary: KOC-KNN Martin 2026
+              value: 1758
+            example11:
+              summary: KOC-GCM Martin 2026
+              value: 1763
         - name: report_format
           in: query
           description: which format to return
@@ -128,6 +142,7 @@ paths:
         '200':
           description: Success
           content: {}
+
     post:
       operationId: app.predictDB_POST
       summary: Generate predictions for multiple molecules
@@ -136,15 +151,63 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/Request"
+              oneOf:
+                - $ref: '#/components/schemas/RequestLegacy'
+                - $ref: '#/components/schemas/RequestWithChemicals'
       responses:
         '200':
           description: Success
           content: {}
 
+  /api/experimental:
+    get:
+      summary: Retrieve experimental database results
+      description: Returns experimental database data for a given identifier in JSON or HTML format.
+      operationId: app.experimentalDB
+      parameters:
+        - name: identifier
+          in: query
+          required: true
+          description: Identifier to look up
+          schema:
+            type: string
+          example: benzene
+        - name: report_format
+          in: query
+          required: false
+          description: Output format for the report
+          schema:
+            type: string
+            enum: [json, html]
+            default: json
+          example: json
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  json:
+                    type: string
+                  html:
+                    type: string
+                  data:
+                    type: object
+            text/html:
+              schema:
+                type: string
+        '400':
+          description: Invalid request
+        '404':
+          description: Identifier not found
+        '500':
+          description: Server error
+
 components:
   schemas:
-    Request:
+    RequestLegacy:
       type: object
       properties:
         smiles:
@@ -160,4 +223,34 @@ components:
         smiles:
           - FC(C(C(C1OC(=O)C2C(=CC=CC=2)N=1)(F)F)(F)F)(F)F
           - CCCCN
+        model_id: 1065
+
+    RequestWithChemicals:
+      type: object
+      properties:
+        chemicals:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                oneOf:
+                  - type: integer
+                  - type: string
+              smiles:
+                type: string
+            required:
+              - id
+              - smiles
+        model_id:
+          type: integer
+      required:
+        - chemicals
+        - model_id
+      example:
+        chemicals:
+          - id: 1
+            smiles: CC(C)CCC(C)NC1=CC(=O)C(=CC1=O)NC1C=CC=CC=1
+          - id: 2
+            smiles: CCCCN
         model_id: 1065

@@ -1,13 +1,15 @@
 
 
-
 from indigo import Indigo
 from indigo.renderer import IndigoRenderer
 from indigo.inchi import IndigoInchi
 
 from typing import Optional, Dict
 import base64
+import logging
 import pandas as pd
+
+from util.prediction_cache_key_utils import normalize_inchi_key
 
 class IndigoUtils :
     
@@ -18,24 +20,39 @@ class IndigoUtils :
         
         self.indigo.setOption("render-output-format", "png")
 
+    @staticmethod
+    def _normalize_smiles_input(smiles: str) -> Optional[str]:
+        if smiles is None:
+            return None
+
+        smiles_text = str(smiles).strip()
+        if not smiles_text:
+            return None
+
+        if smiles_text.upper() in {"NULL", "N/A", "NONE", "NAN"}:
+            return None
+
+        return smiles_text
+
     
     def inchi_key_from_smiles(self, smiles: str, short_key: bool = False) -> Optional[str]:
         """
         Convert SMILES to an InChIKey.
         Set short_key=True to return only the first 14 characters (connectivity block).
         """
-        if smiles is None or str(smiles).strip() == "":
+        smiles_text = self._normalize_smiles_input(smiles)
+        if smiles_text is None:
             return None
         try:
-            mol = self.indigo.loadMolecule(str(smiles))
+            mol = self.indigo.loadMolecule(smiles_text)
             inchi_str = self.indigo_inchi.getInchi(mol)
-            ik = self.indigo_inchi.getInchiKey(inchi_str)
+            ik = normalize_inchi_key(self.indigo_inchi.getInchiKey(inchi_str))
             if ik is None:
                 return None
             # Return first block (14 chars); using split ensures robustness even if format changes.
             return ik.split("-")[0] if short_key else ik
-        except Exception as e:
-            print(f"Error getting InChIKey for SMILES '{smiles}': {e}")
+        except Exception as exc:
+            logging.debug("Skipping invalid SMILES for InChIKey generation: %r (%s)", smiles_text, exc)
             return None
 
     def smiles_to_inchikey_dict(
@@ -60,8 +77,8 @@ class IndigoUtils :
                 else:
                     smiles_to_key[smi] = ik
                     
-            except Exception as e:
-                print(f"Failed SMILES '{smi}': {e}")
+            except Exception as exc:
+                logging.debug("Failed to map SMILES to InChIKey: %r (%s)", smi, exc)
                 smiles_to_key[smi] = None
 
         return smiles_to_key
@@ -73,8 +90,11 @@ class IndigoUtils :
         :param smiles_string:
         '''
         try:
+            smiles_text = self._normalize_smiles_input(smiles_string)
+            if smiles_text is None:
+                return None
             # print(width, height)            
-            mol = self.indigo.loadMolecule(smiles_string)
+            mol = self.indigo.loadMolecule(smiles_text)
             self.indigo.setOption("render-output-format", "png") 
             self.indigo.setOption("render-image-width", width)
             self.indigo.setOption("render-image-height", height)
@@ -110,6 +130,6 @@ class IndigoUtils :
             base64_string = base64.b64encode(img_bytes).decode('utf-8')
             return base64_string
     
-        except Exception as e:
-            print(f"An error occurred while loading the molecule: {e}")
+        except Exception as exc:
+            logging.debug("Failed to render SMILES image: %r (%s)", smiles_string, exc)
             return None
