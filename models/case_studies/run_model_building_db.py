@@ -1995,7 +1995,7 @@ def log_stats(model, params, cv_stats, test_stats, ext_stats):
         logging.info(f"all stats:\tN/A\t{test_stats['BA_Test']:.3f}\t{cv_stats['BA_CV_Training']:.3f}\t{ext_stats['BA_External']:.3f}\t{len(model.embedding)}")
 
 @staticmethod
-def build_output_subfolder(params, folder_embedding=None, logp_columns=None):
+def build_output_subfolder(params, folder_embedding=None, logp_columns=None, include_feature_count=False):
     if isinstance(logp_columns, str):
         logp_columns = [logp_columns]
     
@@ -2006,12 +2006,12 @@ def build_output_subfolder(params, folder_embedding=None, logp_columns=None):
     else:
         subfolder = f"{params.qsar_method}_{params.descriptor_set_name}_fs={str(params.feature_selection)}"
 
-    if hasattr(params, "max_descriptor_count") and params.max_descriptor_count is not None:
+    if include_feature_count and hasattr(params, "max_descriptor_count") and params.max_descriptor_count is not None:
         subfolder = f"{subfolder}_max_descriptor_count={str(params.max_descriptor_count)}"
-    elif hasattr(params, "max_features") and params.max_features is not None:
+    elif include_feature_count and hasattr(params, "max_features") and params.max_features is not None:
         subfolder = f"{subfolder}_max_features={str(params.max_features)}"
 
-    if hasattr(params, "outlier_filter_enabled"):
+    if getattr(params, "outlier_filter_methods", False) and params.outlier_filter_methods is not None and len(params.outlier_filter_methods) > 0:
         subfolder = f"{subfolder}_outlier_filter_methods={"_".join(params.outlier_filter_methods)}"
 
     if folder_embedding is not None:
@@ -2038,7 +2038,7 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
                 descriptor_set_name="WebTEST-default", splitting_name="RND_REPRESENTATIVE",
                 ad_measure_model=None, add_LOGP_Martin=False, logp_columns=None, write_to_db=False, user="tmarti02",
                 unique_identifier=None, append_to_models_folder="", subfolder=None, save_initial_dfs=False,
-                outlier_filter_methods=None):
+                outlier_filter_methods=None, include_feature_count_in_subfolder=False):
     # TODO: reg model using descriptors from XGB or RF model
     # TODO: gcm model that uses reg with fragment descriptors such that it deletes rows with less than 3 instances and the associated rows
     # TODO does add the LOGP predicted from my LOGP model improve the results?
@@ -2550,7 +2550,7 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         # if folder_embedding is not None:
         #     subfolder = subfolder + "_" + folder_embedding
 
-        subfolder = subfolder if subfolder is not None else build_output_subfolder(params, folder_embedding, logp_columns)
+        subfolder = subfolder if subfolder is not None else build_output_subfolder(params, folder_embedding, logp_columns, include_feature_count=include_feature_count_in_subfolder)
         
         model.subfolder=subfolder
                         
