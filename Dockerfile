@@ -5,12 +5,16 @@ ENV PATH=/opt/venv/bin:$PATH \
     PIP_NO_CACHE_DIR=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
+# Refresh cached OS package layers for the security rebuild.
+ARG SECURITY_REFRESH=2026-10-03
 RUN apt-get update && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends \
         ca-certificates python3 libfreetype6 libfontconfig1 fonts-dejavu-core libstdc++6 libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
 FROM runtime AS builder
+# Refresh cached OS package layers for the security rebuild.
+ARG SECURITY_REFRESH=2026-10-03
 RUN apt-get update \
     && apt-get install -y --no-install-recommends build-essential python3-dev python3-venv \
     && rm -rf /var/lib/apt/lists/* \
