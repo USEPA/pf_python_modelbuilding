@@ -474,6 +474,14 @@ def cross_validate_fold(qsar_method):
                                hyperparameters=hyperparameters, n_jobs=n_jobs)
 
 
+
+def convert_starlette_jsonresponse_to_flask(resp):
+    body = resp.body.decode("utf-8")
+    # print(body)
+    data = json.loads(body)
+    return data, resp.status_code
+
+
 @app.route('/api/predictor_models/predictDB', methods=['POST', 'GET'])
 def predictDB():
     """Automates prediction and AD for single smiles using model in database
@@ -485,26 +493,40 @@ def predictDB():
         obj = request.args
     smiles = obj.get('smiles')  # Retrieves the model number to use
     model_id = obj.get('model_id')
+    identifier = obj.get('identifier')
     report_format = obj.get('report_format', 'json').lower()
     
     if report_format not in ['json', 'html']:
         report_format = 'json'
         
-    mp = ModelPredictor()
-    modelResultsJson = mp.predictFromDB(model_id, smiles)
-    
-    if "invalid" in modelResultsJson.lower():
-        return modelResultsJson, 400
-    
-    if report_format == "html":
-        rc = ReportCreator()
-        html = rc.create_html_report_from_json(modelResultsJson)
-        return html, 200
-    else:
-        return modelResultsJson, 200
+    # mp = ModelPredictor()
+    # results = mp.predictFromDB(model_id, smiles)
+    # print(type(results))
+    # print(json.dumps(results, indent=4))
+    #
+    #
+    # # if "invalid" in results.lower():
+    # #     return results, 400
+    #
+    # if report_format == "html":
+    #     rc = ReportCreator()
+    #     html = rc.create_html_report_from_json(json.dumps(results))
+    #     return html, 200
+    # else:
+    #     return results, 200
+    #
+    # return mp.predictFromDB(model_id, smiles, report_format), 200
 
-    return mp.predictFromDB(model_id, smiles, report_format), 200
+    from util.helpers import make_predictdb_response
 
+    response = make_predictdb_response(
+        model_id=model_id,
+        smiles=smiles,
+        identifier=identifier,
+        report_format=report_format
+    )
+    data, status = convert_starlette_jsonresponse_to_flask(response)
+    return data, status 
 
 @app.route('/api/predictor_models/predict_identifier', methods=['POST', 'GET'])
 def predict_identifier():
@@ -843,7 +865,9 @@ def model_coeffs(model_id):
         abort(404, 'no stored model with id ' + model_id)
         
     if hasattr(model, 'getOriginalRegressionCoefficients2') and callable(getattr(model, 'getOriginalRegressionCoefficients2')):
-        coeff_dict = model.getOriginalRegressionCoefficients2()
+        y = model.df_training[model.df_training.columns[1]]
+        X = model.df_training[model.embedding]
+        coeff_dict = model.getOriginalRegressionCoefficients2(X, y)
         return coeff_dict, 200
     else:
         return "Cant return coefficients for " + model.qsar_method

@@ -6,5 +6,4 @@ python-dotenv==1.2.2
 psycopg2-binary==2.9.11
 sklearn-genetic-opt==0.12.0
 sklearn-pmml-model==1.0.7
-sklearn2pmml==0.125.0
 SQLAlchemy==2.0.45

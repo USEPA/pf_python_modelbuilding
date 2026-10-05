@@ -121,6 +121,29 @@ def set_significant_digits(value, significant_digits):
         print(e)
         return "error:" + str(value)
 
+
+from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
+
+# def set_significant_digits(value, significant_digits):
+#     if significant_digits < 1:
+#         raise ValueError("Significant digits must be at least 1")
+#
+#     try:
+#         d = Decimal(str(value))
+#
+#         if d == 0:
+#             return "0"
+#
+#         # Determine exponent for the required significant digits
+#         exponent = d.adjusted()  # position of most significant digit
+#         quantize_exp = Decimal(f"1e{exponent - significant_digits + 1}")
+#
+#         rounded = d.quantize(quantize_exp, rounding=ROUND_HALF_UP)
+#         return format(rounded, "f").rstrip("0").rstrip(".") if "." in format(rounded, "f") else str(rounded)
+#
+#     except (InvalidOperation, ValueError) as e:
+#         print(e)
+#         return "error:" + str(value)
        
 def format2(value):
     return f"{value:.2f}" if value is not None else "N/A"

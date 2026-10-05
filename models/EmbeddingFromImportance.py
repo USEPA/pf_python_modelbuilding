@@ -19,7 +19,8 @@ from sklearn.feature_selection import SequentialFeatureSelector
 
 def generateEmbedding(model, df_training, df_prediction, fraction_of_max_importance,
                       min_descriptor_count, max_descriptor_count,
-                      num_generations=5, n_threads=4,remove_log_p_descriptors=False,
+                      num_generations=5, n_threads=4,
+                      remove_log_p_descriptors=False,remove_fragment_descriptors=False,remove_acnt_descriptors=False,
                       use_permutative=False, use_wards=False):
     '''
     Generates embedding based on importance
@@ -46,10 +47,18 @@ def generateEmbedding(model, df_training, df_prediction, fraction_of_max_importa
     if use_wards:
         # Using ward's method removes too descriptors for PFAS only training sets:
         train_ids, train_labels, train_features, train_column_names, model.is_binary = \
-                DFU.prepare_instances_wards(df_training, "training", remove_log_p_descriptors, 0.5) # uses wards method to remove extra descriptors
+                DFU.prepare_instances_wards(df_training, "training", remove_log_p_descriptors, 0.5)  # uses wards method to remove extra descriptors
     else:
-        train_ids, train_labels, train_features, train_column_names, model.is_binary = \
-            DFU.prepare_instances(df_training, "training", remove_log_p_descriptors, True)  # removes descriptors which are correlated by 0.95
+        _, train_labels, train_features, train_column_names, model.is_binary = \
+                DFU.prepare_instances(
+                    df=df_training,
+                    which_set="training",
+                    remove_logp=remove_log_p_descriptors,
+                    remove_corr=True,
+                    remove_constant=True,
+                    remove_fragment_descriptors=remove_fragment_descriptors,
+                    remove_acnt_descriptors=remove_acnt_descriptors
+                )
 
     # print('train_labels',train_labels)
     # print(train_features)

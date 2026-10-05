@@ -51,7 +51,7 @@ level_styles = {
 coloredlogs.install(level=logging_level, milliseconds=True, level_styles=level_styles,
                     fmt='%(asctime)s - %(name)s - %(levelname)s - %(message)s (%(filename)s:%(lineno)d)')
 
-load_dotenv("../../personal.env")
+load_dotenv("../personal.env")
 PROJECT_ROOT = os.getenv("PROJECT_ROOT")
 
 pd.options.mode.chained_assignment = None  # default='warn'
@@ -1890,7 +1890,7 @@ class DataQuerier:
                 )
 
                 # ad_test_columns[f"AD_{ad.replace(' ', '_')}"] = df_ad_output["AD"].values
-                ad_test_columns[f"AD_{ad.replace(" ", "_")}"] = temp["id"].map(ad_map)
+                ad_test_columns[f"AD_{ad.replace(' ', '_')}"] = temp["id"].map(ad_map)
 
             logging.warning(
                 "AD columns were missing from model predictions; recomputing AD as fallback. "
@@ -1982,7 +1982,8 @@ class DataQuerier:
                 )
 
                 # ad_test_columns[f"AD_{ad.replace(' ', '_')}"] = df_ad_output["AD"].values
-                ad_test_columns[f"AD_{ad.replace(" ", "_")}"] = temp["id"].map(ad_map)
+                # ad_test_columns[f"AD_{ad.replace(" ", "_")}"] = temp["id"].map(ad_map)
+                ad_test_columns[f"AD_{ad.replace(' ', '_')}"] = temp["id"].map(ad_map)
 
             logging.warning(
                 "AD columns were missing from model predictions; recomputing AD as fallback. "
@@ -3742,15 +3743,20 @@ def query_example() -> None:
     """
     logging.info("Running query_example()")
     # model_id = 1753
-    model_id = 1886
+    # model_id = 1847
+    # model_id = 1886
+    model_id = 1754
+    
     try:
         file_path = os.path.join(PROJECT_ROOT, "data", "excel_summaries", f"{model_id}_summary.xlsx")
+        print(file_path)
 
         mdo = ModelDataObjects(model_id=model_id)
         mte = ModelToExcel(mdo, file_path)
         mte.create_excel()
     except Exception as e:
         logging.error(f"Error occurred while processing model_id {model_id}: {e}")
+
 
 
 def local_example() -> None:
@@ -3886,17 +3892,10 @@ def test_query_fish_models() -> None:
             logging.error(f"Error occurred while processing model_id {model_id}: {e}")
 
 
-def main():
-    # update_excel_summaries(username="weston.murdock", model_ids=[1065, 1066, 1067, 1068, 1069, 1070], upload_to_db=False)
-    # query_example()
-    # local_example()
-    # test_model_details_pv()
-    # test_model_details_gmd()
-    # test_query_old_models()
-    # test_query_binary_models()
-    # test_query_fish_models()
-
+def update_models_in_db():
+    upload_to_db = True
     username = "weston.murdock"
+    
     model_ids = [
         # Physchem Models
         1065, # HLC-XGB Martin 2024
@@ -3906,37 +3905,54 @@ def main():
 		1069, # LogP-XGB Martin 2024
 		1070, # MP-XGB Martin 2024
         # Koc Models
-		1763, # Koc Tox-GCM Martin 2026
-		1754, # Koc Tox-RF Martin 2026
-		1756, # Koc Tox-XGB Martin 2026
-		1757, # Koc Tox-REG Martin 2026
-		1758, # Koc Tox-KNN Martin 2026
+        1763, # Koc Tox-GCM Martin 2026
+        1754, # Koc Tox-RF Martin 2026
+        1756, # Koc Tox-XGB Martin 2026
+        1757, # Koc Tox-REG Martin 2026
+        1758, # Koc Tox-KNN Martin 2026
         # Acute Fish Toxicity
-		1887, # Koc Tox-GCM Martin 2026
-		1892, # Koc Tox-RF Martin 2026
-		1895, # Koc Tox-XGB Martin 2026
-		1896, # Koc Tox-REG Martin 2026
-		1897, # Koc Tox-KNN Martin 2026
+        1887, # Koc Tox-GCM Martin 2026
+        1892, # Koc Tox-RF Martin 2026
+        1895, # Koc Tox-XGB Martin 2026
+        1896, # Koc Tox-REG Martin 2026
+        1897, # Koc Tox-KNN Martin 2026
         # RBIODEG 301F RIFM
-		1877, # RBIODEG RIFM-GCM Martin 2026
-		1832, # RBIODEG RIFM-RF_No_FS Martin 2026
-		1834, # RBIODEG RIFM-RF Martin 2026
-		1833, # RBIODEG RIFM-XGB_No_FS Martin 2026
-		1837, # RBIODEG RIFM-XGB Martin 2026
-		1880, # RBIODEG RIFM-REG Martin 2026
-		1845, # RBIODEG RIFM-KNN Martin 2026
+        1877, # RBIODEG RIFM-GCM Martin 2026
+        1832, # RBIODEG RIFM-RF_No_FS Martin 2026
+        1834, # RBIODEG RIFM-RF Martin 2026
+        1833, # RBIODEG RIFM-XGB_No_FS Martin 2026
+        1837, # RBIODEG RIFM-XGB Martin 2026
+        1880, # RBIODEG RIFM-REG Martin 2026
+        1845, # RBIODEG RIFM-KNN Martin 2026
         # RBIODEG 301 RIFM+ECHA
-		1878, # RBIODEG RIFM+ECHA-GCM Martin 2026
-		1849, # RBIODEG RIFM+ECHA-RF_No_FS Martin 2026
-		1862, # RBIODEG RIFM+ECHA-RF Martin 2026
-		1852, # RBIODEG RIFM+ECHA-XGB_No_FS Martin 2026
-		1865, # RBIODEG RIFM+ECHA-XGB Martin 2026
-		1879, # RBIODEG RIFM+ECHA-REG Martin 2026
+        1878, # RBIODEG RIFM+ECHA-GCM Martin 2026
+        1849, # RBIODEG RIFM+ECHA-RF_No_FS Martin 2026
+        1862, # RBIODEG RIFM+ECHA-RF Martin 2026
+        1852, # RBIODEG RIFM+ECHA-XGB_No_FS Martin 2026
+        1865, # RBIODEG RIFM+ECHA-XGB Martin 2026
+        1879, # RBIODEG RIFM+ECHA-REG Martin 2026
         1869 # RBIODEG RIFM+ECHA-KNN Martin 2026
     ]
-    upload_to_db = True
-
     update_excel_summaries(username, model_ids, upload_to_db)
+    
+    
+
+
+def main():
+    # update_excel_summaries(username="weston.murdock", model_ids=[1065, 1066, 1067, 1068, 1069, 1070], upload_to_db=False)
+    # query_example()
+
+    
+    # update_excel_summaries(username='tmarti02', [1754], upload_to_db=False)
+    update_models_in_db()
+    
+    # local_example()
+    # test_model_details_pv()
+    # test_model_details_gmd()
+    # test_query_old_models()
+    # test_query_binary_models()
+    # test_query_fish_models()
+
 
 if __name__ == "__main__":
     main()

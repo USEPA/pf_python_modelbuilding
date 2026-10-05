@@ -406,8 +406,9 @@ def call_build_embedding_importance(qsar_method, training_tsv, prediction_tsv, r
 #     return train_column_names
 
 
-def call_build_embedding_importance_from_df(qsar_method, df_training, df_prediction, remove_log_p_descriptors, n_threads,
-                                    num_generations, use_permutative, run_rfe, fraction_of_max_importance,
+def call_build_embedding_importance_from_df(qsar_method, df_training, df_prediction, remove_log_p_descriptors, 
+                                            remove_fragment_descriptors,remove_acnt_descriptors,
+                                            n_threads, num_generations, use_permutative, run_rfe, fraction_of_max_importance,
                                     min_descriptor_count, max_descriptor_count, use_wards, hyperparameter_grid = None,
                                     run_sfs=False, cv=5, descriptor_coefficient=0.002, alpha=0.7,
                                     n_min=2, n_max=20):
@@ -418,7 +419,7 @@ def call_build_embedding_importance_from_df(qsar_method, df_training, df_predict
     # print('in call_build_embedding_importance, df_prediction.shape',df_prediction.shape)
 
     df_training = dfu.filter_columns_in_both_sets(df_training, df_prediction)
-
+    
     # print('in call_build_embedding_importance, df_training.shape2',df_training.shape)
 
     model = instantiateModel(df_training=df_training, n_jobs=n_threads, qsar_method=qsar_method,
@@ -432,6 +433,7 @@ def call_build_embedding_importance_from_df(qsar_method, df_training, df_predict
     t1 = time.time()
 
     efi.generateEmbedding(model, df_training, df_prediction, remove_log_p_descriptors=remove_log_p_descriptors,
+                          remove_fragment_descriptors=remove_fragment_descriptors, remove_acnt_descriptors=remove_acnt_descriptors,
                           num_generations=num_generations, n_threads=n_threads, use_permutative=use_permutative,
                           fraction_of_max_importance=fraction_of_max_importance,
                           min_descriptor_count=min_descriptor_count, max_descriptor_count=max_descriptor_count,
