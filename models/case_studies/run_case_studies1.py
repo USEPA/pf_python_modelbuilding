@@ -60,19 +60,21 @@ def run_Koc():
     unique_identifier = None
     # write_to_db = True
     write_to_db = False
+
     dataset_name = "KOC v1 modeling"
-    # descriptor_set_name = "WebTEST-default"
+    # dataset_name = "KOC v2 modeling"
+
+    descriptor_set_name = "WebTEST-default"
     # descriptor_set_name = "Mordred-default"
     # descriptor_set_name = "ToxPrints-default"
     # descriptor_set_name = "RDKit-default"
-    descriptor_set_name = "PaDEL-default"
+    # descriptor_set_name = "PaDEL-default"
+
     splitting_name = "RND_REPRESENTATIVE"
     
-    # append_to_models_folder = ""
-    
-    descriptor_coefficient = 0.006
-    
+    # descriptor_coefficient = 0.006
     # append_to_models_folder = "_ad_test_"+str(descriptor_coefficient)
+
     # append_to_models_folder = "_v2.0"
     # append_to_models_folder = "_KOC_v2 external"
     append_to_models_folder = "_descriptor_set_test"
@@ -1721,8 +1723,8 @@ def main():
     # run_example()
     # run_Koc_knn_ga()
         
-    # run_Koc()
-    run_fish_tox()
+    run_Koc()
+    # run_fish_tox()
     
     # run_biodeg_nite()
     

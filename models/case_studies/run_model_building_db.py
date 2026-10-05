@@ -1158,7 +1158,7 @@ def getEngine():
         database=os.getenv('POSTGRES_DB')
     )
     
-    # print(connect_url)    
+    # print(connect_url)
     
     engine = create_engine(connect_url, echo=False)
     return engine
@@ -2196,7 +2196,7 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         df_prediction_ext = None
         dataset_name_ext = None
         
-        if dataset_name == 'KOC v1 modeling':
+        if dataset_name == 'KOC v1 modeling' or dataset_name == 'KOC v2 modeling':
             dataset_name_ext = 'KOC v2 external'
             # dataset_name_ext = 'Koc eChemPortal v1'
         elif dataset_name == 'ECOTOX_2024_12_12_96HR_Fish_LC50_v3a modeling':
