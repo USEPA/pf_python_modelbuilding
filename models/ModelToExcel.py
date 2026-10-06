@@ -3629,7 +3629,7 @@ class ModelToExcel:
 
             if subset_prediction_configs:
                 logging.debug("Creating subset prediction sheets...")
-                self.subset_predictions_sheets(writer, subset_prediction_configs)
+                subset_dfs = self.subset_predictions_sheets(writer, subset_prediction_configs)
 
             # logging.debug("Done creating detailed Excel!")
             # logging.debug("Done with initial passthrough of all sheets!")
@@ -3664,8 +3664,9 @@ class ModelToExcel:
             if subset_prediction_configs:
                 for config in subset_prediction_configs:
                     try:
+                        source_df = subset_dfs.get(config.get("sheet_name"))
                         target_df = self.records_df if config.get("source_set") in {"training", "test"} else self.external_records_df
-                        ExcelFormatter.add_hyperlinks_to_sheet(writer, config.get("sheet_name"), "Records", df_source = self._get_predictions_df_by_source(config.get("source_set")), df_target = target_df, has_subtotals=self.add_subtotals, target_has_superheaders=self.create_records_superheaders)
+                        ExcelFormatter.add_hyperlinks_to_sheet(writer, config.get("sheet_name"), "Records", df_source = source_df, df_target = target_df, has_subtotals=self.add_subtotals, target_has_superheaders=self.create_records_superheaders)
                     except Exception as e:
                         logging.error(f"Error adding hyperlinks for subset sheet {config.get("sheet_name")}: {e}")
             
