@@ -3733,15 +3733,6 @@ class ModelPredictor:
             return batch_results[0]
         return {"AD": False, "adMethod": {"name": applicabilityDomainName}}
 
-#         output, ad_cutoff = adu.generate_applicability_domain_with_preselected_descriptors_from_dfs(
-#             train_df=model.df_training,
-#             test_df=df_prediction,
-#             # test_df=model.df_prediction,  #for testing running batch type ad calc
-#             remove_log_p=model.remove_log_p_descriptors,
-#             embedding=model.embedding,
-#             # applicability_domain=model.applicabilityDomainName,
-#             applicability_domain=applicabilityDomainName,
-#             filterColumnsInBothSets=False)
 
 def _postprocess_prediction_chunk(args):
     (

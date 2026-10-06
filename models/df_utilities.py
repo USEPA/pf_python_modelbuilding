@@ -408,7 +408,7 @@ def prepare_instances_with_preselected_descriptors_gcm(
         # ---------------------------------------------------------------------
         start = "As [+5 valence, one double bond]"
         stop = "-N=S=O"
-
+        
         fragment_features = keep_columns_between(df, start, stop, True)
 
         if fragment_features.empty:

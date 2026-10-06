@@ -901,4 +901,3 @@ def apply_outlier_filter(
 
     # future extension point for winsorize
     return df_out, report
-

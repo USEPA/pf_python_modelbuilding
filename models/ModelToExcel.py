@@ -12,7 +12,7 @@ from sqlalchemy import URL, Engine, text, create_engine
 from sqlalchemy.orm import Session, sessionmaker
 import math
 import numpy as np
-from typing import Optional, Dict, Any, Iterable, Tuple, Union
+from typing import Optional, Dict, Any, Iterable, Tuple, Union, Literal, List
 from xlsxwriter.utility import xl_rowcol_to_cell, xl_col_to_name
 import os
 import traceback
@@ -27,6 +27,7 @@ from models.db_utilities.plot_db import upload_or_update_model_file_in_db
 from models.db_utilities.model_statistics_db import update_statistic_value
 from StatsCalculator import calculate_continuous_statistics, calculate_binary_statistics, calculate_mean_exp_training
 from util import predict_constants as pc
+from util.units_converter import UnitsConverter
 import applicability_domain.applicability_domain_utilities as adu
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -703,7 +704,8 @@ class ChartBuilder:
         title = f"{sheet_name} for {property_name}" if property_name is not None else f"{y_col.capitalize()} vs {x_col.capitalize()}"
         title_len = len(title)
         title_font_size = 18 - 2*(title_len // 20)
-        series_name = f"{y_col.capitalize()} vs {x_col.capitalize()}"
+        # series_name = f"{y_col.capitalize()} vs {x_col.capitalize()}"
+        series_name = f"Predicted vs Observed"
         chart.set_title({
             "name": title,
             "overlay": False,
@@ -1116,6 +1118,77 @@ class DataQuerier:
             except Exception:
                 pass
             return DataQuerier.getSession()
+    
+    @staticmethod
+    def get_average_within_chemical_std(
+        df_pv: pd.DataFrame,
+        property_name: str,
+        smiles_col: str = "canon_qsar_smiles",
+        value_col: str = "prop_value",
+        units_col: str = "prop_unit",
+        qsar_units_col: str = "qsar_property_unit",
+        mol_weight_col: str = "mapped_mol_weight"
+    ) -> float:
+        """
+        Compute the average standard deviation of prop_value across chemicals.
+
+        For each unique chemical (identified by canon_qsar_smiles), this computes the
+        standard deviation of prop_value, then returns the mean of those
+        standard deviations across all chemicals.
+
+        Chemicals with fewer than 2 non-null values are ignored because std cannot
+        be computed meaningfully for them.
+
+        Args:
+            df_pv: Property-values dataframe.
+            smiles_col: Column identifying each chemical.
+            value_col: Column containing the property values.
+            units_col: Column containing the property units.
+            qsar_units_col: Column containing the QSAR units.
+        Returns:
+            float: Average within-chemical standard deviation, or np.nan if not computable.
+        """
+        if df_pv is None or df_pv.empty:
+            return np.nan
+
+        required_cols = {smiles_col, value_col, units_col, qsar_units_col}
+        missing = required_cols - set(df_pv.columns)
+        if missing:
+            raise ValueError(f"df_pv is missing required columns: {missing}")
+
+        # Ensure numeric values and drop rows where key fields are missing
+        temp = df_pv[[smiles_col, value_col, units_col, qsar_units_col, mol_weight_col]].copy()
+        temp[value_col] = pd.to_numeric(temp[value_col], errors="coerce")
+        temp = temp.dropna(subset=[smiles_col, value_col, units_col, qsar_units_col])
+
+        # temp[value_col] = temp.groupby(smiles_col, group_keys=False).apply(
+        #     lambda g: DataQuerier._convert_series_to_qsar_units(
+        #         g[value_col], g[units_col].iloc[0], g[qsar_units_col].iloc[0]
+        #     )
+        # )
+
+        uc = UnitsConverter()
+        temp[value_col] = temp.apply(
+            lambda row: uc.convert_units(
+                property_name=property_name,
+                value=row[value_col],
+                unit_name=row[units_col],
+                final_unit_name=row[qsar_units_col],
+                chemical_id=row[smiles_col],
+                molecular_weight=row[mol_weight_col]
+            ), axis=1
+        )
+
+        temp = temp.dropna(subset=[value_col])
+
+        # Compute std dev per chemical; ignore groups with fewer than 2 values
+        per_chem_std = (
+            temp.groupby(smiles_col)[value_col]
+            .std(ddof=1)
+            .dropna()
+        )
+
+        return float(per_chem_std.mean()) if not per_chem_std.empty else np.nan
 
     def query_model(self) -> Optional[Model]:
         """Query the database for the model object.
@@ -1373,6 +1446,11 @@ class DataQuerier:
         model = self.query_model()
         model_id = getattr(model, "modelId", None)
         model_id = int(model_id) if model_id is not None else None
+        
+        df_pv = self.query_df_pv(external=False)
+        avg_std = DataQuerier.get_average_within_chemical_std(df_pv, property_name=model.propertyName) if df_pv is not None else float("nan")
+        if avg_std is not None and not np.isnan(avg_std):
+            avg_std = round(avg_std, 3)
 
         summary_dict = {
             "Model ID": [model_id],
@@ -1384,6 +1462,7 @@ class DataQuerier:
             "Dataset Description": [model.datasetDescription],
             "nTraining": [model.num_training],
             "nTest": [model.num_prediction],
+            "Average Standard Deviation of Property Value": [avg_std],
             "Method Name": [model.modelMethod],
             "Method Description": [model.modelMethodDescription],
             "Number of Variables": [len(model.embedding)],
@@ -2095,15 +2174,20 @@ class DataTransformer:
         return df_result
 
     @staticmethod
-    def get_cover_sheet_df(results_dict: Dict[str, Any]) -> pd.DataFrame:
+    def get_cover_sheet_df(results_dict: Dict[str, Any], df_pv: pd.DataFrame = None) -> pd.DataFrame:
         """Generate cover sheet dataframe from model results dictionary.
         
         Args:
             results_dict: Dictionary with 'model_details' key containing model metadata.
+            df_pv: DataFrame with chemical data.
         
         Returns:
             pd.DataFrame: Single-row dataframe with model summary information.
         """
+        avg_std = DataQuerier.get_average_within_chemical_std(df_pv, property_name=results_dict["model_details"].get("propertyName", None)) if df_pv is not None else float("nan")
+        if avg_std is not None and not np.isnan(avg_std):
+            avg_std = round(avg_std, 3)
+
         cover_sheet_df = {
             "Model ID": [results_dict["model_details"].get("modelId", None)],
             "Model Name": [results_dict["model_details"].get("modelName", None)],
@@ -2114,6 +2198,7 @@ class DataTransformer:
             "Dataset Description": [results_dict["model_details"].get("datasetDescription", None)],
             "nTraining": [results_dict["model_details"].get("numTraining", None)],
             "nTest": [results_dict["model_details"].get("numPrediction", None)],
+            "Average Standard Deviation of Property Value": [avg_std],
             "Method Name": [results_dict["model_details"].get("qsar_method", None)],
             "Method Description": [results_dict["model_details"].get("qsar_method_description", None)],
             "Number of Variables": [len(results_dict["model_details"].get("embedding", []))],
@@ -3473,7 +3558,8 @@ class ModelToExcel:
             integer_ticks: bool=True,
             yx_offset_rows: int=3,
             col_width_pad: int=6,
-            min_col_width: int=8
+            min_col_width: int=8,
+            subset_prediction_configs: Optional[List[Dict[str, Any]]]=None
         ) -> None:
         """Generate complete Excel workbook with all model summary sheets and charts.
         
@@ -3491,6 +3577,7 @@ class ModelToExcel:
             yx_offset_rows: Empty rows between data and y=x reference line points. Defaults to 3.
             col_width_pad: Extra padding to add to calculated column widths. Defaults to 6.
             min_col_width: Minimum width for any column. Defaults to 8 characters.
+            subset_prediction_configs: List of configuration dictionaries for generating subset prediction sheets. Defaults to None.
         """
         logging.info("Creating detailed Excel...")
         self.excel_path.parent.mkdir(parents=True, exist_ok=True)
@@ -3540,6 +3627,10 @@ class ModelToExcel:
                 logging.debug("Creating External Predictions...")
                 df = self.external_predictions(writer, self.external_predictions_df, add_subtotals=self.add_subtotals, x_col=x_col, y_col=y_col, chart_size_px=chart_size_px, pad_ratio=pad_ratio, integer_ticks=integer_ticks, yx_offset_rows=yx_offset_rows, col_width_pad=col_width_pad, min_col_width=min_col_width, property_name=property_name, property_units=property_units)
 
+            if subset_prediction_configs:
+                logging.debug("Creating subset prediction sheets...")
+                subset_dfs = self.subset_predictions_sheets(writer, subset_prediction_configs)
+
             # logging.debug("Done creating detailed Excel!")
             # logging.debug("Done with initial passthrough of all sheets!")
 
@@ -3570,6 +3661,14 @@ class ModelToExcel:
                     ExcelFormatter.add_hyperlinks_to_sheet(writer, "External Predictions", "External Records", self.external_predictions_df, self.external_records_df, has_subtotals=self.add_subtotals, target_has_superheaders=self.create_records_superheaders)
                 except Exception as e:
                     logging.error(f"Error adding hyperlinks: {e}")
+            if subset_prediction_configs:
+                for config in subset_prediction_configs:
+                    try:
+                        source_df = subset_dfs.get(config.get("sheet_name"))
+                        target_df = self.records_df if config.get("source_set") in {"training", "test"} else self.external_records_df
+                        ExcelFormatter.add_hyperlinks_to_sheet(writer, config.get("sheet_name"), "Records", df_source = source_df, df_target = target_df, has_subtotals=self.add_subtotals, target_has_superheaders=self.create_records_superheaders)
+                    except Exception as e:
+                        logging.error(f"Error adding hyperlinks for subset sheet {config.get("sheet_name")}: {e}")
             
             logging.info(f"Done creating detailed Excel! (model_id = {self.model.modelId})\n\tFile: {self.excel_path}")
 
@@ -3594,18 +3693,505 @@ class ModelToExcel:
         
         return stats
 
+    def _get_predictions_df_by_source(self, source_set: str) -> Optional[pd.DataFrame]:
+        """
+        Return the appropriate predictions dataframe for a requested source set.
+
+        Args:
+            source_set: One of {"training", "test", "external"}.
+
+        Returns:
+            Predictions dataframe or None.
+        """
+        source_set = source_set.lower().strip()
+
+        if source_set in {"training", "train", "cv"}:
+            return self.training_cv_predictions_df
+        elif source_set in {"test", "test_set"}:
+            return self.test_set_predictions_df
+        elif source_set in {"external", "ext", "validation"}:
+            return self.external_predictions_df
+        else:
+            raise ValueError(
+                f"Invalid source_set='{source_set}'. Expected one of "
+                f"'training', 'test', or 'external'."
+            )
+
+    @staticmethod
+    def _normalize_chemical_key_series(s: pd.Series) -> pd.Series:
+        """
+        Normalize identifier columns so joins are less fragile.
+        """
+        return (
+            s.astype(str)
+             .fillna("")
+             .str.strip()
+        )
+
+    def _load_chemical_list_tsv(
+        self,
+        chemical_list_tsv: Union[str, Path],
+        id_columns: dict[str, str] = {"DTXCID": "DTXCID", "canon_qsar_smiles": "Canon QSAR SMILES", "smiles": "SMILES"},
+    ) -> pd.DataFrame:
+        """
+        Load a TSV chemical list and normalize the requested identifier columns.
+
+        Args:
+            chemical_list_tsv: Path to TSV file containing desired chemicals.
+            id_columns: Identifier columns to expect in the TSV, mapping internal names to file column names.
+
+        Returns:
+            Normalized dataframe.
+        """
+        chemical_list_tsv = Path(chemical_list_tsv)
+        if not chemical_list_tsv.exists():
+            raise FileNotFoundError(f"Chemical list TSV not found: {chemical_list_tsv}")
+
+        df_list = pd.read_csv(chemical_list_tsv, sep="\t", dtype=str)
+
+        missing = [c for c in id_columns.keys() if c not in df_list.columns]
+        if missing:
+            raise ValueError(
+                f"Chemical list TSV is missing required columns: {missing}. "
+                f"Found columns: {list(df_list.columns)}"
+            )
+
+        for col in id_columns.keys():
+            df_list.rename(columns={col: id_columns.get(col, col)}, inplace=True)
+            df_list[col] = self._normalize_chemical_key_series(df_list[id_columns.get(col, col)])
+
+        df_list = df_list.drop_duplicates(subset=id_columns.values()).copy()
+        return df_list
+
+    @staticmethod
+    def _make_unique_sheet_name(writer: ExcelWriter, base_name: str) -> str:
+        """
+        Make a unique Excel sheet name to avoid collisions.
+        """
+        base_name = base_name[:31]  # Excel sheet name limit
+        existing = set(writer.sheets.keys())
+
+        if base_name not in existing:
+            return base_name
+
+        i = 2
+        while True:
+            suffix = f" ({i})"
+            candidate = base_name[:31 - len(suffix)] + suffix
+            if candidate not in existing:
+                return candidate
+            i += 1
+
+    @staticmethod
+    def _safe_mean_absolute_error(y_true: pd.Series, y_pred: pd.Series) -> float:
+        if len(y_true) == 0:
+            return np.nan
+        return float(np.mean(np.abs(y_true - y_pred)))
+
+    @staticmethod
+    def _safe_rmse(y_true: pd.Series, y_pred: pd.Series) -> float:
+        if len(y_true) == 0:
+            return np.nan
+        return float(np.sqrt(np.mean((y_true - y_pred) ** 2)))
+
+    @staticmethod
+    def _safe_r2(y_true: pd.Series, y_pred: pd.Series) -> float:
+        """
+        Pearson R^2 style metric, matching the statistics sheet naming.
+        """
+        if len(y_true) < 2:
+            return np.nan
+        corr = np.corrcoef(y_true, y_pred)[0, 1]
+        if pd.isna(corr):
+            return np.nan
+        return float(corr ** 2)
+
+    @staticmethod
+    def _infer_ad_mask(df: pd.DataFrame) -> Optional[pd.Series]:
+        """
+        Try to infer AD membership from available columns.
+
+        Returns:
+            Boolean mask where True means inside AD, or None if no usable AD column is found.
+        """
+        candidate_cols = [c for c in df.columns if c.startswith("AD") or c.startswith("Ad")]
+        if not candidate_cols:
+            return None
+
+        # Prefer the union of the AD columns if multiple are present
+        if len(candidate_cols) > 1:
+            combined = pd.Series(True, index=df.index)
+            for col in candidate_cols:
+                vals = df[col]
+                if vals.dtype == bool:
+                    combined &= vals.fillna(False)
+                else:
+                    lowered = vals.astype(str).str.lower().str.strip()
+                    combined &= lowered.isin(["true", "yes", "1"])
+            return combined
+
+        # Otherwise, prefer the first AD column that looks boolean-like
+        for col in candidate_cols:
+            vals = df[col]
+            if vals.dtype == bool:
+                return vals.fillna(False)
+
+            # Common encodings: 1/0, Yes/No, True/False
+            lowered = vals.astype(str).str.lower().str.strip()
+            if lowered.isin(["true", "false", "yes", "no", "1", "0"]).any():
+                return lowered.isin(["true", "yes", "1"])
+
+        return None
+
+    def _write_subset_metrics_table(
+        self,
+        writer: ExcelWriter,
+        sheet_name: str,
+        df_subset: pd.DataFrame,
+        start_row: int,
+        x_col: str,
+        y_col: str,
+    ) -> int:
+        """
+        Write a compact metrics table below the chart area.
+
+        Returns:
+            Next available row after the table.
+        """
+        workbook = writer.book
+        worksheet = writer.sheets[sheet_name]
+
+        # Formats
+        header_fmt = workbook.add_format({
+            "bold": True,
+            "align": "center",
+            "valign": "vcenter",
+            "bg_color": "#D9EAD3",
+            "border": 1
+        })
+        value_fmt = workbook.add_format({
+            "align": "center",
+            "num_format": "0.000",
+            "border": 1
+        })
+        label_fmt = workbook.add_format({
+            "align": "left",
+            "border": 1
+        })
+        format_super = workbook.add_format({
+            "font_script": 1
+        })
+        format_sub = workbook.add_format({
+            "font_script": 2
+        })
+
+        # Determine metrics
+        y_true = pd.to_numeric(df_subset[x_col], errors="coerce")
+        y_pred = pd.to_numeric(df_subset[y_col], errors="coerce")
+        valid_mask = y_true.notna() & y_pred.notna()
+        y_true = y_true[valid_mask]
+        y_pred = y_pred[valid_mask]
+
+        r2 = self._safe_r2(y_true, y_pred)
+        rmse = self._safe_rmse(y_true, y_pred)
+        mae = self._safe_mean_absolute_error(y_true, y_pred)
+
+        inside_ad_mask = self._infer_ad_mask(df_subset)
+        mae_inside = np.nan
+        mae_outside = np.nan
+        ad_coverage = np.nan
+
+        if inside_ad_mask is not None:
+            inside_ad_mask = inside_ad_mask[valid_mask]
+            if inside_ad_mask.any():
+                mae_inside = self._safe_mean_absolute_error(y_true[inside_ad_mask], y_pred[inside_ad_mask])
+            if (~inside_ad_mask).any():
+                mae_outside = self._safe_mean_absolute_error(y_true[~inside_ad_mask], y_pred[~inside_ad_mask])
+            ad_coverage = float(inside_ad_mask.mean())
+
+        # Write table
+        worksheet.write(start_row, 0, "Metric", header_fmt)
+        worksheet.write(start_row, 1, "Value", header_fmt)
+
+        metrics = [
+            ("R2", r2),
+            ("RMSE", rmse),
+            ("MAE", mae),
+            ("MAE inside AD", mae_inside),
+            ("MAE outside AD", mae_outside),
+            ("Fraction Inside AD", ad_coverage),
+        ]
+
+        source_set = ""
+        if "training" in sheet_name.lower():
+            source_set = "Training"
+        elif "test" in sheet_name.lower():
+            source_set = "Test"
+        elif "external" in sheet_name.lower():
+            source_set = "External"
+
+        row = start_row + 1
+        for label, value in metrics:
+            if "R2" in label:
+                worksheet.write_rich_string(row, 0, "R", format_super, "2", label_fmt)
+            elif "inside" in label:
+                worksheet.write_rich_string(row, 0, "MAE", format_sub, source_set, " Inside AD", label_fmt)
+            elif "outside" in label:
+                worksheet.write_rich_string(row, 0, "MAE", format_sub, source_set, " Outside AD", label_fmt)
+            else:
+                worksheet.write(row, 0, label, label_fmt)
+            if pd.isna(value):
+                worksheet.write_blank(row, 1, None, value_fmt)
+            else:
+                worksheet.write_number(row, 1, float(value), value_fmt)
+            row += 1
+
+        return row
+
+    def subset_predictions_sheet(
+        self,
+        writer: ExcelWriter,
+        chemical_list_tsv: Union[str, Path],
+        source_set: str,
+        sheet_name: str,
+        id_columns: dict[str, str] = {"DTXCID": "DTXCID", "canon_qsar_smiles": "Canon QSAR SMILES", "smiles": "SMILES"},
+        match_mode: Literal["any", "all"] = "any",
+        add_subtotals: bool = True,
+        x_col: str = None,
+        y_col: str = None,
+        chart_size_px: int = 520,
+        pad_ratio: float = 0.02,
+        integer_ticks: bool = True,
+        yx_offset_rows: int = 3,
+        col_width_pad: int = 6,
+        min_col_width: int = 8,
+        property_name: Optional[str] = None,
+        property_units: Optional[str] = None,
+        overwrite: bool = False,
+    ) -> Optional[pd.DataFrame]:
+        """
+        Create a subset predictions sheet filtered by a TSV chemical list.
+
+        Args:
+            writer: ExcelWriter object.
+            chemical_list_tsv: TSV file containing desired chemicals.
+            source_set: One of {"training", "test", "external"}.
+            sheet_name: Desired output sheet name.
+            id_columns: Columns used to match chemicals between list and predictions.
+            match_mode: "any" means keep a row if any ID matches, "all" requires all non-empty IDs to match.
+            add_subtotals: Whether to include subtotals row and frozen panes like other prediction sheets.
+            x_col: x-axis column for the plot.
+            y_col: y-axis column for the plot.
+            chart_size_px: Chart size.
+            pad_ratio: Chart padding.
+            integer_ticks: Use integer ticks.
+            yx_offset_rows: Empty rows between data and y=x reference line.
+            col_width_pad: Column width padding.
+            min_col_width: Minimum width.
+            property_name: Chart title property name.
+            property_units: Units for chart labels.
+            overwrite: If True, overwrite existing sheet name if present; otherwise auto-rename.
+
+        Returns:
+            Filtered dataframe, or None if no matches.
+        """
+        predictions_df = self._get_predictions_df_by_source(source_set)
+        if predictions_df is None or predictions_df.empty:
+            logging.warning(f"No predictions dataframe available for source_set='{source_set}'.")
+            return None
+
+        df_list = self._load_chemical_list_tsv(chemical_list_tsv, id_columns=id_columns)
+
+        # Work on copies so we don't mutate stored dfs
+        df_pred = predictions_df.copy()
+
+        # Normalize matching columns when present
+        usable_cols = [c for c in id_columns.values() if c in df_pred.columns and c in df_list.columns]
+        if not usable_cols:
+            raise ValueError(
+                f"No usable join columns found. Predictions columns: {list(df_pred.columns)}; "
+                f"List columns: {list(df_list.columns)}"
+            )
+
+        for col in usable_cols:
+            df_pred[col] = self._normalize_chemical_key_series(df_pred[col])
+
+        # Build filtered dataframe
+        if match_mode == "all":
+            merged = df_pred.merge(
+                df_list[usable_cols].drop_duplicates(),
+                on=usable_cols,
+                how="inner"
+            )
+        elif match_mode == "any":
+            mask = pd.Series(False, index=df_pred.index)
+            for col in usable_cols:
+                allowed = set(df_list[col].dropna().astype(str).str.strip())
+                mask = mask | df_pred[col].isin(allowed)
+            merged = df_pred.loc[mask].copy()
+        else:
+            raise ValueError("match_mode must be either 'any' or 'all'.")
+
+        if merged.empty:
+            logging.warning(
+                f"Subset sheet '{sheet_name}' produced no rows for source_set='{source_set}'."
+            )
+            return None
+
+        # Preserve original column order
+        merged = merged[[c for c in predictions_df.columns if c in merged.columns]].copy()
+
+        # Prevent accidental duplicates in output rows
+        merged = merged.drop_duplicates().reset_index(drop=True)
+
+        # Resolve sheet name collisions
+        final_sheet_name = sheet_name
+        if final_sheet_name in writer.sheets:
+            if overwrite:
+                # xlsxwriter doesn't support deleting sheets; use a unique replacement name instead
+                final_sheet_name = self._make_unique_sheet_name(writer, sheet_name)
+            else:
+                final_sheet_name = self._make_unique_sheet_name(writer, sheet_name)
+
+        # Write dataframe
+        start_row = ExcelFormatter.get_header_row(has_subtotals=add_subtotals)
+        merged.to_excel(writer, sheet_name=final_sheet_name, index=False, startrow=start_row)
+
+        workbook = writer.book
+        worksheet = writer.sheets[final_sheet_name]
+
+        # Add subtotals / freeze panes
+        if add_subtotals:
+            ExcelFormatter.add_subtotals(writer, final_sheet_name, merged)
+            worksheet.freeze_panes(3, 0)
+        else:
+            worksheet.freeze_panes(1, 0)
+
+        # Formatting matches prediction sheets
+        col_widths = ExcelFormatter.set_column_width(
+            writer,
+            final_sheet_name,
+            merged,
+            min_col_width=min_col_width,
+            col_width_pad=col_width_pad,
+            how="header"
+        )
+
+        # Try to format the key numeric columns if present
+        sig_cols = []
+        for candidate in [f"Observed ({property_units})", f"Predicted ({property_units})", f"Absolute Error ({property_units})", "Mol Weight"]:
+            if candidate in merged.columns:
+                sig_cols.append(candidate)
+
+        if sig_cols:
+            ExcelFormatter.set_sig_figs(
+                writer,
+                final_sheet_name,
+                merged,
+                columns=sig_cols,
+                sig_figs=3,
+                col_widths=col_widths
+            )
+
+        ExcelFormatter.add_filter(writer, final_sheet_name, merged, has_subtotals=add_subtotals)
+
+        # Chart using same plot builder as full test sheet
+        ChartBuilder.add_plot(
+            writer,
+            workbook,
+            final_sheet_name,
+            final_sheet_name,
+            merged,
+            is_binary=self.model.is_binary,
+            x_col=x_col,
+            y_col=y_col,
+            chart_size_px=chart_size_px,
+            pad_ratio=pad_ratio,
+            integer_ticks=integer_ticks,
+            log_plot=self.log_plot,
+            yx_offset_rows=yx_offset_rows,
+            property_name=property_name,
+            property_units=property_units,
+            has_subtotals=add_subtotals
+        )
+
+        # Write summary metrics table below the plot
+        # Place it a bit below the chart area so it won't overlap.
+        metrics_start_row = start_row + len(merged) + 6
+        self._write_subset_metrics_table(
+            writer=writer,
+            sheet_name=final_sheet_name,
+            df_subset=merged,
+            start_row=metrics_start_row,
+            x_col=x_col or f"Observed ({property_units})" if f"Observed ({property_units})" in merged.columns else "Exp",
+            y_col=y_col or f"Predicted ({property_units})" if f"Predicted ({property_units})" in merged.columns else "Pred",
+        )
+
+        return merged
+
+    def subset_predictions_sheets(
+        self,
+        writer: ExcelWriter,
+        configs: list[dict],
+    ) -> dict[str, pd.DataFrame]:
+        """
+        Generate multiple subset prediction sheets from a list of configuration dicts.
+
+        Each config can contain:
+            - chemical_list_tsv (str or Path): Path to TSV file with chemical identifiers. (Required)
+            - source_set (str): The source set to use for the subset predictions. (Required)
+            - sheet_name (str): The name of the sheet to create. (Required)
+            - id_columns (dict[str, str]): The columns to use as identifiers, mapping internal names to file column names.
+            - match_mode (str): The mode for matching chemicals.
+            - add_subtotals (bool): Whether to add subtotals to the sheet.
+            - x_col (str): The column to use for the x-axis.
+            - y_col (str): The column to use for the y-axis.
+            - chart_size_px (Tuple[int, int]): The size of the chart in pixels.
+            - pad_ratio (float): The padding ratio for the chart.
+            - integer_ticks (bool): Whether to use integer ticks on the axes.
+            - yx_offset_rows (int): The number of rows to offset the chart.
+            - col_width_pad (float): The padding for column widths.
+            - min_col_width (float): The minimum column width.
+            - property_name (str): The name of the property being analyzed.
+            - property_units (str): The units of the property being analyzed.
+            - overwrite (bool): Whether to overwrite existing sheets.
+
+        Returns:
+            dict mapping output sheet name -> dataframe
+        """
+        outputs = {}
+        for cfg in configs:
+            cfg = cfg.copy()
+            if "property_units" not in cfg:
+                cfg["property_units"] = self.model.unitsModel if self.model is not None else self.cover_sheet_df["Property Units"].iloc[0] if not self.cover_sheet_df["Property Units"].empty else None
+            if "property_name" not in cfg:
+                property_name = self.model.propertyName if self.model is not None else self.cover_sheet_df["Property Name"].iloc[0] if not self.cover_sheet_df["Property Name"].empty else None
+                if "koc" in property_name.lower():
+                    property_name = "log Koc"
+                cfg["property_name"] = property_name
+            if "x_col" not in cfg:
+                cfg["x_col"] = f"Observed ({cfg.get('property_units', '')})" if f"Observed ({cfg.get('property_units', '')})" in self.training_cv_predictions_df.columns else "Exp"
+            if "y_col" not in cfg:
+                cfg["y_col"] = f"Predicted ({cfg.get('property_units', '')})" if f"Predicted ({cfg.get('property_units', '')})" in self.training_cv_predictions_df.columns else "Pred"
+            df = self.subset_predictions_sheet(writer=writer, **cfg)
+            if df is not None:
+                outputs[cfg.get("sheet_name", "Subset Predictions")] = df
+        return outputs
+
 
 # ============================================================
 # TEST FUNCTIONS AND MISCELLANEOUS STUFF
 # ============================================================
 
-def update_excel_summaries(username: str, model_ids: Optional[list[int]] = None, upload_to_db: bool = False) -> None:
+def update_excel_summaries(username: str, model_ids: Optional[list[int]] = None, upload_to_db: bool = False, excel_arguments: dict = None, unique_identifier: str = None) -> None:
     """Update Excel summaries for the specified models.
 
     Args:
         username: The username of the user updating the summaries.
         model_ids: A list of model IDs for which to update summaries.
         upload_to_db: Whether to upload the updated summaries to the database.
+        excel_arguments: A dictionary of arguments for creating the Excel files.
+        unique_identifier: A unique identifier for the Excel files.
     """
     
     if model_ids is None:
@@ -3616,10 +4202,12 @@ def update_excel_summaries(username: str, model_ids: Optional[list[int]] = None,
 
     for model_id in model_ids:
         logging.info(f"RUNNING EXCEL SUMMARY UPDATE FOR MODEL {model_id}")
-        file_path = os.path.join(PROJECT_ROOT, "data", "excel_summaries", f"{model_id}_summary.xlsx")
+        file_path = os.path.join(PROJECT_ROOT, "data", "excel_summaries", f"{model_id}_summary{unique_identifier}.xlsx")
         mdo = ModelDataObjects(model_id=model_id)
         mte = ModelToExcel(mdo, file_path)
-        mte.create_excel()
+        if excel_arguments is None:
+            excel_arguments = {}
+        mte.create_excel(**excel_arguments)
 
         with open(file_path, "rb") as file:
             file_bytes = file.read()
@@ -3813,12 +4401,12 @@ def update_models_in_db():
     
     model_ids = [
         # Physchem Models
-        # 1065, # HLC-XGB Martin 2024
-        # 1066, # WS-XGB Martin 2024
-        # 1067, # VP-XGB Martin 2024
-        # 1068, # BP-XGB Martin 2024
-        # 1069, # LogP-XGB Martin 2024
-        # 1070, # MP-XGB Martin 2024
+        1065, # HLC-XGB Martin 2024
+		1066, # WS-XGB Martin 2024
+		1067, # VP-XGB Martin 2024
+		1068, # BP-XGB Martin 2024
+		1069, # LogP-XGB Martin 2024
+		1070, # MP-XGB Martin 2024
         # Koc Models
         1763, # Koc Tox-GCM Martin 2026
         1754, # Koc Tox-RF Martin 2026
@@ -3850,7 +4438,36 @@ def update_models_in_db():
     ]
     update_excel_summaries(username, model_ids, upload_to_db)
     
-    
+
+def create_pfas_update_1754():
+    upload_to_db = False
+    username = "weston.murdock"
+    model_ids = [1754]
+    unique_identifier = "_pfas_update"
+
+    pfas_chemical_list_tsv = os.path.join(PROJECT_ROOT, "resources", "pfas_chemical_list.txt")
+
+    excel_arguments = {
+        "subset_prediction_configs": [
+            {
+                "chemical_list_tsv": pfas_chemical_list_tsv,
+                "source_set": "training",
+                "sheet_name": "PFAS Training CV Predictions",
+            },
+            {
+                "chemical_list_tsv": pfas_chemical_list_tsv,
+                "source_set": "test",
+                "sheet_name": "PFAS Test Set Predictions",
+            },
+            {
+                "chemical_list_tsv": pfas_chemical_list_tsv,
+                "source_set": "external",
+                "sheet_name": "PFAS External Predictions",
+            }
+        ]
+    }
+
+    update_excel_summaries(username, model_ids, upload_to_db, excel_arguments=excel_arguments, unique_identifier=unique_identifier)
 
 
 def main():
@@ -3859,7 +4476,8 @@ def main():
 
     
     # update_excel_summaries(username='tmarti02', [1754], upload_to_db=False)
-    update_models_in_db()
+    # update_models_in_db()
+    create_pfas_update_1754()
     
     # local_example()
     # test_model_details_pv()

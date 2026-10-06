@@ -804,7 +804,13 @@ class Model:
                 train_ids, train_labels, train_features, train_column_names, self.is_binary = \
                     DFU.prepare_instances(self.df_training, "training", remove_logp=self.remove_log_p_descriptors, remove_corr=True)
                 # Use columns selected by prepare_instances (in case logp descriptors were removed)
+                if train_column_names is None or len(train_column_names) == 0:
+                    train_ids, train_labels, train_features, train_column_names, self.is_binary = \
+                        DFU.prepare_instances(self.df_training, "training", remove_logp=self.remove_log_p_descriptors, remove_corr=False)
+                if train_column_names is None or len(train_column_names) == 0:
+                    raise ValueError("No descriptors available for training after filtering. Check your descriptor set and filtering options.")
             self.embedding = train_column_names
+            logging.debug(f"Embedding: {', '.join(train_column_names)}")
             # print(self.embedding)
         else:
             self.embedding = descriptor_names

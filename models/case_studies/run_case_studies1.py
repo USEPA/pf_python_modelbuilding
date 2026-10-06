@@ -67,6 +67,7 @@ def run_example():
 def run_Koc():
     # unique_identifier = 'time'
     unique_identifier = None
+
     write_to_db = True
     # write_to_db = False
     dataset_name = "KOC v1 modeling"
@@ -123,6 +124,8 @@ def run_Koc():
     #         unique_identifier=unique_identifier,
     #         append_to_models_folder=append_to_models_folder)  
 
+
+
     # for method in ['rf', 'xgb']:
         # params = set_hyper_parameters(qsar_method=method, feature_selection=True, descriptor_set_name=descriptor_set_name, 
         #                     splitting_name=splitting_name, dataset_name=dataset_name, ad_measure=ad_measure_model)
@@ -148,8 +151,8 @@ def run_Koc():
         #     append_to_models_folder=append_to_models_folder)  
 
     Results.summarize_model_stats(dataset_name, append_to_models_folder=append_to_models_folder, continuous_stat_name='RMSE')
-    # Results.summarize_model_stats(dataset_name, append_to_models_folder=append_to_models_folder, continuous_stat_name='MAE')
-    # Results.summarize_model_stats(dataset_name, append_to_models_folder=append_to_models_folder, continuous_stat_name='PearsonRSQ')
+    Results.summarize_model_stats(dataset_name, append_to_models_folder=append_to_models_folder, continuous_stat_name='MAE')
+    Results.summarize_model_stats(dataset_name, append_to_models_folder=append_to_models_folder, continuous_stat_name='PearsonRSQ')
     
 
 def run_BCF():
@@ -1197,6 +1200,7 @@ def run_biodeg_301F():
     
     # Results.summarize_model_stats(dataset_name, append_to_models_folder=append_to_models_folder)
     
+
     # dataset_name_subset='exp_prop_RBIODEG_RIFM_2026_08_12_CHEMREG'
     # folder = Path(os.getenv("PROJECT_ROOT")) / "data" / ("models"+ append_to_models_folder) / dataset_name
     # session = getSession()
@@ -1663,9 +1667,8 @@ def main():
     # run_example()
     # run_Koc_knn_ga()
         
-    # run_Koc()
-    
-    # run_BCF()
+    run_Koc()
+    # run_fish_tox()
     
     # run_biodeg_nite()
     
@@ -1678,7 +1681,7 @@ def main():
     # run_continuous_model_on_test_set()
     # run_RIFM_model_on_ECHA_test_set()
     
-    # lookAtModelCoefficients(1847)
+    # # lookAtModelCoefficients(1847)
     # lookAtModelCoefficients(1878)
     # testCoefficientFromScratch()
             
@@ -1689,6 +1692,7 @@ def main():
     # run_fish_tox_2()  # OK
     
     # test_model_summary_local()
+    # test_load_model_with_external_set()
     # test_load_model_with_external_set()
     # run_rifm_rf_models()
 
