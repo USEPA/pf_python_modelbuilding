@@ -343,6 +343,8 @@ class ModelInitializer:
                     stats[stat_name] = stat_value
 
             model.modelStatistics = stats
+            
+            # print(stats)
 
         except SQLAlchemyError as ex:
             print("error getting stats for modelId=" + str(model.modelId))
@@ -794,7 +796,7 @@ class ModelInitializer:
                     df.at[row_index, "casrn"] = fallback_record.get("casrn")
                     df.at[row_index, "name"] = fallback_record.get("name")
                     df.at[row_index, "smiles"] = fallback_record.get("smiles")
-                    logging.info(f"from dict_missing_dsstox_records, for cid={identifier}, sid={fallback_record.get('sid')}")
+                    # logging.info(f"from dict_missing_dsstox_records, for cid={identifier}, sid={fallback_record.get('sid')}")
                 
                 else:
                     try:
@@ -803,7 +805,7 @@ class ModelInitializer:
                         
                         if code == 200 and len(chemicals)>0:
                             fallback_record = chemicals[0]["chemical"]
-                            logging.info(f"from resolver, for cid={identifier}, sid={fallback_record.get('sid')}")
+                            # logging.info(f"from resolver, for cid={identifier}, sid={fallback_record.get('sid')}")
                             df.at[row_index, "sid"] = fallback_record.get("sid")
                             df.at[row_index, "casrn"] = fallback_record.get("casrn")
                             df.at[row_index, "name"] = fallback_record.get("name")
@@ -3200,14 +3202,18 @@ class ModelPredictor:
         md.performance["externalAD"] = {}
         
         if md.propertyIsBinary:
+            set_metric(md.performance["train"], "A", "Concordance_Training")
             set_metric(md.performance["train"], "BA", "BA_Training")
             set_metric(md.performance["train"], "SN", "SN_Training")
             set_metric(md.performance["train"], "SP", "SP_Training")
-            
+
+            # set_metric(md.performance["fiveFoldICV"], "A", "Concordance_CV_Training") #doesnt exist in DB yet
             set_metric(md.performance["fiveFoldICV"], "BA", "BA_CV_Training")
             set_metric(md.performance["fiveFoldICV"], "SN", "SN_CV_Training")
             set_metric(md.performance["fiveFoldICV"], "SP", "SP_CV_Training")
             
+            
+            set_metric(md.performance["external"], "A", "Concordance_Test")
             set_metric(md.performance["external"], "BA", "BA_Test")
             set_metric(md.performance["external"], "SN", "SN_Test")
             set_metric(md.performance["external"], "SP", "SP_Test")
