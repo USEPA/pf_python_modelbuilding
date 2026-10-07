@@ -471,6 +471,7 @@ def make_representative_and_inner_cv_splits(
     n_threads=None,
     write_to_db=False,
     shuffle=True,
+    external_set_tsv_path=None,
 ):
     """
     Computes:
@@ -728,10 +729,69 @@ def make_representative_and_inner_cv_splits(
 
     # ---- Load df_overall_set once ----
     session = getSession()
-
+    
+    
     df_overall_set = get_instances(session, datasetName, descriptorSetName)
-    print(f"Input shape = {df_overall_set.shape}")
-
+    print(f"Input shape before filtering = {df_overall_set.shape}")
+    
+    # if external_set_tsv_path is not None:
+    #     df_external = tsv_to_single_column_df(external_set_tsv_path)
+    #     external_smiles = set(df_external["canon_qsar_smiles"].dropna().unique())
+    #
+    #     id_col = df_overall_set.columns[0]
+    #
+    #     before = df_overall_set.shape[0]
+    #     df_overall_set = df_overall_set[~df_overall_set[id_col].isin(external_smiles)].copy()
+    #     after = df_overall_set.shape[0]
+    #
+    #     print(f"Excluded {before - after} rows found in external set")
+    #     print(f"Input shape after filtering = {df_overall_set.shape}")
+    
+    from util.indigo_utils import IndigoUtils
+    indigo_utils = IndigoUtils()
+        
+    if external_set_tsv_path is not None: # remove matches in df_overall_set so that external chemicals wont show up in training/test sets
+        df_external = tsv_to_single_column_df(external_set_tsv_path)
+        external_smiles = set(df_external["canon_qsar_smiles"].dropna().unique())
+    
+        # Build external InChIKey prefixes (first 14 chars)
+        external_inchikey_prefixes = set()
+        for smi in external_smiles:
+            try:
+                ik = indigo_utils.inchi_key_from_smiles(smi)
+                if ik:
+                    external_inchikey_prefixes.add(ik[:14])
+            except Exception as exc:
+                print(f"Warning: failed to generate InChIKey for external SMILES {smi!r}: {exc}")
+    
+        id_col = df_overall_set.columns[0]
+    
+        before = df_overall_set.shape[0]
+    
+        df_overall_set = df_overall_set.copy()
+        df_overall_set["_inchi_key"] = df_overall_set[id_col].apply(
+            lambda smi: indigo_utils.inchi_key_from_smiles(smi) if isinstance(smi, str) and smi.strip() else None
+        )
+        df_overall_set["_inchi_key_prefix"] = df_overall_set["_inchi_key"].str[:14]
+    
+        smiles_mask = df_overall_set[id_col].isin(external_smiles)
+        inchikey_mask = df_overall_set["_inchi_key_prefix"].isin(external_inchikey_prefixes)
+    
+        smiles_dropped = int(smiles_mask.sum())
+        inchikey_dropped = int((~smiles_mask & inchikey_mask).sum())
+    
+        df_overall_set = df_overall_set[~smiles_mask & ~inchikey_mask].copy()
+    
+        after = df_overall_set.shape[0]
+    
+        df_overall_set.drop(columns=["_inchi_key", "_inchi_key_prefix"], inplace=True, errors="ignore")
+    
+        print(f"Dropped {smiles_dropped} rows by exact canon_qsar_smiles match")
+        print(f"Dropped {inchikey_dropped} rows by first-14 InChIKey match")
+        print(f"Excluded {before - after} total rows found in external set")
+        print(f"Input shape after filtering = {df_overall_set.shape}")
+    
+    
     # Build X, y, ids once
     X, y, ids = get_X_y_ids(df_overall_set, remove_log_p_descriptors)
 
@@ -937,13 +997,35 @@ def make_representative_and_inner_cv_splits(
         "excel_path_dataset2": str(excel_path_dataset2) if excel_path_dataset2 else None,
     }
 
-def create_splittings(datasetName,  datasetName2=None, descriptorSetName = 'WebTEST-default'):
+
+def tsv_to_single_column_df(tsv_file_path):
+    """
+    Read a TSV file and return a dataframe with a single column:
+    'canon_qsar_smiles', taken from the 'ID' column.
+    """
+
+    df = pd.read_csv(tsv_file_path, sep="\t")
+
+    if "ID" not in df.columns:
+        raise KeyError("'ID' column not found in TSV file")
+
+    out_df = df[["ID"]].copy()
+    out_df = out_df.rename(columns={"ID": "canon_qsar_smiles"})
+
+    return out_df
+
+
+
+def create_splittings(datasetName,  datasetName2=None, descriptorSetName = 'WebTEST-default', external_set_tsv_path=None):
     """
     Creates entries in data_points_in_splittings table in database
     """
     
+    # write_to_db = False
+    # delete_old = False
+
     write_to_db = True
-    delete_old = False
+    delete_old = True
     
     user="tmarti02"
     remove_log_p_descriptors = False
@@ -977,9 +1059,13 @@ def create_splittings(datasetName,  datasetName2=None, descriptorSetName = 'WebT
     # find_representative_cv_splits(datasetName, descriptorSetName, user, n_splits=5, random_state=42,
     #                         write_to_db=write_to_db)
 
+
+        
+
+
     # all in one:
     make_representative_and_inner_cv_splits(datasetName, datasetName2, descriptorSetName, remove_log_p_descriptors, user, 
-                                            n_outer_splits, n_inner_splits, random_state, n_threads, write_to_db, shuffle)
+                                            n_outer_splits, n_inner_splits, random_state, n_threads, write_to_db, shuffle, external_set_tsv_path)
 
 
 
@@ -1402,4 +1488,6 @@ if __name__ == '__main__':
                                                     
     dataset_name = 'exp_prop_RBIODEG_301F v2 modeling'
     dataset_name2 = 'exp_prop_RBIODEG_RIFM_2026_08_12_CHEMREG'
-    create_splittings(dataset_name, datasetName2=dataset_name2)
+    external_set_path = r"C:\Users\tmarti02\OneDrive - Environmental Protection Agency (EPA)\0 java\0 model_management\ghs-data-gathering\data\experimental\RIFM_2026_08_12\excel files\SMILES_OECD 301F_RASD_NON CBI_v2_RBIODEG.tsv"
+    
+    create_splittings(dataset_name, datasetName2=dataset_name2, external_set_tsv_path=external_set_path)
