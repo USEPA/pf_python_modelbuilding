@@ -2026,7 +2026,7 @@ def build_output_subfolder(params, folder_embedding=None, logp_columns=None, inc
         subfolder = f"{subfolder}_max_features={str(params.max_features)}"
 
     if getattr(params, "outlier_filter_methods", False) and params.outlier_filter_methods is not None and len(params.outlier_filter_methods) > 0:
-        subfolder = f"{subfolder}_outlier_filter_methods={"_".join(params.outlier_filter_methods)}"
+        subfolder = f"{subfolder}_outlier_filter_methods={'_'.join(params.outlier_filter_methods)}"
 
     if folder_embedding is not None:
         subfolder = f"{subfolder}_{folder_embedding}"

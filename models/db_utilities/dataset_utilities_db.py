@@ -12,15 +12,9 @@ import pandas as pd
 import numpy as np
 
 
-from qsar_models import Model
-from models.ModelBuilder import Model
 from utils import print_first_row
 from model_ws_db_utilities import getSession
-import webbrowser      
-import os          
-
-
-
+from models.ModelBuilder import Model
 
 
     
@@ -225,6 +219,96 @@ def get_training_prediction_instances(session, datasetName, descriptorSetName, s
         logging.exception("An exception was thrown!")
         return None, None     
 
+
+
+def get_training_prediction_instances2(session, datasetName, descriptorService, splittingName):
+    try:
+        # Get descriptor headers
+        sql_headers = text("""
+            SELECT ds.headers_tsv
+            FROM qsar_descriptors.descriptor_sets ds
+            WHERE ds.descriptor_service = :descriptorService
+            LIMIT 1
+        """)
+
+        results = session.execute(
+            sql_headers,
+            {'descriptorService': descriptorService}
+        ).fetchone()
+
+        if results is None or results[0] is None:
+            logging.warning(
+                "No descriptor headers found for descriptorService=%s",
+                descriptorService
+            )
+            return None, None
+
+        instance_header = "ID\tProperty\t" + results[0] + "\r\n"
+
+        sql = text("""
+            SELECT
+                dp.canon_qsar_smiles,
+                dp.qsar_property_value,
+                dv.values_tsv,
+                dpis.split_num
+            FROM qsar_datasets.datasets d
+            JOIN qsar_datasets.data_points dp
+                ON dp.fk_dataset_id = d.id
+            JOIN qsar_descriptors.descriptor_values dv
+                ON dp.canon_qsar_smiles = dv.canon_qsar_smiles
+            JOIN qsar_descriptors.descriptor_sets ds
+                ON ds.id = dv.fk_descriptor_set_id
+            JOIN qsar_datasets.data_points_in_splittings dpis
+                ON dpis.fk_data_point_id = dp.id
+            JOIN qsar_datasets.splittings s
+                ON s.id = dpis.fk_splitting_id
+            WHERE d.name = :datasetName
+              AND ds.descriptor_service = :descriptorService
+              AND s.name = :splittingName
+            ORDER BY dp.canon_qsar_smiles
+        """)
+
+        sb_training = [instance_header]
+        sb_prediction = [instance_header]
+
+        results = session.execute(
+            sql,
+            {
+                'datasetName': datasetName,
+                'descriptorService': descriptorService,
+                'splittingName': splittingName
+            }
+        )
+
+        for row in results:
+            chemical_id, qsar_property_value, descriptors, split_num = row
+            instance = _generate_instance(chemical_id, qsar_property_value, descriptors)
+
+            if instance is None:
+                logging.debug(
+                    "null instance datasetName=%s descriptorService=%s chemical_id=%s",
+                    datasetName,
+                    descriptorService,
+                    chemical_id
+                )
+                continue
+
+            if split_num == 0:
+                sb_training.append(instance)
+            elif split_num == 1:
+                sb_prediction.append(instance)
+
+        df_training = _load_df(''.join(sb_training))
+        df_prediction = _load_df(''.join(sb_prediction))
+
+        logging.debug("trainingSet shape %s", df_training.shape)
+        logging.debug("predictionSet shape %s", df_prediction.shape)
+
+        return df_training, df_prediction
+
+    except SQLAlchemyError:
+        logging.exception("An exception was thrown!")
+        return None, None
 
 def get_external_instances(session, model: Model):
         # TODO: Finish implementation
