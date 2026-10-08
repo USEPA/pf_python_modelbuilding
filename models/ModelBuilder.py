@@ -476,6 +476,10 @@ class Model:
         - Handles dense and sparse matrices safely.
         - If the step immediately before the estimator is a simple StandardScaler, results are transformed
           back to original feature units; otherwise coefficients/SEs are reported in the estimator space.
+
+        :param X:
+        :param y:
+        
         """
         from scipy import sparse as sp
 

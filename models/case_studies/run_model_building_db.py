@@ -2026,7 +2026,7 @@ def build_output_subfolder(params, folder_embedding=None, logp_columns=None, inc
         subfolder = f"{subfolder}_max_features={str(params.max_features)}"
 
     if getattr(params, "outlier_filter_methods", False) and params.outlier_filter_methods is not None and len(params.outlier_filter_methods) > 0:
-        subfolder = f"{subfolder}_outlier_filter_methods={"_".join(params.outlier_filter_methods)}"
+        subfolder = f"{subfolder}_outlier_filter_methods={'_'.join(params.outlier_filter_methods)}"
 
     if folder_embedding is not None:
         subfolder = f"{subfolder}_{folder_embedding}"
@@ -2101,7 +2101,9 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         ad_measures.append(pc.Applicability_Domain_TEST_All_Descriptors_Euclidean)
         # ad_measures.append(pc.Applicability_Domain_TEST_Embedding_Cosine)
         # ad_measures.append(pc.Applicability_Domain_TEST_All_Descriptors_Cosine)
-        ad_measures.append(pc.Applicability_Domain_TEST_Fragment_Counts)
+        
+        if descriptor_set_name=="WebTEST-default":
+            ad_measures.append(pc.Applicability_Domain_TEST_Fragment_Counts)
         
         # if remove_fragment_descriptors==False:
         #     ad_measures.append(pc.Applicability_Domain_TEST_Fragment_Counts)
@@ -2576,10 +2578,9 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         
         model.subfolder=subfolder
         
-        print("model.subfolder", subfolder)
-        print("params",json.dumps(params.to_dict(), indent=4))
-        
-                        
+        # print("model.subfolder", subfolder)
+        # print("params",json.dumps(params.to_dict(), indent=4))
+                            
         path_segments = [PROJECT_ROOT, "data", "models" + append_to_models_folder, params.dataset_name, subfolder]
         
         folder_path = os.path.join(*path_segments)
