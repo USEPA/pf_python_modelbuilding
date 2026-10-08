@@ -4068,6 +4068,9 @@ class ModelToExcel:
             worksheet.freeze_panes(1, 0)
 
         # Formatting matches prediction sheets
+        if source_set.lower() == "external":
+            min_col_width = max(min_col_width, 15)
+        
         col_widths = ExcelFormatter.set_column_width(
             writer,
             final_sheet_name,
