@@ -178,6 +178,7 @@ def get_training_prediction_instances(session, datasetName, descriptorSetName, s
             WHERE d.name = :datasetName
             AND ds.name = :descriptorSetName
             AND s.name = :splittingName
+            AND dv.values_tsv IS NOT NULL
             ORDER BY dp.canon_qsar_smiles;
             """)
         
@@ -265,6 +266,7 @@ def get_training_prediction_instances2(session, datasetName, descriptorService, 
             WHERE d.name = :datasetName
               AND ds.descriptor_service = :descriptorService
               AND s.name = :splittingName
+              AND dv.values_tsv IS NOT NULL
             ORDER BY dp.canon_qsar_smiles
         """)
 
@@ -334,6 +336,7 @@ def get_external_instances(session, model: Model):
                     on dv.fk_descriptor_set_id = ds.id
                 where d.name = :datasetName
                 and ds.name = :descriptorSetName
+                AND dv.values_tsv IS NOT NULL
                 order by dp.canon_qsar_smiles;
                 """)
 
@@ -502,6 +505,7 @@ def get_instances_excluding(
                     WHERE d2.name = :datasetName2
                       AND dp2.canon_qsar_smiles = dp.canon_qsar_smiles
               )
+              AND dv.values_tsv IS NOT NULL
             ORDER BY dp.canon_qsar_smiles
         """)
 
