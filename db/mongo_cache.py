@@ -1,4 +1,6 @@
 import json
+from db.mongo_hosts import normalize_mongo_hosts
+
 import logging
 import os
 import re
@@ -292,7 +294,7 @@ def _init_mongo():
 
     try:
         client = MongoClient(
-            host=os.getenv("MONGO_HOST", "localhost"),
+            host=normalize_mongo_hosts(os.getenv("MONGO_HOST", "localhost")),
             port=int(os.getenv("MONGO_PORT", "27017")),
             username=os.getenv("MONGO_USER", "root"),
             password=os.getenv("MONGO_PASSWORD"),

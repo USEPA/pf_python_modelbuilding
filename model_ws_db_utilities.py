@@ -452,6 +452,8 @@ class ModelInitializer:
                 cached_model = model_cache.read_model_snapshot(model_id)
             except model_cache.ModelArtifactCacheUnavailableError as exc:
                 logging.warning("Predictor model artifact cache unavailable for model_id=%s: %s", model_id, exc)
+                if not model_cache.postgres_fallback_enabled():
+                    raise
             else:
                 if cached_model is not None:
                     cached_model.modelId = str(model_id)
