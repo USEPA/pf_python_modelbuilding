@@ -425,35 +425,37 @@ class ModelLoader():
             print(f"An error occurred: {e}")
             return None
 
-    def add_model_statistics(self, user, fk_model_id, stats_dict_name, model_statistics_dict, stats_lookup, created_at, model_statistics_rows): 
-        
+    def add_model_statistics(self, user, fk_model_id, stats_dict_name, model_statistics_dict, stats_lookup, created_at, model_statistics_rows):
+    
         if stats_dict_name not in model_statistics_dict:
             print(stats_dict_name, "Skipping loading stats")
             return
-        
+    
         stats = model_statistics_dict[stats_dict_name]
-        
+    
         for stat_name in stats:
-        
+    
             if "AD" not in stats_dict_name and "Coverage" in stat_name:
                 continue
-        
-            if stat_name == "ad_measure" or stat_name == "mae_ratio":
+    
+            if stat_name in ("ad_measure", "mae_ratio"):
                 continue
-        
+    
             if stat_name in stats_lookup:
                 fk_statistic_id = stats_lookup[stat_name]
-
                 stat_value = stats[stat_name]
-
+    
                 # Convert NumPy scalars to native Python types for DB insertion
                 if isinstance(stat_value, np.generic):
                     stat_value = stat_value.item()
-
-                # Also handle pandas missing values cleanly
-                if pd.isna(stat_value):
+    
+                # Skip missing values
+                # if stat_value is None or pd.isna(stat_value):
+                #     continue
+                
+                if stat_value is None or pd.isna(stat_value):
                     stat_value = None
-
+    
                 model_statistics_row = {
                     "statistic_value": stat_value,
                     "fk_model_id": fk_model_id,
@@ -463,12 +465,12 @@ class ModelLoader():
                     "created_at": created_at,
                     "updated_at": created_at
                 }
-                model_statistics_rows.append(model_statistics_row)                
-        
+    
+                model_statistics_rows.append(model_statistics_row)
+    
             else:
-                if stat_name != 'ba_ratio' and stat_name != 'Concordance_CV_Training':                
+                if stat_name not in ("ba_ratio", "Concordance_CV_Training"):
                     print(stat_name, "Skipping loading stat")
-
     def load_stats(self, results, user, fk_model_id):
         
         stats_rows = self.dbl.get_rows("statistics")
@@ -1071,6 +1073,8 @@ class ModelBuilder:
     #     self.build_and_test_model(df_training, df_prediction, params, embedding)
         
         # self.crossvalidate(session, dataset_name, descriptorSetName, params, embedding)
+       
+
 
     @staticmethod
     def build_and_test_model(df_training, df_prediction, cv, params, embedding, is_binary):
@@ -1243,6 +1247,8 @@ def xgb_sanitize_feature_names(df):
 
     df2 = df2.rename(columns=rename_map)
     return df2, mapping
+
+
 
 
 def xgb_restore_feature_names(df, safe_to_original):
@@ -2165,10 +2171,10 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
             return
 
         # --- XGB feature-name sanitization ---
-        xgb_feature_name_map = None
-        if qsar_method == "xgb":
-            df_training, xgb_feature_name_map = xgb_sanitize_feature_names(df_training)
-            df_prediction, _ = xgb_sanitize_feature_names(df_prediction)
+        # xgb_feature_name_map = None
+        # if qsar_method == "xgb":
+        #     df_training, xgb_feature_name_map = xgb_sanitize_feature_names(df_training)
+        #     df_prediction, _ = xgb_sanitize_feature_names(df_prediction)
 
         s = df_training.iloc[:, 1]
         is_binary = s.isin([0, 1]).all()
@@ -2232,9 +2238,9 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
             df_external = df_prediction_ext.copy()
 
         # --- XGB feature-name sanitization ---
-        xgb_feature_name_map = None
-        if qsar_method == "xgb" and df_prediction_ext is not None:
-            df_prediction_ext, _ = xgb_sanitize_feature_names(df_prediction_ext)
+        # xgb_feature_name_map = None
+        # if qsar_method == "xgb" and df_prediction_ext is not None:
+        #     df_prediction_ext, _ = xgb_sanitize_feature_names(df_prediction_ext)
         
         # check_for_inchi_key_matches(df_training, df_prediction_ext)
         
@@ -2247,11 +2253,11 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
             X, y, cv, feature_cols = du.make_cv_for_base_training(df_training, df_cv_dict, "ID", "Property")  # get cv for use in RFE and SFS so that will use CV folds as the final stat reported as RMSE_CV_TRAINING
 
         # --- XGB feature-name sanitization ---
-        xgb_feature_name_map = None
-        if qsar_method == "xgb" and df_cv_dict is not None:
-            for fold_num in df_cv_dict:
-                df_cv_dict[fold_num]["train"], _ = xgb_sanitize_feature_names(df_cv_dict[fold_num]["train"])
-                df_cv_dict[fold_num]["pred"], _ = xgb_sanitize_feature_names(df_cv_dict[fold_num]["pred"])
+        # xgb_feature_name_map = None
+        # if qsar_method == "xgb" and df_cv_dict is not None:
+        #     for fold_num in df_cv_dict:
+        #         df_cv_dict[fold_num]["train"], _ = xgb_sanitize_feature_names(df_cv_dict[fold_num]["train"])
+        #         df_cv_dict[fold_num]["pred"], _ = xgb_sanitize_feature_names(df_cv_dict[fold_num]["pred"])
         
         if add_LOGP_Martin:
             df_training, df_prediction, df_prediction_ext = add_log_p_martin_columns(
@@ -2392,30 +2398,30 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
                 if len(ad_measure) > 1:
                     adu.generate_consensus_ad(df_pred_ext, ext_stats_dict, ad_measure_model, is_binary=is_binary, is_external=True)
 
-        if qsar_method == "xgb" and xgb_feature_name_map is not None:
-            restore_map = {safe: original for safe, original in xgb_feature_name_map.items()}
-
-            if df_pred_test is not None:
-                df_pred_test = xgb_restore_feature_names(df_pred_test, restore_map)
-
-            if df_pred_training is not None:
-                df_pred_training = xgb_restore_feature_names(df_pred_training, restore_map)
-
-            if df_pred_cv is not None:
-                df_pred_cv = xgb_restore_feature_names(df_pred_cv, restore_map)
-
-            if df_pred_ext is not None:
-                df_pred_ext = xgb_restore_feature_names(df_pred_ext, restore_map)
-
-            if df_prediction_ext is not None:
-                df_prediction_ext = xgb_restore_feature_names(df_prediction_ext, restore_map)
-
-            if df_external is not None:
-                df_external = xgb_restore_feature_names(df_external, restore_map)
-
-            # restore model embedding names too, if needed for reporting / DB / Excel
-            if hasattr(model, "embedding") and model.embedding is not None:
-                model.embedding = [restore_map.get(c, c) for c in model.embedding]
+        # if qsar_method == "xgb" and xgb_feature_name_map is not None:
+        #     restore_map = {safe: original for safe, original in xgb_feature_name_map.items()}
+        #
+        #     if df_pred_test is not None:
+        #         df_pred_test = xgb_restore_feature_names(df_pred_test, restore_map)
+        #
+        #     if df_pred_training is not None:
+        #         df_pred_training = xgb_restore_feature_names(df_pred_training, restore_map)
+        #
+        #     if df_pred_cv is not None:
+        #         df_pred_cv = xgb_restore_feature_names(df_pred_cv, restore_map)
+        #
+        #     if df_pred_ext is not None:
+        #         df_pred_ext = xgb_restore_feature_names(df_pred_ext, restore_map)
+        #
+        #     if df_prediction_ext is not None:
+        #         df_prediction_ext = xgb_restore_feature_names(df_prediction_ext, restore_map)
+        #
+        #     if df_external is not None:
+        #         df_external = xgb_restore_feature_names(df_external, restore_map)
+        #
+        #     # restore model embedding names too, if needed for reporting / DB / Excel
+        #     if hasattr(model, "embedding") and model.embedding is not None:
+        #         model.embedding = [restore_map.get(c, c) for c in model.embedding]
         
         if cross_validate:
             
@@ -3261,26 +3267,27 @@ class Results:
         
         return results_dict
 
-    @staticmethod
+    @staticmethod    
     def summarize_model_stats(
-        dataset_name,
-        excel_name="model_stats.xlsx",
-        sheet_name="Statistics",
-        col_width_pad=4,
-        min_col_width=5,
-        append_to_models_folder="",
-        continuous_stat_name="MAE",
-        binary_stat_name="BA",
-        sort_by_stat="auto",      # "auto", "Test", "Training_CV", "External", or None
-        sort_ascending=None       # True/False, or None to auto-pick by metric
-    ):
+            dataset_name,
+            excel_name="model_stats.xlsx",
+            sheet_name="Statistics",
+            col_width_pad=4,
+            min_col_width=5,
+            append_to_models_folder="",
+            continuous_stat_name="MAE",
+            binary_stat_name="BA",
+            sort_by_stat="auto",      # "auto", "Test", "Training_CV", "External", or None
+            sort_ascending=None,
+            includeAD=False           # True/False, or None to auto-pick by metric
+        ):
         folder = os.path.join(PROJECT_ROOT, "data", "models" + append_to_models_folder, dataset_name)
         os.makedirs(folder, exist_ok=True)
-
+    
         print(folder)
-
+    
         rows = []
-
+    
         def to_float(v):
             try:
                 f = float(v)
@@ -3289,7 +3296,7 @@ class Results:
                 return f
             except Exception:
                 return None
-
+    
         def fmt3(v):
             try:
                 if v is None:
@@ -3300,7 +3307,7 @@ class Results:
                 return f"{f:.3f}"
             except Exception:
                 return "N/A"
-
+    
         def metric_sort_ascending(metric_name):
             """
             Default convention:
@@ -3311,7 +3318,7 @@ class Results:
             if metric_name == binary_stat_name:
                 return False
             return True
-
+    
         # Collect rows
         for json_path in Path(folder).glob("*/results*.json"):
             try:
@@ -3320,18 +3327,37 @@ class Results:
             except json.JSONDecodeError as e:
                 print(f"Skipping {json_path}: invalid JSON ({e})")
                 continue
-
+    
             model_statistics = results.get("model_statistics", {})
             model_details = results.get("model_details", {})
             run_name = json_path.parent.name
-
+    
             is_binary = bool(model_details.get("is_binary", False))
             stat = binary_stat_name if is_binary else continuous_stat_name
-
+    
             test_val = to_float(model_statistics.get("test_stats", {}).get(f"{stat}_Test"))
             cv_val = to_float(model_statistics.get("cv_stats", {}).get(f"{stat}_CV_Training"))
             ext_val = to_float(model_statistics.get("ext_stats", {}).get(f"{stat}_External"))
-
+    
+            row = {
+                "Run": run_name,
+                "Metric": stat,
+                f"{stat}_Test": test_val,
+                f"{stat}_Training_CV": cv_val,
+                f"{stat}_External": ext_val,
+            }
+    
+            if includeAD:
+                row[f"{stat}_Test_inside_AD"] = to_float(
+                    model_statistics.get("test_stats_AD", {}).get(f"{stat}_Test_inside_AD")
+                )
+                row[f"{stat}_Test_outside_AD"] = to_float(
+                    model_statistics.get("test_stats_AD", {}).get(f"{stat}_Test_outside_AD")
+                )
+                row["Coverage_Test"] = to_float(
+                    model_statistics.get("test_stats_AD", {}).get("Coverage_Test")
+                )
+    
             # Embedding length and optional short embedding string
             if "embedding_len" in model_details:
                 len_embedding = model_details["embedding_len"]
@@ -3339,51 +3365,58 @@ class Results:
                 len_embedding = len(model_details["embedding"])
             else:
                 len_embedding = None
-
+    
             embedding_str = None
             if isinstance(len_embedding, int):
                 emb = model_details.get("embedding", [])
                 embedding_str = ", ".join(emb) if isinstance(emb, (list, tuple)) else str(emb)
-
+    
             if embedding_str is not None and len(embedding_str) > 100:
                 embedding_str = embedding_str[:100] + "..."
-
-            rows.append({
-                "Run": run_name,
-                "Metric": stat,
-                f"{stat}_Test": test_val,
-                f"{stat}_Training_CV": cv_val,
-                f"{stat}_External": ext_val,
-                "#_variables": int(len_embedding) if isinstance(len_embedding, int) else None,
-                "Embedding": embedding_str
-            })
-
+    
+            row["#_variables"] = int(len_embedding) if isinstance(len_embedding, int) else None
+            row["Embedding"] = embedding_str
+    
+            rows.append(row)
+    
         if not rows:
-            df_stats = pd.DataFrame(columns=[
+            base_columns = [
                 "Run", f"{continuous_stat_name}_Test", f"{continuous_stat_name}_Training_CV",
                 f"{continuous_stat_name}_External", f"{binary_stat_name}_Test",
                 f"{binary_stat_name}_Training_CV", f"{binary_stat_name}_External",
                 "#_variables", "Embedding", "Metric"
-            ])
+            ]
+    
+            if includeAD:
+                base_columns = [
+                    "Run",
+                    f"{continuous_stat_name}_Test", f"{continuous_stat_name}_Training_CV", f"{continuous_stat_name}_External",
+                    f"{continuous_stat_name}_Test_inside_AD", f"{continuous_stat_name}_Test_outside_AD", "Coverage_Test",
+                    f"{binary_stat_name}_Test", f"{binary_stat_name}_Training_CV", f"{binary_stat_name}_External",
+                    f"{binary_stat_name}_Test_inside_AD", f"{binary_stat_name}_Test_outside_AD", "Coverage_Test",
+                    "#_variables", "Embedding", "Metric"
+                ]
+    
+            df_stats = pd.DataFrame(columns=base_columns)
             excel_path = os.path.join(folder, excel_name)
             df_stats.to_excel(excel_path, index=False)
             print(f"No models found. Created empty summary: {excel_path}")
             return df_stats, excel_path
-
+    
         # Decide homogeneous vs mixed
         metrics_in_rows = sorted(set(r["Metric"] for r in rows))
-
+    
         # Determine which metric/stat column to sort by
         if sort_by_stat == "auto":
             if len(metrics_in_rows) == 1:
                 sort_by_stat = "Test"
             else:
-                sort_by_stat = None  # mixed metrics: do not force a single stat column sort
+                sort_by_stat = None
         elif sort_by_stat is not None:
             valid_sort_cols = {"Test", "Training_CV", "External"}
             if sort_by_stat not in valid_sort_cols:
                 raise ValueError(f"sort_by_stat must be one of {valid_sort_cols}, 'auto', or None")
-
+    
         # Sort rows once here so console / Excel / HTML all match
         if sort_by_stat is not None:
             def row_sort_key(r):
@@ -3392,79 +3425,154 @@ class Results:
                     ascending = metric_sort_ascending(metric)
                 else:
                     ascending = sort_ascending
-
+    
                 colname = f"{metric}_{sort_by_stat}"
                 val = r.get(colname)
-
-                # None/NaN at the end
+    
                 if val is None:
                     return (1, float("inf")) if ascending else (1, float("-inf"))
-
+    
                 try:
                     v = float(val)
                 except Exception:
                     return (1, float("inf")) if ascending else (1, float("-inf"))
-
-                # For descending, negate the value in the key
+    
                 return (0, v) if ascending else (0, -v)
-
+    
             rows = sorted(rows, key=row_sort_key)
-
+    
         print(f"{sort_by_stat or 'unsorted'} {stat} for all models for {dataset_name}")
-
+    
         # Print and build DataFrame
         if len(metrics_in_rows) == 1:
             stat = metrics_in_rows[0]
-            print(f"{'Run':<40} {'Test':<10} {'Training_CV':<15} {'External':<10} {'#_variables':<15}")
-            for r in rows:
+    
+            if includeAD:
                 print(
-                    f"{r['Run']:<40} "
-                    f"{fmt3(r.get(f'{stat}_Test')):<10} "
-                    f"{fmt3(r.get(f'{stat}_Training_CV')):<15} "
-                    f"{fmt3(r.get(f'{stat}_External')):<10} "
-                    f"{str(r.get('#_variables', 'N/A')):<15}"
+                    f"{'Run':<40} "
+                    f"{stat + '_Test':<18} "
+                    f"{stat + '_Training_CV':<18} "
+                    f"{stat + '_External':<18} "
+                    f"{stat + '_Test_inside_AD':<18} "
+                    f"{stat + '_Test_outside_AD':<18} "
+                    f"{'Coverage':<10} "
+                    f"{'#_variables':<15}"
                 )
-
-            columns = ["Run", f"{stat}_Test", f"{stat}_Training_CV", f"{stat}_External", "#_variables", "Embedding", "Metric"]
+            else:
+                print(
+                    f"{'Run':<40} "
+                    f"{stat + '_Test':<18} "
+                    f"{stat + '_Training_CV':<18} "
+                    f"{stat + '_External':<18} "
+                    f"{'#_variables':<15}"
+                )
+    
+            for r in rows:
+                if includeAD:
+                    print(
+                        f"{r['Run']:<40} "
+                        f"{fmt3(r.get(f'{stat}_Test')):<18} "
+                        f"{fmt3(r.get(f'{stat}_Training_CV')):<18} "
+                        f"{fmt3(r.get(f'{stat}_External')):<18} "
+                        f"{fmt3(r.get(f'{stat}_Test_inside_AD')):<18} "
+                        f"{fmt3(r.get(f'{stat}_Test_outside_AD')):<18} "
+                        f"{fmt3(r.get('Coverage_Test')):<10} "
+                        f"{str(r.get('#_variables', 'N/A')):<15}"
+                    )
+                else:
+                    print(
+                        f"{r['Run']:<40} "
+                        f"{fmt3(r.get(f'{stat}_Test')):<18} "
+                        f"{fmt3(r.get(f'{stat}_Training_CV')):<18} "
+                        f"{fmt3(r.get(f'{stat}_External')):<18} "
+                        f"{str(r.get('#_variables', 'N/A')):<15}"
+                    )
+    
+            columns = ["Run", f"{stat}_Test", f"{stat}_Training_CV", f"{stat}_External"]
+            if includeAD:
+                columns += [f"{stat}_Test_inside_AD", f"{stat}_Test_outside_AD", "Coverage_Test"]
+            columns += ["#_variables", "Embedding", "Metric"]
+    
             df_stats = pd.DataFrame(rows).reindex(columns=columns)
-
+    
         else:
-            print(f"{'Run':<40} {'Metric':<10} {'Test':<10} {'Training_CV':<15} {'External':<10} {'#_variables':<15}")
+            if includeAD:
+                print(
+                    f"{'Run':<40} "
+                    f"{'Metric':<10} "
+                    f"{'Test':<18} "
+                    f"{'Training_CV':<18} "
+                    f"{'External':<18} "
+                    f"{'Test_in_AD':<18} "
+                    f"{'Test_out_AD':<18} "
+                    f"{'Coverage':<10} "
+                    f"{'#_variables':<15}"
+                )
+            else:
+                print(
+                    f"{'Run':<40} "
+                    f"{'Metric':<10} "
+                    f"{'Test':<18} "
+                    f"{'Training_CV':<18} "
+                    f"{'External':<18} "
+                    f"{'#_variables':<15}"
+                )
+    
             for r in rows:
                 stat = r["Metric"]
-                print(
-                    f"{r['Run']:<40} "
-                    f"{stat:<10} "
-                    f"{fmt3(r.get(f'{stat}_Test')):<10} "
-                    f"{fmt3(r.get(f'{stat}_Training_CV')):<15} "
-                    f"{fmt3(r.get(f'{stat}_External')):<10} "
-                    f"{str(r.get('#_variables', 'N/A')):<15}"
-                )
-
+                if includeAD:
+                    print(
+                        f"{r['Run']:<40} "
+                        f"{stat:<10} "
+                        f"{fmt3(r.get(f'{stat}_Test')):<18} "
+                        f"{fmt3(r.get(f'{stat}_Training_CV')):<18} "
+                        f"{fmt3(r.get(f'{stat}_External')):<18} "
+                        f"{fmt3(r.get(f'{stat}_Test_inside_AD')):<18} "
+                        f"{fmt3(r.get(f'{stat}_Test_outside_AD')):<18} "
+                        f"{fmt3(r.get('Coverage_Test')):<10} "
+                        f"{str(r.get('#_variables', 'N/A')):<15}"
+                    )
+                else:
+                    print(
+                        f"{r['Run']:<40} "
+                        f"{stat:<10} "
+                        f"{fmt3(r.get(f'{stat}_Test')):<18} "
+                        f"{fmt3(r.get(f'{stat}_Training_CV')):<18} "
+                        f"{fmt3(r.get(f'{stat}_External')):<18} "
+                        f"{str(r.get('#_variables', 'N/A')):<15}"
+                    )
+    
             columns = [
                 "Run",
                 f"{continuous_stat_name}_Test", f"{continuous_stat_name}_Training_CV", f"{continuous_stat_name}_External",
                 f"{binary_stat_name}_Test", f"{binary_stat_name}_Training_CV", f"{binary_stat_name}_External",
-                "#_variables", "Embedding", "Metric"
             ]
-
+    
+            if includeAD:
+                columns += [
+                    f"{continuous_stat_name}_Test_inside_AD", f"{continuous_stat_name}_Test_outside_AD", "Coverage_Test",
+                    f"{binary_stat_name}_Test_inside_AD", f"{binary_stat_name}_Test_outside_AD", "Coverage_Test",
+                ]
+    
+            columns += ["#_variables", "Embedding", "Metric"]
+    
             for r in rows:
                 for c in columns:
                     r.setdefault(c, None)
-
+    
             df_stats = pd.DataFrame(rows).reindex(columns=columns)
-
+    
         excel_path = os.path.join(folder, excel_name)
-
+    
         # Write Excel
         with pd.ExcelWriter(excel_path, engine="xlsxwriter") as writer:
             df_stats.to_excel(writer, sheet_name=sheet_name, index=False, float_format="%.3f")
-
+    
             ws = writer.sheets[sheet_name]
             nrows, ncols = df_stats.shape
             ws.autofilter(0, 0, nrows, ncols - 1)
             ws.freeze_panes(1, 0)
-
+    
             ExcelCreator.set_column_width(
                 writer,
                 sheet_name=sheet_name,
@@ -3473,7 +3581,7 @@ class Results:
                 min_col_width=min_col_width,
                 how="full"
             )
-
+    
         # Write HTML
         html_path = Results.write_model_stats_html(
             df_stats=df_stats,
@@ -3482,188 +3590,16 @@ class Results:
             excel_path=excel_path,
             html_name=None
         )
-        
+    
         import webbrowser
         webbrowser.open(Path(html_path).absolute().as_uri())
     
         print(f"Saved summary to: {excel_path}")
-        print(f"Saved HTML summary to: {html_path}")
+        print(f"Saved HTML summary to: {html_path}\n")
         return df_stats, excel_path
 
-    # @staticmethod
-    # def summarize_model_stats(
-    #     dataset_name,
-    #     excel_name="model_stats.xlsx",
-    #     sheet_name="Statistics",
-    #     col_width_pad=4,
-    #     min_col_width=5,
-    #     append_to_models_folder="",
-    #     continuous_stat_name="MAE",
-    #     binary_stat_name="BA",
-    #     sort_by_stat=None,
-    #     sort_ascending=True
-    # ):
-    #     from pathlib import Path
-    #     import os, json
-    #     import numpy as np
-    #     import pandas as pd
-    
-    #     folder = os.path.join(PROJECT_ROOT, "data", "models" + append_to_models_folder, dataset_name)
-    #     os.makedirs(folder, exist_ok=True)
-    
-    #     print(folder)
-    
-    #     rows = []
-    
-    #     def to_float(v):
-    #         try:
-    #             f = float(v)
-    #             if np.isnan(f):
-    #                 return None
-    #             return f
-    #         except Exception:
-    #             return None
-    
-    #     def fmt3(v):
-    #         try:
-    #             if v is None:
-    #                 return "N/A"
-    #             f = float(v)
-    #             if np.isnan(f):
-    #                 return "N/A"
-    #             return f"{f:.3f}"
-    #         except Exception:
-    #             return "N/A"
-    
-    #     # Collect rows (don’t print yet so we can decide header once)
-    #     for json_path in Path(folder).glob("*/results*.json"):
-    #         try:
-    #             with json_path.open("r", encoding="utf-8") as f:
-    #                 results = json.load(f)
-    #         except json.JSONDecodeError as e:
-    #             print(f"Skipping {json_path}: invalid JSON ({e})")
-    #             continue
-    
-    #         model_statistics = results.get("model_statistics", {})
-    #         model_details = results.get("model_details", {})
-    #         run_name = json_path.parent.name
-    
-    #         is_binary = bool(model_details.get("is_binary", False))
-    #         stat = binary_stat_name if is_binary else continuous_stat_name
-    
-    #         test_val = to_float(model_statistics.get("test_stats", {}).get(f"{stat}_Test"))
-    #         cv_val = to_float(model_statistics.get("cv_stats", {}).get(f"{stat}_CV_Training"))
-    #         ext_val = to_float(model_statistics.get("ext_stats", {}).get(f"{stat}_External"))
-    
-    #         # Embedding length and optional short embedding string
-    #         if "embedding_len" in model_details:
-    #             len_embedding = model_details["embedding_len"]
-    #         elif isinstance(model_details.get("embedding"), (list, tuple)):
-    #             len_embedding = len(model_details["embedding"])
-    #         else:
-    #             len_embedding = None
-    
-    #         embedding_str = None
-            
-    #         if isinstance(len_embedding, int):
-    #             emb = model_details.get("embedding", [])
-    #             embedding_str = ", ".join(emb) if isinstance(emb, (list, tuple)) else str(emb)
-    
-    #         if len(embedding_str) > 100:
-    #             embedding_str = embedding_str[:100] + "..."
-    
-    #         rows.append({
-    #             "Run": run_name,
-    #             "Metric": stat,  # which metric these numbers represent (MAE or BA)
-    #             f"{stat}_Test": test_val,
-    #             f"{stat}_Training_CV": cv_val,
-    #             f"{stat}_External": ext_val,
-    #             "#_variables": int(len_embedding) if isinstance(len_embedding, int) else None,
-    #             "Embedding": embedding_str
-    #         })
-    
-    #     if not rows:
-    #         df_stats = pd.DataFrame(columns=[
-    #             "Run", f"{continuous_stat_name}_Test", f"{continuous_stat_name}_Training_CV",
-    #             f"{continuous_stat_name}_External", "#_variables", "Embedding", "Metric"
-    #         ])
-    #         excel_path = os.path.join(folder, excel_name)
-    #         df_stats.to_excel(excel_path, index=False)
-    #         print(f"No models found. Created empty summary: {excel_path}")
-    #         return df_stats, excel_path
 
-    #     print(f"{stat} for all models for {dataset_name}")
     
-    #     # Decide homogeneous vs mixed and print header once
-    #     metrics_in_rows = sorted(set(r["Metric"] for r in rows))
-    #     if len(metrics_in_rows) == 1:
-    #         stat = metrics_in_rows[0]
-    #         # print(f"Run\t{stat}_Test\t{stat}_Training_CV\t{stat}_External\t#_variables")
-    #         print(f"{'Run':<40} {'Test':<10} {'Training_CV':<15} {'External':<10} {'#_variables':<15}")
-    #         for r in rows:
-    #             # print(f"{r['Run']}\t{fmt3(r.get(f'{stat}_Test'))}\t{fmt3(r.get(f'{stat}_Training_CV'))}\t"
-    #             #       f"{fmt3(r.get(f'{stat}_External'))}\t{r.get('#_variables', 'N/A')}")
-    #             print(f"{r['Run']:<40} {fmt3(r.get(f'{stat}_Test')):<10} {fmt3(r.get(f'{stat}_Training_CV')):<15} {fmt3(r.get(f'{stat}_External')):<10} {r.get('#_variables', 'N/A'):<15}")
-    #         # Build homogeneous DataFrame (only the active metric’s columns)
-    #         columns = ["Run", f"{stat}_Test", f"{stat}_Training_CV", f"{stat}_External", "#_variables", "Embedding"]
-    #         df_stats = pd.DataFrame(rows).reindex(columns=columns)
-    #     else:
-    #         # Mixed: print generic header once, include Metric column
-    #         # print("Run\tMetric\tTest\tTraining_CV\tExternal\t#_variables")
-    #         print(f"{'Run':<40} {'Metric':<10} {'Test':<10} {'Training_CV':<15} {'External':<10} {'#_variables':<15}")
-    #         for r in rows:
-    #             stat_row = r["Metric"]
-    #             # print(f"{r['Run']}\t{stat_row}\t{fmt3(r.get(f'{stat_row}_Test'))}\t"
-    #             #       f"{fmt3(r.get(f'{stat_row}_Training_CV'))}\t{fmt3(r.get(f'{stat_row}_External'))}\t"
-    #             #       f"{r.get('#_variables', 'N/A')}")
-    #             print(f"{r['Run']:<40} {stat_row:<10} {fmt3(r.get(f'{stat_row}_Test')):<10} {fmt3(r.get(f'{stat_row}_Training_CV')):<15} {fmt3(r.get(f'{stat_row}_External')):<10} {r.get('#_variables', 'N/A'):<15}")
-    #         # Include both MAE_* and BA_* columns in DataFrame; fill whichever applies per row
-    #         columns = [
-    #             "Run",
-    #             f"{continuous_stat_name}_Test", f"{continuous_stat_name}_Training_CV", f"{continuous_stat_name}_External",
-    #             f"{binary_stat_name}_Test", f"{binary_stat_name}_Training_CV", f"{binary_stat_name}_External",
-    #             "#_variables", "Embedding", "Metric"
-    #         ]
-    #         # Ensure all expected keys exist in each row
-    #         for r in rows:
-    #             for c in columns:
-    #                 r.setdefault(c, None)
-    #         df_stats = pd.DataFrame(rows).reindex(columns=columns)
-    
-    #     excel_path = os.path.join(folder, excel_name)
-    
-    #     # Write with 3-decimal display. Simple approach: float_format writes strings with 3 decimals.
-    #     with pd.ExcelWriter(excel_path, engine="xlsxwriter") as writer:
-    #         df_stats.to_excel(writer, sheet_name=sheet_name, index=False, float_format="%.3f")
-    
-    #         ws = writer.sheets[sheet_name]
-    #         nrows, ncols = df_stats.shape
-    #         ws.autofilter(0, 0, nrows, ncols - 1)
-    #         ws.freeze_panes(1, 0)
-    
-    #         # Set column widths (if your helper does this)
-    #         ExcelCreator.set_column_width(
-    #             writer,
-    #             sheet_name=sheet_name,
-    #             df=df_stats,
-    #             col_width_pad=col_width_pad,
-    #             min_col_width=min_col_width,
-    #             how="full"
-    #         )
-    
-    #     # Write HTML summary using your helper
-    #     html_path = Results.write_model_stats_html(
-    #         df_stats=df_stats,
-    #         dataset_name=dataset_name,
-    #         output_folder=folder,
-    #         excel_path=excel_path,
-    #         html_name=None
-    #     )
-    
-    #     print(f"Saved summary to: {excel_path}")
-    #     print(f"Saved HTML summary to: {html_path}")
-    #     return df_stats, excel_path
-
     @staticmethod
     def write_model_stats_html(df_stats, dataset_name, output_folder, excel_path, html_name=None):
         """
