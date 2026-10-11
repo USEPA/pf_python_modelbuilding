@@ -1,11 +1,12 @@
 pipeline {
 	agent any
-	environment {
-		IMAGE_TAG = 'latest'
-	}
-	options {
+    options {
         withFolderProperties()
     }
+	environment {
+        K8S_NAMESPACE = 'models-dev'
+		IMAGE_TAG = 'latest'
+	}
 
 	stages {
 		stage('Setup Environment') {
