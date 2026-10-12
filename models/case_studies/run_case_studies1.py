@@ -12,6 +12,7 @@ from pathlib import Path
 from io import StringIO
 
 import logging
+from utils import print_first_row
 logging.basicConfig(
     level=logging.DEBUG,
     format="%(asctime)s %(levelname)s %(name)s - %(message)s"
@@ -36,7 +37,9 @@ from models.case_studies.case_study_utilities import (
     _find_model_folder,
     _full_test_mte,
     _predictSetFromDB_SmilesFromExcel,
+    _calc_stats_training_cv_fragrances,
     _run_test_set,
+    _saveMergedStats
 )
 
 
@@ -440,36 +443,40 @@ def run_biodeg_rifm():
     # print('gcm',test_stats)
     
     # # for method in ['rf', 'xgb']:        
-    # for method in ['rf']:
-    #     model=run_dataset(dataset_name=dataset_name, qsar_method=method, feature_selection=False, descriptor_set_name=descriptor_set_name,
-    #                 ad_measure_model=ad_measure_model, write_to_db=write_to_db, unique_identifier=unique_identifier, append_to_models_folder=append_to_models_folder)  # OK
-    #
-    #     folder = Path(PROJECT_ROOT) / "data" / f"models{append_to_models_folder}" / dataset_name / model.subfolder
-    #     test_stats = _run_test_set(df_external, model, folder)    
-    #     _summarize_fragrance_results_as_excel(session, folder, dataset_name)
-        
-    # #
-    # # # for method in ['reg','knn']:
-    for method in ['rf', 'xgb', 'reg', 'knn']:
-        params = set_hyper_parameters(qsar_method=method, feature_selection=True, descriptor_set_name=descriptor_set_name,
-                                       splitting_name=splitting_name, dataset_name=dataset_name, ad_measure=ad_measure_model)
-        params.descriptor_coefficient = 0.001
-    
-        params.remove_fragment_descriptors = True
-        params.remove_acnt_descriptors = True
-        params.run_rfe = False
-    
-        model = run_dataset(dataset_name=dataset_name, qsar_method=params.qsar_method, feature_selection=params.feature_selection,
-             params=params, descriptor_set_name=descriptor_set_name, ad_measure_model=ad_measure_model, write_to_db=write_to_db,
-             unique_identifier=unique_identifier, append_to_models_folder=append_to_models_folder) 
+    for method in ['xgb']:
+        model=run_dataset(dataset_name=dataset_name, qsar_method=method, feature_selection=False, descriptor_set_name=descriptor_set_name,
+                    ad_measure_model=ad_measure_model, write_to_db=write_to_db, unique_identifier=unique_identifier, append_to_models_folder=append_to_models_folder)  # OK
     
         folder = Path(PROJECT_ROOT) / "data" / f"models{append_to_models_folder}" / dataset_name / model.subfolder
         test_stats = _run_test_set(df_external, model, folder)    
         _summarize_fragrance_results_as_excel(session, folder, dataset_name)
-
-    
-    Results.summarize_model_stats(dataset_name, append_to_models_folder=append_to_models_folder)
-    _summarize_fragrance_results(dataset_name, append_to_models_folder)
+        
+    # #
+    # # # for method in ['reg','knn']:
+    # for method in ['rf', 'xgb', 'reg', 'knn']:
+    # for method in ['xgb', 'reg', 'knn']:
+    #     params = set_hyper_parameters(qsar_method=method, feature_selection=True, descriptor_set_name=descriptor_set_name,
+    #                                    splitting_name=splitting_name, dataset_name=dataset_name, ad_measure=ad_measure_model)
+    #     params.descriptor_coefficient = 0.001
+    #
+    #     params.remove_fragment_descriptors = True
+    #     params.remove_acnt_descriptors = True
+    #     params.run_rfe = False
+    #
+    #     model = run_dataset(dataset_name=dataset_name, qsar_method=params.qsar_method, feature_selection=params.feature_selection,
+    #          params=params, descriptor_set_name=descriptor_set_name, ad_measure_model=ad_measure_model, write_to_db=write_to_db,
+    #          unique_identifier=unique_identifier, append_to_models_folder=append_to_models_folder) 
+    #
+    #     folder = Path(PROJECT_ROOT) / "data" / f"models{append_to_models_folder}" / dataset_name / model.subfolder
+    #     test_stats = _run_test_set(df_external, model, folder)    
+    #     _summarize_fragrance_results_as_excel(session, folder, dataset_name)
+    #
+    #
+    df_stats, _ = Results.summarize_model_stats(dataset_name, append_to_models_folder=append_to_models_folder, includeAD=True)
+    df_stats_fragrance=_summarize_fragrance_results(dataset_name, append_to_models_folder)
+    folder = os.path.join(PROJECT_ROOT, "data", "models" + append_to_models_folder, dataset_name)
+    excel_path_merged= os.path.join(folder, "model_stats_all.xlsx")
+    _saveMergedStats(df_stats, df_stats_fragrance, excel_path_merged)
     
     # following is deprecated since run_test_set makes needed results files:
     # _calculate_fragrance_stats(dataset_name, append_to_models_folder, 'exp_prop_RBIODEG_RIFM_2026_08_12_CHEMREG')
@@ -660,6 +667,7 @@ def run_biodeg_301F():
     # append_to_models_folder = ""
     # append_to_models_folder = "_0.001"
     append_to_models_folder = "_v3.0"
+    # append_to_models_folder = "_test_xgb"
     # append_to_models_folder = "_v3.0_0.006"
     # append_to_models_folder="_bob"
 
@@ -688,13 +696,13 @@ def run_biodeg_301F():
     #
     # # for method in ['rf', 'xgb']:        
     # for method in ['rf']:
-    # # for method in ['xgb']:
-    #     model=run_dataset(dataset_name=dataset_name, qsar_method=method, feature_selection=False, descriptor_set_name=descriptor_set_name,
-    #                 ad_measure_model=ad_measure_model, write_to_db=write_to_db, unique_identifier=unique_identifier, append_to_models_folder=append_to_models_folder)  # OK
-    #
-    #     folder = Path(PROJECT_ROOT) / "data" / f"models{append_to_models_folder}" / dataset_name / model.subfolder
-    #     test_stats = run_test_set(df_external, model, folder, df_smiles_subset)    
-    #     _summarize_fragrance_results_as_excel(session, folder, dataset_name)
+    for method in ['xgb']:
+        model=run_dataset(dataset_name=dataset_name, qsar_method=method, feature_selection=False, descriptor_set_name=descriptor_set_name,
+                    ad_measure_model=ad_measure_model, write_to_db=write_to_db, unique_identifier=unique_identifier, append_to_models_folder=append_to_models_folder)  # OK
+    
+        folder = Path(PROJECT_ROOT) / "data" / f"models{append_to_models_folder}" / dataset_name / model.subfolder
+        test_stats = _run_test_set(df_external, model, folder, df_smiles_subset)    
+        _summarize_fragrance_results_as_excel(session, folder, dataset_name)
         
     #
     # # for method in ['reg','knn']:
@@ -717,10 +725,16 @@ def run_biodeg_301F():
     #     _summarize_fragrance_results_as_excel(session, folder, dataset_name)
 
     
-    Results.summarize_model_stats(dataset_name, append_to_models_folder=append_to_models_folder)
-    _summarize_fragrance_results(dataset_name, append_to_models_folder)
+    df_stats, _ = Results.summarize_model_stats(dataset_name, append_to_models_folder=append_to_models_folder, includeAD=True)
+    df_stats_fragrance=_summarize_fragrance_results(dataset_name, append_to_models_folder)
+    folder = os.path.join(PROJECT_ROOT, "data", "models" + append_to_models_folder, dataset_name)
+    excel_path_merged= os.path.join(folder, "model_stats_all.xlsx")
+    _saveMergedStats(df_stats, df_stats_fragrance, excel_path_merged)
+    
     
     # _calculate_fragrance_stats(dataset_name, append_to_models_folder, 'exp_prop_RBIODEG_RIFM_2026_08_12_CHEMREG')
+
+
 
 
 
@@ -960,8 +974,8 @@ def main():
     
     # run_biodeg_nite()
     
-    run_biodeg_rifm()
-    # run_biodeg_301F()
+    # run_biodeg_rifm()
+    run_biodeg_301F()
 
     
     # mi=ModelInitializer()

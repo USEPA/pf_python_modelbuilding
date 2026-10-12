@@ -244,6 +244,7 @@ def _summarize_fragrance_results(dataset_name, append_to_models_folder):
 
     :param dataset_name:
     :param append_to_models_folder:
+    :return: DataFrame with summary rows
     '''
     folder = Path(PROJECT_ROOT) / "data" / f"models{append_to_models_folder}" / dataset_name
 
@@ -270,38 +271,48 @@ def _summarize_fragrance_results(dataset_name, append_to_models_folder):
                 with open(json_file, "r", encoding="utf-8") as f:
                     test_and_external_stats = json.load(f)
 
-        n_test = test_stats["N"] if test_stats else "NA"
+        n_test = test_stats["N"] if test_stats else None
         ba_test = test_stats["BA_Test"] if test_stats and "BA_Test" in test_stats else None
 
-        n_external = external_stats["N"] if external_stats else "NA"
+        n_external = external_stats["N"] if external_stats else None
         ba_external = external_stats["BA_Test"] if external_stats and "BA_Test" in external_stats else None
 
-        n_both = test_and_external_stats["N"] if test_and_external_stats else "NA"
+        n_both = test_and_external_stats["N"] if test_and_external_stats else None
         ba_both = test_and_external_stats["BA_Test"] if test_and_external_stats and "BA_Test" in test_and_external_stats else None
 
         rows.append({
-            "model": item.name,
+            "Run": item.name,
             "Ntest": n_test,
-            "BA_Test": ba_test,
+            "BA_Test_Fragrances": ba_test,
             "Nexternal": n_external,
-            "BA_External": ba_external,
-            "N_both": n_both,
-            "BA_both": ba_both,
+            "BA_External_Fragrances": ba_external,
+            "Nboth": n_both,
+            "BA_Both_Fragrances": ba_both,
         })
 
-    # Sort descending by BA_both, putting missing values at the end
-    rows.sort(key=lambda r: (r["BA_both"] is None, -(r["BA_both"] or float("-inf"))))
+    # Sort descending by BA_Both_Fragrances, putting missing values at the end
+    rows.sort(
+        key=lambda r: (
+            r["BA_Both_Fragrances"] is None,
+            -(r["BA_Both_Fragrances"] or float("-inf"))
+        )
+    )
 
-    print("model\tNtest\tBA_Test\tNexternal\tBA_External\tN_both\tBA_both")
-    for r in rows:
-        ba_test_str = f"{r['BA_Test']:.3f}" if r["BA_Test"] is not None else "NA"
-        ba_external_str = f"{r['BA_External']:.3f}" if r["BA_External"] is not None else "NA"
-        ba_both_str = f"{r['BA_both']:.3f}" if r["BA_both"] is not None else "NA"
+    df = pd.DataFrame(rows)
+
+    # Optional: print to console in a readable way
+    print("Run\tNtest\tBA_Test_Fragrances\tNexternal\tBA_External_Fragrances\tN_both\tBA_Both_Fragrances")
+    for _, r in df.iterrows():
+        ba_test_str = f"{r['BA_Test_Fragrances']:.3f}" if pd.notna(r["BA_Test_Fragrances"]) else "NA"
+        ba_external_str = f"{r['BA_External_Fragrances']:.3f}" if pd.notna(r["BA_External_Fragrances"]) else "NA"
+        ba_both_str = f"{r['BA_Both_Fragrances']:.3f}" if pd.notna(r["BA_Both_Fragrances"]) else "NA"
 
         print(
-            f"{r['model']}\t{r['Ntest']}\t{ba_test_str}\t"
-            f"{r['Nexternal']}\t{ba_external_str}\t{r['N_both']}\t{ba_both_str}"
+            f"{r['Run']}\t{r['Ntest']}\t{ba_test_str}\t"
+            f"{r['Nexternal']}\t{ba_external_str}\t{r['Nboth']}\t{ba_both_str}"
         )
+
+    return df
 
 
 def _getStatsFromDatasets(endpoint_abbrevs, append_to_models_folder, run, stat, stat_dict):
@@ -586,6 +597,45 @@ def _find_model_folder():
                             pass
                         
                 print('\n')
+
+
+
+def _saveMergedStats(df_stats, df_stats_fragrance, excel_path):
+    
+    col_width_pad=4
+    min_col_width=5
+
+    sheet_name = "Statistics"
+    
+    df_merged = df_stats.merge(
+        df_stats_fragrance,
+        on="Run",
+        how="left"
+    )
+    
+    df_merged = df_merged.drop(columns=["BA_External", "Metric", "Ntest","Nexternal","Nboth"])
+    
+    print_first_row(df_merged)
+    
+    from models.case_studies.run_model_building_db import ExcelCreator
+    
+    with pd.ExcelWriter(excel_path, engine="xlsxwriter") as writer:
+            df_merged.to_excel(writer, sheet_name=sheet_name, index=False, float_format="%.3f")
+    
+            ws = writer.sheets[sheet_name]
+            nrows, ncols = df_merged.shape
+            ws.autofilter(0, 0, nrows, ncols - 1)
+            ws.freeze_panes(1, 0)
+    
+            ExcelCreator.set_column_width(
+                writer,
+                sheet_name=sheet_name,
+                df=df_merged,
+                col_width_pad=col_width_pad,
+                min_col_width=min_col_width,
+                how="full"
+            )
+            
 def _calc_stats_training_cv_fragrances():
     """
     Recalculates the training CV stats for just the fragrances 

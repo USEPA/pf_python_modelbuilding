@@ -783,6 +783,25 @@ class Model:
             parameters[key] = self.hyperparameter_grid[key][0]
         return parameters
 
+
+    def xgb_make_feature_map(self):
+        """
+        Return a renamed copy of df plus a mapping:
+          safe_name -> original_name
+    
+        Only descriptor/feature columns should be renamed; keep ID/Property/etc. unchanged
+        if you want, but for the simplest patch we rename only columns after the first 2.
+        """
+                
+        # mapping = {}
+        cols_to_rename = list(self.df_training.columns[2:])
+        self.feature_rename_map = {}
+        num=1
+        for col in cols_to_rename:
+            self.feature_rename_map[col] = "var"+str(num)
+            num=num+1
+        
+
     def build_model(self, use_pmml_pipeline, scale_features, cv, descriptor_names=None):
         logging.debug('enter build model')
 
@@ -823,7 +842,15 @@ class Model:
             # print("train_ids", train_ids)
             # Use columns selected by prepare_instances (in case logp descriptors were removed)            
 
-        # print(train_features)
+        # print(train_features.head(5))
+
+        if self.regressor_name =="xgb":
+            self.xgb_make_feature_map()
+            train_features = train_features.rename(columns=self.feature_rename_map)
+
+        # print(self.feature_rename_map)
+        # print(train_features.shape)
+
 
         # TODO: see if commenting this line out suppresses feature name warnings and remove/add back if needed
         # if use_pmml_pipeline and scale_features is False:  # need to handle scaling outside of pipeline
@@ -1183,8 +1210,14 @@ class Model:
         def get_numeric_series(values):
             return pd.to_numeric(pd.Series(values), errors='coerce')
 
-        model_input = get_model_input(pred_features)
 
+        # print("pred_features", pred_features)
+        model_input = get_model_input(pred_features)
+        
+        if self.feature_rename_map is not None:# XGB models cant have [,],< characters
+            model_input = model_input.rename(columns=self.feature_rename_map)
+        
+        # print("model_input", model_input)
         # print('pred_labels',pred_labels)
 
         # print('Enter model.do_predictions')
@@ -1583,6 +1616,11 @@ class ModelDescription:
             self.training_descriptor_means = model.training_descriptor_means
         else:
             self.scale_features = True
+            
+                
+        if hasattr(model, "self.feature_rename_map"):
+            self.feature_rename_map=model.feature_rename_map
+            
 
     def to_json(self):
         """Returns description as a JSON"""

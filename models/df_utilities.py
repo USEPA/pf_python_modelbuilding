@@ -113,6 +113,10 @@ def do_remove_fragment_descriptors(df):
     
     start_column = "As [+5 valence, one double bond]"
     stop_column = "-N=S=O"
+    
+    if start_column not in df.columns or stop_column not in df.columns:
+        return df
+    
     i = df.columns.get_loc(start_column)
     j = df.columns.get_loc(stop_column)
     lo, hi = sorted([i, j])
@@ -162,6 +166,9 @@ def prepare_prediction_instances(df, train_column_names):
     ids = df[df.columns[0]]
     # labels = np.array(df[df.columns[1]])
     labels = df[df.columns[1]]
+
+    # print("train_column_names", train_column_names)
+    # print("df.columns", df.columns.to_list())
 
     df = df[train_column_names]
 
