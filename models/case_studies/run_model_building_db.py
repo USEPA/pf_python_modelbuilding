@@ -2047,12 +2047,591 @@ def ensure_session(session):
         return getSession()
 
 @staticmethod
-def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None, cross_validate=True,
+def run_dataset_old(dataset_name, qsar_method, embedding=None, folder_embedding=None, cross_validate=True,
                 run_AD=True, feature_selection=True, fs_previous_embedding=True, params=None,
                 descriptor_set_name="WebTEST-default", splitting_name="RND_REPRESENTATIVE",
                 ad_measure_model=None, add_LOGP_Martin=False, logp_columns=None, write_to_db=False, user="tmarti02",
                 unique_identifier=None, append_to_models_folder="", subfolder=None, save_initial_dfs=False,
                 outlier_filter_methods=None, include_feature_count_in_subfolder=False):
+    # TODO: reg model using descriptors from XGB or RF model
+    # TODO: gcm model that uses reg with fragment descriptors such that it deletes rows with less than 3 instances and the associated rows
+    # TODO does add the LOGP predicted from my LOGP model improve the results?
+    if splitting_name is None:
+        splitting_name = "RND_REPRESENTATIVE"
+    
+    # print(dataset_name)
+    
+    try:
+        # engine = getEngine()
+        session = getSession()
+        
+        # ml = ModelLoader(session)
+
+        if qsar_method == 'gcm' or qsar_method == 'svm':
+            feature_selection = False
+        
+        if embedding is not None:
+            folder_embedding = 'custom'
+            feature_selection = False
+        elif folder_embedding is not None:
+            feature_selection = False
+            file_name_embedding = "results.json"
+            file_path_embedding = os.path.join(PROJECT_ROOT, "data/models", dataset_name, folder_embedding, file_name_embedding)
+            
+            with open(file_path_embedding, "r", encoding="utf-8") as f:
+                results = json.load(f)
+                embedding = results["model_details"]["embedding"] 
+                # print(f"from {folder_embedding}:{embedding}")
+        else:
+            fs_previous_embedding = False
+                    
+        # print (feature_selection)
+        # return
+                    
+        # if True:
+        #     return
+    
+        # **************************************************************************************************************************
+        
+        if ad_measure_model is None: 
+            ad_measure_model = [pc.Applicability_Domain_TEST_Embedding_Euclidean, pc.Applicability_Domain_TEST_Fragment_Counts]
+        
+        ad_measures = []  # list of measures for comparison purposes
+        ad_measures.append(pc.Applicability_Domain_TEST_Embedding_Euclidean)
+        ad_measures.append(pc.Applicability_Domain_TEST_All_Descriptors_Euclidean)
+        # ad_measures.append(pc.Applicability_Domain_TEST_Embedding_Cosine)
+        # ad_measures.append(pc.Applicability_Domain_TEST_All_Descriptors_Cosine)
+        
+        if descriptor_set_name=="WebTEST-default":
+            ad_measures.append(pc.Applicability_Domain_TEST_Fragment_Counts)
+        
+        # if remove_fragment_descriptors==False:
+        #     ad_measures.append(pc.Applicability_Domain_TEST_Fragment_Counts)
+            
+        # ad_measures.append(pc.Applicability_Domain_OPERA_local_index)
+        # ad_measures.append(pc.Applicability_Domain_OPERA_global_index) # Turn off when not doing feature selection on knn, fails due to a matrix singularity
+        
+        # ******************************************************************************************************
+        # Print main info:
+        
+        print("\n")
+        
+        logging.info(f"Start dataset run")
+        logging.info(f"dataset_name={dataset_name}")
+        logging.info(f"qsar_method={qsar_method}")
+        logging.info(f"descriptor_set_name={descriptor_set_name}")
+        logging.info(f"feature_selection={feature_selection}")
+        logging.info(f"cross_validate={cross_validate}")
+        # ******************************************************************************************************
+        
+        if params is None:
+            params = set_hyper_parameters(
+                qsar_method=qsar_method,
+                feature_selection=feature_selection,
+                descriptor_set_name=descriptor_set_name,
+                splitting_name=splitting_name,
+                dataset_name=dataset_name,
+                ad_measure=ad_measure_model)
+        
+        # print(params.n_features_to_select)
+        
+        # make sure they match
+        params.feature_selection = feature_selection
+        
+        # params.run_rfe = False
+
+        # hyperparameter_grid = None # use default
+
+        # Set parameters related to outlier handling
+        if not hasattr(params, "outlier_filter_methods") and outlier_filter_methods is not None and outlier_filter_methods != False:
+            # outlier_filter_methods = ["iqr", "hampel", "robust_z", "esd"]
+            params.outlier_filter_methods = outlier_filter_methods
+
+        if getattr(params, "outlier_filter_methods", False) and not hasattr(params, "outlier_filter_columns"):
+            params.outlier_filter_columns = ["Property"]
+
+        if getattr(params, "outlier_filter_methods", False) and not hasattr(params, "outlier_filter_trim_mode"):
+            params.outlier_filter_trim_mode = "remove"
+        
+        # ******************************************************************************************************
+        # ---- Get dataframes from the database ----
+        logging.info("start getting dataframes from db")
+    
+        df_training, df_prediction = du.get_training_prediction_instances(session, dataset_name, descriptor_set_name, params.splitting_name)
+            
+        
+        if df_training is None or df_prediction is None:
+            logging.error("Failed to retrieve training or prediction dataframes from the database. Ending execution of run_dataset.")
+            return
+
+        # --- XGB feature-name sanitization ---
+        xgb_feature_name_map = None
+        if qsar_method == "xgb":
+            df_training, xgb_feature_name_map = xgb_sanitize_feature_names(df_training)
+            df_prediction, _ = xgb_sanitize_feature_names(df_prediction)
+
+        s = df_training.iloc[:, 1]
+        is_binary = s.isin([0, 1]).all()
+        # print('is_binary', is_binary)
+
+        # ---- Optional outlier filtering on training data only ----
+        if getattr(params, "outlier_filter_methods", False) and params.outlier_filter_methods is not None and len(params.outlier_filter_methods) > 0:
+            logging.info(
+                f"Applying outlier filter: methods={params.outlier_filter_methods}, "
+                f"columns={params.outlier_filter_columns}, mode={params.outlier_filter_trim_mode}"
+            )
+
+            df_training_before = df_training.copy()
+
+            df_training, outlier_report = apply_outlier_filter(
+                df_training,
+                columns=params.outlier_filter_columns,
+                methods=params.outlier_filter_methods,
+                target_col="Property",
+                trim_mode=params.outlier_filter_trim_mode,
+                iqr_k=getattr(params, "outlier_filter_iqr_k", 1.5),
+                hampel_k=getattr(params, "outlier_filter_hampel_k", 3.0),
+                robust_z_thresh=getattr(params, "outlier_filter_robust_z_thresh", 3.5),
+                esd_alpha=getattr(params, "outlier_filter_esd_alpha", 0.05),
+                esd_max_outliers=getattr(params, "outlier_filter_esd_max_outliers", 10),
+            )
+
+            logging.info(
+                f"Outlier filter removed {len(df_training_before) - len(df_training)} rows "
+                f"out of {len(df_training_before)}"
+            )
+
+            if save_initial_dfs:
+                outlier_folder = os.path.join(
+                    PROJECT_ROOT, "data", f"models{append_to_models_folder}",
+                    dataset_name, "outlier_filter"
+                )
+                os.makedirs(outlier_folder, exist_ok=True)
+                outlier_report.to_csv(os.path.join(outlier_folder, "outlier_report.csv"), index=False)
+        
+        df_prediction_ext = None
+        dataset_name_ext = None
+        
+        if dataset_name == 'KOC v1 modeling' or dataset_name == 'KOC v2 modeling':
+            dataset_name_ext = 'KOC v2 external'
+            # dataset_name_ext = 'Koc eChemPortal v1'
+        elif dataset_name == 'ECOTOX_2024_12_12_96HR_Fish_LC50_v3a modeling':
+            dataset_name_ext = 'QSAR_Toolbox_96HR_Fish_LC50_v3 modeling'    
+        elif dataset_name == 'ECOTOX_2024_12_12_96HR_Fish_LC50_v3b modeling':
+            dataset_name_ext = 'QSAR_Toolbox_96HR_Fish_LC50_v3b modeling'    
+
+        elif dataset_name == "exp_prop_BCF_v1_modeling":
+            dataset_name_ext = "exp_prop_BCF_v1_external"
+        
+        elif dataset_name == 'exp_prop_RBIODEG_RIFM_CHEMREG':
+            dataset_name_ext = 'exp_prop_RBIODEG_301F v1 modeling' # use ECHA data as external set to see if works ok
+
+        if dataset_name_ext is not None:
+            dataset_description_ext = du.get_dataset_details(session, dataset_name_ext).get('dataset_description')
+            df_prediction_ext = du.get_instances_excluding(session, dataset_name_ext, dataset_name, descriptor_set_name)
+            df_external = df_prediction_ext.copy()
+
+        # --- XGB feature-name sanitization ---
+        xgb_feature_name_map = None
+        if qsar_method == "xgb" and df_prediction_ext is not None:
+            df_prediction_ext, _ = xgb_sanitize_feature_names(df_prediction_ext)
+        
+        # check_for_inchi_key_matches(df_training, df_prediction_ext)
+        
+        # print(json.dumps( smiles_to_key_training, indent = 4))
+    
+        df_cv_dict = None 
+        
+        if cross_validate:  # TODO we should probably always run these calculations
+            df_cv_dict = du.get_training_cv_instances(session, dataset_name, descriptor_set_name)
+            X, y, cv, feature_cols = du.make_cv_for_base_training(df_training, df_cv_dict, "ID", "Property")  # get cv for use in RFE and SFS so that will use CV folds as the final stat reported as RMSE_CV_TRAINING
+
+        # --- XGB feature-name sanitization ---
+        xgb_feature_name_map = None
+        if qsar_method == "xgb" and df_cv_dict is not None:
+            for fold_num in df_cv_dict:
+                df_cv_dict[fold_num]["train"], _ = xgb_sanitize_feature_names(df_cv_dict[fold_num]["train"])
+                df_cv_dict[fold_num]["pred"], _ = xgb_sanitize_feature_names(df_cv_dict[fold_num]["pred"])
+        
+        if add_LOGP_Martin:
+            df_training, df_prediction, df_prediction_ext = add_log_p_martin_columns(
+                df_training,
+                df_prediction,
+                cross_validate,
+                df_cv_dict,
+                df_external=df_prediction_ext
+            )
+            df_external = df_prediction_ext.copy() if df_prediction_ext is not None else None
+
+        if save_initial_dfs:
+            # Save initial dataframes to CSV files for debugging purposes
+            df_training_initial = df_training.copy()
+            df_prediction_initial = df_prediction.copy()
+            df_prediction_ext_initial = df_prediction_ext.copy() if df_prediction_ext is not None else None
+
+            initial_dfs_folder = os.path.join(PROJECT_ROOT, "data", f"models{append_to_models_folder}", dataset_name, "initial_dfs")
+            os.makedirs(initial_dfs_folder, exist_ok=True)
+            df_training_initial.to_csv(os.path.join(initial_dfs_folder, "df_training.csv"), index=False)
+            df_prediction_initial.to_csv(os.path.join(initial_dfs_folder, "df_prediction.csv"), index=False)
+            if df_prediction_ext_initial is not None:
+                df_prediction_ext_initial.to_csv(os.path.join(initial_dfs_folder, "df_prediction_ext.csv"), index=False)
+            # if df_cv_dict is not None:
+            #     for fold_num, fold_data in df_cv_dict.items():
+            #         fold_data["train"].to_csv(os.path.join(initial_dfs_folder, f"df_cv_train_fold_{fold_num}.csv"), index=False)
+            #         fold_data["pred"].to_csv(os.path.join(initial_dfs_folder, f"df_cv_pred_fold_{fold_num}.csv"), index=False)
+
+        if logp_columns is not None:
+            if isinstance(logp_columns, str):
+                logp_columns = [logp_columns]
+
+        if qsar_method == 'gcm' and logp_columns is not None:
+            if params is None:
+                params = set_hyper_parameters(
+                    qsar_method=qsar_method,
+                    feature_selection=feature_selection,
+                    descriptor_set_name=descriptor_set_name,
+                    splitting_name=splitting_name,
+                    dataset_name=dataset_name,
+                    ad_measure=ad_measure_model)
+            params.logp_columns = logp_columns
+        
+        # print(df_cv_dict)
+        
+        logging.info("done getting dataframes from db")
+        
+        # ******************************************************************************************************
+        # ---- Run feature selection and build model ----
+        
+        if feature_selection:
+            embedding = EmbeddingGenerator.feature_selection(df_training, df_prediction, params, cv)
+
+        if feature_selection and qsar_method == "huber":
+            original_feature_count = df_training.shape[1] - 2  # adjust if needed for ID/Property columns
+            selected_feature_count = len(embedding) if embedding is not None else 0
+
+            # print(f"Huber feature selection: {selected_feature_count} selected out of {original_feature_count}")
+
+            if embedding is None or selected_feature_count >= original_feature_count:
+                raise ValueError(
+                    f"Huber feature selection did not reduce the feature set. "
+                    f"Selected {selected_feature_count} features from {original_feature_count}."
+                )
+            
+        df_pred_training, df_pred_test, training_stats, test_stats, model = ModelBuilder.build_and_test_model(df_training, df_prediction, cv, params, embedding, is_binary)
+                
+        if not feature_selection and fs_previous_embedding and qsar_method != 'gcm':
+    
+            logging.info(f"Before FS, previous embedding has {len(model.embedding)} descriptors: {model.embedding}")
+            
+            if params.run_rfe:
+                run_rfe(model, df_training, 1, 1)
+                logging.info(f"After RFE, {len(model.embedding)} descriptors: {model.embedding}")
+                
+            if params.run_sfs:
+                # run_sfs(model, df_training, params.n_features_to_select)
+                run_sfs(model, df_training, cv=cv)  # iterative
+                logging.info(f"After SFS, {len(model.embedding)} descriptors: {model.embedding}")
+    
+            # redo model and predictions:
+            df_pred_training, df_pred_test, training_stats, test_stats, model = ModelBuilder.build_and_test_model(df_training, df_prediction, params, model.embedding, is_binary)
+            logging.info(f"After FS, embedding has {len(model.embedding)} descriptors: {model.embedding}")
+
+        # ---- Run cross validation calculations ----
+        if cross_validate: 
+            df_pred_cv, cv_stats = ModelBuilder.crossvalidate(df_cv_dict, params, model.embedding, is_binary)
+                
+        ext_stats = None
+        df_pred_ext = None
+        
+        if df_prediction_ext is not None:
+            model.external_dataset_name = dataset_name_ext
+            df_pred_ext, ext_stats = ModelBuilder.predict(model, df_prediction_ext, '_External', is_binary)
+            # print('external stats',json.dumps(ext_stats, indent=4))
+
+        if save_initial_dfs:
+            # Save modified dataframes to CSV files for debugging purposes
+            df_training_modified = df_training.copy()
+            df_prediction_modified = df_prediction.copy()
+            df_prediction_ext_modified = df_prediction_ext.copy() if df_prediction_ext is not None else None
+
+            modified_dfs_folder = os.path.join(PROJECT_ROOT, "data", f"models{append_to_models_folder}", dataset_name, "modified_dfs")
+            os.makedirs(modified_dfs_folder, exist_ok=True)
+            df_training_modified.to_csv(os.path.join(modified_dfs_folder, "df_training_modified.csv"), index=False)
+            df_prediction_modified.to_csv(os.path.join(modified_dfs_folder, "df_prediction_modified.csv"), index=False)
+            if df_prediction_ext_modified is not None:
+                df_prediction_ext_modified.to_csv(os.path.join(modified_dfs_folder, "df_prediction_ext_modified.csv"), index=False)
+        
+        # ******************************************************************************************************
+        # ---- Run applicability domain calculations ----
+        # Applicability domain calcs:
+        stats_dict = {}
+        if run_AD:
+            for ad_measure in ad_measures:
+                df_pred_test = runAD(df_training, df_prediction, params, model.embedding, df_pred_test, ad_measure, stats_dict, is_binary=is_binary, is_external=False)
+    
+            if len(ad_measure) > 1:
+                adu.generate_consensus_ad(df_pred_test, stats_dict, ad_measure_model, is_binary=is_binary, is_external=False)
+    
+            # print(json.dumps(stats_dict,indent=4))
+
+        # print("After AD calcs: ", row_to_json(df_pred_test))
+        
+        # ******************************************************************************************************
+        # look at first prediction to make sure it looks right:
+        logging.debug("First row of df_pred_test:")
+        logging.debug(row_to_json(df_pred_test))
+        # print(df_pred_test.head())
+
+        # New Attributes
+        ext_stats_dict = {}
+        if dataset_name_ext is not None:
+            if run_AD:
+                for ad_measure in ad_measures:
+                    df_pred_ext = runAD(df_training, df_prediction_ext, params, model.embedding, df_pred_ext, ad_measure, ext_stats_dict, is_binary=is_binary, is_external=True)
+        
+                if len(ad_measure) > 1:
+                    adu.generate_consensus_ad(df_pred_ext, ext_stats_dict, ad_measure_model, is_binary=is_binary, is_external=True)
+
+        if qsar_method == "xgb" and xgb_feature_name_map is not None:
+            restore_map = {safe: original for safe, original in xgb_feature_name_map.items()}
+
+            if df_pred_test is not None:
+                df_pred_test = xgb_restore_feature_names(df_pred_test, restore_map)
+
+            if df_pred_training is not None:
+                df_pred_training = xgb_restore_feature_names(df_pred_training, restore_map)
+
+            if df_pred_cv is not None:
+                df_pred_cv = xgb_restore_feature_names(df_pred_cv, restore_map)
+
+            if df_pred_ext is not None:
+                df_pred_ext = xgb_restore_feature_names(df_pred_ext, restore_map)
+
+            if df_prediction_ext is not None:
+                df_prediction_ext = xgb_restore_feature_names(df_prediction_ext, restore_map)
+
+            if df_external is not None:
+                df_external = xgb_restore_feature_names(df_external, restore_map)
+
+            # restore model embedding names too, if needed for reporting / DB / Excel
+            if hasattr(model, "embedding") and model.embedding is not None:
+                model.embedding = [restore_map.get(c, c) for c in model.embedding]
+        
+        if cross_validate:
+            
+            # Add CV fold information to df_training
+            cv_fold_data = []
+            for fold_num, fold_dict in sorted(df_cv_dict.items()):
+                pred_df = fold_dict.get("pred")
+                if pred_df is not None and not pred_df.empty:
+                    for idx, row in pred_df.iterrows():
+                        cv_fold_data.append({"ID": row["ID"], "cv_fold": fold_num})
+            
+            if cv_fold_data:
+                df_cv_folds = pd.DataFrame(cv_fold_data)
+                df_training = df_training.merge(df_cv_folds, on="ID", how="left")
+                # df_pred_cv = df_pred_cv.merge(df_cv_folds, left_on="id", right_on="ID", how="left")
+        
+        # ******************************************************************************************************
+        # ---- Save results ----
+        # create results file:
+        session = ensure_session(session)
+        dataset_info = du.get_dataset_details(session, dataset_name)
+        dsstox_mapping_strategy = json.loads(dataset_info["dsstox_mapping_strategy"])
+        
+        model.qsarReadyRuleSet = dsstox_mapping_strategy.get("qsarReadyRuleSet", "qsar-ready")
+        model.propertyName = dataset_info["property_name"]
+        
+        # print(json.dumps(dataset_info, indent=4))
+        
+        if model.propertyName is None:
+            print("propertyName is None, need to set name_ccd column for property in properties table")
+            return
+        
+        model.propertyDescription = dataset_info["property_description"]
+        model.unitsModel = dataset_info["units_model"] 
+        model.unitsDisplay = dataset_info["units_display"]
+        epoch_ms = time.time_ns() // 1_000_000
+        model.modelName = user + "_" + str(epoch_ms)
+        model.datasetName = dataset_name
+        model.datasetDescription = dataset_info["dataset_description"]
+        model.omitSalts = dsstox_mapping_strategy["omitSalts"]
+        model.applicabilityDomainName = " and ".join(params.ad_measure) if run_AD else None
+        model.num_training = df_training.shape[0]
+        model.num_prediction = df_prediction.shape[0]
+        model.descriptorSetName = descriptor_set_name
+        model.df_preds_training_cv = df_pred_cv
+        model.df_preds_test = df_pred_test
+        if dataset_name_ext is not None:
+            model.external_dataset_name = dataset_name_ext if dataset_name_ext else None
+            model.external_dataset_description = dataset_description_ext
+            model.df_dsstoxRecords_external = df_prediction_ext
+            model.df_preds_external = df_pred_ext
+            model.df_external = df_external
+            model.num_external = df_external.shape[0] if df_external is not None else 0        
+            # model.num_external = df_prediction_ext.shape[0] if df_prediction_ext is not None else 0
+        
+        # Check what happens with ext_stats and how to add new things to the results_dict under the model_details
+        results_dict = Results.create_results_dict(
+            ad_measure_model=ad_measure_model,
+            df_training=df_training,
+            params=params,
+            model=model,
+            training_stats=training_stats,
+            test_stats=test_stats,
+            cv_stats=cv_stats,
+            ext_stats=ext_stats,
+            stats_dict=stats_dict,
+            ext_stats_dict=ext_stats_dict
+            )
+
+        # TODO: check what is in stats_dict and ext_stats_dict, to put into the query_results_dict func in MTE
+        # breakpoint()
+                
+        if model.embedding:
+            columns = model.embedding.copy()
+            columns.insert(0, "Property")
+            columns.insert(0, "ID")
+            df_test_model = df_prediction[columns] # used?
+            df_training_model = df_training[columns]
+                
+        logging.info("start getting mapped property values from db")
+        snapshot_id = 4  # TODO move to parameter or constant
+        duplicate_strategy = "id_suffix"
+        from models.db_utilities.raw_exp_data_db import ExpDataGetter
+        edg = ExpDataGetter()
+        df_pv, unique_params = edg.get_mapped_property_values(session, dataset_name, snapshot_id, duplicate_strategy=duplicate_strategy)
+        logging.info("done getting mapped property values from db")        
+        # print_first_row(df_pv, row=1)
+        
+        df_dps = du.getMappedDatapoints(session, dataset_name)
+
+        df_pred_training = add_source_chemical_info(df_pred_training, df_dps)
+        df_pred_test = add_source_chemical_info(df_pred_test, df_dps)
+        df_pred_cv = add_source_chemical_info(df_pred_cv, df_dps)  # print_first_row(df_pred_cv)
+        
+        df_dps_ext = None
+        if df_prediction_ext is not None:
+            df_dps_ext = du.getMappedDatapoints(session, dataset_name_ext)
+            df_pred_ext = add_source_chemical_info(df_pred_ext, df_dps_ext)
+        
+
+        logging.info(f"test set stats={json.dumps(test_stats, indent=4)}")
+        logging.info(f"external set stats={json.dumps(ext_stats, indent=4)}")
+
+        logging.info(f"training cross validation stats={json.dumps(cv_stats, indent=4)}")
+
+        if run_AD:
+            logging.info(f"test set AD stats={json.dumps(results_dict['model_statistics']['test_stats_AD'], indent=4)}")
+            if dataset_name_ext is not None:
+                logging.info(f"external set AD stats={json.dumps(results_dict['model_statistics']['ext_stats_AD'], indent=4)}")
+        # logging.info(f"test set AD stats={json.dumps( results_dict['model_statistics']['test_stats_AD'] , indent=4)}")
+        
+        logging.info("run_data_set completed\n")
+
+        # model.modelStatistics = {**training_stats, **cv_stats, **test_stats, **results_dict['model_statistics']['test_stats_AD'], **ext_stats}
+        
+        # Safely extract AD stats (could be missing or None)
+        ad_stats = (results_dict.get('model_statistics') or {}).get('test_stats_AD') or {}
+        external_ad_stats = results_dict.get('model_statistics', {}).get('ext_stats_AD', {}) or {}
+        external_ad_stat_key_mapping = {
+            "ad_measure": "ad_measure_external",
+            "MAE_External_inside_AD": "MAE_External_inside_AD",
+            "MAE_External_outside_AD": "MAE_External_outside_AD",
+            "mae_ratio": "mae_ratio_external",
+            "Coverage_External": "Coverage_External",
+            "BA_External_inside_AD": "BA_External_inside_AD",
+            "BA_External_outside_AD": "BA_External_outside_AD",
+            "ba_ratio": "ba_ratio_external"
+        }
+        external_ad_stats = {external_ad_stat_key_mapping.get(key, key): value for key, value in external_ad_stats.items()}
+
+        # Merge; any None becomes {} so it won’t break
+        model.modelStatistics = (
+            (training_stats or {})
+            | (cv_stats or {})
+            | (test_stats or {})
+            | ad_stats
+            | (ext_stats or {})
+            | external_ad_stats
+        )
+        
+        model.df_training = df_training  # df_training_model?
+        model.df_prediction = df_prediction  # df_test_model?
+        model.modelMethod = results_dict["model_details"].get("qsar_method", None)
+        model.modelMethodDescription = results_dict["model_details"].get("qsar_method_description", None)
+        
+        # log_stats(model, params, cv_stats, test_stats, ext_stats)
+        # logging.info(f"model description={json.dumps(json.loads(model.get_model_description()), indent=4)}")
+
+        logging.info("Creating DataFrames for detailed Excel report...")
+
+        # with open("local_model_data.pkl", "wb") as f:
+        #     pickle.dump({"model": model, "df_pv": df_pv, "df_gmd": df_dps, "df_gmd_external": df_dps_ext}, f)
+
+        # subfolder = params.qsar_method + "_" + params.descriptor_set_name + "_fs=" + str(params.feature_selection)
+    
+        # if folder_embedding is not None:
+        #     subfolder = subfolder + "_" + folder_embedding
+
+        subfolder = subfolder if subfolder is not None else build_output_subfolder(params, folder_embedding, logp_columns, include_feature_count=include_feature_count_in_subfolder)
+        
+        model.subfolder=subfolder
+        
+        # print("model.subfolder", subfolder)
+        # print("params",json.dumps(params.to_dict(), indent=4))
+                            
+        path_segments = [PROJECT_ROOT, "data", "models" + append_to_models_folder, params.dataset_name, subfolder]
+        
+        folder_path = os.path.join(*path_segments)
+        folder_path_path = Path(folder_path)
+        folder_path_path.mkdir(parents=True, exist_ok=True)
+
+        identifier = get_identifier(unique_identifier, test_stats, ext_stats)
+        
+        #TODO write results json after loading model so that model_id is set
+        if identifier is None:
+            json_path = os.path.join(folder_path, "results.json")
+            detailed_summary_path = os.path.join(folder_path, f"detailed_summary.xlsx")
+        else:
+            json_path = os.path.join(folder_path, f"results_{identifier}.json")
+            detailed_summary_path = os.path.join(folder_path, f"detailed_summary_{identifier}.xlsx")
+        
+        write_prediction_csvs(df_pred_test, df_pred_ext, folder_path)
+        write_plots(df_pred_test, model, df_pred_cv, folder_path)
+
+        if write_to_db:
+            ml = ModelLoader(session)
+            ml.load_model(user, model, results_dict, df_pred_training, df_pred_test, df_pred_cv, folder_path, df_pred_external=df_pred_ext)
+        
+            # build excel after loading model so have model id number set:
+            mdo = ModelDataObjects(model=model, df_pv=df_pv, df_gmd=df_dps, df_gmd_external=df_dps_ext)
+            mte = ModelToExcel(mdo, detailed_summary_path)
+            mte.create_excel()
+            
+            # need to load model separately from rest of model objects since need to load model into db to get id then create the excel file that displays that id in the summary:
+            filePathOutExcelSummary = os.path.join(folder_path, "detailed_summary.xlsx")
+            image_id = ml.load_model_file(filePathOutExcelSummary, user, model.modelId, 2)
+            logging.info(f"Excel summary loaded to db with id: {image_id}")
+        else:
+            # build excel without loading model, so no id number will be set:
+            mdo = ModelDataObjects(model=model, df_pv=df_pv, df_gmd=df_dps, df_gmd_external=df_dps_ext)
+            mte = ModelToExcel(mdo, detailed_summary_path)
+            mte.create_excel()
+
+
+        with open(json_path, 'w') as json_file:
+            json.dump(results_dict, json_file, indent=4)
+
+        return model
+
+    except Exception:
+        # Print the exception traceback to standard error
+        traceback.print_exc()
+        return None
+
+@staticmethod
+def run_dataset(params):
     # TODO: reg model using descriptors from XGB or RF model
     # TODO: gcm model that uses reg with fragment descriptors such that it deletes rows with less than 3 instances and the associated rows
     # TODO does add the LOGP predicted from my LOGP model improve the results?
