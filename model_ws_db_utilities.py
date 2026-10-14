@@ -2749,6 +2749,14 @@ class ModelPredictor:
                 )
                 continue
 
+            descriptor_error = self._descriptor_input_error(df_prediction, model.embedding)
+            if descriptor_error:
+                results[original_idx] = self._build_prediction_error_report(
+                    response_chemical, report_model_details, descriptor_error,
+                    standardized_chemical=standardized_chemical_for_response,
+                )
+                continue
+
             prediction_frames.append(df_prediction)
             prediction_indices.append(original_idx)
             prediction_chemicals.append(chemical)
@@ -2805,6 +2813,19 @@ class ModelPredictor:
                 results[idx] = {"smiles": smiles_list[idx], "error": "Prediction failed unexpectedly"}
 
         return results
+
+    @staticmethod
+    def _descriptor_input_error(frame, embedding):
+        missing = [name for name in embedding if name not in frame.columns]
+        if missing:
+            return "Required model descriptors are unavailable: " + ", ".join(map(str, missing[:10]))
+        try:
+            values = frame[embedding].to_numpy(dtype=float)
+        except (ValueError, TypeError):
+            return "Required model descriptors contain non-numeric values"
+        if not np.isfinite(values).all():
+            return "Required model descriptors contain missing or non-finite values"
+        return None
 
     @timer
     def predict_model_smiles_batch(self, model_id, smiles_list, generate_report=True, include_model_details=True):
