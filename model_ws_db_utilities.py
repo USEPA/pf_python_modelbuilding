@@ -13,6 +13,7 @@ from indigo.renderer import IndigoRenderer
 import base64
 
 from API_Utilities import QsarSmilesAPI, DescriptorsAPI
+from util.preprocessing_cache import standardization_cache, descriptor_cache
 
 from db.mongo_cache import (
     cache_predictions,
@@ -2527,6 +2528,35 @@ class ModelPredictor:
             return self._standardize_smiles_individually(stdizer_api, smiles_list, model)
 
     def _standardize_smiles_batch(self, stdizer_api, smiles_list, model):
+        return self._reuse_preprocessing(
+            standardization_cache,
+            (stdizer_api, model.qsarReadyRuleSet, bool(model.omitSalts)),
+            smiles_list,
+            lambda missing: self._standardize_smiles_batch_uncached(stdizer_api, missing, model),
+        )
+
+    @staticmethod
+    def _reuse_preprocessing(cache, context, structures, calculate):
+        results = [cache.get((context, structure)) for structure in structures]
+        missing_indices = [index for index, value in enumerate(results) if value is None]
+        if missing_indices:
+            calculated = calculate([structures[index] for index in missing_indices])
+            if len(calculated) != len(missing_indices):
+                raise ValueError("Preprocessing result count does not match input count")
+            for index, value in zip(missing_indices, calculated):
+                results[index] = value
+                if value[1] == 200:
+                    # Batch-local IDs must never leak into a later request.
+                    if isinstance(value[0], dict):
+                        value = (dict(value[0]), value[1])
+                        value[0].pop("id", None)
+                        value[0].pop("recordId", None)
+                    cache.put((context, structures[index]), value)
+        logging.info("Preprocessing reuse: inputs=%s hits=%s misses=%s", len(structures),
+                     len(structures) - len(missing_indices), len(missing_indices))
+        return results
+
+    def _standardize_smiles_batch_uncached(self, stdizer_api, smiles_list, model):
         if not smiles_list:
             return []
 
@@ -2611,6 +2641,14 @@ class ModelPredictor:
             ))
 
     def _calculate_descriptors_batch(self, descriptors_api, qsar_smiles_list, descriptor_service):
+        return self._reuse_preprocessing(
+            descriptor_cache,
+            (descriptors_api, descriptor_service),
+            qsar_smiles_list,
+            lambda missing: self._calculate_descriptors_batch_uncached(descriptors_api, missing, descriptor_service),
+        )
+
+    def _calculate_descriptors_batch_uncached(self, descriptors_api, qsar_smiles_list, descriptor_service):
         if not qsar_smiles_list:
             return []
 
