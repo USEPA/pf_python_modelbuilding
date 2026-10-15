@@ -3267,7 +3267,7 @@ class Results:
         
         return results_dict
 
-    @staticmethod    
+    @staticmethod
     def summarize_model_stats(
             dataset_name,
             excel_name="model_stats.xlsx",
@@ -3335,11 +3335,19 @@ class Results:
             is_binary = bool(model_details.get("is_binary", False))
             stat = binary_stat_name if is_binary else continuous_stat_name
     
+            # model_id as integer
+            model_id_raw = model_details.get("modelId", None)
+            try:
+                model_id = int(model_id_raw) if model_id_raw is not None and str(model_id_raw).strip() != "" else None
+            except (TypeError, ValueError):
+                model_id = None
+    
             test_val = to_float(model_statistics.get("test_stats", {}).get(f"{stat}_Test"))
             cv_val = to_float(model_statistics.get("cv_stats", {}).get(f"{stat}_CV_Training"))
             ext_val = to_float(model_statistics.get("ext_stats", {}).get(f"{stat}_External"))
     
             row = {
+                "model_id": model_id,
                 "Run": run_name,
                 "Metric": stat,
                 f"{stat}_Test": test_val,
@@ -3381,7 +3389,9 @@ class Results:
     
         if not rows:
             base_columns = [
-                "Run", f"{continuous_stat_name}_Test", f"{continuous_stat_name}_Training_CV",
+                "model_id",
+                "Run",
+                f"{continuous_stat_name}_Test", f"{continuous_stat_name}_Training_CV",
                 f"{continuous_stat_name}_External", f"{binary_stat_name}_Test",
                 f"{binary_stat_name}_Training_CV", f"{binary_stat_name}_External",
                 "#_variables", "Embedding", "Metric"
@@ -3389,6 +3399,7 @@ class Results:
     
             if includeAD:
                 base_columns = [
+                    "model_id",
                     "Run",
                     f"{continuous_stat_name}_Test", f"{continuous_stat_name}_Training_CV", f"{continuous_stat_name}_External",
                     f"{continuous_stat_name}_Test_inside_AD", f"{continuous_stat_name}_Test_outside_AD", "Coverage_Test",
@@ -3449,6 +3460,7 @@ class Results:
     
             if includeAD:
                 print(
+                    f"{'model_id':<12} "
                     f"{'Run':<40} "
                     f"{stat + '_Test':<18} "
                     f"{stat + '_Training_CV':<18} "
@@ -3460,6 +3472,7 @@ class Results:
                 )
             else:
                 print(
+                    f"{'model_id':<12} "
                     f"{'Run':<40} "
                     f"{stat + '_Test':<18} "
                     f"{stat + '_Training_CV':<18} "
@@ -3470,6 +3483,7 @@ class Results:
             for r in rows:
                 if includeAD:
                     print(
+                        f"{str(r.get('model_id', 'N/A')):<12} "
                         f"{r['Run']:<40} "
                         f"{fmt3(r.get(f'{stat}_Test')):<18} "
                         f"{fmt3(r.get(f'{stat}_Training_CV')):<18} "
@@ -3481,6 +3495,7 @@ class Results:
                     )
                 else:
                     print(
+                        f"{str(r.get('model_id', 'N/A')):<12} "
                         f"{r['Run']:<40} "
                         f"{fmt3(r.get(f'{stat}_Test')):<18} "
                         f"{fmt3(r.get(f'{stat}_Training_CV')):<18} "
@@ -3488,7 +3503,7 @@ class Results:
                         f"{str(r.get('#_variables', 'N/A')):<15}"
                     )
     
-            columns = ["Run", f"{stat}_Test", f"{stat}_Training_CV", f"{stat}_External"]
+            columns = ["model_id", "Run", f"{stat}_Test", f"{stat}_Training_CV", f"{stat}_External"]
             if includeAD:
                 columns += [f"{stat}_Test_inside_AD", f"{stat}_Test_outside_AD", "Coverage_Test"]
             columns += ["#_variables", "Embedding", "Metric"]
@@ -3498,6 +3513,7 @@ class Results:
         else:
             if includeAD:
                 print(
+                    f"{'model_id':<12} "
                     f"{'Run':<40} "
                     f"{'Metric':<10} "
                     f"{'Test':<18} "
@@ -3510,6 +3526,7 @@ class Results:
                 )
             else:
                 print(
+                    f"{'model_id':<12} "
                     f"{'Run':<40} "
                     f"{'Metric':<10} "
                     f"{'Test':<18} "
@@ -3522,6 +3539,7 @@ class Results:
                 stat = r["Metric"]
                 if includeAD:
                     print(
+                        f"{str(r.get('model_id', 'N/A')):<12} "
                         f"{r['Run']:<40} "
                         f"{stat:<10} "
                         f"{fmt3(r.get(f'{stat}_Test')):<18} "
@@ -3534,6 +3552,7 @@ class Results:
                     )
                 else:
                     print(
+                        f"{str(r.get('model_id', 'N/A')):<12} "
                         f"{r['Run']:<40} "
                         f"{stat:<10} "
                         f"{fmt3(r.get(f'{stat}_Test')):<18} "
@@ -3543,6 +3562,7 @@ class Results:
                     )
     
             columns = [
+                "model_id",
                 "Run",
                 f"{continuous_stat_name}_Test", f"{continuous_stat_name}_Training_CV", f"{continuous_stat_name}_External",
                 f"{binary_stat_name}_Test", f"{binary_stat_name}_Training_CV", f"{binary_stat_name}_External",
