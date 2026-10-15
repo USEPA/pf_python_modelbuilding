@@ -854,6 +854,7 @@ class ModelInitializer:
             WHERE dp.fk_dataset_id = :datasetId
             AND dv.fk_descriptor_set_id = :descriptorSetId
             AND dpis.fk_splitting_id = :splittingId
+            AND dv.values_tsv IS NOT NULL
             ORDER BY dp.canon_qsar_smiles;
             """)
 
@@ -943,6 +944,7 @@ class ModelInitializer:
                 on dv.fk_descriptor_set_id = ds.id
             where d.name = :datasetName
             and ds.name = :descriptorSetName
+            AND dv.values_tsv IS NOT NULL
             order by dp.canon_qsar_smiles;
             """)
 

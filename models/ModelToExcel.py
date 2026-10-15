@@ -1460,6 +1460,7 @@ class DataQuerier:
             "Property Units": [model.unitsModel],
             "Dataset Name": [model.datasetName],
             "Dataset Description": [model.datasetDescription],
+            "Descriptor Set": [model.descriptorSetName],
             "nTraining": [model.num_training],
             "nTest": [model.num_prediction],
             "Average Standard Deviation of Property Value": [avg_std],
@@ -2196,6 +2197,7 @@ class DataTransformer:
             "Property Units": [results_dict["model_details"].get("unitsModel", None)],
             "Dataset Name": [results_dict["model_details"].get("datasetName", None)],
             "Dataset Description": [results_dict["model_details"].get("datasetDescription", None)],
+            "Descriptor Set": [results_dict["model_details"].get("descriptor_set_name", None)],
             "nTraining": [results_dict["model_details"].get("numTraining", None)],
             "nTest": [results_dict["model_details"].get("numPrediction", None)],
             "Average Standard Deviation of Property Value": [avg_std],
@@ -4069,6 +4071,9 @@ class ModelToExcel:
             worksheet.freeze_panes(1, 0)
 
         # Formatting matches prediction sheets
+        if source_set.lower() == "external":
+            min_col_width = max(min_col_width, 15)
+        
         col_widths = ExcelFormatter.set_column_width(
             writer,
             final_sheet_name,
