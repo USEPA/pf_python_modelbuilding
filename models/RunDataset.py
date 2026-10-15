@@ -13,7 +13,7 @@ import pandas as pd
 import numpy as np
 import math
 import time
-import datetime
+from datetime import datetime
 
 from model_ws_utilities import \
     apply_outlier_filter, \
@@ -1039,8 +1039,8 @@ class RunDataset:
             session = RunDataset.getSession(self.engine)
             self.session = session
             return session
-
-    def runAD(df_training, df_prediction, params, embedding, df_predictions, ad_measure, stats_dict, is_binary=False, is_external=False):
+    
+    def runAD(self, df_training, df_prediction, params, embedding, df_predictions, ad_measure, stats_dict, is_binary=False, is_external=False):
         """
         Note: This configuration for runAD should be treated as the preferred run-pattern, and anywhere the AD must be recalculated
         should be done in accordance with this method's call pattern and behavior within this file.
@@ -1638,3 +1638,19 @@ def test_run_dataset():
     )
 
     test_dataset.run()
+
+# EXAMPLE OF DESIRED USAGE
+# def example():
+#     run_dataset = RunDataset()
+
+#     # OPTION A (Control only needed params like qsar_method)
+#     params = run_dataset.create_params(qsar_method) # Everything handled automatically
+
+#     # OPTION B (Fine control of params/hyperparams) (Not used by default)
+#     params = run_dataset.create_params(
+#         a=a,
+#         b=b,
+#         ...
+#     )
+
+#     run_dataset.run(params)
