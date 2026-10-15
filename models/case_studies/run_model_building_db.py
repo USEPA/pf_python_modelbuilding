@@ -426,7 +426,6 @@ class ModelLoader():
             return None
 
     def add_model_statistics(self, user, fk_model_id, stats_dict_name, model_statistics_dict, stats_lookup, created_at, model_statistics_rows):
-    
         if stats_dict_name not in model_statistics_dict:
             print(stats_dict_name, "Skipping loading stats")
             return
@@ -471,8 +470,8 @@ class ModelLoader():
             else:
                 if stat_name not in ("ba_ratio", "Concordance_CV_Training"):
                     print(stat_name, "Skipping loading stat")
+    
     def load_stats(self, results, user, fk_model_id):
-        
         stats_rows = self.dbl.get_rows("statistics")
         stats_lookup = {}  # lookup for the fk_statistic_id
         for stat_row in stats_rows:
@@ -1957,19 +1956,18 @@ def write_prediction_csvs(df_pred_test, df_pred_ext, folder_path):
 
 
 def write_plots(df_pred_test, model, df_pred_cv, folder_path):
-    
     if df_pred_cv is not None:
         mpsTraining = df_pred_cv.to_dict(orient='records') # use CV values so the predictions are fair estimates (exp values wont change from training set)
         mpsTest = df_pred_test.to_dict(orient='records')
         filePathOutHistogram = os.path.join(folder_path, "histogram.png")
-        mtp.generateHistogram2(filePathOutHistogram, model.propertyName, model.unitsModel, mpsTraining, mpsTest, seriesNameTrain="Training set", seriesNameTest="Test set")
+        mtp.generateHistogram2(filePathOutHistogram, model.propertyName, model.unitsModel, mpsTraining, mpsTest, seriesNameTrain="Training Set", seriesNameTest="Test Set")
     
     if not model.is_binary:
         filePathOutScatter = os.path.join(folder_path, "scatter_plot.png")
         title = "Prediction results for " + model.propertyName
         mtp.generateScatterPlot2(filePathOut=filePathOutScatter, title=title, unitName=model.unitsModel, 
             mpsTraining=mpsTraining, mpsTest=mpsTest, 
-            seriesNameTrain="Training set (CV)", seriesNameTest="Test set")
+            seriesNameTrain="Training Set (CV)", seriesNameTest="Test Set")
 
 
 def get_identifier(unique_identifier, test_stats, ext_stats):
@@ -1980,7 +1978,8 @@ def get_identifier(unique_identifier, test_stats, ext_stats):
                 unique_identifier = "external_stat"
             elif "test" in unique_identifier:
                 unique_identifier = "test_stat"
-# Prepare the unique identifier based on the method specified
+    
+    # Prepare the unique identifier based on the method specified
     if unique_identifier == "time":
         identifier = int(time.time() * 1000) # time in ms as identifier
         identifier = f"_{identifier}"
@@ -1990,6 +1989,7 @@ def get_identifier(unique_identifier, test_stats, ext_stats):
         identifier = f"{'RMSE' if test_stats.get('RMSE_Test') else 'BA'}_test_{test_stats.get('RMSE_Test', test_stats.get('BA_Test', '')):.3f}"
     else:
         identifier = None
+    
     return identifier
 
 
