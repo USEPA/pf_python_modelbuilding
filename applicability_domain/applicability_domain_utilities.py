@@ -31,8 +31,13 @@ def generate_applicability_domain_with_preselected_descriptors_from_dfs(train_df
 
     # Need to run get the training column names for alldescriptors AD:
     removeCorr = False  # remove correlated descriptors for all descriptors AD, it's faster without it but doesnt make much difference
-    train_ids, train_labels, train_features, train_column_names, is_binary = \
-        dfu.prepare_instances(df=train_df, which_set="training", remove_logp= remove_log_p, remove_corr=removeCorr)
+    if applicability_domain == pc.Applicability_Domain_TEST_Fragment_Counts:
+        # Fragment ranges use the original training columns, not the prepared
+        # feature matrix. Avoid rescanning every descriptor for every batch.
+        is_binary = train_df.iloc[:, 1].isin([0, 1]).all()
+    else:
+        train_ids, train_labels, train_features, train_column_names, is_binary = \
+            dfu.prepare_instances(df=train_df, which_set="training", remove_logp= remove_log_p, remove_corr=removeCorr)
 
     # print(applicability_domain, train_df.shape, train_features.shape, remove_log_p, removeCorr)
 
