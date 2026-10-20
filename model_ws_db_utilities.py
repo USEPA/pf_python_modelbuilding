@@ -2822,9 +2822,9 @@ class ModelPredictor:
         try:
             values = frame[embedding].to_numpy(dtype=float)
         except (ValueError, TypeError):
-            return "Required model descriptors contain non-numeric values"
+            return "Missing model descriptors: required values are non-numeric"
         if not np.isfinite(values).all():
-            return "Required model descriptors contain missing or non-finite values"
+            return "Missing model descriptors: required values are missing or non-finite"
         return None
 
     @timer

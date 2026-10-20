@@ -367,14 +367,16 @@ def get_cached_prediction(key: str):
                 doc = predictor_models_cache.find_one({"key": key})
             else:
                 doc = _find_one_by_wildcard(predictor_models_cache, *wildcard_parts)
-            return doc.get("prediction", None) if doc else None
+            prediction = doc.get("prediction") if doc else None
+            return None if _prediction_has_error(prediction) else prediction
         except PyMongoError as exc:
             logging.warning("Mongo read failed; using in-memory fallback: %s", exc)
     if wildcard_parts is None:
-        return in_memory_cache.get(key)
+        prediction = in_memory_cache.get(key)
+        return None if _prediction_has_error(prediction) else prediction
     cached_prediction = _get_in_memory_by_wildcard(*wildcard_parts)
     if cached_prediction is not None:
-        return cached_prediction[1]
+        return None if _prediction_has_error(cached_prediction[1]) else cached_prediction[1]
     return None
 
 
@@ -397,7 +399,7 @@ def get_cached_predictions(keys):
             if exact_keys:
                 for doc in predictor_models_cache.find({"key": {"$in": exact_keys}}):
                     key = doc.get("key")
-                    if key is not None:
+                    if key is not None and not _prediction_has_error(doc.get("prediction")):
                         cached_predictions[key] = doc.get("prediction")
 
             _populate_wildcard_hits_from_exact_hits(cached_predictions, wildcard_keys)
@@ -419,6 +421,8 @@ def get_cached_predictions(keys):
 
                 actual_key = doc.get("key")
                 prediction = doc.get("prediction")
+                if _prediction_has_error(prediction):
+                    continue
                 wildcard_hits[wildcard_parts] = (actual_key, prediction)
                 cached_predictions[wildcard_key] = prediction
                 if actual_key is not None:
@@ -427,7 +431,7 @@ def get_cached_predictions(keys):
             logging.warning("Mongo batch read failed; using in-memory fallback: %s", exc)
 
     for key in exact_keys:
-        if key not in cached_predictions and key in in_memory_cache:
+        if key not in cached_predictions and key in in_memory_cache and not _prediction_has_error(in_memory_cache[key]):
             cached_predictions[key] = in_memory_cache[key]
     for wildcard_key in wildcard_keys:
         if wildcard_key in cached_predictions:
@@ -436,7 +440,7 @@ def get_cached_predictions(keys):
         if wildcard_parts is None:
             continue
         cached_prediction = _get_in_memory_by_wildcard(*wildcard_parts)
-        if cached_prediction is not None:
+        if cached_prediction is not None and not _prediction_has_error(cached_prediction[1]):
             cached_predictions[wildcard_key] = cached_prediction[1]
 
     return cached_predictions
