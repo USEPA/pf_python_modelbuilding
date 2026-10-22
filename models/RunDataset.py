@@ -1,9 +1,12 @@
+"""Run database-backed QSAR model building and persist its outputs."""
+
 import json
 import logging
 import os
-from typing import Optional, Union, List
+from typing import Optional, Union, List, Dict, Iterator as _Iterator
 from io import StringIO
 from pathlib import Path
+from dataclasses import asdict, dataclass, field
 
 from sqlalchemy import URL, Engine, text, create_engine
 from sqlalchemy.orm import Session, sessionmaker
@@ -21,11 +24,11 @@ from model_ws_utilities import \
     call_build_embedding_importance_from_df, \
     call_do_predictions_from_df, \
     call_build_model_with_preselected_descriptors_from_df
+from models.ModelBuilder import Model as _QSARModel
 
 from util.database_utilities import DatabaseUtilities
 from util.serialization_compat import serialize_model
 from util import predict_constants as pc
-from models.case_studies import run_model_building_db as rmdb
 import models.db_utilities.dataset_utilities_db as du
 from models.db_utilities.raw_exp_data_db import ExpDataGetter
 from models.ModelToExcel import ModelToExcel, ModelDataObjects
@@ -35,19 +38,26 @@ from models.EmbeddingFromImportance import perform_iterative_sequential_feature_
 from applicability_domain import applicability_domain_utilities as adu
 from models import make_test_plots as mtp
 
-PROJECT_ROOT = os.getenv("PROJECT_ROOT")
+PROJECT_ROOT: Optional[str] = os.getenv("PROJECT_ROOT")
 
-FEATURE_SELECTION_METHOD_GENETIC_ALGORITHM = "Genetic algorithm"
-FEATURE_SELECTION_METHOD_GROUP_CONTRIBUTION = "Group contribution" 
-FEATURE_SELECTION_METHOD_IMPORTANCE = "Importance"
+FEATURE_SELECTION_METHOD_GENETIC_ALGORITHM: str = "Genetic algorithm"
+FEATURE_SELECTION_METHOD_GROUP_CONTRIBUTION: str = "Group contribution"
+FEATURE_SELECTION_METHOD_IMPORTANCE: str = "Importance"
 
-SNAPSHOT_ID = 4
-DUPLICATE_STRATEGY = "id_suffix"
+SNAPSHOT_ID: int = 4
+DUPLICATE_STRATEGY: str = "id_suffix"
 
 
 class StaticHelpers:
+    """Stateless helpers shared by RunDataset stages."""
+
     @staticmethod
-    def write_prediction_csvs(df_pred_test, df_pred_ext, folder_path):
+    def write_prediction_csvs(
+        df_pred_test: pd.DataFrame,
+        df_pred_ext: Optional[pd.DataFrame],
+        folder_path: str,
+    ) -> None:
+        """Write test and optional external predictions to CSV files."""
         prediction_csv_path = os.path.join(folder_path, f"test set predictions.csv")
         df_pred_test.to_csv(prediction_csv_path, index=False)
         if df_pred_ext is not None:
@@ -55,10 +65,17 @@ class StaticHelpers:
             df_pred_ext.to_csv(prediction_csv_path, index=False)
 
     @staticmethod
-    def write_plots(df_pred_test, model, df_pred_cv, folder_path):
+    def write_plots(
+        df_pred_test: pd.DataFrame,
+        model: _QSARModel,
+        df_pred_cv: Optional[pd.DataFrame],
+        folder_path: str,
+    ) -> None:
+        """Write prediction plots using cross-validation and test predictions."""
+        mpsTraining = []
+        mpsTest = df_pred_test.to_dict(orient='records')
         if df_pred_cv is not None:
             mpsTraining = df_pred_cv.to_dict(orient='records') # use CV values so the predictions are fair estimates (exp values wont change from training set)
-            mpsTest = df_pred_test.to_dict(orient='records')
             filePathOutHistogram = os.path.join(folder_path, "histogram.png")
             mtp.generateHistogram2(filePathOutHistogram, model.propertyName, model.unitsModel, mpsTraining, mpsTest, seriesNameTrain="Training Set", seriesNameTest="Test Set")
         
@@ -70,7 +87,7 @@ class StaticHelpers:
                 seriesNameTrain="Training Set (CV)", seriesNameTest="Test Set")
     
     @staticmethod
-    def getEngine(connect_args: Optional[dict] = {}) -> Engine:
+    def getEngine(connect_args: Optional[Dict[str, object]] = {}) -> Engine:
         """Create SQLAlchemy engine for PostgreSQL connection.
 
         Uses environment variables for database credentials:
@@ -102,7 +119,7 @@ class StaticHelpers:
         return engine
 
     @staticmethod
-    def getSession(engine: Engine = None) -> Session:
+    def getSession(engine: Optional[Engine] = None) -> Session:
         """Create SQLAlchemy session for database queries.
 
         Args:
@@ -118,7 +135,8 @@ class StaticHelpers:
         return session
 
     @staticmethod
-    def get_current_user_id():
+    def get_current_user_id() -> str:
+        """Return the configured user ID or the legacy fallback ID."""
         user_id = os.getenv("USER_ID")
         if user_id is None:
             logging.warning("USER_ID environment variable is not set, falling back to default (tmarti02)")
@@ -126,7 +144,8 @@ class StaticHelpers:
         return user_id
 
     @staticmethod
-    def ensure_static_session(session):
+    def ensure_static_session(session: Session) -> Session:
+        """Check a session and replace it after an operational failure."""
         try:
             # cheap no-op to force a DB round trip
             session.execute(text("SELECT 1"))
@@ -139,7 +158,13 @@ class StaticHelpers:
             return RunDataset.getSession()
     
     @staticmethod
-    def build_output_subfolder(params, folder_embedding=None, logp_columns=None, include_feature_count=False):
+    def build_output_subfolder(
+        params: "Parameters",
+        folder_embedding: Optional[Union[str, List[str]]] = None,
+        logp_columns: Optional[Union[str, List[str]]] = None,
+        include_feature_count: bool = False,
+    ) -> str:
+        """Build an output folder name from model and run settings."""
         if isinstance(logp_columns, str):
             logp_columns = [logp_columns]
 
@@ -164,21 +189,66 @@ class StaticHelpers:
         return subfolder
 
     @staticmethod
-    def safe_div(n, d):
+    def safe_div(n: Union[int, float], d: Union[int, float, None]) -> float:
+        """Divide safely, returning NaN for a zero or missing denominator."""
         try:
             return n / d if (d is not None and d != 0 and not (isinstance(d, float) and math.isnan(d))) else float('nan')
         except ZeroDivisionError:
             return float('nan')
 
     @staticmethod
-    def add_source_chemical_info(df_pred, df_dps):
+    def add_source_chemical_info(df_pred: pd.DataFrame, df_dps: pd.DataFrame) -> pd.DataFrame:
+        """Join mapped chemical and experimental-property identifiers."""
         df_pred.rename(columns={'id':'canon_qsar_smiles'}, inplace=True)
         df_pred = df_pred.merge(df_dps, on='canon_qsar_smiles', how='left')
         df_pred.rename(columns={'qsar_exp_prop_property_values_id_first':'exp_prop_id'}, inplace=True)
         return df_pred
 
     @staticmethod
-    def get_identifier(unique_identifier, test_stats, ext_stats):
+    def add_log_p_martin_columns(
+        df_training: Optional[pd.DataFrame],
+        df_prediction: Optional[pd.DataFrame],
+        cross_validate: bool,
+        df_cv_dict: Optional[Dict[int, Dict[str, pd.DataFrame]]] = None,
+        df_external: Optional[pd.DataFrame] = None,
+    ) -> tuple[Optional[pd.DataFrame], Optional[pd.DataFrame], Optional[pd.DataFrame]]:
+        """Add pretrained LOGP Martin predictions to each supplied dataframe."""
+        import warnings
+        from sklearn.exceptions import InconsistentVersionWarning
+
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=InconsistentVersionWarning)
+            warnings.filterwarnings("ignore", message=".*serialized model.*XGBoost.*")
+            warnings.filterwarnings("ignore", message=".*old JSON model.*XGBoost.*")
+
+            model_id = "1069"
+            prediction_name = "LOGP_Martin"
+            from models.db_utilities.dataset_utilities_db import add_model_prediction_to_df
+
+            def add_columns(frame: Optional[pd.DataFrame]) -> Optional[pd.DataFrame]:
+                """Add one model prediction column when a frame is present."""
+                if frame is None:
+                    return None
+                return add_model_prediction_to_df(frame, model_id, prediction_name)
+
+            df_training = add_columns(df_training)
+            df_prediction = add_columns(df_prediction)
+            df_external = add_columns(df_external)
+
+            if cross_validate:
+                for fold in df_cv_dict.values():
+                    fold["train"] = add_columns(fold["train"])
+                    fold["pred"] = add_columns(fold["pred"])
+
+        return df_training, df_prediction, df_external
+
+    @staticmethod
+    def get_identifier(
+        unique_identifier: Optional[str],
+        test_stats: Dict[str, object],
+        ext_stats: Optional[Dict[str, object]],
+    ) -> Optional[str]:
+        """Return the requested run identifier, optionally based on statistics."""
         if unique_identifier is not None:
             # Fuzzy matching on excel_identifier
             if "stat" in unique_identifier:
@@ -191,9 +261,9 @@ class StaticHelpers:
         if unique_identifier == "time":
             identifier = int(time.time() * 1000) # time in ms as identifier
             identifier = f"_{identifier}"
-        elif unique_identifier == "external_stat" and ext_stats is not None and not ext_stats.empty:
+        elif unique_identifier == "external_stat" and ext_stats:
             identifier = f"{'RMSE' if ext_stats.get('RMSE_External') else 'BA'}_external_{ext_stats.get('RMSE_External', ext_stats.get('BA_External', '')):.3f}"
-        elif unique_identifier == "test_stat" or (unique_identifier == "external_stat" and (ext_stats is None or ext_stats.empty)):
+        elif unique_identifier == "test_stat" or (unique_identifier == "external_stat" and not ext_stats):
             identifier = f"{'RMSE' if test_stats.get('RMSE_Test') else 'BA'}_test_{test_stats.get('RMSE_Test', test_stats.get('BA_Test', '')):.3f}"
         else:
             identifier = None
@@ -201,7 +271,13 @@ class StaticHelpers:
         return identifier
 
     @staticmethod
-    def feature_selection(df_training, df_prediction, params, cv=5):
+    def feature_selection(
+        df_training: pd.DataFrame,
+        df_prediction: pd.DataFrame,
+        params: "Parameters",
+        cv: object = 5,
+    ) -> Optional[List[str]]:
+        """Select descriptors with the configured method."""
         if params.feature_selection_method == FEATURE_SELECTION_METHOD_GENETIC_ALGORITHM:
             embedding, _ = call_build_embedding_ga_db(
                 df_training,
@@ -246,9 +322,259 @@ class StaticHelpers:
         return embedding
 
 
+@dataclass
+class Parameters:
+    """Shared settings for a single QSAR model configuration."""
+
+    dataset_name: str
+    qsar_method: str
+    descriptor_set_name: str
+    ad_measure: list[str]
+    splitting_name: str = "RND_REPRESENTATIVE"
+    feature_selection_method: str = FEATURE_SELECTION_METHOD_GROUP_CONTRIBUTION
+    hyperparameter_grid: Optional[Dict[str, object]] = None
+    feature_selection: bool = False
+    remove_log_p_descriptors: bool = False
+    n_threads: Optional[int] = 10
+    scale_features: bool = False
+    use_pmml_pipeline: bool = False
+    logp_columns: Optional[List[str]] = None
+    outlier_filter_methods: Optional[List[str]] = None
+    outlier_filter_columns: Optional[List[str]] = None
+    outlier_filter_trim_mode: Optional[str] = None
+    outlier_filter_iqr_k: float = 1.5
+    outlier_filter_hampel_k: float = 3.0
+    outlier_filter_robust_z_thresh: float = 3.5
+    outlier_filter_esd_alpha: float = 0.05
+    outlier_filter_esd_max_outliers: int = 10
+
+    def to_dict(self) -> Dict[str, object]:
+        """Serialize the model configuration to a dictionary."""
+        values = asdict(self)
+        for name in (
+            "outlier_filter_methods",
+            "outlier_filter_columns",
+            "outlier_filter_trim_mode",
+            "outlier_filter_iqr_k",
+            "outlier_filter_hampel_k",
+            "outlier_filter_robust_z_thresh",
+            "outlier_filter_esd_alpha",
+            "outlier_filter_esd_max_outliers",
+        ):
+            values.pop(name, None)
+        return values
+
+    @staticmethod
+    def set_hyper_parameters(
+        qsar_method: str,
+        feature_selection: bool,
+        descriptor_set_name: str,
+        splitting_name: str,
+        dataset_name: str,
+        ad_measure: List[str],
+    ) -> "Parameters":
+        """Create method-specific settings with established default grids."""
+        common = {
+            "dataset_name": dataset_name,
+            "qsar_method": qsar_method,
+            "descriptor_set_name": descriptor_set_name,
+            "splitting_name": splitting_name,
+            "feature_selection": feature_selection,
+            "ad_measure": ad_measure,
+        }
+        method = qsar_method.lower()
+
+        if method in {"xgb", "lgb", "rf"}:
+            grids = {
+                "xgb": {"estimator__booster": ["gbtree"]},
+                "lgb": {},
+                "rf": {"estimator__max_features": ["sqrt", "log2"]},
+            }
+            return ParametersImportance(**common, hyperparameter_grid=grids[method])
+        if method == "knn":
+            return ParametersGeneticAlgorithm(
+                **common,
+                hyperparameter_grid={"estimator__n_neighbors": [3], "estimator__weights": ["distance"]},
+            )
+        if method in {"reg", "las"}:
+            return ParametersGeneticAlgorithm(**common, hyperparameter_grid={})
+        if method == "gcm":
+            return ParametersGroupContribution(**common, hyperparameter_grid={})
+        if method == "svm":
+            return ParametersGeneric(**common, hyperparameter_grid={})
+        if method == "huber":
+            return ParametersHuber(**common, hyperparameter_grid={})
+        if method == "ransac":
+            return ParametersRansac(**common, hyperparameter_grid={})
+        if method == "theil_sen":
+            return ParametersTheilSen(**common, hyperparameter_grid={})
+        raise ValueError(f"Unsupported qsar_method: {qsar_method}")
+
+
+@dataclass
+class ParametersImportance(Parameters):
+    """Settings for importance-based descriptor selection methods."""
+
+    feature_selection_method: str = FEATURE_SELECTION_METHOD_IMPORTANCE
+    n_threads: Optional[int] = 4
+    num_generations: int = 1
+    use_permutative: bool = True
+    use_wards: bool = False
+    run_rfe: bool = True
+    run_sfs: bool = True
+    n_features_to_select: Union[int, str] = "auto"
+    min_descriptor_count: int = 30
+    max_descriptor_count: int = 40
+    n_min: int = 2
+    n_max: int = 20
+    descriptor_coefficient: float = 0.006
+    alpha: float = 0.7
+    fraction_of_max_importance: float = field(init=False)
+    remove_fragment_descriptors: bool = True
+    remove_acnt_descriptors: bool = True
+
+    def __post_init__(self) -> None:
+        importance_fractions = {"rf": 0.25, "xgb": 0.03, "lgb": 0.03}
+        try:
+            self.fraction_of_max_importance = importance_fractions[self.qsar_method.lower()]
+        except KeyError as exc:
+            raise ValueError(f"Invalid importance method: {self.qsar_method}") from exc
+
+
+@dataclass
+class ParametersGroupContribution(Parameters):
+    """Settings for the group-contribution QSAR method."""
+
+    feature_selection: bool = True
+    min_count: int = 3
+
+
+@dataclass
+class ParametersGeneticAlgorithm(Parameters):
+    """Shared settings for genetic-algorithm QSAR methods."""
+
+    feature_selection_method: str = FEATURE_SELECTION_METHOD_GENETIC_ALGORITHM
+    num_generations: int = 100
+    num_optimizers: int = 100
+    num_jobs: int = 4
+    n_threads: Optional[int] = None
+    max_length: int = 24
+    max_features: int = 25
+    descriptor_coefficient: float = 0.006
+    alpha: float = 0.7
+    threshold: int = 1
+    elitism: bool = True
+    crossover_probability: float = 0.9
+    mutation_probability: float = 0.05
+    use_wards: bool = False
+    run_rfe: bool = True
+    run_sfs: bool = True
+    n_features_to_select: Union[int, str] = "auto"
+    remove_fragment_descriptors: bool = True
+    remove_acnt_descriptors: bool = True
+
+
+@dataclass
+class ParametersHuber(ParametersGeneticAlgorithm):
+    """Huber-regression settings."""
+
+    n_threads: Optional[int] = 10
+    scale_features: bool = True
+    min_descriptor_count: int = 5
+    min_count: int = 3
+
+
+@dataclass
+class ParametersTheilSen(ParametersGeneticAlgorithm):
+    """Theil-Sen-regression settings."""
+
+    n_threads: Optional[int] = 10
+    scale_features: bool = True
+    min_descriptor_count: int = 5
+    min_count: int = 3
+
+
+@dataclass
+class ParametersRansac(ParametersGeneticAlgorithm):
+    """RANSAC-regression settings."""
+
+    n_threads: Optional[int] = 10
+    scale_features: bool = True
+    min_descriptor_count: int = 5
+    min_count: int = 3
+
+
+@dataclass
+class ParametersGeneric(Parameters):
+    """Settings for generic QSAR methods without feature selection."""
+
+    feature_selection: bool = False
+
+
+@dataclass
+class RunParams:
+    """Execution controls and outputs for one RunDataset invocation."""
+
+    hyperparameters: Parameters
+    embedding: Optional[List[str]] = None
+    folder_embedding: Optional[str] = None
+    cross_validate: bool = True
+    run_AD: bool = True
+    fs_previous_embedding: bool = True
+    add_LOGP_Martin: bool = False
+    write_to_db: bool = False
+    user: str = ""
+    unique_identifier: Optional[str] = None
+    append_to_models_folder: str = ""
+    subfolder: Optional[str] = None
+    save_initial_dfs: bool = False
+    include_feature_count_in_subfolder: bool = False
+    engine: Optional[Engine] = None
+    session: Optional[Session] = None
+    current_user_id: str = ""
+    cv: object = 5
+    is_binary: bool = False
+    model: Optional[_QSARModel] = None
+    dataset_name_ext: Optional[str] = None
+    dataset_description_ext: Optional[str] = None
+    cv_stats: Optional[Dict[str, object]] = None
+    ext_stats: Optional[Dict[str, object]] = None
+    ad_stats: Dict[str, object] = field(default_factory=dict)
+    external_ad_stats: Dict[str, object] = field(default_factory=dict)
+    stats_dict: Dict[str, Dict[str, object]] = field(default_factory=dict)
+    ext_stats_dict: Dict[str, Dict[str, object]] = field(default_factory=dict)
+    df_training: Optional[pd.DataFrame] = None
+    df_prediction: Optional[pd.DataFrame] = None
+    df_prediction_ext: Optional[pd.DataFrame] = None
+    df_external: Optional[pd.DataFrame] = None
+    df_cv_dict: Optional[Dict[int, Dict[str, pd.DataFrame]]] = None
+    df_pred_training: Optional[pd.DataFrame] = None
+    df_pred_test: Optional[pd.DataFrame] = None
+    df_pred_cv: Optional[pd.DataFrame] = None
+    df_pred_ext: Optional[pd.DataFrame] = None
+    df_pv: Optional[pd.DataFrame] = None
+    df_dps: Optional[pd.DataFrame] = None
+    df_dps_ext: Optional[pd.DataFrame] = None
+    training_stats: Dict[str, object] = field(default_factory=dict)
+    test_stats: Dict[str, object] = field(default_factory=dict)
+    folder_path: str = ""
+    folder_path_path: Optional[Path] = None
+    json_path: str = ""
+    detailed_summary_path: str = ""
+    results_dict: Dict[str, object] = field(default_factory=dict)
+
+
 class ModelBuilder:
+    """Build QSAR models and calculate their prediction statistics."""
+
     @staticmethod 
-    def predict(model, df, tag, is_binary):
+    def predict(
+        model: _QSARModel,
+        df: pd.DataFrame,
+        tag: str,
+        is_binary: bool,
+    ) -> tuple[pd.DataFrame, Dict[str, object]]:
+        """Predict one dataset and calculate its binary or continuous statistics."""
         json_predictions = call_do_predictions_from_df(df, model)
         
         df_predictions = pd.read_json(StringIO(json_predictions), orient="records")
@@ -262,10 +588,16 @@ class ModelBuilder:
         return df_predictions, stats
     
     @staticmethod
-    def crossvalidate(df_cv_dict, params, embedding, is_binary):
+    def crossvalidate(
+        df_cv_dict: Dict[int, Dict[str, pd.DataFrame]],
+        params: Parameters,
+        embedding: Optional[List[str]],
+        is_binary: bool,
+    ) -> tuple[pd.DataFrame, Dict[str, object]]:
+        """Build predictions and aggregate statistics across the five CV folds."""
         logging.info("Start running CV calculations ...")
     
-        def _fold_predictions():
+        def _fold_predictions() -> _Iterator[pd.DataFrame]:
             for i in range(1, 6):
                 splittingName = f"RND_REPRESENTATIVE_CV{i}"
                 logging.debug(f"Running CV split = {splittingName}")
@@ -300,7 +632,34 @@ class ModelBuilder:
         return df_predictions_all, cv_stats
 
     @staticmethod
-    def build_and_test_model(df_training, df_prediction, cv, params, embedding, is_binary):
+    def build_and_test_model2(
+        df_training: pd.DataFrame,
+        df_prediction: pd.DataFrame,
+        params: Parameters,
+        embedding: Optional[List[str]],
+    ) -> pd.DataFrame:
+        """Fit a fold model and return predictions for that fold's holdout set."""
+        model = call_build_model_with_preselected_descriptors_from_df(
+            params,
+            df_training,
+            df_prediction,
+            cv=None,
+            descriptor_names_tsv=embedding,
+            filterColumnsInBothSets=True
+        )
+        json_predictions = call_do_predictions_from_df(df_prediction, model)
+        return pd.read_json(StringIO(json_predictions), orient="records")
+
+    @staticmethod
+    def build_and_test_model(
+        df_training: pd.DataFrame,
+        df_prediction: pd.DataFrame,
+        cv: object,
+        params: Parameters,
+        embedding: Optional[List[str]],
+        is_binary: bool,
+    ) -> tuple[pd.DataFrame, pd.DataFrame, Dict[str, object], Dict[str, object], _QSARModel]:
+        """Fit a model and return training/test predictions and their statistics."""
         model = call_build_model_with_preselected_descriptors_from_df(
             params,
             df_training.copy(),
@@ -332,11 +691,21 @@ class ModelBuilder:
 
 
 class ModelLoader():
-    def __init__(self, session):
+    """Persist trained models and their related records."""
+
+    def __init__(self, session: Session) -> None:
+        """Bind model-loading operations to an active database session."""
         self.session = session
         self.dbl = DatabaseUtilities(schema="qsar_models", session=self.session)
 
-    def load_model_file(self, file_path, username, fk_model_id, fk_file_type_id):
+    def load_model_file(
+        self,
+        file_path: Union[str, Path],
+        username: str,
+        fk_model_id: int,
+        fk_file_type_id: int,
+    ) -> Optional[int]:
+        """Read a file and store it as a model-file database record."""
         p = Path(file_path)
         if not p.is_file():
             print(f"File does not exist: {p}")
@@ -368,7 +737,14 @@ class ModelLoader():
             print(f"An error occurred: {e}")
             return None  # or re-raise: rais
     
-    def update_model_file(self, file_path, username, fk_model_id, fk_file_type_id):
+    def update_model_file(
+        self,
+        file_path: Union[str, Path],
+        username: str,
+        fk_model_id: int,
+        fk_file_type_id: int,
+    ) -> Optional[int]:
+        """Replace the stored bytes for a model file."""
         try:
             # Read the image file as binary
             with open(file_path, 'rb') as file:
@@ -388,7 +764,17 @@ class ModelLoader():
             print(f"An error occurred: {e}")
             return None
 
-    def add_model_statistics(self, user, fk_model_id, stats_dict_name, model_statistics_dict, stats_lookup, created_at, model_statistics_rows):
+    def add_model_statistics(
+        self,
+        user: str,
+        fk_model_id: int,
+        stats_dict_name: str,
+        model_statistics_dict: Dict[str, object],
+        stats_lookup: Dict[str, int],
+        created_at: datetime,
+        model_statistics_rows: List[Dict[str, object]],
+    ) -> None:
+        """Append recognized statistics as database-ready rows."""
         if stats_dict_name not in model_statistics_dict:
             print(stats_dict_name, "Skipping loading stats")
             return
@@ -430,7 +816,8 @@ class ModelLoader():
                 if stat_name not in ("ba_ratio", "Concordance_CV_Training"):
                     print(stat_name, "Skipping loading stat")
     
-    def load_stats(self, results, user, fk_model_id):
+    def load_stats(self, results: Dict[str, object], user: str, fk_model_id: int) -> None:
+        """Load model statistics from a completed run's results payload."""
         stats_rows = self.dbl.get_rows("statistics")
         stats_lookup = {}  # lookup for the fk_statistic_id
         for stat_row in stats_rows:
@@ -454,11 +841,12 @@ class ModelLoader():
                 
         stats_row_ids = self.dbl.create_many("model_statistics", model_statistics_rows)
         
-    def divide_array(self, source: Union[bytes, bytearray], chunksize: int=26214400) -> List[Union[bytes, bytearray]] | None:
-        """
-        Split a bytes-like object into chunks of size `chunksize`.
-        Returns a list of slices (copies). Last chunk may be shorter.
-        """
+    def divide_array(
+        self,
+        source: Union[bytes, bytearray],
+        chunksize: int = 26214400,
+    ) -> Optional[List[Union[bytes, bytearray]]]:
+        """Split model bytes into fixed-size chunks, returning None on mismatch."""
         parts = [source[i:i + chunksize] for i in range(0, len(source), chunksize)]
     
         # Optional: mimic the Java prints
@@ -472,7 +860,16 @@ class ModelLoader():
     
         return parts
 
-    def load_model_from_object(self, user, model, params, fk_descriptor_embedding_id, fk_method_id, fk_ad_method):
+    def load_model_from_object(
+        self,
+        user: str,
+        model: _QSARModel,
+        params: Dict[str, object],
+        fk_descriptor_embedding_id: int,
+        fk_method_id: int,
+        fk_ad_method: int,
+    ) -> int:
+        """Insert a model record and assign its generated database name."""
         created_at = datetime.now()
                 
         model_row = {
@@ -509,7 +906,8 @@ class ModelLoader():
         )
         return new_id        
 
-    def create_model_bytes(self, bytes_list):
+    def create_model_bytes(self, bytes_list: List[Dict[str, object]]) -> List[int]:
+        """Insert serialized model chunks and return their row identifiers."""
         try:
             # Insert records
             result = self.dbl.create_many(table="model_bytes", records=bytes_list)
@@ -523,7 +921,8 @@ class ModelLoader():
             # Re-raise or log the error
             raise        
 
-    def load_model_bytes(self, user, model, fk_model_id):
+    def load_model_bytes(self, user: str, model: _QSARModel, fk_model_id: int) -> List[int]:
+        """Serialize a model and store it in the model-bytes table."""
         model_bytes = serialize_model(model)
         bytes_list = self.divide_array(model_bytes)
 
@@ -552,6 +951,7 @@ class ModelLoader():
         fk_splitting_id: Optional[int] = None,
         chunk_size: int = 1000,
     ) -> int:
+        """Insert prediction rows and any associated AD estimates in batches."""
         if df is None or df.empty:
             logging.info(f"For {set_name} set, no predictions to load.")
             return 0
@@ -634,10 +1034,7 @@ class ModelLoader():
         prediction_ids: list[int],
         user: str,
     ) -> pd.DataFrame:
-        """
-        Build one row per prediction per AD method, using each AD column's
-        corresponding ad_methods.id.
-        """
+        """Build one AD-estimate row per prediction and AD method."""
         if df is None or df.empty:
             return pd.DataFrame()
 
@@ -705,19 +1102,13 @@ class ModelLoader():
         return pd.DataFrame(rows)
 
     def normalize_ad_method_name(self, ad_name: str) -> str:
-        """
-        Convert dataframe AD column naming into the database ad_methods.name format.
-
-        Examples:
-        AD_TEST_Euclidean_Distance_All_Descriptors -> TEST Euclidean Distance All Descriptors
-        TEST_Euclidean_Distance_All_Descriptors -> TEST Euclidean Distance All Descriptors
-        OPERA_Global_Index -> OPERA Global Index
-        """
+        """Convert an AD dataframe column name to its database display name."""
         if ad_name.startswith("AD_"):
             ad_name = ad_name[3:]
         return ad_name.replace("_", " ").strip()
 
-    def get_ad_method_id_by_name(self, ad_name: str):
+    def get_ad_method_id_by_name(self, ad_name: str) -> Optional[int]:
+        """Look up an applicability-domain method identifier by name."""
         db_name = self.normalize_ad_method_name(ad_name)
         row_ad_method = self.dbl.get_row("ad_methods", name=db_name)
         if row_ad_method is None:
@@ -725,7 +1116,8 @@ class ModelLoader():
             return None
         return row_ad_method.id
 
-    def create_method(self, user, isBinary, fullMethodName):
+    def create_method(self, user: str, isBinary: bool, fullMethodName: str) -> int:
+        """Create a methods-table entry for the current QSAR model."""
         logging.info(f"Creating method")
         created_at = datetime.now()
         record = {
@@ -740,7 +1132,18 @@ class ModelLoader():
         new_id = self.dbl.create_row("methods", record)
         return new_id
 
-    def load_model(self, user, model, results, df_pred_training, df_pred_test, df_pred_cv, folder_path, df_pred_external=None):
+    def load_model(
+        self,
+        user: str,
+        model: _QSARModel,
+        results: Dict[str, object],
+        df_pred_training: pd.DataFrame,
+        df_pred_test: pd.DataFrame,
+        df_pred_cv: Optional[pd.DataFrame],
+        folder_path: str,
+        df_pred_external: Optional[pd.DataFrame] = None,
+    ) -> None:
+        """Persist model data, predictions, statistics, and plot files."""
         params = results["params"]
 
         # ---- get fk_descriptor_embedding_id ----
@@ -853,7 +1256,8 @@ class ModelLoader():
         image_id = self.load_model_file(filePathOutHistogram, user, fk_model_id, 4)
         logging.info(f"Histogram plot loaded to db with id: {image_id}")
         
-    def create_descriptor_embedding_from_params(self, user, results):
+    def create_descriptor_embedding_from_params(self, user: str, results: Dict[str, object]) -> int:
+        """Create a descriptor-embedding record from serialized run results."""
         params = results["params"]
 
         epoch_ms = time.time_ns() // 1_000_000
@@ -882,151 +1286,207 @@ class ModelLoader():
 
 
 class RunDataset:
-    def __init__(
-            self,
-            dataset_name,
-            qsar_method,
-            embedding=None,
-            folder_embedding=None,
-            cross_validate=True,
-            run_AD=True,
-            feature_selection=True,
-            fs_previous_embedding=True,
-            params=None,
-            descriptor_set_name="WebTEST-default",
-            splitting_name="RND_REPRESENTATIVE",
-            ad_measure=None,
-            add_LOGP_Martin=False,
-            logp_columns=None,
-            write_to_db=False,
-            user="",
-            unique_identifier=None,
-            append_to_models_folder="",
-            subfolder=None,
-            save_initial_dfs=False,
-            outlier_filter_methods=None,
-            include_feature_count_in_subfolder=False
-        ):
-        self.dataset_name = dataset_name
-        self.qsar_method = qsar_method
-        self.embedding = embedding
-        self.folder_embedding = folder_embedding
-        self.cross_validate = cross_validate
-        self.run_AD = run_AD
-        self.feature_selection = feature_selection
-        self.fs_previous_embedding = fs_previous_embedding
-        self.params = params
-        self.descriptor_set_name = descriptor_set_name
-        self.splitting_name = splitting_name
-        self.ad_measure = ad_measure
-        self.add_LOGP_Martin = add_LOGP_Martin
-        self.logp_columns = logp_columns
-        self.write_to_db = write_to_db
-        self.user = user
-        self.unique_identifier = unique_identifier
-        self.append_to_models_folder = append_to_models_folder
-        self.subfolder = subfolder
-        self.save_initial_dfs = save_initial_dfs
-        self.outlier_filter_methods = outlier_filter_methods or []
-        self.include_feature_count_in_subfolder = include_feature_count_in_subfolder
+    """Coordinate dataset retrieval, model building, and result persistence."""
 
-        self.post_init()
+    def generate_params(
+        self,
+        dataset_name: Optional[str] = None,
+        qsar_method: Optional[str] = None,
+        embedding: Optional[List[str]] = None,
+        folder_embedding: Optional[str] = None,
+        cross_validate: bool = True,
+        run_AD: bool = True,
+        feature_selection: Optional[bool] = None,
+        fs_previous_embedding: bool = True,
+        hyperparameters: Optional[Parameters] = None,
+        descriptor_set_name: Optional[str] = None,
+        splitting_name: Optional[str] = None,
+        ad_measure: Optional[List[str]] = None,
+        add_LOGP_Martin: bool = False,
+        logp_columns: Optional[Union[str, List[str]]] = None,
+        write_to_db: bool = False,
+        user: str = "",
+        unique_identifier: Optional[str] = None,
+        append_to_models_folder: str = "",
+        subfolder: Optional[str] = None,
+        save_initial_dfs: bool = False,
+        outlier_filter_methods: Optional[List[str]] = None,
+        include_feature_count_in_subfolder: bool = False,
+        engine: Optional[Engine] = None,
+        session: Optional[Session] = None,
+    ) -> RunParams:
+        """Create run state and resolve model configuration in one object.
 
-    def post_init(self):
+        Args:
+            dataset_name: Dataset to build a model for.
+            qsar_method: QSAR method name used to choose default parameters.
+            embedding: Optional preselected descriptor names.
+            folder_embedding: Existing results folder supplying a descriptor embedding.
+            cross_validate: Whether to calculate predictions across CV folds.
+            run_AD: Whether to calculate applicability-domain estimates.
+            feature_selection: Optional override for the model's feature-selection setting.
+            fs_previous_embedding: Whether to refine a supplied embedding after model fitting.
+            hyperparameters: A prebuilt method-specific parameter object.
+            descriptor_set_name: Descriptor set used by the dataset.
+            splitting_name: Database split used to retrieve training and test records.
+            ad_measure: Applicability-domain measures to calculate.
+            add_LOGP_Martin: Whether to add pretrained LOGP Martin predictions.
+            logp_columns: Optional LOGP columns included in output naming and model settings.
+            write_to_db: Whether to persist the completed model to the database.
+            user: User identifier used for output and database records.
+            unique_identifier: Optional unique or statistic-derived output suffix.
+            append_to_models_folder: Optional suffix added to the models directory.
+            subfolder: Explicit output subfolder, overriding generated naming.
+            save_initial_dfs: Whether to save initial intermediate dataframes.
+            outlier_filter_methods: Optional methods to set on the hyperparameter object.
+            include_feature_count_in_subfolder: Include feature limits in output naming.
+            engine: Optional existing SQLAlchemy engine.
+            session: Optional existing SQLAlchemy session.
+
+        Returns:
+            RunParams containing the hyperparameters, run controls, and runtime state.
+
+        When ``hyperparameters`` is supplied, its dataset and model settings are
+        authoritative. Matching configuration arguments remain accepted for
+        compatibility; conflicting values raise instead of silently overriding it.
+        """
+        if hyperparameters is None:
+            if dataset_name is None or qsar_method is None:
+                raise ValueError("dataset_name and qsar_method are required without hyperparameters")
+
+            descriptor_set_name = descriptor_set_name or "WebTEST-default"
+            splitting_name = splitting_name or "RND_REPRESENTATIVE"
+            if feature_selection is None:
+                feature_selection = qsar_method not in {"gcm", "svm"}
+            if qsar_method in {"gcm", "svm"}:
+                feature_selection = False
+
+            if ad_measure is None:
+                ad_measure = [
+                    pc.Applicability_Domain_TEST_Embedding_Euclidean,
+                    pc.Applicability_Domain_TEST_All_Descriptors_Euclidean,
+                ]
+            else:
+                ad_measure = list(ad_measure)
+            if descriptor_set_name == "WebTEST-default" and pc.Applicability_Domain_TEST_Fragment_Counts not in ad_measure:
+                ad_measure.append(pc.Applicability_Domain_TEST_Fragment_Counts)
+
+            hyperparameters = Parameters.set_hyper_parameters(
+                qsar_method=qsar_method,
+                feature_selection=feature_selection,
+                descriptor_set_name=descriptor_set_name,
+                splitting_name=splitting_name,
+                dataset_name=dataset_name,
+                ad_measure=ad_measure,
+            )
+        else:
+            supplied_values = {
+                "dataset_name": dataset_name,
+                "qsar_method": qsar_method,
+                "descriptor_set_name": descriptor_set_name,
+                "splitting_name": splitting_name,
+                "feature_selection": feature_selection,
+                "ad_measure": ad_measure,
+            }
+            for name, supplied_value in supplied_values.items():
+                if supplied_value is not None and supplied_value != getattr(hyperparameters, name):
+                    raise ValueError(f"{name} conflicts with hyperparameters.{name}")
+
+            if hyperparameters.qsar_method in {"gcm", "svm"}:
+                hyperparameters.feature_selection = False
+
+        if logp_columns is not None:
+            normalized_logp_columns = [logp_columns] if isinstance(logp_columns, str) else logp_columns
+            if hyperparameters.logp_columns is not None and hyperparameters.logp_columns != normalized_logp_columns:
+                raise ValueError("logp_columns conflicts with hyperparameters.logp_columns")
+            hyperparameters.logp_columns = normalized_logp_columns
+
+        if outlier_filter_methods is not None:
+            if hyperparameters.outlier_filter_methods is not None and hyperparameters.outlier_filter_methods != outlier_filter_methods:
+                raise ValueError("outlier_filter_methods conflicts with hyperparameters.outlier_filter_methods")
+            hyperparameters.outlier_filter_methods = outlier_filter_methods
+
+        params = RunParams(
+            embedding=embedding,
+            folder_embedding=folder_embedding,
+            cross_validate=cross_validate,
+            run_AD=run_AD,
+            fs_previous_embedding=fs_previous_embedding,
+            hyperparameters=hyperparameters,
+            add_LOGP_Martin=add_LOGP_Martin,
+            write_to_db=write_to_db,
+            user=user,
+            unique_identifier=unique_identifier,
+            append_to_models_folder=append_to_models_folder,
+            subfolder=subfolder,
+            save_initial_dfs=save_initial_dfs,
+            include_feature_count_in_subfolder=include_feature_count_in_subfolder,
+            engine=engine,
+            session=session,
+        )
+        self.post_init(params)
+        return params
+
+    def post_init(self, params: RunParams) -> None:
+        """Initialize run infrastructure and derive output paths."""
         # Initialize database engine and session
-        self.engine = self.engine or self.getEngine()
-        self.session = self.session or self.getSession(self.engine)
-        self.current_user_id = self.get_current_user_id()
-        if not self.user:
-            self.user = self.current_user_id
-
-        # Set default splitting name if not provided
-        self.splitting_name = self.splitting_name or "RND_REPRESENTATIVE"
-
-        # Set feature selection to False for certain QSAR methods
-        if self.qsar_method in {"gcm", "svm"}:
-            self.feature_selection = False
+        params.engine = params.engine or StaticHelpers.getEngine()
+        params.session = params.session or StaticHelpers.getSession(params.engine)
+        params.current_user_id = StaticHelpers.get_current_user_id()
+        if not params.user:
+            params.user = params.current_user_id
 
         # Set embedding and feature selection based on provided parameters
-        if self.embedding is not None:
-            self.folder_embedding = "custom"
-            self.feature_selection = False
-        elif self.folder_embedding is not None:
-            self.feature_selection = False
+        if params.embedding is not None:
+            params.folder_embedding = "custom"
+            params.hyperparameters.feature_selection = False
+        elif params.folder_embedding is not None:
+            params.hyperparameters.feature_selection = False
             file_name_embedding = "results.json"
-            file_path_embedding = os.path.join(PROJECT_ROOT, "data/models", self.dataset_name, self.folder_embedding, file_name_embedding)
+            file_path_embedding = os.path.join(PROJECT_ROOT, "data/models", params.hyperparameters.dataset_name, params.folder_embedding, file_name_embedding)
             
             with open(file_path_embedding, "r", encoding="utf-8") as f:
                 results = json.load(f)
-                self.folder_embedding = results["model_details"]["embedding"]
-                # print(f"from {folder_embedding}:{embedding}")
+                params.embedding = results["model_details"]["embedding"]
         else:
-            self.fs_previous_embedding = False
+            params.fs_previous_embedding = False
 
-        # Set default applicability domain measures if not provided
-        self.ad_measure = self.ad_measure or [pc.Applicability_Domain_TEST_Embedding_Euclidean, pc.Applicability_Domain_TEST_All_Descriptors_Euclidean]
-        if self.descriptor_set_name == "WebTEST-default":
-            self.ad_measure.append(pc.Applicability_Domain_TEST_Fragment_Counts)
-
-        # Set hyperparameters if not provided
-        if self.params is None:
-            self.params = rmdb.set_hyper_parameters(
-                qsar_method=self.qsar_method,
-                feature_selection=self.feature_selection,
-                descriptor_set_name=self.descriptor_set_name,
-                splitting_name=self.splitting_name,
-                dataset_name=self.dataset_name,
-                ad_measure=self.ad_measure
-            )
-        self.params.feature_selection = self.feature_selection
-
-        # Set parameters related to outlier handling
-        if not hasattr(self.params, "outlier_filter_methods") and self.outlier_filter_methods is not None and self.outlier_filter_methods != False:
-            # outlier_filter_methods = ["iqr", "hampel", "robust_z", "esd"]
-            self.params.outlier_filter_methods = self.outlier_filter_methods
-
-        if getattr(self.params, "outlier_filter_methods", False) and not hasattr(self.params, "outlier_filter_columns"):
-            self.params.outlier_filter_columns = ["Property"]
-
-        if getattr(self.params, "outlier_filter_methods", False) and not hasattr(self.params, "outlier_filter_trim_mode"):
-            self.params.outlier_filter_trim_mode = "remove"
+        if params.hyperparameters.outlier_filter_methods:
+            if params.hyperparameters.outlier_filter_columns is None:
+                params.hyperparameters.outlier_filter_columns = ["Property"]
+            if params.hyperparameters.outlier_filter_trim_mode is None:
+                params.hyperparameters.outlier_filter_trim_mode = "remove"
 
         # Set external dataset
-        self.df_prediction_ext = None
-        self.dataset_name_ext = None
+        params.df_prediction_ext = None
+        params.dataset_name_ext = None
     
-        if self.dataset_name == 'KOC v1 modeling' or self.dataset_name == 'KOC v2 modeling':
-            self.dataset_name_ext = 'KOC v2 external'
-        elif self.dataset_name == 'ECOTOX_2024_12_12_96HR_Fish_LC50_v3a modeling':
-            self.dataset_name_ext = 'QSAR_Toolbox_96HR_Fish_LC50_v3 modeling'    
-        elif self.dataset_name == 'ECOTOX_2024_12_12_96HR_Fish_LC50_v3b modeling':
-            self.dataset_name_ext = 'QSAR_Toolbox_96HR_Fish_LC50_v3b modeling'    
-        elif self.dataset_name == "exp_prop_BCF_v1_modeling":
-            self.dataset_name_ext = "exp_prop_BCF_v1_external"
-        elif self.dataset_name == 'exp_prop_RBIODEG_RIFM_CHEMREG':
-            self.dataset_name_ext = 'exp_prop_RBIODEG_301F v1 modeling' # use ECHA data as external set to see if works ok
+        if params.hyperparameters.dataset_name == 'KOC v1 modeling' or params.hyperparameters.dataset_name == 'KOC v2 modeling':
+            params.dataset_name_ext = 'KOC v2 external'
+        elif params.hyperparameters.dataset_name == 'ECOTOX_2024_12_12_96HR_Fish_LC50_v3a modeling':
+            params.dataset_name_ext = 'QSAR_Toolbox_96HR_Fish_LC50_v3 modeling'
+        elif params.hyperparameters.dataset_name == 'ECOTOX_2024_12_12_96HR_Fish_LC50_v3b modeling':
+            params.dataset_name_ext = 'QSAR_Toolbox_96HR_Fish_LC50_v3b modeling'
+        elif params.hyperparameters.dataset_name == "exp_prop_BCF_v1_modeling":
+            params.dataset_name_ext = "exp_prop_BCF_v1_external"
+        elif params.hyperparameters.dataset_name == 'exp_prop_RBIODEG_RIFM_CHEMREG':
+            params.dataset_name_ext = 'exp_prop_RBIODEG_301F v1 modeling'
 
-        # Ensure logp_columns is a list
-        if self.logp_columns is not None:
-            if isinstance(self.logp_columns, str):
-                self.logp_columns = [self.logp_columns]
-            self.params.logp_columns = self.logp_columns
-
-        self.subfolder = self.subfolder if self.subfolder is not None else self.build_output_subfolder(
-            self.params,
-            self.folder_embedding,
-            self.logp_columns,
-            include_feature_count=self.include_feature_count_in_subfolder
+        params.subfolder = params.subfolder if params.subfolder is not None else StaticHelpers.build_output_subfolder(
+            params.hyperparameters,
+            params.folder_embedding,
+            params.hyperparameters.logp_columns,
+            include_feature_count=params.include_feature_count_in_subfolder
         )
 
-        self.path_segments = [PROJECT_ROOT, "data", "models" + self.append_to_models_folder, self.params.dataset_name, self.subfolder]
-        
-        self.folder_path = os.path.join(*self.path_segments)
-        self.folder_path_path = Path(self.folder_path)
-        self.folder_path_path.mkdir(parents=True, exist_ok=True)
+        path_segments = [PROJECT_ROOT, "data", "models" + params.append_to_models_folder, params.hyperparameters.dataset_name, params.subfolder]
+        params.folder_path = os.path.join(*path_segments)
+        params.folder_path_path = Path(params.folder_path)
+        params.folder_path_path.mkdir(parents=True, exist_ok=True)
 
-    def ensure_session(self) -> Session:
-        session = self.session
+    def ensure_session(self, params: RunParams) -> Session:
+        """Return a working database session, replacing stale sessions."""
+        session = params.session
         try:
             # cheap no-op to force a DB round trip
             session.execute(text("SELECT 1"))
@@ -1036,11 +1496,22 @@ class RunDataset:
                 session.close()
             except Exception:
                 pass
-            session = RunDataset.getSession(self.engine)
-            self.session = session
+            session = StaticHelpers.getSession(params.engine)
+            params.session = session
             return session
     
-    def runAD(self, df_training, df_prediction, params, embedding, df_predictions, ad_measure, stats_dict, is_binary=False, is_external=False):
+    def runAD(
+        self,
+        df_training: pd.DataFrame,
+        df_prediction: pd.DataFrame,
+        params: RunParams,
+        embedding: Optional[List[str]],
+        df_predictions: pd.DataFrame,
+        ad_measure: str,
+        stats_dict: Dict[str, Dict[str, object]],
+        is_binary: bool = False,
+        is_external: bool = False,
+    ) -> pd.DataFrame:
         """
         Note: This configuration for runAD should be treated as the preferred run-pattern, and anywhere the AD must be recalculated
         should be done in accordance with this method's call pattern and behavior within this file.
@@ -1054,7 +1525,7 @@ class RunDataset:
 
         df_ad_output, _ = adu.generate_applicability_domain_with_preselected_descriptors_from_dfs(
             train_df=df_training.copy(), test_df=df_prediction.copy(),
-            remove_log_p=params.remove_log_p_descriptors,
+            remove_log_p=params.hyperparameters.remove_log_p_descriptors,
             embedding=embedding, applicability_domain=ad_measure,
             filterColumnsInBothSets=False,
             returnTrainingAD=False
@@ -1085,14 +1556,14 @@ class RunDataset:
 
         # Compute statistics using the provided functions
         if is_binary:
-            cutoff = getattr(params, 'cutoff', getattr(params, 'classification_cutoff', 0.5))
+            cutoff = getattr(params.hyperparameters, 'cutoff', getattr(params.hyperparameters, 'classification_cutoff', 0.5))
 
             stats_inside = calculate_binary_statistics(df_inside, cutoff=cutoff, tag=tag)
             stats_outside = calculate_binary_statistics(df_outside, cutoff=cutoff, tag=tag)
             
             ba_inside = stats_inside.get(pc.BALANCED_ACCURACY + tag, float('nan'))
             ba_outside = stats_outside.get(pc.BALANCED_ACCURACY + tag, float('nan'))
-            ba_ratio = RunDataset.safe_div(ba_inside, ba_outside)
+            ba_ratio = StaticHelpers.safe_div(ba_inside, ba_outside)
 
             stats = {
                 "ad_measure": ad_measure,
@@ -1119,7 +1590,7 @@ class RunDataset:
             except Exception:
                 mae_outside = float('nan')
 
-            mae_ratio = RunDataset.safe_div(mae_outside, mae_inside)
+            mae_ratio = StaticHelpers.safe_div(mae_outside, mae_inside)
 
             stats = {
                 "ad_measure": ad_measure,
@@ -1132,214 +1603,244 @@ class RunDataset:
         stats_dict[f"{ad_measure}{' External' if is_external else ''}"] = stats
         return df_predictions
 
-    def query_dataframes(self):
+    def query_dataframes(self, params: RunParams) -> None:
+        """Load training, test, and configured external datasets."""
         logging.info("Querying dataframes from database...")
 
-        self.ensure_session()
-        df_training, df_prediction = du.get_training_prediction_instances(self.session, self.dataset_name, self.descriptor_set_name, self.params.splitting_name)
+        self.ensure_session(params)
+        df_training, df_prediction = du.get_training_prediction_instances(
+            params.session,
+            params.hyperparameters.dataset_name,
+            params.hyperparameters.descriptor_set_name,
+            params.hyperparameters.splitting_name,
+        )
         
         if df_training is None or df_prediction is None:
             logging.error("Failed to retrieve training or prediction dataframes from the database")
             return
 
-        self.df_training = df_training.copy()
-        self.df_prediction = df_prediction.copy()
+        params.df_training = df_training.copy()
+        params.df_prediction = df_prediction.copy()
 
         # Query external dataset if specified
-        self.df_external = None
-        if self.dataset_name_ext is not None:
-            self.ensure_session()
-            dataset_description_ext = du.get_dataset_details(self.session, self.dataset_name_ext).get('dataset_description')
+        params.df_external = None
+        params.dataset_description_ext = None
+        if params.dataset_name_ext is not None:
+            self.ensure_session(params)
+            params.dataset_description_ext = du.get_dataset_details(params.session, params.dataset_name_ext).get('dataset_description')
 
-            self.ensure_session()
-            df_prediction_ext = du.get_instances_excluding(self.session, self.dataset_name_ext, self.dataset_name, self.descriptor_set_name)
+            self.ensure_session(params)
+            df_prediction_ext = du.get_instances_excluding(
+                params.session,
+                params.dataset_name_ext,
+                params.hyperparameters.dataset_name,
+                params.hyperparameters.descriptor_set_name,
+            )
 
-            self.df_external = df_prediction_ext.copy()
+            params.df_prediction_ext = df_prediction_ext.copy()
+            params.df_external = params.df_prediction_ext.copy()
 
         logging.info("Dataframes queried successfully")
 
-    def set_is_binary(self):
-        if self.df_training is None:
+    def set_is_binary(self, params: RunParams) -> None:
+        """Determine whether the target contains only binary labels."""
+        if params.df_training is None:
             logging.error("Training dataframe is not available. Please run query_dataframes() first.")
             return
 
-        s = self.df_training.iloc[:, 1]  # Assuming the second column is the target variable
-        self.is_binary = s.isin([0, 1]).all()
+        s = params.df_training.iloc[:, 1]  # Assuming the second column is the target variable
+        params.is_binary = s.isin([0, 1]).all()
 
-    def apply_outlier_filtering(self):
-        if getattr(self.params, "outlier_filter_methods", False) and self.params.outlier_filter_methods is not None and len(self.params.outlier_filter_methods) > 0:
+    def apply_outlier_filtering(self, params: RunParams) -> None:
+        """Apply the configured outlier filters to training data."""
+        if params.hyperparameters.outlier_filter_methods:
             logging.info(
-                f"Applying outlier filter: methods={self.params.outlier_filter_methods}, "
-                f"columns={self.params.outlier_filter_columns}, mode={self.params.outlier_filter_trim_mode}"
+                f"Applying outlier filter: methods={params.hyperparameters.outlier_filter_methods}, "
+                f"columns={params.hyperparameters.outlier_filter_columns}, mode={params.hyperparameters.outlier_filter_trim_mode}"
             )
         
-            df_training_before = self.df_training.copy()
+            df_training_before = params.df_training.copy()
         
-            self.df_training, outlier_report = apply_outlier_filter(
-                self.df_training,
-                columns=self.params.outlier_filter_columns,
-                methods=self.params.outlier_filter_methods,
+            params.df_training, _ = apply_outlier_filter(
+                params.df_training,
+                columns=params.hyperparameters.outlier_filter_columns,
+                methods=params.hyperparameters.outlier_filter_methods,
                 target_col="Property",
-                trim_mode=self.params.outlier_filter_trim_mode,
-                iqr_k=getattr(self.params, "outlier_filter_iqr_k", 1.5),
-                hampel_k=getattr(self.params, "outlier_filter_hampel_k", 3.0),
-                robust_z_thresh=getattr(self.params, "outlier_filter_robust_z_thresh", 3.5),
-                esd_alpha=getattr(self.params, "outlier_filter_esd_alpha", 0.05),
-                esd_max_outliers=getattr(self.params, "outlier_filter_esd_max_outliers", 10),
+                trim_mode=params.hyperparameters.outlier_filter_trim_mode,
+                iqr_k=getattr(params.hyperparameters, "outlier_filter_iqr_k", 1.5),
+                hampel_k=getattr(params.hyperparameters, "outlier_filter_hampel_k", 3.0),
+                robust_z_thresh=getattr(params.hyperparameters, "outlier_filter_robust_z_thresh", 3.5),
+                esd_alpha=getattr(params.hyperparameters, "outlier_filter_esd_alpha", 0.05),
+                esd_max_outliers=getattr(params.hyperparameters, "outlier_filter_esd_max_outliers", 10),
             )
         
             logging.info(
-                f"Outlier filter removed {len(df_training_before) - len(self.df_training)} rows "
+                f"Outlier filter removed {len(df_training_before) - len(params.df_training)} rows "
                 f"out of {len(df_training_before)}"
             )
 
-    def setup_cross_validation(self):
-        self.df_cv_dict = None
+    def setup_cross_validation(self, params: RunParams) -> None:
+        """Load CV folds and prepare the cross-validation splitter."""
+        params.df_cv_dict = None
 
-        if self.cross_validate:
-            self.ensure_session()
-            self.df_cv_dict = du.get_cross_validation_instances(self.session, self.dataset_name, self.descriptor_set_name)
+        if params.cross_validate:
+            self.ensure_session(params)
+            params.df_cv_dict = du.get_training_cv_instances(
+                params.session,
+                params.hyperparameters.dataset_name,
+                params.hyperparameters.descriptor_set_name,
+            )
 
-            X, y, self.cv, feature_cols = du.make_cv_for_base_training(self.df_training, self.df_cv_dict, "ID", "Property")
+            _, _, params.cv, _ = du.make_cv_for_base_training(params.df_training, params.df_cv_dict, "ID", "Property")
+        else:
+            params.cv = 5
 
-    def setup_logp_martin(self):
+    def setup_logp_martin(self, params: RunParams) -> None:
+        """Add pretrained LOGP Martin predictions when requested."""
         # Add LOGP Martin columns if specified
-        if self.add_LOGP_Martin:
-            self.df_training, self.df_prediction, df_prediction_ext = rmdb.add_log_p_martin_columns(
-                self.df_training,
-                self.df_prediction,
-                self.cross_validate,
-                self.df_cv_dict,
-                df_external=self.df_external
+        if params.add_LOGP_Martin:
+            params.df_training, params.df_prediction, df_prediction_ext = StaticHelpers.add_log_p_martin_columns(
+                params.df_training,
+                params.df_prediction,
+                params.cross_validate,
+                params.df_cv_dict,
+                df_external=params.df_prediction_ext
             )
-            self.df_external = df_prediction_ext.copy() if df_prediction_ext is not None else None
+            params.df_prediction_ext = df_prediction_ext.copy() if df_prediction_ext is not None else None
+            params.df_external = params.df_prediction_ext
     
-    def run_feature_selection(self):
-        if self.feature_selection:
-            self.embedding = self.feature_selection(
-                self.df_training,
-                self.df_prediction,
-                self.params,
-                self.cv
+    def run_feature_selection(self, params: RunParams) -> None:
+        """Select descriptors before fitting when feature selection is enabled."""
+        if params.hyperparameters.feature_selection:
+            params.embedding = StaticHelpers.feature_selection(
+                params.df_training,
+                params.df_prediction,
+                params.hyperparameters,
+                params.cv
             )
 
-            if self.qsar_method == "huber":
-                original_feature_count = self.df_training.shape[1] - 2  # adjust if needed for ID/Property columns
-                selected_feature_count = len(self.embedding) if self.embedding is not None else 0
+            if params.hyperparameters.qsar_method == "huber":
+                original_feature_count = params.df_training.shape[1] - 2  # adjust if needed for ID/Property columns
+                selected_feature_count = len(params.embedding) if params.embedding is not None else 0
                 
                 # print(f"Huber feature selection: {selected_feature_count} selected out of {original_feature_count}")
                 
-                if self.embedding is None or selected_feature_count >= original_feature_count:
+                if params.embedding is None or selected_feature_count >= original_feature_count:
                     raise ValueError(
                         f"Huber feature selection did not reduce the feature set. "
                         f"Selected {selected_feature_count} features from {original_feature_count}."
                     )
 
-    def run_model_building(self):
-        self.df_pred_training, self.df_pred_test, self.training_stats, self.test_stats, self.model = ModelBuilder.build_and_test_model(
-            self.df_training,
-            self.df_prediction,
-            self.cv,
-            self.params,
-            self.embedding,
-            self.is_binary
+    def run_model_building(self, params: RunParams) -> None:
+        """Fit the configured model and calculate training/test statistics."""
+        params.df_pred_training, params.df_pred_test, params.training_stats, params.test_stats, params.model = ModelBuilder.build_and_test_model(
+            params.df_training,
+            params.df_prediction,
+            params.cv,
+            params.hyperparameters,
+            params.embedding,
+            params.is_binary
         )
 
-    def run_post_build_feature_selection(self):
-        if not self.feature_selection and self.embedding is not None and self.qsar_method != 'gcm':
+    def run_post_build_feature_selection(self, params: RunParams) -> None:
+        """Refine a supplied embedding and rebuild the model if requested."""
+        if not params.hyperparameters.feature_selection and params.embedding is not None and params.hyperparameters.qsar_method != 'gcm':
         
-            logging.info(f"Before FS, previous embedding has {len(self.model.embedding)} descriptors: {self.model.embedding}")
+            logging.info(f"Before FS, previous embedding has {len(params.model.embedding)} descriptors: {params.model.embedding}")
         
-            if self.params.run_rfe:
-                run_rfe(self.model, self.df_training, 1, 1)
-                logging.info(f"After RFE, {len(self.model.embedding)} descriptors: {self.model.embedding}")
+            if params.hyperparameters.run_rfe:
+                run_rfe(params.model, params.df_training, 1, 1)
+                logging.info(f"After RFE, {len(params.model.embedding)} descriptors: {params.model.embedding}")
         
-            if self.params.run_sfs:
-                # run_sfs(self.model, self.df_training, self.params.n_features_to_select)
-                run_sfs(self.model, self.df_training, cv=self.cv)  # iterative
-                logging.info(f"After SFS, {len(self.model.embedding)} descriptors: {self.model.embedding}")
+            if params.hyperparameters.run_sfs:
+                run_sfs(params.model, params.df_training, cv=params.cv)  # iterative
+                logging.info(f"After SFS, {len(params.model.embedding)} descriptors: {params.model.embedding}")
         
             # redo model and predictions:
-            df_pred_training, df_pred_test, training_stats, test_stats, model = ModelBuilder.build_and_test_model(
-                self.df_training,
-                self.df_prediction,
-                self.params,
-                self.model.embedding,
-                self.is_binary
+            params.df_pred_training, params.df_pred_test, params.training_stats, params.test_stats, params.model = ModelBuilder.build_and_test_model(
+                params.df_training,
+                params.df_prediction,
+                params.cv,
+                params.hyperparameters,
+                params.model.embedding,
+                params.is_binary
             )
-            logging.info(f"After FS, embedding has {len(model.embedding)} descriptors: {model.embedding}")
+            logging.info(f"After FS, embedding has {len(params.model.embedding)} descriptors: {params.model.embedding}")
 
-    def run_cross_validation(self):
-        if self.cross_validate:
-            self.df_pred_cv, self.cv_stats = ModelBuilder.crossvalidate(
-                self.df_cv_dict,
-                self.params,
-                self.model.embedding,self.is_binary
+    def run_cross_validation(self, params: RunParams) -> None:
+        """Build held-out predictions and statistics for all CV folds."""
+        if params.cross_validate:
+            params.df_pred_cv, params.cv_stats = ModelBuilder.crossvalidate(
+                params.df_cv_dict,
+                params.hyperparameters,
+                params.model.embedding,params.is_binary
             )
 
-    def generate_external_stats(self):
-        self.ext_stats = None
-        self.df_pred_ext = None
+    def generate_external_stats(self, params: RunParams) -> None:
+        """Predict an optional external dataset and calculate its statistics."""
+        params.ext_stats = None
+        params.df_pred_ext = None
         
-        if self.df_prediction_ext is not None:
-            self.model.external_dataset_name = self.dataset_name_ext
-            self.df_pred_ext, self.ext_stats = ModelBuilder.predict(self.model, self.df_prediction_ext, '_External', self.is_binary)
+        if params.df_prediction_ext is not None:
+            params.model.external_dataset_name = params.dataset_name_ext
+            params.df_pred_ext, params.ext_stats = ModelBuilder.predict(params.model, params.df_prediction_ext, '_External', params.is_binary)
 
-    def run_applicability_domain(self):
-        self.stats_dict = {}
-        if self.run_AD:
-            for ad_measure in self.ad_measures:
-                self.df_pred_test = self.runAD(
-                    self.df_training,
-                    self.df_prediction,
-                    self.params,
-                    self.model.embedding,
-                    self.df_pred_test,
+    def run_applicability_domain(self, params: RunParams) -> None:
+        """Calculate requested AD flags, consensus flags, and statistics."""
+        params.stats_dict = {}
+        if params.run_AD:
+            for ad_measure in params.hyperparameters.ad_measure:
+                params.df_pred_test = self.runAD(
+                    params.df_training,
+                    params.df_prediction,
+                    params,
+                    params.model.embedding,
+                    params.df_pred_test,
                     ad_measure,
-                    self.stats_dict,
-                    is_binary=self.is_binary,
+                    params.stats_dict,
+                    is_binary=params.is_binary,
                     is_external=False
                 )
         
-            if len(self.ad_measures) > 1:
+            if len(params.hyperparameters.ad_measure) > 1:
                 adu.generate_consensus_ad(
-                    self.df_pred_test,
-                    self.stats_dict,
-                    self.ad_measure_model,
-                    is_binary=self.is_binary,
+                    params.df_pred_test,
+                    params.stats_dict,
+                    params.hyperparameters.ad_measure,
+                    is_binary=params.is_binary,
                     is_external=False
                 )
 
-            if self.dataset_name_ext is not None:
-                self.ext_stats_dict = {}
-                if self.dataset_name_ext is not None:
-                    for ad_measure in self.ad_measures:
-                        self.df_pred_ext = self.runAD(
-                            self.df_training,
-                            self.df_prediction_ext,
-                            self.params,
-                            self.model.embedding,
-                            self.df_pred_ext,
+            if params.dataset_name_ext is not None:
+                params.ext_stats_dict = {}
+                for ad_measure in params.hyperparameters.ad_measure:
+                    params.df_pred_ext = self.runAD(
+                            params.df_training,
+                            params.df_prediction_ext,
+                            params,
+                            params.model.embedding,
+                            params.df_pred_ext,
                             ad_measure,
-                            self.ext_stats_dict,
-                            is_binary=self.is_binary,
+                            params.ext_stats_dict,
+                            is_binary=params.is_binary,
                             is_external=True
                         )
 
-                    if len(self.ad_measures) > 1:
-                        adu.generate_consensus_ad(
-                            self.df_pred_ext,
-                            self.ext_stats_dict,
-                            self.ad_measure_model,
-                            is_binary=self.is_binary,
-                            is_external=True
-                        )
+                if len(params.hyperparameters.ad_measure) > 1:
+                    adu.generate_consensus_ad(
+                        params.df_pred_ext,
+                        params.ext_stats_dict,
+                        params.hyperparameters.ad_measure,
+                        is_binary=params.is_binary,
+                        is_external=True
+                    )
 
-    def add_cv_info_to_df_training(self):
-        if self.cross_validate:
+    def add_cv_info_to_df_training(self, params: RunParams) -> None:
+        """Attach each training record's CV fold to the training dataframe."""
+        if params.cross_validate:
             # Add CV fold information to df_training
             cv_fold_data = []
-            for fold_num, fold_dict in sorted(self.df_cv_dict.items()):
+            for fold_num, fold_dict in sorted(params.df_cv_dict.items()):
                 pred_df = fold_dict.get("pred")
                 if pred_df is not None and not pred_df.empty:
                     for idx, row in pred_df.iterrows():
@@ -1347,16 +1848,17 @@ class RunDataset:
         
             if cv_fold_data:
                 df_cv_folds = pd.DataFrame(cv_fold_data)
-                self.df_training = self.df_training.merge(df_cv_folds, on="ID", how="left")
+                params.df_training = params.df_training.merge(df_cv_folds, on="ID", how="left")
 
-    def extract_ad_stats(self):
+    def extract_ad_stats(self, params: RunParams) -> None:
+        """Extract consensus and external applicability-domain statistics."""
         # Safely extract AD stats (could be missing or None)
-        ad_measure_final = " and ".join(self.ad_measure_model) if self.ad_measure_model else None
+        ad_measure_final = " and ".join(params.hyperparameters.ad_measure) if params.hyperparameters.ad_measure else None
         ad_measure_final_external = ad_measure_final + " External" if ad_measure_final else None
 
-        self.ad_stats = self.stats_dict.get(ad_measure_final) or {}
+        params.ad_stats = params.stats_dict.get(ad_measure_final) or {}
 
-        external_ad_stats = self.stats_dict.get(ad_measure_final_external) or {}
+        external_ad_stats = getattr(params, "ext_stats_dict", {}).get(ad_measure_final_external) or {}
         external_ad_stat_key_mapping = {
             "ad_measure": "ad_measure_external",
             "MAE_External_inside_AD": "MAE_External_inside_AD",
@@ -1367,128 +1869,135 @@ class RunDataset:
             "BA_External_outside_AD": "BA_External_outside_AD",
             "ba_ratio": "ba_ratio_external"
         }
-        self.external_ad_stats = {external_ad_stat_key_mapping.get(key, key): value for key, value in external_ad_stats.items()}
+        params.external_ad_stats = {external_ad_stat_key_mapping.get(key, key): value for key, value in external_ad_stats.items()}
 
-    def get_mapped_property_values_from_db(self):
+    def get_mapped_property_values_from_db(self, params: RunParams) -> None:
+        """Load mapped property values and datapoint identifiers."""
         logging.info("Retrieving mapped property values from database...")
 
-        session = self.ensure_session()
+        session = self.ensure_session(params)
         edg = ExpDataGetter()
-        self.df_pv, unique_params = edg.get_mapped_property_values(session, self.dataset_name, SNAPSHOT_ID, duplicate_strategy=DUPLICATE_STRATEGY)
+        params.df_pv, unique_params = edg.get_mapped_property_values(
+            session,
+            params.hyperparameters.dataset_name,
+            SNAPSHOT_ID,
+            duplicate_strategy=DUPLICATE_STRATEGY,
+        )
 
-        session = self.ensure_session()
-        self.df_dps = du.getMappedDatapoints(session, self.dataset_name)
+        session = self.ensure_session(params)
+        params.df_dps = du.getMappedDatapoints(session, params.hyperparameters.dataset_name)
 
-        self.df_dps_ext = None
-        if self.df_prediction_ext is not None:
-            self.df_dps_ext = du.getMappedDatapoints(session, self.dataset_name_ext)
+        params.df_dps_ext = None
+        if params.df_prediction_ext is not None:
+            params.df_dps_ext = du.getMappedDatapoints(session, params.dataset_name_ext)
         
         logging.info("Mapped property values retrieved successfully")
 
-    def add_source_chemical_info_to_dfs(self):
-        if getattr(self, "df_dps", None) is None:
+    def add_source_chemical_info_to_dfs(self, params: RunParams) -> None:
+        """Add source chemical and experimental-property IDs to predictions."""
+        if getattr(params, "df_dps", None) is None:
             logging.error("Data points dataframe (df_dps) is not available. Please run get_mapped_property_values_from_db() first.")
             return
         
-        self.df_pred_training = self.add_source_chemical_info(self.df_pred_training, self.df_dps)
-        self.df_pred_test = self.add_source_chemical_info(self.df_pred_test, self.df_dps)
-        self.df_pred_cv = self.add_source_chemical_info(self.df_pred_cv, self.df_dps)
+        params.df_pred_training = StaticHelpers.add_source_chemical_info(params.df_pred_training, params.df_dps)
+        params.df_pred_test = StaticHelpers.add_source_chemical_info(params.df_pred_test, params.df_dps)
+        if params.df_pred_cv is not None:
+            params.df_pred_cv = StaticHelpers.add_source_chemical_info(params.df_pred_cv, params.df_dps)
 
-        if self.df_prediction_ext is not None and getattr(self, "df_dps_ext", None) is not None:
-            self.df_pred_ext = self.add_source_chemical_info(self.df_pred_ext, self.df_dps_ext)
-        elif self.df_prediction_ext is not None:
+        if params.df_prediction_ext is not None and getattr(params, "df_dps_ext", None) is not None:
+            params.df_pred_ext = StaticHelpers.add_source_chemical_info(params.df_pred_ext, params.df_dps_ext)
+        elif params.df_prediction_ext is not None:
             logging.warning("External data points dataframe (df_dps_ext) is not available. Please run get_mapped_property_values_from_db() first.")
 
-    def log_stats_to_console(self):
-        logging.info(f"Cross-validation Stats = {json.dumps(self.cv_stats, indent=4)}")
-        logging.info(f"Test Set Stats = {json.dumps(self.test_stats, indent=4)}")
-        logging.info(f"External Set Stats = {json.dumps(self.ext_stats, indent=4)}")
+    def log_stats_to_console(self, params: RunParams) -> None:
+        """Log aggregate model and applicability-domain statistics."""
+        logging.info(f"Cross-validation Stats = {json.dumps(getattr(params, 'cv_stats', None), indent=4)}")
+        logging.info(f"Test Set Stats = {json.dumps(params.test_stats, indent=4)}")
+        logging.info(f"External Set Stats = {json.dumps(params.ext_stats, indent=4)}")
 
-        if self.run_AD:
-            logging.info(f"Test Set AD Stats = {json.dumps(self.ad_stats, indent=4)}")
-            if self.dataset_name_ext is not None:
-                logging.info(f"External Set AD Stats = {json.dumps(self.external_ad_stats, indent=4)}")
+        if params.run_AD:
+            logging.info(f"Test Set AD Stats = {json.dumps(params.ad_stats, indent=4)}")
+            if params.dataset_name_ext is not None:
+                logging.info(f"External Set AD Stats = {json.dumps(params.external_ad_stats, indent=4)}")
 
-    def create_dirs(self):
-        identifier = self.get_identifier(self.unique_identifier, self.test_stats, self.ext_stats)
+    def create_dirs(self, params: RunParams) -> None:
+        """Select output filenames for the current run."""
+        identifier = StaticHelpers.get_identifier(params.unique_identifier, params.test_stats, params.ext_stats)
         
         if identifier is None:
-            self.json_path = os.path.join(self.folder_path, "results.json")
-            self.detailed_summary_path = os.path.join(self.folder_path, f"detailed_summary.xlsx")
+            params.json_path = os.path.join(params.folder_path, "results.json")
+            params.detailed_summary_path = os.path.join(params.folder_path, "detailed_summary.xlsx")
         else:
-            self.json_path = os.path.join(self.folder_path, f"results_{identifier}.json")
-            self.detailed_summary_path = os.path.join(self.folder_path, f"detailed_summary_{identifier}.xlsx")
+            params.json_path = os.path.join(params.folder_path, f"results_{identifier}.json")
+            params.detailed_summary_path = os.path.join(params.folder_path, f"detailed_summary_{identifier}.xlsx")
 
-    def append_info_to_model_object(self):
-        session = self.ensure_session()
-        dataset_info = du.get_dataset_details(session, self.dataset_name)
+    def append_info_to_model_object(self, params: RunParams) -> None:
+        """Attach dataset metadata, predictions, and statistics to the model."""
+        session = self.ensure_session(params)
+        dataset_info = du.get_dataset_details(session, params.hyperparameters.dataset_name)
         dsstox_mapping_strategy = json.loads(dataset_info["dsstox_mapping_strategy"])
 
-        if getattr(self.model, "propertyName", None) is None:
-            print("propertyName is None, need to set name_ccd column for property in properties table")
+        params.model.propertyName = dataset_info["property_name"]
+        if params.model.propertyName is None:
+            logging.error("propertyName is None, need to set name_ccd column for property in properties table")
             return
 
-        self.model.qsarReadyRuleSet = dsstox_mapping_strategy.get("qsarReadyRuleSet", "qsar-ready")
-        self.model.propertyName = dataset_info["property_name"]
-        self.model.propertyDescription = dataset_info["property_description"]
-        self.model.unitsModel = dataset_info["units_model"] 
-        self.model.unitsDisplay = dataset_info["units_display"]
+        params.model.qsarReadyRuleSet = dsstox_mapping_strategy.get("qsarReadyRuleSet", "qsar-ready")
+        params.model.propertyDescription = dataset_info["property_description"]
+        params.model.unitsModel = dataset_info["units_model"]
+        params.model.unitsDisplay = dataset_info["units_display"]
         epoch_ms = time.time_ns() // 1_000_000
-        self.model.modelName = self.user + "_" + str(epoch_ms)
-        self.model.datasetName = self.dataset_name
-        self.model.datasetDescription = dataset_info["dataset_description"]
-        self.model.omitSalts = dsstox_mapping_strategy["omitSalts"]
-        self.model.applicabilityDomainName = " and ".join(self.params.ad_measure) if self.run_AD else None
-        self.model.num_training = self.df_training.shape[0]
-        self.model.num_prediction = self.df_prediction.shape[0]
-        self.model.descriptorSetName = self.descriptor_set_name
-        self.model.df_preds_training_cv = self.df_preds_training_cv
-        self.model.df_preds_test = self.df_preds_test
-        if self.dataset_name_ext is not None:
-            self.model.external_dataset_name = self.dataset_name_ext if self.dataset_name_ext else None
-            self.model.external_dataset_description = self.dataset_description_ext
-            self.model.df_dsstoxRecords_external = self.df_prediction_ext
-            self.model.df_preds_external = self.df_pred_ext
-            self.model.df_external = self.df_external
-            # self.model.num_external = self.df_external.shape[0] if self.df_external is not None else 0
+        params.model.modelName = params.user + "_" + str(epoch_ms)
+        params.model.datasetName = params.hyperparameters.dataset_name
+        params.model.datasetDescription = dataset_info["dataset_description"]
+        params.model.omitSalts = dsstox_mapping_strategy["omitSalts"]
+        params.model.applicabilityDomainName = " and ".join(params.hyperparameters.ad_measure) if params.run_AD else None
+        params.model.num_training = params.df_training.shape[0]
+        params.model.num_prediction = params.df_prediction.shape[0]
+        params.model.descriptorSetName = params.hyperparameters.descriptor_set_name
+        params.model.df_preds_training_cv = params.df_pred_cv
+        params.model.df_preds_test = params.df_pred_test
+        if params.dataset_name_ext is not None:
+            params.model.external_dataset_name = params.dataset_name_ext
+            params.model.external_dataset_description = params.dataset_description_ext
+            params.model.df_dsstoxRecords_external = params.df_prediction_ext
+            params.model.df_preds_external = params.df_pred_ext
+            params.model.df_external = params.df_external
 
-        self.model.modelStatistics = (
-            (self.training_stats or {})
-            | (self.cv_stats or {})
-            | (self.test_stats or {})
-            | (self.ad_stats or {})
-            | (self.ext_stats or {})
-            | (self.external_ad_stats or {})
+        params.model.modelStatistics = (
+            (params.training_stats or {})
+            | (getattr(params, "cv_stats", None) or {})
+            | (params.test_stats or {})
+            | (params.ad_stats or {})
+            | (params.ext_stats or {})
+            | (params.external_ad_stats or {})
         )
 
-        self.model.df_training = self.df_training  # df_training_model?
-        self.model.df_prediction = self.df_prediction  # df_test_model?
-        self.model.modelMethod = getattr(self.model, "regressor_name", None) or getattr(self.model, "qsar_method", None)
-        self.model.modelMethodDescription = getattr(self.model, "description", None)
+        params.model.df_training = params.df_training
+        params.model.df_prediction = params.df_prediction
+        params.model.modelMethod = getattr(params.model, "regressor_name", None) or getattr(params.model, "qsar_method", None)
+        params.model.modelMethodDescription = getattr(params.model, "description", None)
 
-        self.model.subfolder = self.subfolder
+        params.model.subfolder = params.subfolder
 
-    def create_results_dict(self):
+    def create_results_dict(self, params: RunParams) -> Dict[str, object]:
+        """Build the JSON-serializable result payload for this run."""
         # TODO: Clean up this function considerably, if needed, particulary wrt params object
-        # Map variables from self to names used in the original function from run_model_building_db
-        ad_measure_model = self.ad_measure_model
-        df_training = self.df_training
-        params = self.params
-        model = self.model
-        training_stats = self.training_stats
-        test_stats = self.test_stats
-        cv_stats = self.cv_stats
-        ext_stats = self.ext_stats
-        stats_dict = self.stats_dict
-        ext_stats_dict = self.ext_stats_dict
+        hyperparameters = params.hyperparameters
+        training_stats = params.training_stats
+        test_stats = params.test_stats
+        cv_stats = params.cv_stats
+        ext_stats = params.ext_stats
+        stats_dict = params.stats_dict
+        ext_stats_dict = params.ext_stats_dict
 
-        results_dict = {"params":params.to_dict()}
+        results_dict = {"params":hyperparameters.to_dict()}
 
-        md = model.get_model_description_dict()
+        md = params.model.get_model_description_dict()
         results_dict["model_details"] = md
 
         # Store the embedding length safely (handles None)
-        embedding = getattr(model, "embedding", None)
+        embedding = getattr(params.model, "embedding", None)
         md["embedding_len"] = len(embedding) if embedding is not None else 0
 
         md["qsar_method_description"] = md.pop("description")
@@ -1501,16 +2010,16 @@ class RunDataset:
         md.pop("training_descriptor_std_devs")
         md.pop("training_descriptor_means")
 
-        md["splittingName"] = params.splitting_name
+        md["splittingName"] = hyperparameters.splitting_name
 
-        md["descriptor_set_name"] = params.descriptor_set_name
+        md["descriptor_set_name"] = hyperparameters.descriptor_set_name
 
-        qsar_method = params.qsar_method
+        qsar_method = hyperparameters.qsar_method
 
         if qsar_method == 'reg' or qsar_method == 'las' or qsar_method == 'gcm':
-            y = df_training[df_training.columns[1]]
-            X = df_training[model.embedding]
-            results_dict["model_details"]['model_coefficients'] = json.loads(model.getOriginalRegressionCoefficients2(X, y))            
+            y = params.df_training[params.df_training.columns[1]]
+            X = params.df_training[params.model.embedding]
+            results_dict["model_details"]['model_coefficients'] = json.loads(params.model.getOriginalRegressionCoefficients2(X, y))
 
         ms = {}
         results_dict["model_statistics"] = ms
@@ -1533,7 +2042,7 @@ class RunDataset:
         ms["test_stats"] = test_stats
 
         if len(stats_dict) > 0:
-            str_ad_measure_final = " and ".join(ad_measure_model)                        
+            str_ad_measure_final = " and ".join(params.hyperparameters.ad_measure)
             ms["test_stats_AD"] = stats_dict[str_ad_measure_final]
             ms["test_stats_all_AD"] = stats_dict
 
@@ -1542,79 +2051,81 @@ class RunDataset:
             ms["ext_stats_AD"] = ext_stats_dict[external_ad]
             ms["ext_stats_all_AD"] = ext_stats_dict
 
-        self.results_dict = results_dict
-
+        params.results_dict = results_dict
         return results_dict
 
-    def write_files(self):
-        StaticHelpers.write_prediction_csvs(self.df_pred_test, self.df_pred_ext, self.folder_path)
-        StaticHelpers.write_plots(self.df_pred_test, self.model, self.df_pred_cv, self.folder_path)
+    def write_files(self, params: RunParams) -> None:
+        """Write prediction files, plots, workbook, and results JSON."""
+        StaticHelpers.write_prediction_csvs(params.df_pred_test, params.df_pred_ext, params.folder_path)
+        StaticHelpers.write_plots(params.df_pred_test, params.model, params.df_pred_cv, params.folder_path)
 
-        if self.write_to_db:
-            self.ensure_session()
-            ml = ModelLoader(self.session)
-            ml.load_model(self.user, self.model, self.results_dict, self.df_pred_training, self.df_pred_test, self.df_pred_cv, self.folder_path, df_pred_external=self.df_pred_ext)
+        if params.write_to_db:
+            self.ensure_session(params)
+            ml = ModelLoader(params.session)
+            ml.load_model(params.user, params.model, params.results_dict, params.df_pred_training, params.df_pred_test, params.df_pred_cv, params.folder_path, df_pred_external=params.df_pred_ext)
         
             # build excel after loading model so have model id number set:
-            mdo = ModelDataObjects(model=self.model, df_pv=self.df_pv, df_gmd=self.df_dps, df_gmd_external=self.df_dps_ext)
-            mte = ModelToExcel(mdo, self.detailed_summary_path)
+            mdo = ModelDataObjects(model=params.model, df_pv=params.df_pv, df_gmd=params.df_dps, df_gmd_external=params.df_dps_ext)
+            mte = ModelToExcel(mdo, params.detailed_summary_path)
             mte.create_excel()
         
             # need to load model separately from rest of model objects since need to load model into db to get id then create the excel file that displays that id in the summary:
-            filePathOutExcelSummary = os.path.join(self.folder_path, "detailed_summary.xlsx")
-            image_id = ml.load_model_file(filePathOutExcelSummary, self.user, self.model.modelId, 2)
+            filePathOutExcelSummary = os.path.join(params.folder_path, "detailed_summary.xlsx")
+            image_id = ml.load_model_file(filePathOutExcelSummary, params.user, params.model.modelId, 2)
             logging.info(f"Excel summary loaded to db with id: {image_id}")
         else:
             # build excel without loading model, so no id number will be set:
-            mdo = ModelDataObjects(model=self.model, df_pv=self.df_pv, df_gmd=self.df_dps, df_gmd_external=self.df_dps_ext)
-            mte = ModelToExcel(mdo, self.detailed_summary_path)
+            mdo = ModelDataObjects(model=params.model, df_pv=params.df_pv, df_gmd=params.df_dps, df_gmd_external=params.df_dps_ext)
+            mte = ModelToExcel(mdo, params.detailed_summary_path)
             mte.create_excel()
         
         
-        with open(self.json_path, 'w') as json_file:
-            json.dump(self.results_dict, json_file, indent=4)
+        with open(params.json_path, 'w') as json_file:
+            json.dump(params.results_dict, json_file, indent=4)
 
     # -------------------------------------------------------------------------------------------------------------
 
-    def run(self):
+    def run(self, params: RunParams) -> _QSARModel:
+        """Run every dataset-processing, model-building, and output stage."""
         print("\n")
         logging.info(f"Start RunDataset:")
-        logging.info(f"\tdataset_name = {self.dataset_name}")
-        logging.info(f"\tqsar_method = {self.qsar_method}")
-        logging.info(f"\tdescriptor_set_name = {self.descriptor_set_name}")
-        logging.info(f"\tfeature_selection = {self.feature_selection}")
-        logging.info(f"\tcross_validate = {self.cross_validate}")
+        logging.info(f"\tdataset_name = {params.hyperparameters.dataset_name}")
+        logging.info(f"\tqsar_method = {params.hyperparameters.qsar_method}")
+        logging.info(f"\tdescriptor_set_name = {params.hyperparameters.descriptor_set_name}")
+        logging.info(f"\tfeature_selection = {params.hyperparameters.feature_selection}")
+        logging.info(f"\tcross_validate = {params.cross_validate}")
 
-        self.query_dataframes()
+        self.query_dataframes(params)
 
         logging.info("Performing additional dataframe processing...")
-        self.set_is_binary()
-        self.apply_outlier_filtering()
-        self.setup_cross_validation()
-        self.setup_logp_martin()
+        self.set_is_binary(params)
+        self.apply_outlier_filtering(params)
+        self.setup_cross_validation(params)
+        self.setup_logp_martin(params)
         logging.info("Dataframe processing completed")
 
-        self.run_feature_selection()
-        self.run_model_building()
-        self.run_post_build_feature_selection()
-        self.run_cross_vallidation()
-        self.generate_external_stats()
-        self.run_applicability_domain()
-        self.add_cv_info_to_df_training()
-        self.extract_ad_stats()
-        self.get_mapped_property_values_from_db()
-        self.add_source_chemical_info_to_dfs()
-        self.log_stats_to_console()
-        self.create_dirs()
-        self.append_info_to_model_object()
-        self.create_results_dict()
-        self.write_files()
+        self.run_feature_selection(params)
+        self.run_model_building(params)
+        self.run_post_build_feature_selection(params)
+        self.run_cross_validation(params)
+        self.generate_external_stats(params)
+        self.run_applicability_domain(params)
+        self.add_cv_info_to_df_training(params)
+        self.extract_ad_stats(params)
+        self.get_mapped_property_values_from_db(params)
+        self.add_source_chemical_info_to_dfs(params)
+        self.log_stats_to_console(params)
+        self.create_dirs(params)
+        self.append_info_to_model_object(params)
+        self.create_results_dict(params)
+        self.write_files(params)
 
-        return self.model
+        return params.model
 
 # -------------------------------------------------------------------------------------------------------------
 
-def test_run_dataset():
+def test_run_dataset() -> None:
+    """Run the database-backed KOC example configuration."""
     write_to_db = False
     dataset_name = "KOC v1 modeling"
     descriptor_set_name = "WebTEST-default"
@@ -1625,7 +2136,8 @@ def test_run_dataset():
     append_to_models_folder = "_RunDataset_test"
     ad_measure_model = [pc.Applicability_Domain_TEST_Embedding_Euclidean, pc.Applicability_Domain_TEST_Fragment_Counts]
 
-    test_dataset = RunDataset(
+    runner = RunDataset()
+    params = runner.generate_params(
         dataset_name=dataset_name,
         qsar_method=qsar_method,
         feature_selection=feature_selection,
@@ -1637,20 +2149,12 @@ def test_run_dataset():
         append_to_models_folder=append_to_models_folder
     )
 
-    test_dataset.run()
+    runner.run(params)
 
-# EXAMPLE OF DESIRED USAGE
-# def example():
-#     run_dataset = RunDataset()
 
-#     # OPTION A (Control only needed params like qsar_method)
-#     params = run_dataset.create_params(qsar_method) # Everything handled automatically
+def main() -> None:
+    test_run_dataset()
 
-#     # OPTION B (Fine control of params/hyperparams) (Not used by default)
-#     params = run_dataset.create_params(
-#         a=a,
-#         b=b,
-#         ...
-#     )
 
-#     run_dataset.run(params)
+if __name__ == "__main__":
+    main()
