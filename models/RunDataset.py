@@ -6,7 +6,7 @@ import os
 from typing import Optional, Union, List, Dict, Iterator as _Iterator
 from io import StringIO
 from pathlib import Path
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 
 from sqlalchemy import URL, Engine, text, create_engine
 from sqlalchemy.orm import Session, sessionmaker
@@ -1298,7 +1298,7 @@ class RunDataset:
         run_AD: bool = True,
         feature_selection: Optional[bool] = None,
         fs_previous_embedding: bool = True,
-        hyperparameters: Optional[Parameters] = None,
+        hyperparameters: Optional[Union[Parameters, Dict[str, object]]] = None,
         descriptor_set_name: Optional[str] = None,
         splitting_name: Optional[str] = None,
         ad_measure: Optional[List[str]] = None,
@@ -1326,7 +1326,8 @@ class RunDataset:
             run_AD: Whether to calculate applicability-domain estimates.
             feature_selection: Optional override for the model's feature-selection setting.
             fs_previous_embedding: Whether to refine a supplied embedding after model fitting.
-            hyperparameters: A prebuilt method-specific parameter object.
+            hyperparameters: A method-specific ``Parameters`` instance or a
+                dictionary of model tuning fields to override on generated defaults.
             descriptor_set_name: Descriptor set used by the dataset.
             splitting_name: Database split used to retrieve training and test records.
             ad_measure: Applicability-domain measures to calculate.
@@ -1346,10 +1347,24 @@ class RunDataset:
         Returns:
             RunParams containing the hyperparameters, run controls, and runtime state.
 
-        When ``hyperparameters`` is supplied, its dataset and model settings are
-        authoritative. Matching configuration arguments remain accepted for
-        compatibility; conflicting values raise instead of silently overriding it.
+        A dictionary may override method-specific tuning fields. Pass dataset,
+        method, split, AD, and other run configuration through their dedicated
+        arguments. A supplied ``Parameters`` instance remains authoritative;
+        conflicting configuration arguments raise instead of silently overriding it.
         """
+        configured_values = {
+            "dataset_name": dataset_name,
+            "qsar_method": qsar_method,
+            "descriptor_set_name": descriptor_set_name,
+            "splitting_name": splitting_name,
+            "feature_selection": feature_selection,
+            "ad_measure": ad_measure,
+        }
+        hyperparameter_overrides: Dict[str, object] = {}
+        if isinstance(hyperparameters, dict):
+            hyperparameter_overrides = hyperparameters
+            hyperparameters = None
+
         if hyperparameters is None:
             if dataset_name is None or qsar_method is None:
                 raise ValueError("dataset_name and qsar_method are required without hyperparameters")
@@ -1380,20 +1395,44 @@ class RunDataset:
                 ad_measure=ad_measure,
             )
         else:
-            supplied_values = {
-                "dataset_name": dataset_name,
-                "qsar_method": qsar_method,
-                "descriptor_set_name": descriptor_set_name,
-                "splitting_name": splitting_name,
-                "feature_selection": feature_selection,
-                "ad_measure": ad_measure,
-            }
-            for name, supplied_value in supplied_values.items():
+            for name, supplied_value in configured_values.items():
                 if supplied_value is not None and supplied_value != getattr(hyperparameters, name):
                     raise ValueError(f"{name} conflicts with hyperparameters.{name}")
 
             if hyperparameters.qsar_method in {"gcm", "svm"}:
                 hyperparameters.feature_selection = False
+
+        if hyperparameter_overrides:
+            parameter_fields = {
+                parameter_field.name: parameter_field
+                for parameter_field in fields(hyperparameters)
+                if parameter_field.init
+            }
+            configuration_fields = {
+                "dataset_name",
+                "qsar_method",
+                "descriptor_set_name",
+                "splitting_name",
+                "feature_selection",
+                "ad_measure",
+                "logp_columns",
+                "outlier_filter_methods",
+            }
+            unsupported_overrides = set(hyperparameter_overrides) - set(parameter_fields)
+            configuration_overrides = set(hyperparameter_overrides) & configuration_fields
+            if unsupported_overrides or configuration_overrides:
+                invalid_names = sorted(unsupported_overrides | configuration_overrides)
+                invalid_message = ", ".join(invalid_names)
+                raise ValueError(
+                    f"Unsupported hyperparameter override(s): {invalid_message}. "
+                    "Pass run configuration through generate_params arguments."
+                )
+
+            for name, value in hyperparameter_overrides.items():
+                setattr(hyperparameters, name, value)
+
+        if hyperparameters.qsar_method in {"gcm", "svm"}:
+            hyperparameters.feature_selection = False
 
         if logp_columns is not None:
             normalized_logp_columns = [logp_columns] if isinstance(logp_columns, str) else logp_columns
@@ -2128,11 +2167,11 @@ def test_run_dataset() -> None:
     """Run the database-backed KOC example configuration."""
     write_to_db = False
     dataset_name = "KOC v1 modeling"
-    descriptor_set_name = "WebTEST-default"
+    # descriptor_set_name = "WebTEST-default"
     qsar_method = "gcm"
-    feature_selection = False
-    splitting_name = "RND_REPRESENTATIVE"
-    unique_identifier = None
+    # feature_selection = False
+    # splitting_name = "RND_REPRESENTATIVE"
+    # unique_identifier = None
     append_to_models_folder = "_RunDataset_test"
     ad_measure_model = [pc.Applicability_Domain_TEST_Embedding_Euclidean, pc.Applicability_Domain_TEST_Fragment_Counts]
 
@@ -2140,20 +2179,46 @@ def test_run_dataset() -> None:
     params = runner.generate_params(
         dataset_name=dataset_name,
         qsar_method=qsar_method,
-        feature_selection=feature_selection,
-        descriptor_set_name=descriptor_set_name,
-        splitting_name=splitting_name,
+        # feature_selection=feature_selection,
+        # descriptor_set_name=descriptor_set_name,
+        # splitting_name=splitting_name,
         ad_measure=ad_measure_model,
         write_to_db=write_to_db,
-        unique_identifier=unique_identifier,
+        # unique_identifier=unique_identifier,
         append_to_models_folder=append_to_models_folder
     )
 
     runner.run(params)
 
 
+def test_customized_run() -> None:
+    """Run a test of RunDataset using a copied run configuration from run_case_studies1.py with customization options"""
+    dataset_name = "exp_prop_BCF_v1_modeling"
+    qsar_method = "knn"
+    write_to_db = False
+    append_to_models_folder = "_RunDataset_test"
+
+    ad_measure = [pc.Applicability_Domain_TEST_Embedding_Euclidean, pc.Applicability_Domain_TEST_Fragment_Counts]
+    hyperparameters = {
+        "max_features": 25,
+        "descriptor_coefficient": 0.006
+    }
+
+    runner = RunDataset()
+    params = runner.generate_params(
+        dataset_name = dataset_name,
+        qsar_method = qsar_method,
+        write_to_db = write_to_db,
+        append_to_models_folder = append_to_models_folder,
+        ad_measure = ad_measure,
+        hyperparameters = hyperparameters
+    )
+    runner.run(params)
+
+
 def main() -> None:
-    test_run_dataset()
+    # test_run_dataset()
+    test_customized_run()
 
 
 if __name__ == "__main__":
