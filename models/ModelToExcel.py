@@ -1741,14 +1741,16 @@ class DataQuerier:
         df_preds_training_cv = model.df_preds_training_cv.rename(columns={"canon_qsar_smiles": "id"})
 
         training = pd.merge(model.df_training, df_gmd, left_on="ID", right_on="canon_qsar_smiles", how="left")
-        training = pd.merge(training, df_preds_training_cv, left_on="ID", right_on="id", how="left")
+        training = pd.merge(training, df_preds_training_cv, left_on="ID", right_on="id", how="left", suffixes=("", "_drop"))
+        training = training.drop(columns=[c for c in training.columns if c.endswith("_drop")])
 
         training["Set"] = "Training"
 
         df_preds_test = model.df_preds_test.rename(columns={"canon_qsar_smiles": "id"})
 
         test = pd.merge(model.df_prediction, df_gmd, left_on="ID", right_on="canon_qsar_smiles", how="left")
-        test = pd.merge(test, df_preds_test, left_on="ID", right_on="id", how="left")
+        test = pd.merge(test, df_preds_test, left_on="ID", right_on="id", how="left", suffixes=("", "_drop"))
+        test = test.drop(columns=[c for c in test.columns if c.endswith("_drop")])
 
         test["Set"] = "Test"
 
@@ -1807,7 +1809,8 @@ class DataQuerier:
 
         df_preds_training_cv = model.df_preds_training_cv.rename(columns={"canon_qsar_smiles": "id"})
 
-        temp = pd.merge(df_preds_training_cv, df_gmd, left_on="id", right_on="canon_qsar_smiles", how="left")
+        temp = pd.merge(df_preds_training_cv, df_gmd, left_on="id", right_on="canon_qsar_smiles", how="left", suffixes=("", "_drop"))
+        temp = temp.drop(columns=[c for c in temp.columns if c.endswith("_drop")])
 
         training_cv_predictions_dict = {
             "Exp Prop ID": temp["qsar_exp_prop_property_values_id_first"],
@@ -1845,7 +1848,8 @@ class DataQuerier:
 
         df_preds_test = model.df_preds_test.rename(columns={"canon_qsar_smiles": "id"})
 
-        temp = pd.merge(df_preds_test, df_gmd, left_on="id", right_on="canon_qsar_smiles", how="left")
+        temp = pd.merge(df_preds_test, df_gmd, left_on="id", right_on="canon_qsar_smiles", how="left", suffixes=("", "_drop"))
+        temp = temp.drop(columns=[c for c in temp.columns if c.endswith("_drop")])
 
         # ad_test_columns = {}
         # if model.applicabilityDomainName is not None:
@@ -1938,7 +1942,8 @@ class DataQuerier:
 
         df_preds_external = model.df_preds_external.rename(columns={"canon_qsar_smiles": "id"})
 
-        temp = pd.merge(df_preds_external, df_gmd_external, left_on="id", right_on="canon_qsar_smiles", how="left")
+        temp = pd.merge(df_preds_external, df_gmd_external, left_on="id", right_on="canon_qsar_smiles", how="left", suffixes=("", "_drop"))
+        temp = temp.drop(columns=[c for c in temp.columns if c.endswith("_drop")])
 
         # ads = model.applicabilityDomainName.split(" and ")
         # ad_test_columns = {}
