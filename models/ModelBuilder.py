@@ -1214,7 +1214,7 @@ class Model:
         # print("pred_features", pred_features)
         model_input = get_model_input(pred_features)
         
-        if self.feature_rename_map is not None:# XGB models cant have [,],< characters
+        if getattr(self, "feature_rename_map", None) is not None:# XGB models cant have [,],< characters
             model_input = model_input.rename(columns=self.feature_rename_map)
         
         # print("model_input", model_input)
