@@ -30,7 +30,10 @@ class UnitsConverter:
     
     def handle_surface_tension(self, property_name, value, unit_name, final_unit_name, chemical_id):
         if final_unit_name == pc.LOG_CP and unit_name == pc.CP:
-            return math.log10(value)
+            try:
+                return math.log10(value)
+            except:
+                return 0
         elif final_unit_name == pc.CP and unit_name == pc.LOG_CP:
             return math.pow(10, value)
         else:
@@ -55,10 +58,16 @@ class UnitsConverter:
             if unit_name == pc.LOG_MOL_KG:
                 return -value
             elif unit_name == pc.MOL_KG and value != 0:
-                return -math.log10(value)
+                try:
+                    return -math.log10(value)
+                except:
+                    return 0
             elif unit_name == pc.MG_KG:
                 if dsstox_record.mol_weight is not None:
-                    return -math.log10(value / 1000.0 / dsstox_record.mol_weight)
+                    try:
+                        return -math.log10(value / 1000.0 / dsstox_record.mol_weight)
+                    except:
+                        return 0
                 elif value == 0:
                     logging.warning(
                         "%s: value=0 for %s, so can't convert to %s",
@@ -82,7 +91,10 @@ class UnitsConverter:
 
     def handle_clint(self, property_name, value, unit_name, final_unit_name, chemical_id):
         if final_unit_name == pc.LOG_UL_MIN_1MM_CELLS and unit_name == pc.UL_MIN_1MM_CELLS:
-            return math.log10(value)
+            try:
+                return math.log10(value)
+            except:
+                return 0
         elif final_unit_name == pc.UL_MIN_1MM_CELLS and unit_name == pc.LOG_UL_MIN_1MM_CELLS:
             return math.pow(10, value)
         else:
@@ -102,7 +114,10 @@ class UnitsConverter:
 
     def handle_oh(self, property_name, value, unit_name, final_unit_name, chemical_id):
         if final_unit_name == pc.LOG_CM3_MOLECULE_SEC and unit_name == pc.CM3_MOLECULE_SEC:
-            return math.log10(value)
+            try:
+                return math.log10(value)
+            except:
+                return 0
         elif final_unit_name == pc.CM3_MOLECULE_SEC and unit_name == pc.LOG_CM3_MOLECULE_SEC:
             return math.pow(10, value)
         else:
@@ -110,7 +125,13 @@ class UnitsConverter:
 
     def handle_koc(self, property_name, value, unit_name, final_unit_name, chemical_id):
         if final_unit_name == pc.LOG_L_KG and unit_name == pc.L_KG:
-            return math.log10(value)
+            try:
+                try:
+                    return math.log10(value)
+                except:
+                    return 0
+            except:
+                return 0
         elif final_unit_name == pc.L_KG and unit_name == pc.LOG_L_KG:
             return math.pow(10, value)
         else:
@@ -118,7 +139,10 @@ class UnitsConverter:
 
     def handle_kmhl(self, property_name, value, unit_name, final_unit_name, chemical_id):
         if final_unit_name == pc.LOG_DAYS and unit_name == pc.DAYS:
-            return math.log10(value)
+            try:
+                return math.log10(value)
+            except:
+                return 0
         elif final_unit_name == pc.DAYS and unit_name == pc.LOG_DAYS:
             return math.pow(10, value)
         else:
@@ -126,7 +150,10 @@ class UnitsConverter:
 
     def handle_vapor_pressure(self, property_name, value, unit_name, final_unit_name, chemical_id):
         if final_unit_name == pc.LOG_MMHG and unit_name == pc.MMHG :
-            return math.log10(value)
+            try:
+                return math.log10(value)
+            except:
+                return 0
         elif final_unit_name == pc.MMHG and unit_name == pc.LOG_MMHG :
             return math.pow(10, value)
         else:
@@ -134,7 +161,10 @@ class UnitsConverter:
 
     def handle_viscosity(self, property_name, value, unit_name, final_unit_name, chemical_id):
         if final_unit_name == pc.LOG_CP and unit_name == pc.CP :
-            return math.log10(value)
+            try:
+                return math.log10(value)
+            except:
+                return 0
         elif final_unit_name == pc.CP and unit_name == pc.LOG_CP :
             return math.pow(10, value)
         else:
@@ -143,7 +173,10 @@ class UnitsConverter:
     def handle_henrys_law_constant(self, property_name, value, unit_name, final_unit_name, chemical_id):
         
         if final_unit_name == pc.NEG_LOG_ATM_M3_MOL and unit_name == pc.ATM_M3_MOL :
-            return -math.log10(value)
+            try:
+                return -math.log10(value)
+            except:
+                return 0
         elif final_unit_name == pc.ATM_M3_MOL and unit_name == pc.NEG_LOG_ATM_M3_MOL :
             return math.pow(10, -value)
         else:
@@ -154,10 +187,16 @@ class UnitsConverter:
             if unit_name == pc.LOG_M:
                 return -value
             elif unit_name == pc.MOLAR and value != 0:
-                return -math.log10(value)
+                try:
+                    return -math.log10(value)
+                except:
+                    return 0
             elif unit_name == pc.G_L:
                 if molecular_weight is not None:
-                    return -math.log10(value / molecular_weight)
+                    try:
+                        return -math.log10(value / molecular_weight)
+                    except:
+                        return 0
                 elif value == 0:
                     logging.warning(
                         "%s: value=0 for %s, so can't convert to %s",
@@ -165,7 +204,7 @@ class UnitsConverter:
                         chemical_id,
                         final_unit_name,
                     )
-                    return NaN
+                    return float("nan")
                 elif molecular_weight is None:
                     logging.warning(
                         "%s: missing MW for %s, so can't convert to %s",
@@ -173,7 +212,7 @@ class UnitsConverter:
                         chemical_id,
                         final_unit_name,
                     )
-                    return NaN
+                    return float("nan")
         elif final_unit_name == pc.MOLAR and unit_name == pc.NEG_LOG_M:
             return math.pow(10, -value)
         elif final_unit_name == pc.MG_L and unit_name == pc.NEG_LOG_M:
