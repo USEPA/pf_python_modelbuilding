@@ -852,6 +852,14 @@ def isBinary(df):
     else:
         return False
 
+def isTernary(df):
+    """Prepares a pandas df of training data by removing logp and correlated descriptors"""
+    df_labels = df[df.columns[1]]
+
+    if df_labels.isin([0, 1, 2]).all():
+        return True
+    else:
+        return False
 
 # def prepare_instances_with_preselected_descriptors(df, which_set, descriptor_names):
 #     """Prepares a pandas df of training data by removing logp and correlated descriptors"""

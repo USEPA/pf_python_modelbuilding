@@ -104,6 +104,9 @@ def getBin2(expsTrain,expsTest, property_name, unit_name):
     elif unit_name == 'Binary 0/1':
         bins = [-0.5, 0.5, 1.5]
 
+    elif unit_name == 'Multiclass':
+        bins = [-0.5, 0.5, 1.5, 2.5]
+
     else:
         print('\n*** else', property_name,unit_name)
         bins = range(minVal, maxVal)
