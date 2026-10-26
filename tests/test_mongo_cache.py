@@ -95,6 +95,22 @@ class TestMongoCacheInitRetry(unittest.TestCase):
             {"LFQSCWFLJHTTHZ*": {"value": 1}},
         )
 
+    def test_legacy_error_predictions_are_cache_misses(self):
+        mongo_cache._mongo_init_done = True
+        key = "LFQSCWFLJHTTHZ-UHFFFAOYSA-N-1065"
+        error = {"modelResults": {"predictionError": "Descriptor calculation failed"}}
+        mongo_cache.in_memory_cache = {key: error}
+        with patch("db.mongo_cache._ensure_init"):
+            self.assertIsNone(mongo_cache.get_cached_prediction(key))
+            self.assertIsNone(mongo_cache.get_cached_prediction("LFQSCWFLJHTTHZ*-1065"))
+            self.assertEqual(mongo_cache.get_cached_predictions([key, "LFQSCWFLJHTTHZ*-1065"]), {})
+            collection = unittest.mock.Mock()
+            collection.find.return_value = [{"key": key, "prediction": error}]
+            collection.find_one.return_value = {"key": key, "prediction": error}
+            mongo_cache.predictor_models_cache = collection
+            self.assertIsNone(mongo_cache.get_cached_prediction(key))
+            self.assertEqual(mongo_cache.get_cached_predictions([key]), {})
+
     def test_get_cached_predictions_matches_wildcard_suffix_from_memory(self):
         mongo_cache._mongo_init_done = True
         mongo_cache.in_memory_cache = {

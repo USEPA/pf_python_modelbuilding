@@ -142,6 +142,10 @@ paths:
         '200':
           description: Success
           content: {}
+        '400':
+          description: Invalid request or model ID absent from available model storage.
+        '503':
+          description: Model storage is unavailable or the stored model artifact cannot be restored. Retry after service recovery.
 
     post:
       operationId: app.predictDB_POST
@@ -158,6 +162,10 @@ paths:
         '200':
           description: Success
           content: {}
+        '400':
+          description: Invalid request or model ID absent from available model storage.
+        '503':
+          description: Model storage is unavailable or the stored model artifact cannot be restored. Retry after service recovery.
 
   /api/experimental:
     get:

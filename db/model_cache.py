@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from db.mongo_hosts import normalize_mongo_hosts
+
 import logging
 import math
 import os
@@ -125,7 +127,7 @@ def connect_mongo():
         raise ModelArtifactCacheUnavailableError("MONGO_PASSWORD is set but MONGO_USER is empty")
 
     client_kwargs = dict(
-        host=_get_env("MONGO_HOST", default="localhost"),
+        host=normalize_mongo_hosts(_get_env("MONGO_HOST", default="localhost")),
         port=_get_int_env("MONGO_PORT", default=27017),
         appname=_get_env(
             "PREDICTOR_MODEL_ARTIFACT_MONGO_APP_NAME",
@@ -329,6 +331,8 @@ def write_model_snapshot(model_id: int | str, model: Any) -> None:
             },
             upsert=True,
         )
+    except ModelArtifactCacheUnavailableError:
+        raise
     except PyMongoError as exc:
         raise ModelArtifactCacheUnavailableError(f"Mongo model artifact cache unavailable: {exc}") from exc
     finally:
@@ -353,13 +357,15 @@ def read_model_snapshot(model_id: int | str):
             int(document.get("chunk_count") or 0),
         )
         if payload is None:
-            return None
+            raise ModelArtifactCacheUnavailableError("Model artifact chunks are incomplete")
         return deserialize_model(payload)
+    except ModelArtifactCacheUnavailableError:
+        raise
     except PyMongoError as exc:
         raise ModelArtifactCacheUnavailableError(f"Mongo model artifact cache unavailable: {exc}") from exc
     except Exception as exc:
         logging.warning("Could not restore model_id=%s from Mongo artifact cache: %s", model_id, exc)
-        return None
+        raise ModelArtifactCacheUnavailableError("Model artifact could not be restored") from exc
     finally:
         if client is not None:
             client.close()

@@ -14,7 +14,8 @@ import base64
 from pathlib import Path
 
 
-from API_Utilities import QsarSmilesAPI, DescriptorsAPI
+from API_Utilities import QsarSmilesAPI, DescriptorsAPI, SearchAPI
+from util.preprocessing_cache import standardization_cache, descriptor_cache
 
 from db.mongo_cache import (
     cache_predictions,
@@ -58,7 +59,9 @@ from util.chemical_image_utils import build_render_image_url, get_render_smiles
 from utils import timer, print_first_row
 from applicability_domain import applicability_domain_utilities as adu
 from model_service_common.config import get_env as _get_env
-from API_Utilities import SearchAPI
+
+
+from model_service_common.postgres import postgres_connect_args
 
 # debug = False
 import logging
@@ -208,12 +211,15 @@ def getEngine():
                     drivername='postgresql+psycopg2',
                     username=os.getenv('POSTGRES_USER'),
                     password=os.getenv('POSTGRES_PASSWORD'),
-                    host=os.getenv('POSTGRES_HOST', 'localhost'),
-                    port=int(os.getenv('POSTGRES_PORT', 5432)),
                     database=os.getenv('POSTGRES_DB')
                 )
 
-                _engine = create_engine(connect_url, echo=False, pool_pre_ping=True)
+                _engine = create_engine(
+                    connect_url,
+                    connect_args=postgres_connect_args(),
+                    echo=False,
+                    pool_pre_ping=True,
+                )
                 _session_factory = sessionmaker(bind=_engine)
 
     return _engine
@@ -583,6 +589,8 @@ class ModelInitializer:
                 cached_model = model_cache.read_model_snapshot(model_id)
             except model_cache.ModelArtifactCacheUnavailableError as exc:
                 logging.warning("Predictor model artifact cache unavailable for model_id=%s: %s", model_id, exc)
+                if not model_cache.postgres_fallback_enabled():
+                    raise
             else:
                 if cached_model is not None:
                     cached_model.modelId = str(model_id)
@@ -2827,6 +2835,35 @@ class ModelPredictor:
             return self._standardize_smiles_individually(stdizer_api, smiles_list, model)
 
     def _standardize_smiles_batch(self, stdizer_api, smiles_list, model):
+        return self._reuse_preprocessing(
+            standardization_cache,
+            (stdizer_api, model.qsarReadyRuleSet, bool(model.omitSalts)),
+            smiles_list,
+            lambda missing: self._standardize_smiles_batch_uncached(stdizer_api, missing, model),
+        )
+
+    @staticmethod
+    def _reuse_preprocessing(cache, context, structures, calculate):
+        results = [cache.get((context, structure)) for structure in structures]
+        missing_indices = [index for index, value in enumerate(results) if value is None]
+        if missing_indices:
+            calculated = calculate([structures[index] for index in missing_indices])
+            if len(calculated) != len(missing_indices):
+                raise ValueError("Preprocessing result count does not match input count")
+            for index, value in zip(missing_indices, calculated):
+                results[index] = value
+                if value[1] == 200:
+                    # Batch-local IDs must never leak into a later request.
+                    if isinstance(value[0], dict):
+                        value = (dict(value[0]), value[1])
+                        value[0].pop("id", None)
+                        value[0].pop("recordId", None)
+                    cache.put((context, structures[index]), value)
+        logging.info("Preprocessing reuse: inputs=%s hits=%s misses=%s", len(structures),
+                     len(structures) - len(missing_indices), len(missing_indices))
+        return results
+
+    def _standardize_smiles_batch_uncached(self, stdizer_api, smiles_list, model):
         if not smiles_list:
             return []
 
@@ -2911,6 +2948,14 @@ class ModelPredictor:
             ))
 
     def _calculate_descriptors_batch(self, descriptors_api, qsar_smiles_list, descriptor_service):
+        return self._reuse_preprocessing(
+            descriptor_cache,
+            (descriptors_api, descriptor_service),
+            qsar_smiles_list,
+            lambda missing: self._calculate_descriptors_batch_uncached(descriptors_api, missing, descriptor_service),
+        )
+
+    def _calculate_descriptors_batch_uncached(self, descriptors_api, qsar_smiles_list, descriptor_service):
         if not qsar_smiles_list:
             return []
 
@@ -3011,6 +3056,14 @@ class ModelPredictor:
                 )
                 continue
 
+            descriptor_error = self._descriptor_input_error(df_prediction, model.embedding)
+            if descriptor_error:
+                results[original_idx] = self._build_prediction_error_report(
+                    response_chemical, report_model_details, descriptor_error,
+                    standardized_chemical=standardized_chemical_for_response,
+                )
+                continue
+
             prediction_frames.append(df_prediction)
             prediction_indices.append(original_idx)
             prediction_chemicals.append(chemical)
@@ -3067,6 +3120,19 @@ class ModelPredictor:
                 results[idx] = {"smiles": smiles_list[idx], "error": "Prediction failed unexpectedly"}
 
         return results
+
+    @staticmethod
+    def _descriptor_input_error(frame, embedding):
+        missing = [name for name in embedding if name not in frame.columns]
+        if missing:
+            return "Required model descriptors are unavailable: " + ", ".join(map(str, missing[:10]))
+        try:
+            values = frame[embedding].to_numpy(dtype=float)
+        except (ValueError, TypeError):
+            return "Missing model descriptors: required values are non-numeric"
+        if not np.isfinite(values).all():
+            return "Missing model descriptors: required values are missing or non-finite"
+        return None
 
     @timer
     def predict_model_smiles_batch(self, model_id, smiles_list, generate_report=True, include_model_details=True):

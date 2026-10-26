@@ -1,3 +1,4 @@
+from db.model_cache import ModelArtifactCacheUnavailableError
 import copy
 import json
 import logging
@@ -462,6 +463,8 @@ def predict_smiles_in_process(args):
     try:
         pred = predictor.predictFromDB(model_id, current_smiles, include_model_details=include_model_details)
         return normalize_error_payload(pred, current_smiles)
+    except ModelArtifactCacheUnavailableError:
+        raise
     except Exception as exc:
         logging.exception("Unhandled exception in process prediction for %s", current_smiles)
         return build_error_response(current_smiles, "internal_error", "Unhandled prediction error", str(exc))
@@ -525,6 +528,8 @@ def make_predictdb_post_response(body):
             max_workers = max(1, min(max_workers, len(unique_smiles)))
             with ProcessPoolExecutor(max_workers=max_workers, initializer=init_process_predictor) as executor:
                 unique_results = list(executor.map(predict_smiles_in_process, ((model_id, s, False) for s in unique_smiles)))
+        except ModelArtifactCacheUnavailableError:
+            return JSONResponse(build_batch_error_response("model_storage_unavailable", "Model storage is temporarily unavailable"), status_code=503)
         except Exception as exc:
             logging.exception("Unhandled exception in batch process pool")
             return _json_response(
@@ -545,6 +550,8 @@ def make_predictdb_post_response(body):
                     f"Batch prediction returned {len(raw_results)} results for {len(unique_smiles)} SMILES"
                 )
             unique_results = [normalize_error_payload(pred, smi) for smi, pred in zip(unique_smiles, raw_results)]
+        except ModelArtifactCacheUnavailableError:
+            return JSONResponse(build_batch_error_response("model_storage_unavailable", "Model storage is temporarily unavailable"), status_code=503)
         except Exception as exc:
             logging.exception("Unhandled exception in batch prediction")
             return _json_response(
@@ -615,6 +622,8 @@ def make_predictdb_response(model_id, smiles=None, identifier=None, report_forma
     predictor = _get_request_predictor()
     try:
         pred = predictor.predictFromDB(model_id, smiles)
+    except ModelArtifactCacheUnavailableError:
+        return JSONResponse(build_error_response(smiles, "model_storage_unavailable", "Model storage is temporarily unavailable"), status_code=503)
     except Exception as exc:
         logging.exception("Unhandled exception in single prediction for %s", smiles)
         return _json_response(
