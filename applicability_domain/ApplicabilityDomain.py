@@ -394,58 +394,48 @@ class ADResults:
         self.results = results
 
 
+
 class TESTFragmentCounts(ApplicabilityDomainStrategy):
     
     def __init__(self, TrainSet, TestSet, is_categorical):
         ApplicabilityDomainStrategy.__init__(self, TrainSet, TestSet, is_categorical)
         
     def evaluate(self, embedding):
-        # Define the fragment range
         start_column = "As [+5 valence, one double bond]"
         xgboost_start_column = "As__+5_valence,_one_double_bond_"
         stop_column = "-N=S=O"
-        # Robustly get the slice between start and stop by position (inclusive),
-        # regardless of column order
+
         cols = self.TestSet.columns
-        # breakpoint()
         if start_column not in cols and xgboost_start_column in cols:
             start_column = xgboost_start_column
         if start_column not in cols or stop_column not in cols:
             raise KeyError("Start or stop column not found in TestSet.")
+
         lo = cols.get_loc(start_column)
         hi = cols.get_loc(stop_column)
         lo, hi = sorted([lo, hi])
         frag_cols = cols[lo:hi+1]
-    
-        # Subset the test set to the fragment range
+
         df_new = self.TestSet.loc[:, frag_cols]
-    
-        # Keep only fragments that also exist in the training set
         common_columns = frag_cols.intersection(self.TrainSet.columns)
-    
-        # Training stats for each fragment
+
         min_values = (
             self.TrainSet[common_columns]
             .apply(lambda col: col[col > 0].min())
             .fillna(0)
         )
         max_values = self.TrainSet[common_columns].max()
-    
-        # Count how many training chemicals contain each fragment
         training_count = (self.TrainSet[common_columns] > 0).sum()
-    
-        # Build a long-format dataframe of test counts for all chemicals/fragments
+
         results_df = (
             df_new[common_columns]
-            .reset_index()  # preserves the original test chemical index
-            .rename(columns={'index': 'test_chemical'})  # name the index column
-            .melt(id_vars=['test_chemical'], var_name='fragment', value_name='test_value')
+            .reset_index()
+            .rename(columns={'index': '_row_pos'})
+            .melt(id_vars=['_row_pos'], var_name='fragment', value_name='test_value')
         )
-    
-        # Keep only fragments that are present in the test chemical (count > 0)
+
         results_df = results_df[results_df['test_value'] > 0]
-    
-        # Attach training stats per fragment
+
         train_stats = pd.DataFrame({
             'fragment': common_columns,
             'training_min': min_values.values,
@@ -453,53 +443,36 @@ class TESTFragmentCounts(ApplicabilityDomainStrategy):
             'training_count': training_count.values
         })
         results_df = results_df.merge(train_stats, on='fragment', how='left')
-    
-        # Correctly attach idTest per row by mapping test_chemical -> first column of TestSet
-        id_map = self.TestSet.iloc[:, 0]  # Series indexed by test chemical index
-        results_df['idTest'] = results_df['test_chemical'].map(id_map)
-    
-        # Convert embedding to a set for fast membership checks
+
+        id_map = self.TestSet.iloc[:, 0]
+        results_df['idTest'] = results_df['_row_pos'].map(id_map)
+
         embedding_set = set(embedding or [])
-    
-        # Build per_chemical_df:
-        # - fragment_table: list of dicts with fragment-level details, with '*' appended
-        #   to fragments that are not in the embedding list
-        # - AD: True only if all test_value are within [training_min, training_max]
-        #   AND all fragments are present in the embedding list
+
         def _build_row(group: pd.DataFrame) -> dict:
-            in_bounds = (group['test_value'] >= group['training_min']) & (group['test_value'] <= group['training_max'])
-            in_embedding_mask = group['fragment'].isin(embedding_set)
-    
-            # Append '*' to fragment names not in embedding
-            group_flagged = group.copy()
-            
-            # group_flagged.loc[~in_embedding_mask, 'fragment'] = (
-            #     group_flagged.loc[~in_embedding_mask, 'fragment'] + '*'
-            # )
-    
-            frag_table = group_flagged[['fragment', 'test_value', 'training_min', 'training_max', 'training_count']] \
+            in_bounds = (
+                (group['test_value'] >= group['training_min']) &
+                (group['test_value'] <= group['training_max'])
+            )
+
+            frag_table = group[['fragment', 'test_value', 'training_min', 'training_max', 'training_count']] \
                 .to_dict(orient='records')
-    
-            # AD must also be False if any fragment is not in the embedding list
-            ad = bool(in_bounds.all())
-    
+
             return {
+                '_row_pos': int(group['_row_pos'].iloc[0]),
                 'idTest': group['idTest'].iloc[0],
                 'fragment_table': frag_table,
-                'AD': ad
+                'AD': bool(in_bounds.all()),
             }
-    
+
         if results_df.empty:
-            per_chemical_df = pd.DataFrame(columns=['idTest', 'fragment_table', 'AD'])
+            per_chemical_df = pd.DataFrame(columns=['_row_pos', 'idTest', 'fragment_table', 'AD'])
         else:
-            rows = [_build_row(g) for _, g in results_df.groupby('idTest', sort=False)]
-            per_chemical_df = pd.DataFrame(rows, columns=['idTest', 'fragment_table', 'AD'])
-    
-        
-        pd.set_option("display.max_columns",None)
-        
-        # print(per_chemical_df[per_chemical_df.idTest=='BrC1=CC(Br)=C(C=C1)OC1C=CC(Br)=CC=1'].to_dict(orient='records'))
-        return per_chemical_df
+            rows = [_build_row(g) for _, g in results_df.groupby('_row_pos', sort=False)]
+            per_chemical_df = pd.DataFrame(rows, columns=['_row_pos', 'idTest', 'fragment_table', 'AD'])
+
+        return per_chemical_df.sort_values('_row_pos').reset_index(drop=True)
+
 
 # At this point:
 # - results_df contains long-form rows for all nonzero fragments per test chemical.

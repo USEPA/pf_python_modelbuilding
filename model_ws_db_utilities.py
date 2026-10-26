@@ -2407,15 +2407,16 @@ class ModelPredictor:
 
         return results
 
+
     def _determine_applicability_domain_batch(self, model, applicability_domain_name, df_prediction):
         if df_prediction is None or df_prediction.empty:
             return []
-
+    
         if applicability_domain_name == pc.Applicability_Domain_TEST_Embedding_Euclidean:
             fast_results = self._fast_test_embedding_euclidean_ad_batch(model, applicability_domain_name, df_prediction)
             if fast_results is not None:
                 return fast_results
-
+    
         output, ad_cutoff = adu.generate_applicability_domain_with_preselected_descriptors_from_dfs(
             train_df=model.df_training,
             test_df=df_prediction,
@@ -2424,17 +2425,49 @@ class ModelPredictor:
             applicability_domain=applicability_domain_name,
             filterColumnsInBothSets=True,
         )
-
-        return [
-            self._build_applicability_domain_result_from_row(
-                model,
+    
+        if output is None or output.empty:
+            return [
+                {
+                    "AD": False,
+                    "adMethod": {"name": applicability_domain_name},
+                }
+                for _ in range(len(df_prediction.index))
+            ]
+    
+        # Prefer explicit row-position alignment if present
+        if '_row_pos' in output.columns:
+            output = output.sort_values('_row_pos').reset_index(drop=True)
+    
+        # Fallback if output row count doesn't match input
+        if len(output.index) != len(df_prediction.index):
+            logging.warning(
+                "AD output row count mismatch; attempting to align by idTest where possible. "
+                "ad=%s output_rows=%s input_rows=%s",
                 applicability_domain_name,
-                output.iloc[row_pos],
-                ad_cutoff,
+                len(output.index),
+                len(df_prediction.index),
             )
-            for row_pos in range(len(output.index))
-        ]
-
+    
+            input_ids = df_prediction.iloc[:, 0].tolist()
+            if 'idTest' in output.columns:
+                output = output.set_index('idTest').reindex(input_ids).reset_index()
+            else:
+                output = output.iloc[:len(df_prediction.index)].copy()
+    
+        results = []
+        for row_pos in range(len(df_prediction.index)):
+            row = output.iloc[row_pos]
+            results.append(
+                self._build_applicability_domain_result_from_row(
+                    model,
+                    applicability_domain_name,
+                    row,
+                    ad_cutoff,
+                )
+            )
+    
+        return results
     def _determine_applicability_domains_batch(self, model, df_prediction):
         row_count = 0 if df_prediction is None else len(df_prediction.index)
         results_by_row = [[] for _ in range(row_count)]
