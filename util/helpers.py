@@ -1,6 +1,7 @@
 import copy
 import json
 import logging
+import math
 import os
 from concurrent.futures import ProcessPoolExecutor
 import threading
@@ -56,7 +57,15 @@ def _coerce_json_safe(value):
             if list_value is not value:
                 return _coerce_json_safe(list_value)
 
+    # Make invalid JSON floats safe
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+
     return value
+
+
+def _json_response(content, status_code=200):
+    return JSONResponse(content=_coerce_json_safe(content), status_code=status_code)
 
 
 def _to_obj(x):
@@ -498,12 +507,12 @@ def collect_model_details_for_metadata(model_ids, smiles=None):
 def make_predictdb_post_response(body):
     parsed_request, _, error_payload = _parse_predictdb_post_input(body)
     if error_payload is not None:
-        return JSONResponse(error_payload, status_code=400)
+        return _json_response(error_payload, status_code=400)
 
     model_id, smiles_list, request_ids = parsed_request
 
     if not smiles_list:
-        return JSONResponse(content=build_predictdb_post_payload([]))
+        return _json_response(build_predictdb_post_payload([]))
 
     unique_smiles, index_map = dedupe_smiles_preserve_order(smiles_list)
     batch_mode = os.getenv("PREDICT_BATCH_MODE", "thread").strip().lower()
@@ -518,8 +527,8 @@ def make_predictdb_post_response(body):
                 unique_results = list(executor.map(predict_smiles_in_process, ((model_id, s, False) for s in unique_smiles)))
         except Exception as exc:
             logging.exception("Unhandled exception in batch process pool")
-            return JSONResponse(
-                content=build_batch_error_response(
+            return _json_response(
+                build_batch_error_response(
                     "internal_error",
                     "Unhandled batch prediction error",
                     str(exc),
@@ -538,8 +547,8 @@ def make_predictdb_post_response(body):
             unique_results = [normalize_error_payload(pred, smi) for smi, pred in zip(unique_smiles, raw_results)]
         except Exception as exc:
             logging.exception("Unhandled exception in batch prediction")
-            return JSONResponse(
-                content=build_batch_error_response(
+            return _json_response(
+                build_batch_error_response(
                     "internal_error",
                     "Unhandled batch prediction error",
                     str(exc),
@@ -564,12 +573,12 @@ def make_predictdb_post_response(body):
         for idx in index_map[smiles]:
             model_results[idx] = _attach_request_id_to_prediction(prediction, request_ids[idx])
 
-    return JSONResponse(content=build_predictdb_post_payload(model_results, model_details=batch_model_details))
+    return _json_response(build_predictdb_post_payload(model_results, model_details=batch_model_details))
 
 
 def make_predictdb_response(model_id, smiles=None, identifier=None, report_format="json"):
     if smiles and identifier:
-        return JSONResponse(
+        return _json_response(
             build_error_response(smiles, "bad_request", f"Both SMILES '{smiles}' and identifier {identifier} are provided"),
             status_code=400,
         )
@@ -579,13 +588,13 @@ def make_predictdb_response(model_id, smiles=None, identifier=None, report_forma
             chemicals, code = SearchAPI.call_resolver_get(RESOLVER_API, identifier)
         except Exception as exc:
             logging.exception("Resolver lookup failed for identifier=%s", identifier)
-            return JSONResponse(
+            return _json_response(
                 build_error_response(identifier, "resolver_error", "Resolver lookup failed", str(exc)),
                 status_code=500,
             )
 
         if code != 200 or not chemicals:
-            return JSONResponse(
+            return _json_response(
                 build_error_response(identifier, "not_found", f"Could not find {identifier}"),
                 status_code=404,
             )
@@ -593,12 +602,12 @@ def make_predictdb_response(model_id, smiles=None, identifier=None, report_forma
 
     if not smiles:
         if not identifier:
-            return JSONResponse(
+            return _json_response(
                 build_error_response("", "bad_request", "Either 'smiles' or 'identifier' is required"),
                 status_code=400,
             )
 
-        return JSONResponse(
+        return _json_response(
             build_error_response(identifier, "not_found", f"Could not find {identifier}"),
             status_code=404,
         )
@@ -608,7 +617,7 @@ def make_predictdb_response(model_id, smiles=None, identifier=None, report_forma
         pred = predictor.predictFromDB(model_id, smiles)
     except Exception as exc:
         logging.exception("Unhandled exception in single prediction for %s", smiles)
-        return JSONResponse(
+        return _json_response(
             build_error_response(smiles, "internal_error", "Unhandled prediction error", str(exc)),
             status_code=500,
         )
@@ -621,67 +630,53 @@ def make_predictdb_response(model_id, smiles=None, identifier=None, report_forma
 
     if report_format == "html":
         if isinstance(normalized_pred, dict) and normalized_pred.get("error") is not None and normalized_pred.get("modelResults") is None:
-            return JSONResponse(content=normalized_pred, status_code=_error_status_code(normalized_pred))
+            return _json_response(normalized_pred, status_code=_error_status_code(normalized_pred))
         report_creator = ReportCreator()
         model_results_html = report_creator.create_html_report_from_json(to_json_str(normalized_pred))
         return HTMLResponse(content=model_results_html)
 
     single_payload = build_predictdb_single_payload(normalized_pred)
-    return JSONResponse(content=single_payload, status_code=_error_status_code(normalized_pred))
 
-
+    return _json_response(single_payload, status_code=_error_status_code(normalized_pred))
 
 
 def make_experimental_db_response(identifier, report_format="json"):
-
     if not identifier:
-        return JSONResponse(
+        return _json_response(
             build_error_response("", "bad_request", "'identifier' is required"),
             status_code=400,
         )
 
     try:
         chemicals, code = SearchAPI.call_resolver_get(RESOLVER_API, identifier)
-        
     except Exception as exc:
         logging.exception("Resolver lookup failed for identifier=%s", identifier)
-        return JSONResponse(
+        return _json_response(
             build_error_response(identifier, "resolver_error", "Resolver lookup failed", str(exc)),
             status_code=500,
         )
 
     if code != 200 or not chemicals:
-        return JSONResponse(
+        return _json_response(
             build_error_response(identifier, "not_found", f"Could not find {identifier}"),
             status_code=404,
         )
-        
+
     sid = (chemicals[0].get("chemical") or {}).get("sid")
-    sids=[]
-    sids.append(sid)
-        
+    sids = [sid]
+
     from util.exp_prop import fetch_property_values_grouped_by_chemical, write_results_to_html
     from model_ws_db_utilities import getSession
     session = getSession()
-    
+
     data = fetch_property_values_grouped_by_chemical(session, sids)
-    
-    # print(json.dumps(data,indent=4))
-    
 
     report_format = (report_format or "json").lower()
     if report_format not in ("json", "html"):
         report_format = "json"
 
-
     if report_format == "html":
         html = write_results_to_html(data, write_to_file=False)
         return HTMLResponse(content=html)
 
-    # single_payload = build_predictdb_single_payload(normalized_pred)
-    # single_payload={}
-    return JSONResponse(content=data, status_code=200)
-    
-    
-
-
+    return _json_response(data, status_code=200)

@@ -1076,7 +1076,8 @@ class ModelBuilder:
 
 
     @staticmethod
-    def build_and_test_model(df_training, df_prediction, cv, params, embedding, is_binary):
+    def build_and_test_model(df_training, df_prediction, cv, params, embedding):
+        
         
         model = call_build_model_with_preselected_descriptors_from_df(params, df_training.copy(), df_prediction.copy(),
                                                                       cv, descriptor_names_tsv=embedding,
@@ -1094,9 +1095,13 @@ class ModelBuilder:
     
         # calculate stats for test set
         
-        if is_binary:
+        if model.is_binary and model.num_categories==2:
             test_stats = calculate_binary_statistics(df_predictions_test, 0.5, "_Test")
             training_stats = calculate_binary_statistics(df_predictions_training, 0.5, "_Training")
+
+        elif model.is_binary and model.num_categories==3:
+            test_stats = {} #TODO
+            training_stats = {} #TODO
 
         else:
             mean_exp_training = df_training["Property"].mean()
@@ -2176,8 +2181,12 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         #     df_training, xgb_feature_name_map = xgb_sanitize_feature_names(df_training)
         #     df_prediction, _ = xgb_sanitize_feature_names(df_prediction)
 
-        s = df_training.iloc[:, 1]
-        is_binary = s.isin([0, 1]).all()
+        # s = df_training.iloc[:, 1]
+        # is_binary = s.isin([0, 1]).all()
+        #
+        # if s.isin([0, 1, 2]).all():
+        #     is_binary = True
+        
         # print('is_binary', is_binary)
 
         # ---- Optional outlier filtering on training data only ----
@@ -2323,7 +2332,7 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
                     f"Selected {selected_feature_count} features from {original_feature_count}."
                 )
             
-        df_pred_training, df_pred_test, training_stats, test_stats, model = ModelBuilder.build_and_test_model(df_training, df_prediction, cv, params, embedding, is_binary)
+        df_pred_training, df_pred_test, training_stats, test_stats, model = ModelBuilder.build_and_test_model(df_training, df_prediction, cv, params, embedding)
                 
         if not feature_selection and fs_previous_embedding and qsar_method != 'gcm':
     
@@ -2339,7 +2348,7 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
                 logging.info(f"After SFS, {len(model.embedding)} descriptors: {model.embedding}")
     
             # redo model and predictions:
-            df_pred_training, df_pred_test, training_stats, test_stats, model = ModelBuilder.build_and_test_model(df_training, df_prediction, params, model.embedding, is_binary)
+            df_pred_training, df_pred_test, training_stats, test_stats, model = ModelBuilder.build_and_test_model(df_training, df_prediction, params, model.embedding)
             logging.info(f"After FS, embedding has {len(model.embedding)} descriptors: {model.embedding}")
 
         # ---- Run cross validation calculations ----
