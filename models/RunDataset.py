@@ -1385,6 +1385,8 @@ class RunDataset:
                 ad_measure = list(ad_measure)
             if descriptor_set_name == "WebTEST-default" and pc.Applicability_Domain_TEST_Fragment_Counts not in ad_measure:
                 ad_measure.append(pc.Applicability_Domain_TEST_Fragment_Counts)
+            elif descriptor_set_name != "WebTEST-default" and pc.Applicability_Domain_TEST_Fragment_Counts in ad_measure:
+                ad_measure.remove(pc.Applicability_Domain_TEST_Fragment_Counts)
 
             hyperparameters = Parameters.set_hyper_parameters(
                 qsar_method=qsar_method,
@@ -2217,8 +2219,8 @@ def test_customized_run() -> None:
 
 
 def main() -> None:
-    # test_run_dataset()
-    test_customized_run()
+    test_run_dataset()
+    # test_customized_run()
 
 
 if __name__ == "__main__":
