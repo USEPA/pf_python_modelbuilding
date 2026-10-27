@@ -3146,6 +3146,7 @@ class ModelPredictor:
 
         report_model_details = model_details_dict if include_model_details else None
         standardized_results = self._standardize_smiles_batch(STDIZER_API, smiles_list, model)
+        
         return self._predict_model_smiles_batch_from_standardized_results(
             model,
             DESCRIPTORS_API,
@@ -3239,7 +3240,7 @@ class ModelPredictor:
                 generate_report=True,
             )
             cache_entries = []
-
+            
             for idx, cache_key, prediction in zip(missing_indices, missing_cache_keys, generated_results):
                 prediction_obj = self._prediction_from_cached_value(prediction)
                 results[idx] = prediction_obj
@@ -3697,6 +3698,10 @@ class ModelPredictor:
 
     @timer
     def standardizeStructure(self, stdizer_api, smiles, model: Model):
+        
+        if model.omitSalts and "." in smiles:
+            return f"{smiles}: model can't run mixtures", 400
+
         useFullStandardize = False
         try:
             chemicals, code = QsarSmilesAPI.call_qsar_ready_standardize_post(stdizer_api=stdizer_api, smiles=smiles, full=useFullStandardize,
@@ -3709,21 +3714,23 @@ class ModelPredictor:
         if code >= 400:
             return chemicals, code
                 
+        logging.info(f"len(chemicals){len(chemicals)}")
+                
         if len(chemicals) == 0:
             # logging.debug('Standardization failed')
             return f"{smiles} failed standardization" if smiles else 'No Structure', 400
 
-        if len(chemicals) > 1 and model.omitSalts:
-            # print('qsar smiles indicates mixture')
-            return f"{smiles}: model can't run mixtures", 400
-
-        chemical = chemicals[0]
-        qsarSmiles = chemical["canonicalSmiles"]
-        if not qsarSmiles:
-            logging.warning("Standardization returned empty canonicalSmiles for %s", smiles)
-            return f"{smiles} failed standardization", 400
-        logging.debug(f"qsarSmiles: {qsarSmiles}")
-        return chemical, 200
+        elif len(chemicals) > 1: # even if omitSalts = False it still shouldnt make prediction because the qsar ready smiles isnt a single component
+            # e.g. CccCCCCO.COCOCOCOC can't run model predictions but Cl.CCC(=O)OC1(CCN(CC#CC2=CC=CC=C2)CC1)C1=CC=CC=C1 will give single component
+            return f"{smiles}: chemical cannot be standardized to a single component", 400
+        else:
+            chemical = chemicals[0]
+            qsarSmiles = chemical["canonicalSmiles"]
+            if not qsarSmiles:
+                logging.warning("Standardization returned empty canonicalSmiles for %s", smiles)
+                return f"{smiles} failed standardization", 400
+            logging.debug(f"qsarSmiles: {qsarSmiles}")
+            return chemical, 200
         
     def standardizeStructure2(self, stdizer_api, smiles, qsarReadyRuleSet, omitSalts):
         useFullStandardize = False
