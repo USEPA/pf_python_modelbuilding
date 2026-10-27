@@ -1233,10 +1233,11 @@ class DataTransformer:
         model_descriptors_df = pd.DataFrame(results_dict["model_details"]["embedding"], columns=["Symbol"])
 
         PROJECT_ROOT = os.getenv("PROJECT_ROOT")
-        path_segments = [PROJECT_ROOT, "resources", "variable definitions-ed.txt"]
+        path_segments = [PROJECT_ROOT, "resources", "variable definitions.txt"]
         
         variable_definitions_df = pd.read_csv(os.path.join(*path_segments), sep="\t")
-
+        variable_definitions_df = variable_definitions_df[variable_definitions_df.Set.isin([None, results_dict["model_details"]["descriptor_set_name"]])]
+        
         model_descriptors_df['Symbol'] = model_descriptors_df['Symbol'].astype(str)
         variable_definitions_df['Symbol'] = variable_definitions_df['Symbol'].astype(str)
 

@@ -1717,6 +1717,8 @@ class DataQuerier:
             results_dict["model_details"]["model_coefficients"] = coefficients_df
         else:
             logging.warning(f"Model type {method_name} does not support coefficient retrieval, coefficient values will not be added to Model Descriptors sheet")
+
+        results_dict["model_details"]["descriptor_set_name"] = model.descriptorSetName
         
         model_descriptors = DataTransformer.get_model_descriptors_df(results_dict)
 
@@ -2559,9 +2561,11 @@ class DataTransformer:
                 
 
         PROJECT_ROOT = os.getenv("PROJECT_ROOT")
-        path_segments = [PROJECT_ROOT, "resources", "variable definitions-ed.txt"]
+        path_segments = [PROJECT_ROOT, "resources", "variable definitions.txt"]
         
         variable_definitions_df = pd.read_csv(os.path.join(*path_segments), sep="\t")
+        variable_definitions_df = variable_definitions_df[variable_definitions_df.Set.isin(["All", results_dict["model_details"]["descriptor_set_name"]])]
+        variable_definitions_df = variable_definitions_df.drop(columns=["Set"], errors="ignore")
 
         model_descriptors_df['Symbol'] = model_descriptors_df['Symbol'].astype(str)
         variable_definitions_df['Symbol'] = variable_definitions_df['Symbol'].astype(str)

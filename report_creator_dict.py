@@ -528,7 +528,7 @@ class ReportCreator:
             from pathlib import Path
             BASE_DIR = Path(__file__).resolve().parent
             RESOURCES_DIR = BASE_DIR / "resources"
-            tsv_path = RESOURCES_DIR / "variable definitions-ed.txt"
+            tsv_path = RESOURCES_DIR / "variable definitions.txt"
             # Read the TSV
             df_defs = pd.read_csv(tsv_path, sep="\t", dtype=str)
             return df_defs
