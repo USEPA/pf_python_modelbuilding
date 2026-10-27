@@ -813,6 +813,12 @@ class Model:
         
 
     def build_model(self, use_pmml_pipeline, scale_features, cv, descriptor_names=None):
+        """
+        builds the model_obj
+        Note: is_binary is set when model is instantiated so dont need to reset here
+        
+        """
+        
         logging.debug('enter build model')
 
 
@@ -826,7 +832,7 @@ class Model:
         if descriptor_names is None:
             
             if self.regressor_name == 'gcm':
-                train_ids, train_labels, train_features, train_column_names, self.is_binary = \
+                train_ids, train_labels, train_features, train_column_names, _ = \
                     DFU.prepare_instances_with_preselected_descriptors_gcm(
                         self.df_training,
                         "training",
@@ -834,11 +840,11 @@ class Model:
                     )
                 # print(len(train_column_names))
             else:
-                train_ids, train_labels, train_features, train_column_names, self.is_binary = \
+                train_ids, train_labels, train_features, train_column_names, _ = \
                     DFU.prepare_instances(self.df_training, "training", remove_logp=self.remove_log_p_descriptors, remove_corr=True)
                 # Use columns selected by prepare_instances (in case logp descriptors were removed)
                 if train_column_names is None or len(train_column_names) == 0:
-                    train_ids, train_labels, train_features, train_column_names, self.is_binary = \
+                    train_ids, train_labels, train_features, train_column_names, _ = \
                         DFU.prepare_instances(self.df_training, "training", remove_logp=self.remove_log_p_descriptors, remove_corr=False)
                 if train_column_names is None or len(train_column_names) == 0:
                     raise ValueError("No descriptors available for training after filtering. Check your descriptor set and filtering options.")
@@ -847,7 +853,7 @@ class Model:
             # print(self.embedding)
         else:
             self.embedding = descriptor_names
-            train_ids, train_labels, train_features, train_column_names, self.is_binary = \
+            train_ids, train_labels, train_features, train_column_names, _ = \
                 DFU.prepare_instances_with_preselected_descriptors(self.df_training, "training", self.embedding)
             # print("train_ids", train_ids)
             # Use columns selected by prepare_instances (in case logp descriptors were removed)            
@@ -1624,6 +1630,10 @@ class ModelDescription:
         self.omitSalts = model.omitSalts
         self.qsarReadyRuleSet = model.qsarReadyRuleSet
         self.is_binary = model.is_binary
+        
+        if hasattr(model, "num_categories"):
+            self.num_categories = model.num_categories
+        
         self.remove_log_p_descriptors = model.remove_log_p_descriptors
         self.hyperparameter_grid = model.hyperparameter_grid
         self.hyperparameters = model.hyperparameters  # final hyperparameters
