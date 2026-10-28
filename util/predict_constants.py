@@ -312,9 +312,20 @@ BALANCED_ACCURACY: Final[str] = "BA"
 SENSITIVITY: Final[str] = "SN"
 SPECIFICITY: Final[str] = "SP"
 CONCORDANCE: Final[str] = "Concordance"
+
 POS_CONCORDANCE: Final[str] = "PosConcordance"
 NEG_CONCORDANCE: Final[str] = "NegConcordance"
+
+RECALL_CLASS_0: Final[str] ="RECALL_CLASS_0"
+RECALL_CLASS_1: Final[str] ="RECALL_CLASS_1"
+RECALL_CLASS_2: Final[str] ="RECALL_CLASS_2"
+
+
+
 PEARSON_RSQ: Final[str] = "PearsonRSQ"
+
+
+            
 
 TAG_EXTERNAL: Final[str] = "_External"
 TAG_TEST: Final[str] = "_Test"

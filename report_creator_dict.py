@@ -264,7 +264,7 @@ class ReportCreator:
                             
                         else:
                             
-                            if md["propertyIsBinary"]:
+                            if md["propertyIsBinary"] and md['unitsModel'] !='Multiclass':
                                 binary = int(mr["predictionValueUnitsModel"] >= 0.5)
                                 my_td+=(b("Predicted value:"))
                                 my_td+=(f" {str_pred_model_units} \u2794 {binary} {md['unitsModel']}")
@@ -430,57 +430,92 @@ class ReportCreator:
                                 
                                                 
     
-        def addStatsTableTraining(self, md): 
-            
-                # ms = md["modelStatistics"]
-                
-                ms = md["performance"]
-                
-                with table(border=1, cellpadding="0", cellspacing="0", width="100%"):
-                    caption("Model Training Set Statistics")
-            
-                    with tbody():
+        def addStatsTableTraining(self, md):
+        
+            ms = md["performance"]
+        
+            # Detect 3-class mode
+            num_categories = getattr(md, "num_categories", None)
+            if num_categories is None and isinstance(md, dict):
+                num_categories = md.get("num_categories", md.get("numCategories", None))
+        
+            is_three_class = md.get("propertyIsBinary", False) and num_categories == 3 if isinstance(md, dict) else getattr(md, "propertyIsBinary", False) and num_categories == 3
+        
+            with table(border=1, cellpadding="0", cellspacing="0", width="100%"):
+                caption("Model Training Set Statistics")
+        
+                with tbody():
+                    if md["propertyIsBinary"] and not is_three_class:
+                        # Binary classification: 3 columns per block
                         with tr():
-                            # Row for "Training" and "Test" headers
                             td(f"Training (80%, n={ms['train']['N']})", colspan="3", align="center", style="background-color: #d3d3d3; width: 25%;")
                             td(f"5-fold CV (80%, n={ms['train']['N']})", colspan="3", align="center", style="background-color: #ccffcc; width: 25%;")
-                
+        
                         with tr():
-                            
                             for _ in range(2):
-                                
-                                if md['propertyIsBinary']:
-                                    td(["BA"], align="center")
-                                    td("SN", align="center")
-                                    td("SP", align="center")
-                                else:
-                                    td(["R", sup("2")], align="center")
-                                    td("RMSE", align="center")
-                                    td("MAE", align="center")
-                                            
+                                td("BA", align="center")
+                                td("SN", align="center")
+                                td("SP", align="center")
+        
                         with tr():
-                            # Training set stats
-                            
-                            if md['propertyIsBinary']:
-                                td(format2(ms["train"]["BA"]), align="center")
-                                td(format2(ms["train"]["SN"]), align="center")
-                                td(format2(ms["train"]["SP"]), align="center")
-                
-                                # CV stats
-                                td(format2(ms["fiveFoldICV"]["BA"]), align="center")
-                                td(format2(ms["fiveFoldICV"]["SN"]), align="center")
-                                td(format2(ms["fiveFoldICV"]["SP"]), align="center")
-    
-                            else:
-                                td(format2(ms["train"]["R2"]), align="center")
-                                td(format2(ms["train"]["RMSE"]), align="center")
-                                td(format2(ms["train"]["MAE"]), align="center")
-                
-                                # CV stats
-                                td(format2(ms["fiveFoldICV"]["R2"]), align="center")
-                                td(format2(ms["fiveFoldICV"]["RMSE"]), align="center")
-                                td(format2(ms["fiveFoldICV"]["MAE"]), align="center")
-    
+                            # Training
+                            td(format2(ms["train"].get("BA")), align="center")
+                            td(format2(ms["train"].get("SN")), align="center")
+                            td(format2(ms["train"].get("SP")), align="center")
+        
+                            # CV
+                            td(format2(ms["fiveFoldICV"].get("BA")), align="center")
+                            td(format2(ms["fiveFoldICV"].get("SN")), align="center")
+                            td(format2(ms["fiveFoldICV"].get("SP")), align="center")
+        
+                    elif is_three_class:
+                        # 3-class classification: 4 columns per block
+                        with tr():
+                            td(f"Training (80%, n={ms['train']['N']})", colspan="4", align="center", style="background-color: #d3d3d3; width: 25%;")
+                            td(f"5-fold CV (80%, n={ms['train']['N']})", colspan="4", align="center", style="background-color: #ccffcc; width: 25%;")
+        
+                        with tr():
+                            for _ in range(2):
+                                td("BA", align="center")
+                                td("Recall Class 0", align="center")
+                                td("Recall Class 1", align="center")
+                                td("Recall Class 2", align="center")
+        
+                        with tr():
+                            # Training
+                            td(format2(ms["train"].get("BA")), align="center")
+                            td(format2(ms["train"].get("RECALL_CLASS_0")), align="center")
+                            td(format2(ms["train"].get("RECALL_CLASS_1")), align="center")
+                            td(format2(ms["train"].get("RECALL_CLASS_2")), align="center")
+        
+                            # CV
+                            td(format2(ms["fiveFoldICV"].get("BA")), align="center")
+                            td(format2(ms["fiveFoldICV"].get("RECALL_CLASS_0")), align="center")
+                            td(format2(ms["fiveFoldICV"].get("RECALL_CLASS_1")), align="center")
+                            td(format2(ms["fiveFoldICV"].get("RECALL_CLASS_2")), align="center")
+        
+                    else:
+                        # Regression: 3 columns per block
+                        with tr():
+                            td(f"Training (80%, n={ms['train']['N']})", colspan="3", align="center", style="background-color: #d3d3d3; width: 25%;")
+                            td(f"5-fold CV (80%, n={ms['train']['N']})", colspan="3", align="center", style="background-color: #ccffcc; width: 25%;")
+        
+                        with tr():
+                            for _ in range(2):
+                                td(["R", sup("2")], align="center")
+                                td("RMSE", align="center")
+                                td("MAE", align="center")
+        
+                        with tr():
+                            # Training
+                            td(format2(ms["train"].get("R2")), align="center")
+                            td(format2(ms["train"].get("RMSE")), align="center")
+                            td(format2(ms["train"].get("MAE")), align="center")
+        
+                            # CV
+                            td(format2(ms["fiveFoldICV"].get("R2")), align="center")
+                            td(format2(ms["fiveFoldICV"].get("RMSE")), align="center")
+                            td(format2(ms["fiveFoldICV"].get("MAE")), align="center")
         
 
         def writeVariablesTable(self, variables):
@@ -576,64 +611,98 @@ class ReportCreator:
                 self.writeVariablesTable(variables)  
             
         
-        def addStatsTableTest(self, md): 
+        def addStatsTableTest(self, md):
         
             ms = md["performance"]
-            
-            set="external"
-            
+            set_name = "external"
+        
+            # Detect 3-class mode
+            num_categories = getattr(md, "num_categories", None)
+            if num_categories is None and isinstance(md, dict):
+                num_categories = md.get("num_categories", md.get("numCategories", None))
+        
+            is_three_class = md.get("propertyIsBinary", False) and num_categories == 3 if isinstance(md, dict) else getattr(md, "propertyIsBinary", False) and num_categories == 3
         
             with table(border=1, cellpadding="0", cellspacing="0", width="100%"):
                 caption("Model Test Set Statistics")
-            
+        
                 with tbody():
-                    with tr():
-                        # Row for "Training" and "Test" headers
-                        td(f"Test (20%, n={ms[set]['N']})", colspan="3", align="center", style="background-color: #ccccff; width: 25%;")
-                        td("Test Set Applicability Domain Statistics", colspan="3", align="center",
-                           style="background-color: #ffffcc; width: 25%;")
+                    if md["propertyIsBinary"] and not is_three_class:
+                        # Binary classification
+                        with tr():
+                            td(f"Test (20%, n={ms[set_name]['N']})", colspan="3", align="center", style="background-color: #ccccff; width: 25%;")
+                            td("Test Set Applicability Domain Statistics", colspan="3", align="center",
+                               style="background-color: #ffffcc; width: 25%;")
         
-                    with tr():
-                        # Header row for metrics
-        
-                        if md['propertyIsBinary']:
+                        with tr():
                             td("BA", align="center")
                             td("SN", align="center")
                             td("SP", align="center")
-            
+        
                             td("BA Test inside AD", align="center")
                             td("BA Test outside AD", align="center")
                             td("Fraction Inside AD", align="center")
-
-                        else:
+        
+                        with tr():
+                            td(format2(ms[set_name].get("BA")), align="center")
+                            td(format2(ms[set_name].get("SN")), align="center")
+                            td(format2(ms[set_name].get("SP")), align="center")
+        
+                            td(format2(ms[set_name + "AD"].get("BA_inside_AD")), align="center")
+                            td(format2(ms[set_name + "AD"].get("BA_outside_AD")), align="center")
+                            td(format2(ms[set_name + "AD"].get("Fraction_inside_AD")), align="center")
+        
+                    elif is_three_class:
+                        # 3-class classification
+                        with tr():
+                            td(f"Test (20%, n={ms[set_name]['N']})", colspan="4", align="center", style="background-color: #ccccff; width: 25%;")
+                            td("Test Set Applicability Domain Statistics", colspan="3", align="center",
+                               style="background-color: #ffffcc; width: 25%;")
+        
+                        with tr():
+                            td("BA", align="center")
+                            td("Recall Class 0", align="center")
+                            td("Recall Class 1", align="center")
+                            td("Recall Class 2", align="center")
+        
+                            td("BA Test inside AD", align="center")
+                            td("BA Test outside AD", align="center")
+                            td("Fraction Inside AD", align="center")
+        
+                        with tr():
+                            td(format2(ms[set_name].get("BA")), align="center")
+                            td(format2(ms[set_name].get("RECALL_CLASS_0")), align="center")
+                            td(format2(ms[set_name].get("RECALL_CLASS_1")), align="center")
+                            td(format2(ms[set_name].get("RECALL_CLASS_2")), align="center")
+        
+                            td(format2(ms[set_name + "AD"].get("BA_inside_AD")), align="center")
+                            td(format2(ms[set_name + "AD"].get("BA_outside_AD")), align="center")
+                            td(format2(ms[set_name + "AD"].get("Fraction_inside_AD")), align="center")
+        
+                    else:
+                        # Regression
+                        with tr():
+                            td(f"Test (20%, n={ms[set_name]['N']})", colspan="3", align="center", style="background-color: #ccccff; width: 25%;")
+                            td("Test Set Applicability Domain Statistics", colspan="3", align="center",
+                               style="background-color: #ffffcc; width: 25%;")
+        
+                        with tr():
                             td(["R", sup("2")], align="center")
                             td("RMSE", align="center")
                             td("MAE", align="center")
-            
+        
                             td("MAE Test inside AD", align="center")
                             td("MAE Test outside AD", align="center")
                             td("Fraction Inside AD", align="center")
         
-                    with tr():
-                        
-                        if md['propertyIsBinary']:
-                            td(format2(ms[set]["BA"]), align="center")
-                            td(format2(ms[set]["SN"]), align="center")
-                            td(format2(ms[set]["SP"]), align="center")
-    
-                            # AD stats
-                            td(format2(ms[set+"AD"]["BA_inside_AD"]), align="center")
-                            td(format2(ms[set+"AD"]["BA_outside_AD"]), align="center")
-                            td(format2(ms[set+"AD"]["Fraction_inside_AD"]), align="center")    
-                        else:
-                            td(format2(ms[set]["R2"]), align="center")
-                            td(format2(ms[set]["RMSE"]), align="center")
-                            td(format2(ms[set]["MAE"]), align="center")
-    
-                            # AD stats
-                            td(format2(ms[set+"AD"]["MAE_inside_AD"]), align="center")
-                            td(format2(ms[set+"AD"]["MAE_outside_AD"]), align="center")
-                            td(format2(ms[set+"AD"]["Fraction_inside_AD"]), align="center")    
+                        with tr():
+                            td(format2(ms[set_name].get("R2")), align="center")
+                            td(format2(ms[set_name].get("RMSE")), align="center")
+                            td(format2(ms[set_name].get("MAE")), align="center")
+        
+                            td(format2(ms[set_name + "AD"].get("MAE_inside_AD")), align="center")
+                            td(format2(ms[set_name + "AD"].get("MAE_outside_AD")), align="center")
+                            td(format2(ms[set_name + "AD"].get("Fraction_inside_AD")), align="center")        
     
     class RawExpDataSection:
         
@@ -783,7 +852,7 @@ class ReportCreator:
             # public_source_original_name=self.safe_text(rec["public_source_original_name"])
 
         def create_experimental_records_table(self, records, param_names):
-                # caption("Results for neighbors compared with entire set")
+           # caption("")
             with table(cls="compact"):
                 with body():
                     with tr(style="background-color: #d3d3d3"):
@@ -908,29 +977,103 @@ table.compact td {
         
         def compute_confusion_counts(self, neighbors: list, pred_threshold: float = 0.5):
             """
-            Compute TP, FN, FP, TN for binary labels.
-            - Prediction is positive if pred >= pred_threshold, else negative.
-            - Actual is positive if exp == 1, else negative.
-            """
-            TP = FN = FP = TN = 0
+            Compute confusion matrix counts for binary or 3-class labels.
         
+            Returns:
+                {
+                    "classes": [0,1] or [0,1,2],
+                    "matrix": {actual: {pred: count, ...}, ...}
+                }
+            """
+            rows = []
             for n in neighbors:
                 if 'exp' not in n or 'pred' not in n:
                     continue
+                try:
+                    actual = int(float(n['exp']))
+                    predicted_raw = float(n['pred'])
+                    rows.append((actual, predicted_raw))
+                except (TypeError, ValueError):
+                    continue
         
-                actual_pos = (float(n['exp']) == 1.0)
-                predicted_pos = (float(n['pred']) >= pred_threshold)
+            if not rows:
+                return {"classes": [], "matrix": {}}
         
-                if actual_pos and predicted_pos:
-                    TP += 1
-                elif actual_pos and not predicted_pos:
-                    FN += 1
-                elif not actual_pos and predicted_pos:
-                    FP += 1
-                else:
-                    TN += 1
+            actual_values = [a for a, _ in rows]
+            predicted_values = [p for _, p in rows]
         
-            return TP, FN, FP, TN
+            classes = sorted(set(actual_values).union(set(int(round(p)) for p in predicted_values)))
+        
+            # Binary case
+            if set(classes).issubset({0, 1}):
+                matrix = {
+                    0: {0: 0, 1: 0},
+                    1: {0: 0, 1: 0},
+                }
+        
+                for actual, predicted_raw in rows:
+                    actual_class = 1 if actual == 1 else 0
+                    predicted_class = 1 if predicted_raw >= pred_threshold else 0
+                    matrix[actual_class][predicted_class] += 1
+        
+                return {"classes": [0, 1], "matrix": matrix}
+        
+            # Multiclass case (0,1,2)
+            if set(classes).issubset({0, 1, 2}):
+                matrix = {
+                    0: {0: 0, 1: 0, 2: 0},
+                    1: {0: 0, 1: 0, 2: 0},
+                    2: {0: 0, 1: 0, 2: 0},
+                }
+        
+                for actual, predicted_raw in rows:
+                    actual_class = actual
+                    predicted_class = int(round(predicted_raw))
+                    predicted_class = max(0, min(2, predicted_class))
+                    if actual_class in matrix:
+                        matrix[actual_class][predicted_class] += 1
+        
+                return {"classes": [0, 1, 2], "matrix": matrix}
+        
+            # fallback to binary
+            matrix = {
+                0: {0: 0, 1: 0},
+                1: {0: 0, 1: 0},
+            }
+            for actual, predicted_raw in rows:
+                actual_class = 1 if actual == 1 else 0
+                predicted_class = 1 if predicted_raw >= pred_threshold else 0
+                matrix[actual_class][predicted_class] += 1
+        
+            return {"classes": [0, 1], "matrix": matrix}        
+        
+        def compute_recall_stats(self, neighbors: list, pred_threshold: float = 0.5):
+            """
+            Compute recall stats and balanced accuracy for binary or multiclass.
+            """
+            result = self.compute_confusion_counts(neighbors, pred_threshold=pred_threshold)
+            classes = result.get("classes", [])
+            matrix = result.get("matrix", {})
+        
+            if not classes:
+                return {}
+        
+            recalls = {}
+            per_class_recalls = []
+        
+            for c in classes:
+                tp = matrix.get(c, {}).get(c, 0)
+                fn = sum(matrix.get(c, {}).get(p, 0) for p in classes if p != c)
+                recall = (tp / (tp + fn)) if (tp + fn) else None
+                recalls[c] = recall
+                if recall is not None:
+                    per_class_recalls.append(recall)
+        
+            ba = (sum(per_class_recalls) / len(per_class_recalls)) if per_class_recalls else None
+            recalls["BA"] = ba
+            return recalls
+        
+        
         
         def build_confusion_matrix_html(self, neighbors_in_set: dict, pred_threshold: float = 0.5) -> str:
             # Inline styles (no head modifications)
@@ -941,35 +1084,37 @@ table.compact td {
             pos_cell = base_cell + " background:#e7f7ec;"
             neg_cell = base_cell + " background:#fbeaea;"
         
-            # title_text = neighbors_in_set.get('title', 'Binary Confusion Matrix')
             neighbors = neighbors_in_set.get('neighbors', [])
-            
-            TP, FN, FP, TN = self.compute_confusion_counts(neighbors, pred_threshold=pred_threshold)
-                
-            def fmt(x):
-                return f"{x:.3f}" if x is not None else "N/A"
         
-            # Build document without touching doc.head
-            # h2(title_text)
-            # p(f"Set: {neighbors_in_set.get('set', 'N/A')} | Threshold (pred ≥ x is Positive): {pred_threshold}")
-    
-            # Confusion matrix table (rows = Actual, columns = Predicted)
+            result = self.compute_confusion_counts(neighbors, pred_threshold=pred_threshold)
+            classes = result.get("classes", [])
+            matrix = result.get("matrix", {})
+        
+            if not classes:
+                return "<p>No valid data available for confusion matrix.</p>"
+        
+            def cell_style(i, j):
+                return pos_cell if i == j else neg_cell
+        
+            matrix_title = (
+                "3-Class Confusion Matrix for Neighbors"
+                if classes == [0, 1, 2]
+                else "Binary Confusion Matrix for Neighbors"
+            )
+        
             with table(style=table_style):
-                caption("Binary Confusion Matrix for Neighbors")
+                caption(matrix_title)
                 with thead():
                     with tr():
                         th("", style=th_cell)  # top-left empty
-                        th("Predicted Positive", style=th_cell)
-                        th("Predicted Negative", style=th_cell)
+                        for c in classes:
+                            th(f"Predicted {c}", style=th_cell)
                 with tbody():
-                    with tr():
-                        th("Actual Positive", style=row_header)
-                        td(str(TP), style=pos_cell)
-                        td(str(FN), style=neg_cell)
-                    with tr():
-                        th("Actual Negative", style=row_header)
-                        td(str(FP), style=neg_cell)
-                        td(str(TN), style=pos_cell)
+                    for actual in classes:
+                        with tr():
+                            th(f"Actual {actual}", style=row_header)
+                            for predicted in classes:
+                                td(str(matrix.get(actual, {}).get(predicted, 0)), style=cell_style(actual, predicted))
     
 
             # Dont need following because have "Results for neighbors compared with entire set" table    
@@ -1042,59 +1187,93 @@ table.compact td {
                         td_tc += img(src=image_src, border="1", alt=title, title=title, width="150", height="150"), br()
                     td_tc += chem_id        
     
+
         def addMaeTable(self, td_tc, md, neighborsInSet):
-                
-                with td_tc:
-                    p()
-                    with table(border=1, cellpadding="5", cellspacing="0"):
-                        caption("Results for neighbors compared with entire set")
-                            
+
+            set_name = neighborsInSet["set"].strip().lower()
+            if set_name == "training":
+                perf = md["performance"]["fiveFoldICV"]
+            elif set_name == "test":
+                perf = md["performance"]["external"]
+
+            print("neighborsInSet[set]", neighborsInSet["set"])
+            print(perf)    
+
+            with td_tc:
+                p()
+                with table(border=1, cellpadding="5", cellspacing="0"):
+                    caption("Results for neighbors compared with entire set")
+        
+                    # Detect number of classes from the neighbors
+                    classes = self.compute_confusion_counts(neighborsInSet.get("neighbors", []))["classes"]
+        
+                    if md['propertyIsBinary'] and classes == [0, 1, 2]:
+                        # 3-class display
                         with tbody():
-                            
-                            if md['propertyIsBinary']:
-                                
-                                with tr(style="background-color: #d3d3d3"):
-                                    th("Chemicals")
-                                    th("BA*")
-                                    th("SN")
-                                    th("SP")
-                                with tr():
-                                    td("Analogs from set")
-                                    td(get_formatted_value(False, neighborsInSet["BA"], 3))
-                                    td(get_formatted_value(False, neighborsInSet["SN"], 3))
-                                    td(get_formatted_value(False, neighborsInSet["SP"], 3))
-                                
-                                with tr():
-                                    td("Entire set")
-                                    if "train" in neighborsInSet["set"].lower():
-                                        td(get_formatted_value(False, md["performance"]["fiveFoldICV"]["BA"], 3))    
-                                        td(get_formatted_value(False, md["performance"]["fiveFoldICV"]["SN"], 3))
-                                        td(get_formatted_value(False, md["performance"]["fiveFoldICV"]["SP"], 3))
-                                    else:
-                                        td(get_formatted_value(False, md["performance"]["external"]["BA"], 3))
-                                        td(get_formatted_value(False, md["performance"]["external"]["SN"], 3))
-                                        td(get_formatted_value(False, md["performance"]["external"]["SP"], 3))
-                                
-                            else:
-                            
-                                with tr(style="background-color: #d3d3d3"):
-                                    th("Chemicals")
-                                    th("MAE*")
-                                with tr():
-                                    td("Analogs from set")
-                                    td(get_formatted_value(False, neighborsInSet["MAE"], 3))
-                                with tr():
-                                    td("Entire set")
-                                    if "train" in neighborsInSet["set"].lower():
-                                        td(get_formatted_value(False, md["performance"]["fiveFoldICV"]["MAE"], 3))    
-                                    else:
-                                        td(get_formatted_value(False, md["performance"]["external"]["MAE"], 3))
-                                        
-                                                                    
-                    if md['propertyIsBinary']:
+                            with tr(style="background-color: #d3d3d3"):
+                                th("Chemicals")
+                                th("BA")
+                                th("Recall Class 0")
+                                th("Recall Class 1")
+                                th("Recall Class 2")
+        
+                            # Analogs from set
+                            analog_stats = self.compute_recall_stats(neighborsInSet["neighbors"], pred_threshold=0.5)
+        
+                            with tr():
+                                td("Analogs from set")
+                                td(get_formatted_value(False, analog_stats.get("BA"), 3))
+                                td(get_formatted_value(False, analog_stats.get(0), 3))
+                                td(get_formatted_value(False, analog_stats.get(1), 3))
+                                td(get_formatted_value(False, analog_stats.get(2), 3))
+        
+                            # Entire set
+                            with tr():
+                                td("Entire set")
+                                td(get_formatted_value(False, perf.get("BA"), 3))
+                                td(get_formatted_value(False, perf.get("RECALL_CLASS_0"), 3))
+                                td(get_formatted_value(False, perf.get("RECALL_CLASS_1"), 3))
+                                td(get_formatted_value(False, perf.get("RECALL_CLASS_2"), 3))
+        
+                        p("* BA=Balanced accuracy, Recall Class N = recall for class N")
+        
+                    elif md['propertyIsBinary']:
+                        # Binary display (unchanged)
+                        with tbody():
+                            with tr(style="background-color: #d3d3d3"):
+                                th("Chemicals")
+                                th("BA*")
+                                th("SN")
+                                th("SP")
+                            with tr():
+                                td("Analogs from set")
+                                td(get_formatted_value(False, neighborsInSet["BA"], 3))
+                                td(get_formatted_value(False, neighborsInSet["SN"], 3))
+                                td(get_formatted_value(False, neighborsInSet["SP"], 3))
+        
+                            with tr():
+                                td("Entire set")                                
+                                td(get_formatted_value(False, perf["BA"], 3))
+                                td(get_formatted_value(False, perf["SN"], 3))
+                                td(get_formatted_value(False, perf["SP"], 3))
+        
                         p('* BA=Balanced accuracy, SN=Sensitivity, SP=Specificity')
+        
                     else:
+                        # Regression display
+                        with tbody():
+                            with tr(style="background-color: #d3d3d3"):
+                                th("Chemicals")
+                                th("MAE*")
+                            with tr():
+                                td("Analogs from set")
+                                td(get_formatted_value(False, neighborsInSet["MAE"], 3))
+                            with tr():
+                                td("Entire set")
+                                td(get_formatted_value(False, perf["MAE"], 3))
+        
                         p('* Mean absolute error in ' + md["unitsModel"])
+
                     
         def addNeighborTileTable(self, report, neighbors):
                 
@@ -1281,6 +1460,8 @@ table.compact td {
                         nrs = self.NeighborSection()
                         
                         if report["neighborResultsPrediction"]:
+                            
+                            print(report["neighborResultsPrediction"]["set"])
                         
                             with tr():
                                 with td():
@@ -1289,6 +1470,9 @@ table.compact td {
                                     
 
                         if report["neighborResultsTraining"]:
+
+                            print(report["neighborResultsTraining"]["set"])
+
                                     
                             with tr():
                                 with td():

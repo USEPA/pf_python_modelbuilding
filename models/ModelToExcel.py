@@ -812,66 +812,53 @@ class ChartBuilder:
         yx_offset_rows: int,
         chart_size_px: int
     ) -> None:
-        """Add a confusion matrix of binary data to the plot sheet.
-        Called in add_plot if is_binary = True.
-
-        Args:
-            workbook: The Excel workbook object.
-            sheet_name: The name of the data sheet.
-            sheet_name_plot: The name of the plot sheet.
-            worksheet: The worksheet object for the data sheet.
-            worksheet_plot: The worksheet object for the plot sheet.
-            df: The DataFrame containing the data.
-            x_col: The column name for experimental values (binary 0 or 1).
-            y_col: The column name for predicted values (binary 0 or 1).
-            x_col_idx: The index of the x-axis column.
-            y_col_idx: The index of the y-axis column.
-            x_col_name: The name of the x-axis column (experimental).
-            y_col_name: The name of the y-axis column (predicted).
-            property_name: The name of the property being plotted.
-            property_units: The units of the property being plotted.
-            nrows: The number of rows of data to plot.
-            data_start_row: The row where the data starts.
-            yx_offset_rows: The number of rows to offset the frequency data.
-            chart_size_px: The size of the chart in pixels.
-        """
-        # Calculate frequency counts for binary data predictions and set up reference cell positions
-        data_end_row = data_start_row + nrows - 1
-        chart_start_col = len(df.columns)
-        worksheet.set_column(chart_start_col + 1, chart_start_col + 3, 20)  # Adjust column width for chart
+        """Add a confusion matrix for binary or 3-class classification models."""
         
-        # Count combinations: experimental value (x_col) vs predicted value (y_col)
-        # Threshold 0.5 to convert continuous predictions to binary
-        count_0_0 = ((df[x_col] == 0) & (df[y_col] < 0.5)).sum()  # Exp=0, Pred=0 (correct)
-        count_0_1 = ((df[x_col] == 0) & (df[y_col] >= 0.5)).sum()  # Exp=0, Pred=1 (incorrect)
-        count_1_0 = ((df[x_col] == 1) & (df[y_col] < 0.5)).sum()  # Exp=1, Pred=0 (incorrect)
-        count_1_1 = ((df[x_col] == 1) & (df[y_col] >= 0.5)).sum()  # Exp=1, Pred=1 (correct)
+        # Keep only valid rows
+        y_true = pd.to_numeric(df[x_col], errors="coerce")
+        y_pred = pd.to_numeric(df[y_col], errors="coerce")
 
-        # logging.debug(f"Frequency counts for {sheet_name}:\n\tExp=0, Pred=0: {count_0_0}\n\tExp=0, Pred=1: {count_0_1}\n\tExp=1, Pred=0: {count_1_0}\n\tExp=1, Pred=1: {count_1_1}")
-        logging.debug(f"Frequency counts for {sheet_name}:\n\t\t\tPredicted 0\t\tPredicted 1\n\tExperimental 0\t\t{count_0_0}\t\t{count_0_1}\n\tExperimental 1\t\t{count_1_0}\t\t{count_1_1}")
+        valid = y_true.notna() & y_pred.notna()
+        y_true = y_true[valid].astype(int)
+        y_pred = y_pred[valid].astype(int)
 
-        # Worksheet formats
+        classes = sorted(set(y_true.unique()).union(set(y_pred.unique())))
+
+        if len(classes) not in (2, 3):
+            raise ValueError(
+                f"Expected 2 or 3 classes, got {classes}"
+            )
+
+        # Build confusion matrix
+        cm = pd.crosstab(y_true, y_pred, rownames=["Experimental"], colnames=["Predicted"])
+        cm = cm.reindex(index=classes, columns=classes, fill_value=0)
+
+        # Worksheet layout
+        chart_start_col = len(df.columns)
+        worksheet.set_column(chart_start_col + 1, chart_start_col + 4, 18)
+
         centered = workbook.add_format({"align": "center", "valign": "vcenter", "bold": True})
         green = workbook.add_format({"fg_color": "#00B04F", "align": "center", "valign": "vcenter"})
         red = workbook.add_format({"fg_color": "#FF0000", "align": "center", "valign": "vcenter"})
 
-        # Write data to worksheet for chart
-        # Row 1: Category labels (predicted values)
         freq_row_start = 0
         freq_col_start = chart_start_col + 2
+
         worksheet.write_string(freq_row_start, freq_col_start - 1, "Confusion Matrix", centered)
-        worksheet.write_string(freq_row_start, freq_col_start, "Predicted 0", centered)
-        worksheet.write_string(freq_row_start, freq_col_start + 1, "Predicted 1", centered)
-        worksheet.write_string(freq_row_start + 1, freq_col_start - 1, "Experimental 0", centered)
-        worksheet.write_string(freq_row_start + 2, freq_col_start - 1, "Experimental 1", centered)
 
-        # Row 2: Correct predictions (green series) - diagonal: count_0_0 and count_1_1
-        worksheet.write_number(freq_row_start + 1, freq_col_start, count_0_0, green)
-        worksheet.write_number(freq_row_start + 2, freq_col_start + 1, count_1_1, green)
+        # Column headers
+        for j, cls in enumerate(classes):
+            worksheet.write_string(freq_row_start, freq_col_start + j, f"Predicted {cls}", centered)
 
-        # Row 3: Incorrect predictions (red series) - off-diagonal: count_0_1 and count_1_0
-        worksheet.write_number(freq_row_start + 1, freq_col_start + 1, count_0_1, red)
-        worksheet.write_number(freq_row_start + 2, freq_col_start, count_1_0, red)
+        # Row headers and matrix values
+        for i, cls_i in enumerate(classes):
+            worksheet.write_string(freq_row_start + i + 1, freq_col_start - 1, f"Experimental {cls_i}", centered)
+
+            for j, cls_j in enumerate(classes):
+                val = int(cm.loc[cls_i, cls_j])
+                fmt = green if i == j else red
+                worksheet.write_number(freq_row_start + i + 1, freq_col_start + j, val, fmt)
+
 
     @staticmethod
     def add_plot(
@@ -1577,27 +1564,64 @@ class DataQuerier:
         return statistics_dict
 
     def query_binary_stats_dict(self, model: Model) -> dict:
+        num_categories = getattr(model, "num_categories", 2)
+    
         statistics_dict = {
             "nTraining": [model.num_training],
             "nTest": [model.num_prediction],
             "Concordance_Training": [model.modelStatistics.get("Concordance_Training", float("nan"))],
             "BA_Training": [model.modelStatistics.get("BA_Training", float("nan"))],
-            "SN_Training": [model.modelStatistics.get("SN_Training", float("nan"))],
-            "SP_Training": [model.modelStatistics.get("SP_Training", float("nan"))],
             "Concordance_CV_Training": [model.modelStatistics.get("Concordance_CV_Training", float("nan"))],
             "BA_CV_Training": [model.modelStatistics.get("BA_CV_Training", float("nan"))],
-            "SN_CV_Training": [model.modelStatistics.get("SN_CV_Training", float("nan"))],
-            "SP_CV_Training": [model.modelStatistics.get("SP_CV_Training", float("nan"))],
             "Concordance_Test": [model.modelStatistics.get("Concordance_Test", float("nan"))],
             "BA_Test": [model.modelStatistics.get("BA_Test", float("nan"))],
-            "SN_Test": [model.modelStatistics.get("SN_Test", float("nan"))],
-            "SP_Test": [model.modelStatistics.get("SP_Test", float("nan"))],
             "BA_Test_inside_AD": [model.modelStatistics.get("BA_Test_inside_AD", float("nan"))],
             "BA_Test_outside_AD": [model.modelStatistics.get("BA_Test_outside_AD", float("nan"))],
             "Coverage_Test": [model.modelStatistics.get("Coverage_Test", float("nan"))]
         }
+    
+        if num_categories == 3:
+            statistics_dict.update({
+                "RECALL_CLASS_0_Training": [model.modelStatistics.get("RECALL_CLASS_0_Training", float("nan"))],
+                "RECALL_CLASS_1_Training": [model.modelStatistics.get("RECALL_CLASS_1_Training", float("nan"))],
+                "RECALL_CLASS_2_Training": [model.modelStatistics.get("RECALL_CLASS_2_Training", float("nan"))],
+    
+                "RECALL_CLASS_0_CV_Training": [model.modelStatistics.get("RECALL_CLASS_0_CV_Training", float("nan"))],
+                "RECALL_CLASS_1_CV_Training": [model.modelStatistics.get("RECALL_CLASS_1_CV_Training", float("nan"))],
+                "RECALL_CLASS_2_CV_Training": [model.modelStatistics.get("RECALL_CLASS_2_CV_Training", float("nan"))],
+    
+                "RECALL_CLASS_0_Test": [model.modelStatistics.get("RECALL_CLASS_0_Test", float("nan"))],
+                "RECALL_CLASS_1_Test": [model.modelStatistics.get("RECALL_CLASS_1_Test", float("nan"))],
+                "RECALL_CLASS_2_Test": [model.modelStatistics.get("RECALL_CLASS_2_Test", float("nan"))],
+    
+                "BA_Test": [model.modelStatistics.get("BA_Test", float("nan"))],
+            })
+        else:
+            statistics_dict.update({
+                "SN_Training": [model.modelStatistics.get("SN_Training", float("nan"))],
+                "SP_Training": [model.modelStatistics.get("SP_Training", float("nan"))],
+    
+                "SN_CV_Training": [model.modelStatistics.get("SN_CV_Training", float("nan"))],
+                "SP_CV_Training": [model.modelStatistics.get("SP_CV_Training", float("nan"))],
+    
+                "SN_Test": [model.modelStatistics.get("SN_Test", float("nan"))],
+                "SP_Test": [model.modelStatistics.get("SP_Test", float("nan"))],
+            })
+    
         if getattr(model, "external_dataset_name", False):
-            if model.modelStatistics.get("BA_External", False):
+            if num_categories == 3:
+                statistics_dict.update({
+                    "nExternal": [getattr(model, "num_external", float("nan"))],
+                    "BA_External": [model.modelStatistics.get("BA_External", float("nan"))],
+                    "BA_External_inside_AD": [model.modelStatistics.get("BA_External_inside_AD", float("nan"))],
+                    "BA_External_outside_AD": [model.modelStatistics.get("BA_External_outside_AD", float("nan"))],
+                    "Coverage_External": [model.modelStatistics.get("Coverage_External", float("nan"))],
+    
+                    "RECALL_CLASS_0_External": [model.modelStatistics.get("RECALL_CLASS_0_External", float("nan"))],
+                    "RECALL_CLASS_1_External": [model.modelStatistics.get("RECALL_CLASS_1_External", float("nan"))],
+                    "RECALL_CLASS_2_External": [model.modelStatistics.get("RECALL_CLASS_2_External", float("nan"))],
+                })
+            else:
                 statistics_dict.update({
                     "nExternal": [getattr(model, "num_external", float("nan"))],
                     "BA_External": [model.modelStatistics.get("BA_External", float("nan"))],
@@ -1607,46 +1631,8 @@ class DataQuerier:
                     "BA_External_outside_AD": [model.modelStatistics.get("BA_External_outside_AD", float("nan"))],
                     "Coverage_External": [model.modelStatistics.get("Coverage_External", float("nan"))]
                 })
-            else:
-                temp_dict = {}
-                temp_df = model.df_preds_external.copy()
-                ad_measures = model.applicabilityDomainName.split(" and ")
-                for ad_measure in ad_measures:
-                    df_ad_output, _ = adu.generate_applicability_domain_with_preselected_descriptors_from_dfs(
-                        train_df=model.df_training.copy(), test_df=model.df_external.copy(),
-                        remove_log_p=model.remove_log_p_descriptors,
-                        embedding=model.embedding, applicability_domain=ad_measure,
-                        filterColumnsInBothSets=False,
-                        returnTrainingAD=False
-                    )
-                                            
-                    colAD = "AD_" + ad_measure.replace(" ", "_")
-                    
-                    # Append AD flag to predictions
-                    temp_df = (
-                        temp_df
-                        .merge(
-                            df_ad_output.rename(columns={'idTest': 'id'})[['id', 'AD']],
-                            on='id', how='left'
-                        )
-                        .rename(columns={'AD': colAD})
-                    )
-
-                adu.generate_consensus_ad(temp_df, temp_dict, ad_measures, is_binary=model.is_binary, is_external=True)
-                temp_dict = temp_dict.get(f"{model.applicabilityDomainName} External", {})
-                temp_dict.update(calculate_binary_statistics(temp_df, 0.5, tag="_External", ad_measure_final=model.applicabilityDomainName.split(" and ")))
-                statistics_dict.update({
-                    "nExternal": [getattr(model, "num_external", float("nan"))],
-                    "BA_External": [temp_dict.get("BA_External", float("nan"))],  # Need to handle next 3
-                    "SN_External": [temp_dict.get("SN_External", float("nan"))],
-                    "SP_External": [temp_dict.get("SP_External", float("nan"))],
-                    "BA_External_inside_AD": [temp_dict.get("BA_External_inside_AD", float("nan"))],
-                    "BA_External_outside_AD": [temp_dict.get("BA_External_outside_AD", float("nan"))],
-                    "Coverage_External": [temp_dict.get("Coverage_External", float("nan"))]
-                })
-            
-        return statistics_dict
     
+        return statistics_dict    
     def query_records_df(self) -> pd.DataFrame:
         """Query database for detailed experimental records.
         
@@ -3083,61 +3069,125 @@ class ModelToExcel:
                 worksheet.write_number("F11", statistics.at[0, "Coverage_External"], format_number)
 
             img_path = os.path.join(os.getenv("PROJECT_ROOT"), "resources", "continuous_equations.png")
-        
+                
         else:
-            # Binary model statistics layout
-            # Make section sub-headers (column titles)
-            worksheet.write_string("A2", "Sensitivity", format_center)
-            worksheet.write_string("D2", "Sensitivity", format_center)
-            worksheet.write_string("A6", "Sensitivity", format_center)
+            # Binary / multiclass statistics layout
+            num_categories = getattr(self.model, "num_categories", 2)
 
-            worksheet.write_string("B2", "Specificity", format_center)
-            worksheet.write_string("E2", "Specificity", format_center)
-            worksheet.write_string("B6", "Specificity", format_center)
+            
+        
+            if num_categories == 2:
+            
+                # Binary model statistics layout
+                # Make section sub-headers (column titles)
+                worksheet.write_string("A2", "Sensitivity", format_center)
+                worksheet.write_string("D2", "Sensitivity", format_center)
+                worksheet.write_string("A6", "Sensitivity", format_center)
+    
+                worksheet.write_string("B2", "Specificity", format_center)
+                worksheet.write_string("E2", "Specificity", format_center)
+                worksheet.write_string("B6", "Specificity", format_center)
+    
+                worksheet.write_string("C2", "Balanced Accuracy", format_center)
+                worksheet.write_string("F2", "Balanced Accuracy", format_center)
+                worksheet.write_string("C6", "Balanced Accuracy", format_center)
+    
+                worksheet.write_rich_string("D6", "BA", format_sub, "Test", " Inside AD", format_center)
+                worksheet.write_rich_string("E6", "BA", format_sub, "Test", " Outside AD", format_center)
+                worksheet.write_string("F6", "Fraction Inside AD", format_center)
+    
+                # Write statistics
+                worksheet.write_number("A3", statistics.at[0, "SN_Training"], format_number)
+                worksheet.write_number("B3", statistics.at[0, "SP_Training"], format_number)
+                worksheet.write_number("C3", statistics.at[0, "BA_Training"], format_number)
+    
+                worksheet.write_number("D3", statistics.at[0, "SN_CV_Training"], format_number)
+                worksheet.write_number("E3", statistics.at[0, "SP_CV_Training"], format_number)
+                worksheet.write_number("F3", statistics.at[0, "BA_CV_Training"], format_number)
+    
+                worksheet.write_number("A7", statistics.at[0, "SN_Test"], format_number)
+                worksheet.write_number("B7", statistics.at[0, "SP_Test"], format_number)
+                worksheet.write_number("C7", statistics.at[0, "BA_Test"], format_number)
+    
+                worksheet.write_number("D7", statistics.at[0, "BA_Test_inside_AD"], format_number)
+                worksheet.write_number("E7", statistics.at[0, "BA_Test_outside_AD"], format_number)
+                worksheet.write_number("F7", statistics.at[0, "Coverage_Test"], format_number)
+    
+                if has_external:
+                    worksheet.write_string("A10", "Sensitivity", format_center)
+                    worksheet.write_string("B10", "Specificity", format_center)
+                    worksheet.write_string("C10", "Balanced Accuracy", format_center)
+    
+                    worksheet.write_rich_string("D10", "BA", format_sub, "External", " Inside AD", format_center)
+                    worksheet.write_rich_string("E10", "BA", format_sub, "External", " Outside AD", format_center)
+                    worksheet.write_string("F10", "Fraction Inside AD", format_center)
+    
+                    worksheet.write_number("A11", statistics.at[0, "SN_External"], format_number)
+                    worksheet.write_number("B11", statistics.at[0, "SP_External"], format_number)
+                    worksheet.write_number("C11", statistics.at[0, "BA_External"], format_number)
+    
+                    worksheet.write_number("D11", statistics.at[0, "BA_External_inside_AD"], format_number)
+                    worksheet.write_number("E11", statistics.at[0, "BA_External_outside_AD"], format_number)
+                    worksheet.write_number("F11", statistics.at[0, "Coverage_External"], format_number)
+    
+                img_path = os.path.join(os.getenv("PROJECT_ROOT"), "resources", "binary_equations.png") #TODO add multiclass image
 
-            worksheet.write_string("C2", "Balanced Accuracy", format_center)
-            worksheet.write_string("F2", "Balanced Accuracy", format_center)
-            worksheet.write_string("C6", "Balanced Accuracy", format_center)
+            elif num_categories == 3:
+                    # Training
+                    worksheet.write_string("A2", "Recall Class 0", format_center)
+                    worksheet.write_string("B2", "Recall Class 1", format_center)
+                    worksheet.write_string("C2", "Recall Class 2", format_center)
+    
+                    # CV
+                    worksheet.write_string("D2", "Recall Class 0", format_center)
+                    worksheet.write_string("E2", "Recall Class 1", format_center)
+                    worksheet.write_string("F2", "Recall Class 2", format_center)
+    
+                    # Test
+                    worksheet.write_string("A6", "Recall Class 0", format_center)
+                    worksheet.write_string("B6", "Recall Class 1", format_center)
+                    worksheet.write_string("C6", "Recall Class 2", format_center)
+    
+                    worksheet.write_rich_string("D6", "BA", format_sub, "Test", " Inside AD", format_center)
+                    worksheet.write_rich_string("E6", "BA", format_sub, "Test", " Outside AD", format_center)
+                    worksheet.write_string("F6", "Fraction Inside AD", format_center)
+    
+                    # Write statistics
+                    worksheet.write_number("A3", statistics.at[0, "RECALL_CLASS_0_Training"], format_number)
+                    worksheet.write_number("B3", statistics.at[0, "RECALL_CLASS_1_Training"], format_number)
+                    worksheet.write_number("C3", statistics.at[0, "RECALL_CLASS_2_Training"], format_number)
+    
+                    worksheet.write_number("D3", statistics.at[0, "RECALL_CLASS_0_CV_Training"], format_number)
+                    worksheet.write_number("E3", statistics.at[0, "RECALL_CLASS_1_CV_Training"], format_number)
+                    worksheet.write_number("F3", statistics.at[0, "RECALL_CLASS_2_CV_Training"], format_number)
+    
+                    worksheet.write_number("A7", statistics.at[0, "RECALL_CLASS_0_Test"], format_number)
+                    worksheet.write_number("B7", statistics.at[0, "RECALL_CLASS_1_Test"], format_number)
+                    worksheet.write_number("C7", statistics.at[0, "RECALL_CLASS_2_Test"], format_number)
+    
+                    worksheet.write_number("D7", statistics.at[0, "BA_Test_inside_AD"], format_number)
+                    worksheet.write_number("E7", statistics.at[0, "BA_Test_outside_AD"], format_number)
+                    worksheet.write_number("F7", statistics.at[0, "Coverage_Test"], format_number)
+    
+                    if has_external:
+                        worksheet.write_string("A10", "Recall Class 0", format_center)
+                        worksheet.write_string("B10", "Recall Class 1", format_center)
+                        worksheet.write_string("C10", "Recall Class 2", format_center)
+    
+                        worksheet.write_rich_string("D10", "BA", format_sub, "External", " Inside AD", format_center)
+                        worksheet.write_rich_string("E10", "BA", format_sub, "External", " Outside AD", format_center)
+                        worksheet.write_string("F10", "Fraction Inside AD", format_center)
+    
+                        worksheet.write_number("A11", statistics.at[0, "RECALL_CLASS_0_External"], format_number)
+                        worksheet.write_number("B11", statistics.at[0, "RECALL_CLASS_1_External"], format_number)
+                        worksheet.write_number("C11", statistics.at[0, "RECALL_CLASS_2_External"], format_number)
+    
+                        worksheet.write_number("D11", statistics.at[0, "BA_External_inside_AD"], format_number)
+                        worksheet.write_number("E11", statistics.at[0, "BA_External_outside_AD"], format_number)
+                        worksheet.write_number("F11", statistics.at[0, "Coverage_External"], format_number)
+    
+                    img_path = os.path.join(os.getenv("PROJECT_ROOT"), "resources", "binary_equations.png")
 
-            worksheet.write_rich_string("D6", "BA", format_sub, "Test", " Inside AD", format_center)
-            worksheet.write_rich_string("E6", "BA", format_sub, "Test", " Outside AD", format_center)
-            worksheet.write_string("F6", "Fraction Inside AD", format_center)
-
-            # Write statistics
-            worksheet.write_number("A3", statistics.at[0, "SN_Training"], format_number)
-            worksheet.write_number("B3", statistics.at[0, "SP_Training"], format_number)
-            worksheet.write_number("C3", statistics.at[0, "BA_Training"], format_number)
-
-            worksheet.write_number("D3", statistics.at[0, "SN_CV_Training"], format_number)
-            worksheet.write_number("E3", statistics.at[0, "SP_CV_Training"], format_number)
-            worksheet.write_number("F3", statistics.at[0, "BA_CV_Training"], format_number)
-
-            worksheet.write_number("A7", statistics.at[0, "SN_Test"], format_number)
-            worksheet.write_number("B7", statistics.at[0, "SP_Test"], format_number)
-            worksheet.write_number("C7", statistics.at[0, "BA_Test"], format_number)
-
-            worksheet.write_number("D7", statistics.at[0, "BA_Test_inside_AD"], format_number)
-            worksheet.write_number("E7", statistics.at[0, "BA_Test_outside_AD"], format_number)
-            worksheet.write_number("F7", statistics.at[0, "Coverage_Test"], format_number)
-
-            if has_external:
-                worksheet.write_string("A10", "Sensitivity", format_center)
-                worksheet.write_string("B10", "Specificity", format_center)
-                worksheet.write_string("C10", "Balanced Accuracy", format_center)
-
-                worksheet.write_rich_string("D10", "BA", format_sub, "External", " Inside AD", format_center)
-                worksheet.write_rich_string("E10", "BA", format_sub, "External", " Outside AD", format_center)
-                worksheet.write_string("F10", "Fraction Inside AD", format_center)
-
-                worksheet.write_number("A11", statistics.at[0, "SN_External"], format_number)
-                worksheet.write_number("B11", statistics.at[0, "SP_External"], format_number)
-                worksheet.write_number("C11", statistics.at[0, "BA_External"], format_number)
-
-                worksheet.write_number("D11", statistics.at[0, "BA_External_inside_AD"], format_number)
-                worksheet.write_number("E11", statistics.at[0, "BA_External_outside_AD"], format_number)
-                worksheet.write_number("F11", statistics.at[0, "Coverage_External"], format_number)
-
-            img_path = os.path.join(os.getenv("PROJECT_ROOT"), "resources", "binary_equations.png")
 
         ExcelFormatter.set_column_width(writer, "Statistics", statistics, how="full")
 

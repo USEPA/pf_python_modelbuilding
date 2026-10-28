@@ -1150,7 +1150,9 @@ class ModelDetails:
         else:
             self.propertyDescription = None
             
-        self.propertyIsBinary = model.is_binary
+        self.propertyIsBinary = model.is_binary                
+        if hasattr(model, 'num_categories'):
+            self.numCategories = model.num_categories
 
         self.datasetName = model.datasetName
         
@@ -3268,7 +3270,7 @@ class ModelPredictor:
         :return:
         """
 
-        print(f"predictFromDB: {model_id} and {STDIZER_API}, {DESCRIPTORS_API} for {len(smiles)} SMILES")
+        # print(f"predictFromDB: {model_id} and {STDIZER_API}, {DESCRIPTORS_API} for {len(smiles)} SMILES")
 
         if isinstance(smiles, str):
             predictions = self._predict_from_db_batch(
@@ -3287,7 +3289,7 @@ class ModelPredictor:
 
     def addPerformance(self, md: ModelDetails):
         ms = md.modelStatistics or {}
-
+    
         def set_metric(block: dict, out_key: str, *candidates: str):
             """Put first existing metric from candidates into block[out_key]."""
             for k in candidates:
@@ -3295,26 +3297,31 @@ class ModelPredictor:
                     block[out_key] = ms[k]
                     return
             block[out_key] = None
-
+    
         md.performance = {}
-
+    
         md.performance["train"] = {}
         md.performance["fiveFoldICV"] = {}
-        md.performance["external"] = {}  # TODO rename to "prediction" since can have separate external set from another data source
+        md.performance["external"] = {}   # TODO rename to "prediction"
         md.performance["externalAD"] = {}
-        
-        if md.propertyIsBinary:
+    
+        num_categories = getattr(md, "num_categories", None)
+        if num_categories is None:
+            num_categories = getattr(md, "numCategories", None)
+    
+        is_multiclass_3 = bool(md.propertyIsBinary and num_categories == 3)
+    
+        if md.propertyIsBinary and not is_multiclass_3:
+            # Standard binary classification
             set_metric(md.performance["train"], "A", "Concordance_Training")
             set_metric(md.performance["train"], "BA", "BA_Training")
             set_metric(md.performance["train"], "SN", "SN_Training")
             set_metric(md.performance["train"], "SP", "SP_Training")
-
-            # set_metric(md.performance["fiveFoldICV"], "A", "Concordance_CV_Training") #doesnt exist in DB yet
+    
             set_metric(md.performance["fiveFoldICV"], "BA", "BA_CV_Training")
             set_metric(md.performance["fiveFoldICV"], "SN", "SN_CV_Training")
             set_metric(md.performance["fiveFoldICV"], "SP", "SP_CV_Training")
-            
-            
+    
             set_metric(md.performance["external"], "A", "Concordance_Test")
             set_metric(md.performance["external"], "BA", "BA_Test")
             set_metric(md.performance["external"], "SN", "SN_Test")
@@ -3323,16 +3330,40 @@ class ModelPredictor:
             set_metric(md.performance["externalAD"], "BA_inside_AD", "BA_Test_inside_AD")
             set_metric(md.performance["externalAD"], "BA_outside_AD", "BA_Test_outside_AD")
             set_metric(md.performance["externalAD"], "Fraction_inside_AD", "Coverage_Test")
-
+    
+        elif is_multiclass_3:
+            # 3-class classification: use recalls instead of SN/SP
+            set_metric(md.performance["train"], "A", "Concordance_Training")
+            set_metric(md.performance["train"], "BA", "BA_Training")
+            set_metric(md.performance["train"], "RECALL_CLASS_0", "RECALL_CLASS_0_Training")
+            set_metric(md.performance["train"], "RECALL_CLASS_1", "RECALL_CLASS_1_Training")
+            set_metric(md.performance["train"], "RECALL_CLASS_2", "RECALL_CLASS_2_Training")
+    
+            set_metric(md.performance["fiveFoldICV"], "BA", "BA_CV_Training")
+            set_metric(md.performance["fiveFoldICV"], "RECALL_CLASS_0", "RECALL_CLASS_0_CV_Training")
+            set_metric(md.performance["fiveFoldICV"], "RECALL_CLASS_1", "RECALL_CLASS_1_CV_Training")
+            set_metric(md.performance["fiveFoldICV"], "RECALL_CLASS_2", "RECALL_CLASS_2_CV_Training")
+    
+            set_metric(md.performance["external"], "A", "Concordance_Test")
+            set_metric(md.performance["external"], "BA", "BA_Test")
+            set_metric(md.performance["external"], "RECALL_CLASS_0", "RECALL_CLASS_0_Test")
+            set_metric(md.performance["external"], "RECALL_CLASS_1", "RECALL_CLASS_1_Test")
+            set_metric(md.performance["external"], "RECALL_CLASS_2", "RECALL_CLASS_2_Test")
+    
+            set_metric(md.performance["externalAD"], "BA_inside_AD", "BA_Test_inside_AD")
+            set_metric(md.performance["externalAD"], "BA_outside_AD", "BA_Test_outside_AD")
+            set_metric(md.performance["externalAD"], "Fraction_inside_AD", "Coverage_Test")
+    
         else:
+            # Regression
             set_metric(md.performance["train"], "R2", "PearsonRSQ_Training", "R2_Training")
             set_metric(md.performance["train"], "RMSE", "RMSE_Training")
             set_metric(md.performance["train"], "MAE", "MAE_Training")
-            
+    
             set_metric(md.performance["fiveFoldICV"], "R2", "PearsonRSQ_CV_Training", "PearsonRSQ_CV")
             set_metric(md.performance["fiveFoldICV"], "RMSE", "RMSE_CV_Training", "RMSE_CV", "RMSE_CV_Train")
             set_metric(md.performance["fiveFoldICV"], "MAE", "MAE_CV_Training", "MAE_CV")
-        
+    
             set_metric(md.performance["external"], "R2", "PearsonRSQ_Test", "R2_Test")
             set_metric(md.performance["external"], "RMSE", "RMSE_Test")
             set_metric(md.performance["external"], "MAE", "MAE_Test")
@@ -3340,8 +3371,10 @@ class ModelPredictor:
             set_metric(md.performance["externalAD"], "MAE_inside_AD", "MAE_Test_inside_AD")
             set_metric(md.performance["externalAD"], "MAE_outside_AD", "MAE_Test_outside_AD")
             set_metric(md.performance["externalAD"], "Fraction_inside_AD", "Coverage_Test")
-
+    
         md.modelStatistics = None
+    
+    
     
     def smiles_to_base64(self, smiles_string, width=400, height=400):
         '''
@@ -3387,8 +3420,8 @@ class ModelPredictor:
                         modelResults.experimentalValueSet = "Test"
                         modelResults.experimentalValueUnitsModel = neighborResultsPrediction["neighbors"][0]["exp"]
         
-        logging.info(f"experimentalValueSet={modelResults.experimentalValueSet}")        
-        logging.info(f"experimentalValueUnitsModel={ modelResults.experimentalValueUnitsModel}")
+        # logging.info(f"experimentalValueSet={modelResults.experimentalValueSet}")        
+        # logging.info(f"experimentalValueUnitsModel={ modelResults.experimentalValueUnitsModel}")
 
     def setExpPredValuesForADAnalogs(self, model, analogs):
         self._ensure_model_runtime_cache(model)
@@ -3490,15 +3523,44 @@ class ModelPredictor:
         else:
             tag = pc.TAG_TEST
         
+        
+        
+        if model.is_binary and getattr(model, "num_categories", None):
+            # Multiclass-as-binary path (e.g., 3 classes)
+            if model.num_categories == 3:
+                stats_test = stats.calculate_ternary_statistics_sklearn(df_neighbors, tag)
+        
+                BA = stats_test[pc.BALANCED_ACCURACY + tag]
+                REC0 = stats_test[pc.RECALL_CLASS_0 + tag]
+                REC1 = stats_test[pc.RECALL_CLASS_1 + tag]
+                REC2 = stats_test[pc.RECALL_CLASS_2 + tag]
+        
+                return {
+                    "set": set_name,
+                    "neighbors": enriched_neighbors,
+                    "BA": BA,
+                    "RECALL_CLASS_0": REC0,
+                    "RECALL_CLASS_1": REC1,
+                    "RECALL_CLASS_2": REC2,
+                    "unitNeighbor": units_model,
+                    "title": title
+                }
+        
+        
         if model.is_binary:
             binary_cutoff = 0.5
-            stats_test = stats.calculate_binary_statistics(df_neighbors, binary_cutoff, tag)
+            stats_test = stats.calculate_binary_statistics_sklearn(df_neighbors, binary_cutoff, tag)
             BA = stats_test[pc.BALANCED_ACCURACY + tag]
             SN = stats_test[pc.SENSITIVITY + tag]
             SP = stats_test[pc.SPECIFICITY + tag]
 
-            return {"set": "Training", "neighbors":enriched_neighbors, "BA":BA, "SN":SN, "SP":SP, "unitNeighbor":units_model,
-                                   "title": title}
+            return {"set": set_name, 
+                    "neighbors":enriched_neighbors, 
+                    "BA":BA, 
+                    "SN":SN, 
+                    "SP":SP, 
+                    "unitNeighbor":units_model,
+                    "title": title}
 
         else:
             mae_value = None
