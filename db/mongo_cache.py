@@ -131,7 +131,8 @@ def _warn_mongo_cache_skip(
     fallback: str | None = None,
     log_warning: bool = True,
 ):
-    if not log_warning:
+    
+    if not log_warning or not _env_bool("MONGO_CACHE_ENABLED", True):
         return
     if fallback:
         logging.warning("Mongo cache skipped for key=%r: %s; fallback=%s", key, reason, fallback)

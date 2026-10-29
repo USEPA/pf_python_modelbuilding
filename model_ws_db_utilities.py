@@ -3160,7 +3160,7 @@ class ModelPredictor:
 
     def _predict_from_db_batch(self, model_id, smiles_list, include_model_details=True):
 
-        print(f"_predict_from_db_batch: {model_id} and {STDIZER_API}, {DESCRIPTORS_API} for {len(smiles_list)} SMILES")
+        # print(f"_predict_from_db_batch: {model_id} and {STDIZER_API}, {DESCRIPTORS_API} for {len(smiles_list)} SMILES")
 
         if not smiles_list:
             return []
@@ -3760,7 +3760,7 @@ class ModelPredictor:
 
     @timer
     def standardizeStructure(self, stdizer_api, smiles, model: Model):
-        
+                
         if model.omitSalts and "." in smiles:
             return f"{smiles}: model can't run mixtures", 400
 
@@ -3776,7 +3776,7 @@ class ModelPredictor:
         if code >= 400:
             return chemicals, code
                 
-        logging.info(f"len(chemicals){len(chemicals)}")
+        # logging.info(f"len(chemicals){len(chemicals)}")
                 
         if len(chemicals) == 0:
             # logging.debug('Standardization failed')
