@@ -42,6 +42,14 @@ IDENTIFIER_FIELDS = ("cid", "sid", "casrn", "name", "inchi", "inchiKey")
 LOGGER = logging.getLogger("chemical_identifier_backfill")
 
 
+def _normalize_mongo_hosts(value):
+    """Normalize seed-list whitespace; preserve full MongoDB URI contents."""
+    value = value.strip()
+    if value.startswith(("mongodb://", "mongodb+srv://")):
+        return value
+    return ",".join(host.strip() for host in value.split(",") if host.strip())
+
+
 @dataclass(frozen=True)
 class CacheCandidate:
     doc_id: Any
@@ -249,7 +257,7 @@ def build_mongo_client(args: argparse.Namespace) -> MongoClient:
         return MongoClient(args.mongo_uri, **client_kwargs)
 
     client_kwargs = {
-        "host": os.getenv("MONGO_HOST", "localhost"),
+        "host": _normalize_mongo_hosts(os.getenv("MONGO_HOST", "localhost")),
         "port": _env_int("MONGO_PORT", 27017),
         "authSource": os.getenv("MONGO_AUTH_SOURCE", "admin"),
         "appname": app_name,

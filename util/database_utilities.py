@@ -27,6 +27,9 @@ from sqlalchemy import MetaData, create_engine, text, bindparam
 from sqlalchemy import inspect as sa_inspect, select as sa_select, update as sa_update
 from sqlalchemy.engine import URL
 from sqlalchemy.orm import sessionmaker
+from model_service_common.postgres import postgres_connect_args
+
+from datetime import datetime, timezone
 
 import numpy as np
 import pandas as pd
@@ -49,11 +52,15 @@ class DatabaseUtilities:
             drivername='postgresql+psycopg2',
             username=os.getenv('POSTGRES_USER'),
             password=os.getenv('POSTGRES_PASSWORD'),
-            host=os.getenv('POSTGRES_HOST', 'localhost'),
-            port=int(os.getenv('POSTGRES_PORT', 5432)),  # ensure int
             database=os.getenv('POSTGRES_DB')
         )
-        self.engine = create_engine(connect_url, echo=False, pool_pre_ping=True, future=True)
+        self.engine = create_engine(
+            connect_url,
+            connect_args=postgres_connect_args(),
+            echo=False,
+            pool_pre_ping=True,
+            future=True,
+        )
         self.SessionLocal = sessionmaker(bind=self.engine, autoflush=False, autocommit=False, future=True)
 
         if session:
@@ -281,6 +288,33 @@ class DatabaseUtilities:
             yield seq[i:i + size]
 
 
+
+    def create_many(
+            self,
+            table: str,
+            records: Iterable[Mapping[str, Any]],
+            schema: Optional[str] = None,
+            commit: bool = True,
+        ) -> List[Any]:
+            """
+            Bulk insert multiple rows and return a list of primary keys in the same order.
+            - Uses add_all + flush to populate PKs (safe for typical defaults/sequences).
+            - Only commits when `commit=True` and no transaction is active.
+            """
+            cls = self._get_mapped_class(table)
+            rows = [cls(**rec) for rec in records]
+            if not rows:
+                return []
+        
+            self.session.add_all(rows)
+            self.session.flush()  # populate PKs
+        
+            # Commit only if requested and we're not inside a transaction context
+            if commit and not self.session.in_transaction():
+                self.session.commit()
+        
+            return [self._extract_pk(r) for r in rows]
+
     def create_many_chunked(
         self,
         table: str,
@@ -353,66 +387,113 @@ class DatabaseUtilities:
         except SQLAlchemyError:
             raise
 
-    def create_many(
-        self,
-        table: str,
-        records: Iterable[Mapping[str, Any]],
-        schema: Optional[str] = None,
-        commit: bool = True,
-    ) -> List[Any]:
-        """
-        Bulk insert multiple rows and return a list of primary keys in the same order.
-        - Uses add_all + flush to populate PKs (safe for typical defaults/sequences).
-        - Only commits when `commit=True` and no transaction is active.
-        """
-        cls = self._get_mapped_class(table)
-        rows = [cls(**rec) for rec in records]
-        if not rows:
-            return []
+
     
-        self.session.add_all(rows)
-        self.session.flush()  # populate PKs
+    def addMissingStats(self):
+        CREATED_BY = os.getenv("USER_ID", "tmarti02")
+        TABLE = "statistics"
     
-        # Commit only if requested and we're not inside a transaction context
-        if commit and not self.session.in_transaction():
-            self.session.commit()
+        STAT_DESCRIPTIONS = {
+            "RECALL_CLASS_0_Training": "Training recall for class 0",
+            "RECALL_CLASS_1_Training": "Training recall for class 1",
+            "RECALL_CLASS_2_Training": "Training recall for class 2",
+            "Concordance_CV_Training": "Training cross-validation concordance",
+            "RECALL_CLASS_0_CV_Training": "Training cross-validation recall for class 0",
+            "RECALL_CLASS_1_CV_Training": "Training cross-validation recall for class 1",
+            "RECALL_CLASS_2_CV_Training": "Training cross-validation recall for class 2",
+            "RECALL_CLASS_0_Test": "Test recall for class 0",
+            "RECALL_CLASS_1_Test": "Test recall for class 1",
+            "RECALL_CLASS_2_Test": "Test recall for class 2",
+        }
     
-        return [self._extract_pk(r) for r in rows]
+        STAT_NAMES = list(STAT_DESCRIPTIONS.keys())
+    
+        existing_rows = self.get_rows(table=TABLE)
+        existing_names = {
+            row.name for row in existing_rows
+            if getattr(row, "name", None) is not None
+        }
+    
+        def build_record(name: str, is_binary: bool = True) -> dict:
+            """
+            Build a row for qsar_models.statistics.
+            Only uses metadata columns; no stat values are inserted.
+            """
+            return {
+                "created_at": datetime.now(timezone.utc),
+                "created_by": CREATED_BY,
+                "description": STAT_DESCRIPTIONS.get(name),
+                "is_binary": is_binary,
+                "name": name,
+            }
+    
+        missing_records = []
+        for stat_name in STAT_NAMES:
+            if stat_name in existing_names:
+                print(f"[SKIP] {stat_name}")
+                continue
+            print(f"[ADD]   {stat_name}")
+            missing_records.append(build_record(stat_name, is_binary=True))
+    
+        if not missing_records:
+            print("No missing statistics definitions found.")
+            return
+    
+        print(missing_records)
+    
+        inserted_ids = self.create_many(
+            table=TABLE,
+            records=missing_records,
+            commit=False,
+        )
+    
+        self.session.commit()
+    
+        print(f"\nInserted {len(inserted_ids)} missing statistics definitions.")
 
 def getSession():
     connect_url = URL.create(
         drivername='postgresql+psycopg2',
         username=os.getenv('POSTGRES_USER'),
         password=os.getenv('POSTGRES_PASSWORD'),
-        host=os.getenv('POSTGRES_HOST', 'localhost'),
-        port=os.getenv('POSTGRES_PORT', 5432),
         database=os.getenv('POSTGRES_DB')
     )
     # print(connect_url)
-    engine = create_engine(connect_url, echo=False)
+    engine = create_engine(connect_url, connect_args=postgres_connect_args(), echo=False)
     Session = sessionmaker(bind=engine)
     session = Session()
     return session
 
+
+
+    
 
 if __name__ == '__main__':
     
     from dotenv import load_dotenv, find_dotenv
     
     # Searches upward from the current working directory for ".env.res_qsar"
-    env_path = find_dotenv(".env.res_qsar", raise_error_if_not_found=True)    
-    load_dotenv(env_path)
-
-    dl = DatabaseUtilities("qsar_models")
+    # env_path = find_dotenv(".env.res_qsar", raise_error_if_not_found=True)    
+    # load_dotenv(env_path)
     
-    # Get row in database using filter:
-    row = dl.get_row(table="descriptor_embeddings", embedding_tsv="col1\tcol2", dataset_name="KOC v1 modeling")
-
-    dl.print_row_as_json(row)
-            
-    rows = dl.get_rows("descriptor_embeddings", dataset_name="KOC v1 modeling")    
-    dl.print_rows_as_json(rows)
+    
+    load_dotenv("../personal.env")
+    dl = DatabaseUtilities("qsar_models")
+    dl.addMissingStats()
+    
+    # # Get row in database using filter:
+    # row = dl.get_row(table="descriptor_embeddings", embedding_tsv="col1\tcol2", dataset_name="KOC v1 modeling")
+    #
+    # dl.print_row_as_json(row)
+    #
+    # rows = dl.get_rows("descriptor_embeddings", dataset_name="KOC v1 modeling")    
+    # dl.print_rows_as_json(rows)
     
     # row = dl.get_rows(session, "descriptor_embeddings", dataset_name="KOC v1 modeling", embedding_tsv="col1\tcol2")    
     # dl.print_row_as_json(row)
+    
+    
+    
+    
+    
     

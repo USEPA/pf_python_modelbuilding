@@ -348,6 +348,38 @@ def _get_qsar_smiles_from_fragrance_spreadsheet():
     return unique_df
 
 
+
+def _combine_test_external_fragrance_predictions(dataset_name, subset, append_to_models_folder):
+    folder = Path(PROJECT_ROOT) / "data" / f"models{append_to_models_folder}" / dataset_name / subset
+
+    path_test = folder / "RIFM test set predictions.tsv"
+    path_external = folder / "external set predictions.tsv"
+    path_out = folder / "combined fragrance predictions.tsv"
+
+    id_col = "id"
+
+    df_test = pd.read_csv(path_test, sep="\t")
+    df_external = pd.read_csv(path_external, sep="\t")
+
+    if id_col not in df_test.columns:
+        raise KeyError(f"'{id_col}' column not found in RIFM test set predictions.tsv")
+    if id_col not in df_external.columns:
+        raise KeyError(f"'{id_col}' column not found in external set predictions.tsv")
+
+    # Combine and keep unique IDs
+    df_combined = pd.concat([df_test, df_external], ignore_index=True)
+    df_combined = df_combined.drop_duplicates(subset=[id_col], keep="first").copy()
+
+    # Optional: sort by ID
+    # df_combined = df_combined.sort_values(id_col).reset_index(drop=True)
+
+    df_combined.to_csv(path_out, sep="\t", index=False)
+
+    print(f"Saved combined predictions to: {path_out}")
+    return df_combined
+
+
+
 def _recalc_stats(session, dataset_name, subset, append_to_models_folder, dataset_to_exclude):
     
     folder = Path(PROJECT_ROOT) / "data" / f"models{append_to_models_folder}" / dataset_name / subset
@@ -615,7 +647,7 @@ def _saveMergedStats(df_stats, df_stats_fragrance, excel_path):
     
     df_merged = df_merged.drop(columns=["BA_External", "Metric", "Ntest","Nexternal","Nboth"])
     
-    print_first_row(df_merged)
+    # print_first_row(df_merged)
     
     from models.case_studies.run_model_building_db import ExcelCreator
     
@@ -752,6 +784,69 @@ def _calculate_stats_for_subset(dataset_name, df_smiles_subset, append_to_models
     print(f"{run_folder}\tRIFM_BA_TEST={test_stats_RIFM['BA_Test']:.3f}\tn={df_pred_in_rifm_test.shape[0]}\tOther_Fragrances_BA_TEST={test_stats_other_fragrances['BA_Test']:.3f}\tn={df_pred_fragrances.shape[0]}")
 
 
+def _determine_when_10_day_model_conflicts():
+    append_to_models_folder = "_v3.0"
+
+    dataset_rbiodeg = "exp_prop_RBIODEG_RIFM_2026_08_12_CHEMREG"
+    dataset_rbiodeg_10_day = "exp_prop_RBIODEG_10_day_RIFM_2026_08_12_CHEMREG"
+
+    run_biodeg = "rf_WebTEST-default_fs=False"
+    run_biodeg_10_day = run_biodeg
+
+    PROJECT_ROOT = os.getenv("PROJECT_ROOT")
+    folder_biodeg = Path(PROJECT_ROOT) / "data" / f"models{append_to_models_folder}" / dataset_rbiodeg / run_biodeg
+    folder_biodeg_10_day = Path(PROJECT_ROOT) / "data" / f"models{append_to_models_folder}" / dataset_rbiodeg_10_day / run_biodeg_10_day
+
+    path_test_set_rbiodeg = folder_biodeg / "RIFM test set predictions.tsv"
+    path_external_set_rbiodeg = folder_biodeg / "external set predictions.tsv"
+
+    path_test_set_rbiodeg_10_day = folder_biodeg_10_day / "RIFM test set predictions.tsv"
+    path_external_set_rbiodeg_10_day = folder_biodeg_10_day / "external set predictions.tsv"
+
+    df_test_set_rbiodeg = pd.read_csv(path_test_set_rbiodeg, sep="\t")
+    df_external_set_rbiodeg = pd.read_csv(path_external_set_rbiodeg, sep="\t")
+    df_test_set_rbiodeg_10_day = pd.read_csv(path_test_set_rbiodeg_10_day, sep="\t")
+    df_external_set_rbiodeg_10_day = pd.read_csv(path_external_set_rbiodeg_10_day, sep="\t")
+
+    # Merge test + external for RBIODEG
+    df_rbiodeg = pd.concat(
+        [df_test_set_rbiodeg, df_external_set_rbiodeg],
+        ignore_index=True
+    )
+
+    # Merge test + external for RBIODEG_10_day
+    df_rbiodeg_10_day = pd.concat(
+        [df_test_set_rbiodeg_10_day, df_external_set_rbiodeg_10_day],
+        ignore_index=True
+    )
+
+    # Merge the two combined sets by ID
+    df_merged = df_rbiodeg.merge(
+        df_rbiodeg_10_day,
+        on="id",
+        how="outer",
+        suffixes=("_rbiodeg", "_rbiodeg_10_day")
+    )
+
+    # print("RBIODEG merged:")
+    # print(df_rbiodeg.head())
+    #
+    # print("RBIODEG 10-day merged:")
+    # print(df_rbiodeg_10_day.head())
+    pd.set_option("display.max_columns", None)
+    pd.set_option("display.max_rows", None)
+    pd.set_option("display.width", None)
+    pd.set_option("display.max_colwidth", None)
+
+    df_merged.index = range(1, len(df_merged) + 1)
+    
+    print("Final merged comparison:")
+    print(df_merged)
+    
+    print("Conflicts: pred_rbiodeg < 0.5 and pred_rbiodeg_10_day >= 0.5")
+    print(df_merged[(df_merged["pred_rbiodeg"] < 0.5) & (df_merged["pred_rbiodeg_10_day"] >= 0.5)])
+
+    return df_rbiodeg, df_rbiodeg_10_day, df_merged
 
 
 def _fetch_set_qsar_smiles(session, dataset_name, split_num, descriptor_set_name='WebTEST-default',  outer_splitting_name='RND_REPRESENTATIVE'):
@@ -795,5 +890,183 @@ def _fetch_set_qsar_smiles(session, dataset_name, split_num, descriptor_set_name
 
 
 
+def _calc_multiclass_stats(y_true, y_pred):
+    
+    from sklearn.metrics import balanced_accuracy_score, recall_score, classification_report
+
+    mask = y_true.notna() & y_pred.notna()
+    y_true = y_true[mask].astype(int)
+    y_pred = y_pred[mask].astype(int)
+    ba = balanced_accuracy_score(y_true, y_pred)
+    recalls = recall_score(y_true, y_pred, average=None, labels=[0, 1, 2])
+
+    # print(f"Balanced accuracy: {ba:.3f}")
+    # print(f"Recall class 0: {recalls[0]:.3f}")
+    # print(f"Recall class 1: {recalls[1]:.3f}")
+    # print(f"Recall class 2: {recalls[2]:.3f}")
+    # print("\nClassification report:")
+    # print(classification_report(y_true, y_pred, labels=[0, 1, 2]))
+    
+    # metrics_df = pd.DataFrame({
+    #         "metric":["balanced_accuracy", "recall_0", "recall_1", "recall_2"], 
+    #         "value":[
+    #             ba, 
+    #             recalls[0], 
+    #             recalls[1], 
+    #             recalls[2]]})
+    
+    metrics_df = pd.DataFrame([{
+        "balanced_accuracy": ba,
+        "recall_0": recalls[0],
+        "recall_1": recalls[1],
+        "recall_2": recalls[2]
+    }])
+    print(metrics_df)
+
+def _generate_multiclass_predictions_from_two_binary_models(dataset_name_meets_10_day_window):
+    append_to_models_folder = "_v3.0"
+    subset = "rf_WebTEST-default_fs=False"
+
+    dataset_name_60_percent_biodeg = "exp_prop_RBIODEG_RIFM_2026_08_12_CHEMREG"
+    dataset_name_multiclass = "exp_prop_RBIODEG_Multiclass_RIFM_2026_08_12_CHEMREG"
+
+    id_col = "id"
+    pred_col = "pred"
+    exp_col = "exp"
+
+    folder_60 = Path(PROJECT_ROOT) / "data" / f"models{append_to_models_folder}" / dataset_name_60_percent_biodeg / subset
+    folder_10 = Path(PROJECT_ROOT) / "data" / f"models{append_to_models_folder}" / dataset_name_meets_10_day_window / subset
+    folder_multiclass = Path(PROJECT_ROOT) / "data" / f"models{append_to_models_folder}" / dataset_name_multiclass / subset
+
+    path_60 = folder_60 / "combined fragrance predictions.tsv"
+    path_10 = folder_10 / "combined fragrance predictions.tsv"
+    path_multiclass = folder_multiclass / "combined fragrance predictions.tsv"
+
+    df_60 = pd.read_csv(path_60, sep="\t")
+    df_10 = pd.read_csv(path_10, sep="\t")
+    df_multiclass_exp = pd.read_csv(path_multiclass, sep="\t")
+
+    if id_col not in df_60.columns or pred_col not in df_60.columns:
+        raise KeyError(f"'{id_col}' and/or '{pred_col}' not found in {path_60}")
+    if id_col not in df_10.columns or pred_col not in df_10.columns:
+        raise KeyError(f"'{id_col}' and/or '{pred_col}' not found in {path_10}")
+    if id_col not in df_multiclass_exp.columns or exp_col not in df_multiclass_exp.columns:
+        raise KeyError(f"'{id_col}' and/or '{exp_col}' not found in {path_multiclass}")
+
+    df_60 = df_60[[id_col, pred_col]].rename(columns={pred_col: "pred_60_percent"})
+    df_10 = df_10[[id_col, pred_col]].rename(columns={pred_col: "pred_10_day"})
+
+    df_multiclass = df_60.merge(df_10, on=id_col, how="outer")
+
+    def assign_multiclass(row):
+        pred_60 = row["pred_60_percent"]
+        pred_10 = row["pred_10_day"]
+
+        if pd.isna(pred_60) or pd.isna(pred_10):
+            return None
+
+        if pred_60 < 0.5:
+            return 0
+        elif pred_10 < 0.5:
+            return 1
+        else:
+            return 2
+
+    df_multiclass["pred_multiclass"] = df_multiclass.apply(assign_multiclass, axis=1)
+
+    # remove rows where the 10_day value is missing
+    df_multiclass = df_multiclass[df_multiclass["pred_10_day"].notna()].copy()
+
+    # merge in experimental multiclass values WITHOUT renaming columns in df_multiclass_exp
+    df_multiclass = df_multiclass.merge(
+        df_multiclass_exp[[id_col, exp_col]],
+        on=id_col,
+        how="left"
+    )
+
+    df_multiclass = df_multiclass.rename(columns={"exp": "exp_multiclass"})
+
+    # Reorder columns
+    df_multiclass = df_multiclass[
+        [id_col, "exp_multiclass", "pred_60_percent", "pred_10_day", "pred_multiclass"]
+    ]
+    
+    
+    df_multiclass_exp = df_multiclass_exp.rename(columns={"exp": "exp_multiclass","pred":"pred_multiclass"})
+
+    # Print full dataframe
+    with pd.option_context(
+        "display.max_rows", None,
+        "display.max_columns", None,
+        "display.width", None,
+        "display.max_colwidth", None,
+    ):
+        print(df_multiclass)
+    #     print(df_multiclass_exp)
+
+    # calculate stats using the original column names
+
+    _calc_multiclass_stats(df_multiclass["exp_multiclass"], df_multiclass["pred_multiclass"])
+    
+    # _calc_multiclass_stats(df_multiclass_exp["exp_multiclass"], df_multiclass_exp["pred_multiclass"])
+
+
+    return df_multiclass
+
+def _generate_stats_for_multiclass_model():
+    append_to_models_folder = "_v3.0"
+    subset = "rf_WebTEST-default_fs=False"
+
+
+    id_col = "id"
+    pred_col = "pred"
+    exp_col = "exp"
+
+    dataset_name_multiclass = "exp_prop_RBIODEG_Multiclass_RIFM_2026_08_12_CHEMREG"
+    folder_multiclass = Path(PROJECT_ROOT) / "data" / f"models{append_to_models_folder}" / dataset_name_multiclass / subset
+    path_multiclass = folder_multiclass / "combined fragrance predictions.tsv"
+
+    df_multiclass_exp = pd.read_csv(path_multiclass, sep="\t")
+
+    if id_col not in df_multiclass_exp.columns or exp_col not in df_multiclass_exp.columns:
+        raise KeyError(f"'{id_col}' and/or '{exp_col}' not found in {path_multiclass}")
+
+
+    # Print full dataframe
+    with pd.option_context(
+        "display.max_rows", None,
+        "display.max_columns", None,
+        "display.width", None,
+        "display.max_colwidth", None,
+    ):
+        print(df_multiclass_exp)
+
+    _calc_multiclass_stats(df_multiclass_exp[exp_col], df_multiclass_exp[pred_col])
+
+
+    return df_multiclass_exp
+
+def _get_multiclass_results_for_different_10_day_sets():
+    
+    # dataset_names = ['exp_prop_RBIODEG_10_day_RIFM_2026_08_12_CHEMREG','exp_prop_RBIODEG_10_day2_RIFM_2026_08_12_CHEMREG']
+    dataset_names = ['exp_prop_RBIODEG_10_day_RIFM_2026_08_12_CHEMREG']
+    for dataset_name in dataset_names:
+        print("\n", dataset_name)       
+        _generate_multiclass_predictions_from_two_binary_models(dataset_name)
+    
+
+
 if __name__ == '__main__':
-    pass
+    # _determine_when_10_day_model_conflicts()
+    
+    # append_to_models_folder="_v3.0"
+    # subset = "rf_WebTEST-default_fs=False" 
+    # dataset_names = ['exp_prop_RBIODEG_RIFM_2026_08_12_CHEMREG','exp_prop_RBIODEG_10_day_RIFM_2026_08_12_CHEMREG','exp_prop_RBIODEG_10_day2_RIFM_2026_08_12_CHEMREG','exp_prop_RBIODEG_10_day2_RIFM_2026_08_12_CHEMREG_resplit','exp_prop_RBIODEG_Multiclass_RIFM_2026_08_12_CHEMREG']
+    # for dataset_name in dataset_names:    
+    #     _combine_test_external_fragrance_predictions(dataset_name, subset, append_to_models_folder)
+    
+    
+    
+    _get_multiclass_results_for_different_10_day_sets()
+    _generate_stats_for_multiclass_model()    
+    

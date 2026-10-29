@@ -36,6 +36,7 @@ import traceback
 
 from util.database_utilities import DatabaseUtilities
 from util.serialization_compat import serialize_model
+from model_service_common.postgres import postgres_connect_args
 
 from models import make_test_plots as mtp 
 
@@ -47,7 +48,7 @@ from models.EmbeddingFromImportance import perform_iterative_sequential_feature_
 
 from models.ModelToExcel import ModelToExcel, ModelDataObjects
 
-from StatsCalculator import calculate_binary_statistics, calculate_continuous_statistics
+from StatsCalculator import calculate_continuous_statistics, calculate_binary_statistics_sklearn, calculate_ternary_statistics_sklearn
 
 import models.db_utilities.dataset_utilities_db as du
 
@@ -999,7 +1000,7 @@ class ModelBuilder:
         # stats = calculate_continuous_statistics(df_predictions, mean_exp_training, tag)
         
         if is_binary:
-            stats = calculate_binary_statistics(df_predictions, 0.5, tag)
+            stats = calculate_binary_statistics_sklearn(df_predictions, 0.5, tag)
         else:
             mean_exp_training = df_predictions["exp"].mean()
             stats = calculate_continuous_statistics(df_predictions, mean_exp_training, tag)
@@ -1008,7 +1009,7 @@ class ModelBuilder:
         return df_predictions, stats
     
     @staticmethod
-    def crossvalidate(df_cv_dict, params, embedding, is_binary):
+    def crossvalidate(df_cv_dict, params, embedding, is_binary, num_categories):
         logging.info("Start running CV calculations ...")
     
         def _fold_predictions():
@@ -1033,9 +1034,16 @@ class ModelBuilder:
         
         # print_first_row(df_predictions_all)
     
-        if is_binary:
-            cv_stats = calculate_binary_statistics(
+        if is_binary and num_categories==2:
+            
+            print(df_predictions_all)
+            
+            cv_stats = calculate_binary_statistics_sklearn(
                 df_predictions_all, 0.5, "_CV_Training"
+            )
+        elif is_binary and num_categories==3:
+            cv_stats = calculate_ternary_statistics_sklearn(
+                df_predictions_all, "_CV_Training"
             )
             
         else:
@@ -1076,7 +1084,8 @@ class ModelBuilder:
 
 
     @staticmethod
-    def build_and_test_model(df_training, df_prediction, cv, params, embedding, is_binary):
+    def build_and_test_model(df_training, df_prediction, cv, params, embedding):
+        
         
         model = call_build_model_with_preselected_descriptors_from_df(params, df_training.copy(), df_prediction.copy(),
                                                                       cv, descriptor_names_tsv=embedding,
@@ -1094,9 +1103,13 @@ class ModelBuilder:
     
         # calculate stats for test set
         
-        if is_binary:
-            test_stats = calculate_binary_statistics(df_predictions_test, 0.5, "_Test")
-            training_stats = calculate_binary_statistics(df_predictions_training, 0.5, "_Training")
+        if model.is_binary and model.num_categories==2:
+            test_stats = calculate_binary_statistics_sklearn(df_predictions_test, 0.5, "_Test")
+            training_stats = calculate_binary_statistics_sklearn(df_predictions_training, 0.5, "_Training")
+
+        elif model.is_binary and model.num_categories==3:
+            test_stats = calculate_ternary_statistics_sklearn(df_predictions_test, "_Test")
+            training_stats = calculate_ternary_statistics_sklearn(df_predictions_training, "_Training")
 
         else:
             mean_exp_training = df_training["Property"].mean()
@@ -1162,14 +1175,12 @@ def getEngine():
         drivername='postgresql+psycopg2',
         username=os.getenv('POSTGRES_USER'),
         password=os.getenv('POSTGRES_PASSWORD'),
-        host=os.getenv('POSTGRES_HOST', 'localhost'),
-        port=os.getenv('POSTGRES_PORT', 5432),
         database=os.getenv('POSTGRES_DB')
     )
     
     # print(connect_url)
     
-    engine = create_engine(connect_url, echo=False)
+    engine = create_engine(connect_url, connect_args=postgres_connect_args(), echo=False)
     return engine
 
 
@@ -1734,7 +1745,7 @@ def set_hyper_parameters(qsar_method, feature_selection, descriptor_set_name, sp
     return params
         
 
-def runAD(df_training, df_prediction, params, embedding, df_predictions, ad_measure, stats_dict, is_binary=False, is_external=False):
+def runAD(df_training, df_prediction, params, embedding, df_predictions, ad_measure, stats_dict, is_binary=False, num_categories=None, is_external=False):
     """
     Note: This configuration for runAD should be treated as the preferred run-pattern, and anywhere the AD must be recalculated
     should be done in accordance with this method's call pattern and behavior within this file.
@@ -1791,12 +1802,17 @@ def runAD(df_training, df_prediction, params, embedding, df_predictions, ad_meas
         except ZeroDivisionError:
             return float('nan')
 
+    
+    # print(is_binary, num_categories, ad_measure)
+    # print(df_outside,"\n")
+
     # Compute statistics using the provided functions
-    if is_binary:
+    
+    if is_binary and num_categories == 2:
         cutoff = getattr(params, 'cutoff', getattr(params, 'classification_cutoff', 0.5))
 
-        stats_inside = calculate_binary_statistics(df_inside, cutoff=cutoff, tag=tag)
-        stats_outside = calculate_binary_statistics(df_outside, cutoff=cutoff, tag=tag)
+        stats_inside = calculate_binary_statistics_sklearn(df_inside, cutoff=cutoff, tag=tag)
+        stats_outside = calculate_binary_statistics_sklearn(df_outside, cutoff=cutoff, tag=tag)
         
         ba_inside = stats_inside.get(pc.BALANCED_ACCURACY + tag, float('nan'))
         ba_outside = stats_outside.get(pc.BALANCED_ACCURACY + tag, float('nan'))
@@ -1810,6 +1826,23 @@ def runAD(df_training, df_prediction, params, embedding, df_predictions, ad_meas
             f"Coverage_{stat_insert}": coverage_ad
         }
 
+    elif is_binary and num_categories == 3:
+        
+        stats_inside = calculate_ternary_statistics_sklearn(df_inside, tag=tag)
+        stats_outside = calculate_ternary_statistics_sklearn(df_outside, tag=tag)
+        
+        ba_inside = stats_inside.get(pc.BALANCED_ACCURACY + tag, float('nan'))
+        ba_outside = stats_outside.get(pc.BALANCED_ACCURACY + tag, float('nan'))
+        ba_ratio = safe_div(ba_inside, ba_outside)
+
+        stats = {
+            "ad_measure": ad_measure,
+            f"BA_{stat_insert}_inside_AD": ba_inside,
+            f"BA_{stat_insert}_outside_AD": ba_outside,
+            "ba_ratio": ba_ratio,
+            f"Coverage_{stat_insert}": coverage_ad
+        }
+        
     else:
         # Mean of training exp for Q2/R2 in continuous stats
         mean_exp_training = float('nan')  # not needed for calculating MAE inside and outside
@@ -2176,8 +2209,12 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         #     df_training, xgb_feature_name_map = xgb_sanitize_feature_names(df_training)
         #     df_prediction, _ = xgb_sanitize_feature_names(df_prediction)
 
-        s = df_training.iloc[:, 1]
-        is_binary = s.isin([0, 1]).all()
+        # s = df_training.iloc[:, 1]
+        # is_binary = s.isin([0, 1]).all()
+        #
+        # if s.isin([0, 1, 2]).all():
+        #     is_binary = True
+        
         # print('is_binary', is_binary)
 
         # ---- Optional outlier filtering on training data only ----
@@ -2323,7 +2360,8 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
                     f"Selected {selected_feature_count} features from {original_feature_count}."
                 )
             
-        df_pred_training, df_pred_test, training_stats, test_stats, model = ModelBuilder.build_and_test_model(df_training, df_prediction, cv, params, embedding, is_binary)
+        df_pred_training, df_pred_test, training_stats, test_stats, model = ModelBuilder.build_and_test_model(df_training, df_prediction, cv, params, embedding)
+                                
                 
         if not feature_selection and fs_previous_embedding and qsar_method != 'gcm':
     
@@ -2339,19 +2377,19 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
                 logging.info(f"After SFS, {len(model.embedding)} descriptors: {model.embedding}")
     
             # redo model and predictions:
-            df_pred_training, df_pred_test, training_stats, test_stats, model = ModelBuilder.build_and_test_model(df_training, df_prediction, params, model.embedding, is_binary)
+            df_pred_training, df_pred_test, training_stats, test_stats, model = ModelBuilder.build_and_test_model(df_training, df_prediction, params, model.embedding)
             logging.info(f"After FS, embedding has {len(model.embedding)} descriptors: {model.embedding}")
 
         # ---- Run cross validation calculations ----
         if cross_validate: 
-            df_pred_cv, cv_stats = ModelBuilder.crossvalidate(df_cv_dict, params, model.embedding, is_binary)
+            df_pred_cv, cv_stats = ModelBuilder.crossvalidate(df_cv_dict, params, model.embedding, model.is_binary, model.num_categories)
                 
         ext_stats = None
         df_pred_ext = None
         
         if df_prediction_ext is not None:
             model.external_dataset_name = dataset_name_ext
-            df_pred_ext, ext_stats = ModelBuilder.predict(model, df_prediction_ext, '_External', is_binary)
+            df_pred_ext, ext_stats = ModelBuilder.predict(model, df_prediction_ext, '_External', model.is_binary)
             # print('external stats',json.dumps(ext_stats, indent=4))
 
         if save_initial_dfs:
@@ -2373,7 +2411,7 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         stats_dict = {}
         if run_AD:
             for ad_measure in ad_measures:
-                df_pred_test = runAD(df_training, df_prediction, params, model.embedding, df_pred_test, ad_measure, stats_dict, is_binary=is_binary, is_external=False)
+                df_pred_test = runAD(df_training, df_prediction, params, model.embedding, df_pred_test, ad_measure, stats_dict, is_binary=model.is_binary, num_categories=model.num_categories, is_external=False)
     
             if len(ad_measure) > 1:
                 adu.generate_consensus_ad(df_pred_test, stats_dict, ad_measure_model, is_binary=is_binary, is_external=False)
@@ -2444,6 +2482,9 @@ def run_dataset(dataset_name, qsar_method, embedding=None, folder_embedding=None
         session = ensure_session(session)
         dataset_info = du.get_dataset_details(session, dataset_name)
         dsstox_mapping_strategy = json.loads(dataset_info["dsstox_mapping_strategy"])
+        
+        print("dsstox_mapping_strategy",json.dumps(dsstox_mapping_strategy,indent=4))
+        
         
         model.qsarReadyRuleSet = dsstox_mapping_strategy.get("qsarReadyRuleSet", "qsar-ready")
         model.propertyName = dataset_info["property_name"]
@@ -3267,7 +3308,7 @@ class Results:
         
         return results_dict
 
-    @staticmethod    
+    @staticmethod
     def summarize_model_stats(
             dataset_name,
             excel_name="model_stats.xlsx",
@@ -3335,11 +3376,19 @@ class Results:
             is_binary = bool(model_details.get("is_binary", False))
             stat = binary_stat_name if is_binary else continuous_stat_name
     
+            # model_id as integer
+            model_id_raw = model_details.get("modelId", None)
+            try:
+                model_id = int(model_id_raw) if model_id_raw is not None and str(model_id_raw).strip() != "" else None
+            except (TypeError, ValueError):
+                model_id = None
+    
             test_val = to_float(model_statistics.get("test_stats", {}).get(f"{stat}_Test"))
             cv_val = to_float(model_statistics.get("cv_stats", {}).get(f"{stat}_CV_Training"))
             ext_val = to_float(model_statistics.get("ext_stats", {}).get(f"{stat}_External"))
     
             row = {
+                "model_id": model_id,
                 "Run": run_name,
                 "Metric": stat,
                 f"{stat}_Test": test_val,
@@ -3381,7 +3430,9 @@ class Results:
     
         if not rows:
             base_columns = [
-                "Run", f"{continuous_stat_name}_Test", f"{continuous_stat_name}_Training_CV",
+                "model_id",
+                "Run",
+                f"{continuous_stat_name}_Test", f"{continuous_stat_name}_Training_CV",
                 f"{continuous_stat_name}_External", f"{binary_stat_name}_Test",
                 f"{binary_stat_name}_Training_CV", f"{binary_stat_name}_External",
                 "#_variables", "Embedding", "Metric"
@@ -3389,6 +3440,7 @@ class Results:
     
             if includeAD:
                 base_columns = [
+                    "model_id",
                     "Run",
                     f"{continuous_stat_name}_Test", f"{continuous_stat_name}_Training_CV", f"{continuous_stat_name}_External",
                     f"{continuous_stat_name}_Test_inside_AD", f"{continuous_stat_name}_Test_outside_AD", "Coverage_Test",
@@ -3449,6 +3501,7 @@ class Results:
     
             if includeAD:
                 print(
+                    f"{'model_id':<12} "
                     f"{'Run':<40} "
                     f"{stat + '_Test':<18} "
                     f"{stat + '_Training_CV':<18} "
@@ -3460,6 +3513,7 @@ class Results:
                 )
             else:
                 print(
+                    f"{'model_id':<12} "
                     f"{'Run':<40} "
                     f"{stat + '_Test':<18} "
                     f"{stat + '_Training_CV':<18} "
@@ -3470,6 +3524,7 @@ class Results:
             for r in rows:
                 if includeAD:
                     print(
+                        f"{str(r.get('model_id', 'N/A')):<12} "
                         f"{r['Run']:<40} "
                         f"{fmt3(r.get(f'{stat}_Test')):<18} "
                         f"{fmt3(r.get(f'{stat}_Training_CV')):<18} "
@@ -3481,6 +3536,7 @@ class Results:
                     )
                 else:
                     print(
+                        f"{str(r.get('model_id', 'N/A')):<12} "
                         f"{r['Run']:<40} "
                         f"{fmt3(r.get(f'{stat}_Test')):<18} "
                         f"{fmt3(r.get(f'{stat}_Training_CV')):<18} "
@@ -3488,7 +3544,7 @@ class Results:
                         f"{str(r.get('#_variables', 'N/A')):<15}"
                     )
     
-            columns = ["Run", f"{stat}_Test", f"{stat}_Training_CV", f"{stat}_External"]
+            columns = ["model_id", "Run", f"{stat}_Test", f"{stat}_Training_CV", f"{stat}_External"]
             if includeAD:
                 columns += [f"{stat}_Test_inside_AD", f"{stat}_Test_outside_AD", "Coverage_Test"]
             columns += ["#_variables", "Embedding", "Metric"]
@@ -3498,6 +3554,7 @@ class Results:
         else:
             if includeAD:
                 print(
+                    f"{'model_id':<12} "
                     f"{'Run':<40} "
                     f"{'Metric':<10} "
                     f"{'Test':<18} "
@@ -3510,6 +3567,7 @@ class Results:
                 )
             else:
                 print(
+                    f"{'model_id':<12} "
                     f"{'Run':<40} "
                     f"{'Metric':<10} "
                     f"{'Test':<18} "
@@ -3522,6 +3580,7 @@ class Results:
                 stat = r["Metric"]
                 if includeAD:
                     print(
+                        f"{str(r.get('model_id', 'N/A')):<12} "
                         f"{r['Run']:<40} "
                         f"{stat:<10} "
                         f"{fmt3(r.get(f'{stat}_Test')):<18} "
@@ -3534,6 +3593,7 @@ class Results:
                     )
                 else:
                     print(
+                        f"{str(r.get('model_id', 'N/A')):<12} "
                         f"{r['Run']:<40} "
                         f"{stat:<10} "
                         f"{fmt3(r.get(f'{stat}_Test')):<18} "
@@ -3543,6 +3603,7 @@ class Results:
                     )
     
             columns = [
+                "model_id",
                 "Run",
                 f"{continuous_stat_name}_Test", f"{continuous_stat_name}_Training_CV", f"{continuous_stat_name}_External",
                 f"{binary_stat_name}_Test", f"{binary_stat_name}_Training_CV", f"{binary_stat_name}_External",

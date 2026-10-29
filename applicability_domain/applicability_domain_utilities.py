@@ -32,20 +32,26 @@ def generate_applicability_domain_with_preselected_descriptors_from_dfs(train_df
 
     # Need to run get the training column names for alldescriptors AD:
     removeCorr = False  # remove correlated descriptors for all descriptors AD, it's faster without it but doesnt make much difference
-    train_ids, train_labels, train_features, train_column_names, is_binary = \
-        dfu.prepare_instances(df=train_df, which_set="training", remove_logp= remove_log_p, remove_corr=removeCorr)
+    if applicability_domain == pc.Applicability_Domain_TEST_Fragment_Counts:
+        # Fragment ranges use the original training columns, not the prepared
+        # feature matrix. Avoid rescanning every descriptor for every batch.
+        is_binary = train_df.iloc[:, 1].isin([0, 1]).all()
+    else:
+        train_ids, train_labels, train_features, train_column_names, is_binary = \
+            dfu.prepare_instances(df=train_df, which_set="training", remove_logp= remove_log_p, remove_corr=removeCorr)
 
     # print(applicability_domain, train_df.shape, train_features.shape, remove_log_p, removeCorr)
-
 
     if applicability_domain == pc.Applicability_Domain_TEST_Embedding_Cosine:
         ad = adm.TESTApplicabilityDomain(train_df, test_df, is_binary)
         ad.set_parameters({'k': 3, 'fractionTrainingSetInsideAD': 0.95, 'similarity': 'cosine'})
         output = ad.evaluate(embedding=embedding)
+
     elif applicability_domain == pc.Applicability_Domain_TEST_Embedding_Euclidean:
         ad = adm.TESTApplicabilityDomain(train_df, test_df, is_binary)
         ad.set_parameters({'k': 3, 'fractionTrainingSetInsideAD': 0.95, 'similarity': 'euclidean'})
         output = ad.evaluate(embedding=embedding)
+
     elif applicability_domain == pc.Applicability_Domain_TEST_All_Descriptors_Cosine:
         ad = adm.TESTApplicabilityDomain(train_df, test_df, is_binary)
         ad.set_parameters({'k': 3, 'fractionTrainingSetInsideAD': 0.95, 'similarity': 'cosine',
@@ -59,7 +65,7 @@ def generate_applicability_domain_with_preselected_descriptors_from_dfs(train_df
         output = ad.evaluate(embedding=train_column_names)
 
     elif applicability_domain == pc.Applicability_Domain_TEST_Fragment_Counts:
-        ad=adm.TESTFragmentCounts(train_df, test_df, is_binary)
+        ad = adm.TESTFragmentCounts(train_df, test_df, is_binary)
         output = ad.evaluate(embedding=embedding)
 
     elif applicability_domain == pc.Applicability_Domain_OPERA_local_index:
@@ -67,29 +73,26 @@ def generate_applicability_domain_with_preselected_descriptors_from_dfs(train_df
         ad.set_parameters({'k': 5, 'exceptionalLocal': 0.6, 'similarity': 'euclidean',
                            'onlyLocal': 0.01, 'fractionTrainingSetInsideAD': 0.95})
         output = ad.evaluate(embedding=embedding)
+
     elif applicability_domain == pc.Applicability_Domain_OPERA_global_index:
         ad = adm.OPERAGlobalApplicabilityDomain(train_df, test_df, is_binary)
         ad.set_parameters({'fractionTrainingSetInsideAD': 0.95, 'train_column_names': train_column_names})
         output = ad.evaluate(embedding=embedding)
+
     elif applicability_domain == pc.Applicability_Domain_Kernel_Density:
         ad = adm.KernelDensityApplicabilityDomain(train_df, test_df, is_binary)
         ad.set_parameters({'fractionTrainingSetInsideAD': 0.95, 'train_column_names': train_column_names})
         output = ad.evaluate(embedding=embedding)
+
     else:
-        raise(f"invalid applicability domain:{applicability_domain}")
-        
+        raise ValueError(f"invalid applicability domain:{applicability_domain}")
+
+    if isinstance(output, pd.DataFrame) and '_row_pos' in output.columns:
+        output = output.sort_values('_row_pos').reset_index(drop=True)
+
     df_results_inside = output.loc[output['AD'] == True]
-    # print('inside shape=', df_results_inside.shape)
     total_rows = output.shape[0]
     coverage = (df_results_inside.shape[0] / total_rows) if total_rows > 0 else 0.0
-
-    # count_inside_AD = output['AD'].value_counts()[True]
-    # countTest = output.shape[0]
-    # coverage = count_inside_AD / countTest
-
-    if debug:
-        print('\nAD', applicability_domain)
-        print('Fraction of test set insideID', coverage)
 
     if returnTrainingAD:
         col_name_id = ad.TrainSet.columns[0]
@@ -98,9 +101,7 @@ def generate_applicability_domain_with_preselected_descriptors_from_dfs(train_df
         output = pd.DataFrame(np.column_stack([idTR, AD_TR]),columns=['idTrain', 'AD'])
         return output, ad.splitting_value
     else:
-        # print(output)
         return output, ad.splitting_value
-
 
 
 def generate_applicability_domain_with_preselected_descriptors(training_tsv, test_tsv, remove_log_p,

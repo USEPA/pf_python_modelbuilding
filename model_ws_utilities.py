@@ -28,6 +28,7 @@ from model_registry import models
 
 
 from utils import timer
+from pandas.core.dtypes.common import is_categorical_dtype
 
 
 def get_model_info(qsar_method):
@@ -214,12 +215,20 @@ def instantiateModel(df_training, n_jobs, qsar_method, remove_log_p, use_pmml_pi
     else:
         pass
         # 404 NOT FOUND if requested QSAR method has not been implemented
-    model.is_binary = dfu.isBinary(df_training)
+    
+    if dfu.isBinary(df_training):
+        model.num_categories = 2
+        model.is_binary = True
+    elif dfu.isTernary(df_training):
+        model.num_categories = 3
+        model.is_binary = True
+    else:
+        model.is_binary = False
+    
     model.use_pmml = use_pmml_pipeline
-
-    logging.debug('instantiateModel: model.is_binary: '+str(model.is_binary))
-
-    obj = mb.model_registry_model_obj(qsar_method, model.is_binary)
+                
+    obj = mb.model_registry_model_obj(qsar_method, model.is_binary, model.num_categories)
+                                      
 
     # TODO: see if always including the StandardScaler works properly
     # if use_pmml_pipeline is False or scale_features:

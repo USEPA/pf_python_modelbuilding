@@ -86,7 +86,7 @@ def _is_pipeline_or_pmml_model(model_obj):
         or 'PMML' in type(model_obj).__name__
     )
 
-def model_registry_model_obj(regressor_name, is_categorical):
+def model_registry_model_obj(regressor_name, is_categorical, num_categories):
     '''
     model registry for getting model_obj (not pipeline)
     :param regressor_name:
@@ -111,10 +111,20 @@ def model_registry_model_obj(regressor_name, is_categorical):
         else:
             return SVR()
     elif regressor_name == 'xgb':
+        
         if is_categorical:
+            
+            if num_categories > 2:
+                return XGBClassifier(
+                objective="multi:softprob",
+                num_class=3,
+                eval_metric="mlogloss"
+            )
+            else:
+                        
             # return XGBClassifier()
             # return XGBClassifier(use_label_encoder=False, eval_metric='logloss')
-            return XGBClassifier(eval_metric='logloss',random_state=SEED)
+                return XGBClassifier(eval_metric='logloss',random_state=SEED)
             # return XGBClassifier(use_label_encoder=False, eval_metric='auc')
         else:
             return XGBRegressor(importance_type=importance_type, random_state=SEED)
@@ -803,6 +813,12 @@ class Model:
         
 
     def build_model(self, use_pmml_pipeline, scale_features, cv, descriptor_names=None):
+        """
+        builds the model_obj
+        Note: is_binary is set when model is instantiated so dont need to reset here
+        
+        """
+        
         logging.debug('enter build model')
 
 
@@ -816,7 +832,7 @@ class Model:
         if descriptor_names is None:
             
             if self.regressor_name == 'gcm':
-                train_ids, train_labels, train_features, train_column_names, self.is_binary = \
+                train_ids, train_labels, train_features, train_column_names, _ = \
                     DFU.prepare_instances_with_preselected_descriptors_gcm(
                         self.df_training,
                         "training",
@@ -824,11 +840,11 @@ class Model:
                     )
                 # print(len(train_column_names))
             else:
-                train_ids, train_labels, train_features, train_column_names, self.is_binary = \
+                train_ids, train_labels, train_features, train_column_names, _ = \
                     DFU.prepare_instances(self.df_training, "training", remove_logp=self.remove_log_p_descriptors, remove_corr=True)
                 # Use columns selected by prepare_instances (in case logp descriptors were removed)
                 if train_column_names is None or len(train_column_names) == 0:
-                    train_ids, train_labels, train_features, train_column_names, self.is_binary = \
+                    train_ids, train_labels, train_features, train_column_names, _ = \
                         DFU.prepare_instances(self.df_training, "training", remove_logp=self.remove_log_p_descriptors, remove_corr=False)
                 if train_column_names is None or len(train_column_names) == 0:
                     raise ValueError("No descriptors available for training after filtering. Check your descriptor set and filtering options.")
@@ -837,7 +853,7 @@ class Model:
             # print(self.embedding)
         else:
             self.embedding = descriptor_names
-            train_ids, train_labels, train_features, train_column_names, self.is_binary = \
+            train_ids, train_labels, train_features, train_column_names, _ = \
                 DFU.prepare_instances_with_preselected_descriptors(self.df_training, "training", self.embedding)
             # print("train_ids", train_ids)
             # Use columns selected by prepare_instances (in case logp descriptors were removed)            
@@ -1214,9 +1230,10 @@ class Model:
         # print("pred_features", pred_features)
         model_input = get_model_input(pred_features)
         
-        if getattr(self, "feature_rename_map", None) is not None:# XGB models cant have [,],< characters
-            model_input = model_input.rename(columns=self.feature_rename_map)
-        
+        feature_rename_map = getattr(self, "feature_rename_map", None)
+        if feature_rename_map is not None:
+            model_input = model_input.rename(columns=feature_rename_map)
+            
         # print("model_input", model_input)
         # print('pred_labels',pred_labels)
 
@@ -1243,8 +1260,11 @@ class Model:
         # print(pred_features)
         # print(predictions)
         # print('is_categorical', self.is_binary)
-
-        if self.is_binary:
+        
+        # print('in do_predictions, is_binary=',self.is_binary)
+        
+        num_categories = getattr(self, "num_categories", None)
+        if self.is_binary and (num_categories is None or num_categories == 2):
         
             if _is_pypmml_model(self.model_obj):
                 predictions = self.model_obj.predict(model_input)
@@ -1268,6 +1288,7 @@ class Model:
                 predictions = self.model_obj.predict_proba(model_input)[:, 1]
                 # Threshold at 0.5
                 preds = np.rint(predictions)
+                                
 
                 y_true = pd.to_numeric(pd.Series(pred_labels), errors='coerce')
                 mask = ~y_true.isna()
@@ -1288,6 +1309,16 @@ class Model:
             else:
                 logging.debug("Skipping Balanced Accuracy for Test data because labels are missing")
 
+        
+        elif self.is_binary and self.num_categories == 3:
+            
+            #TODO: do we need to somehow preserve the probabilities?
+            #TODO make it work 
+            
+            probs = self.model_obj.predict_proba(model_input)
+            predictions = np.argmax(probs, axis=1)
+            # print(predictions)            
+        
         elif not self.is_binary:
 
             # inputFolder = 'C:/Users/TMARTI02/OneDrive - Environmental Protection Agency (EPA)/000 Papers/2024 tetko challenge/modeling/'
@@ -1599,6 +1630,10 @@ class ModelDescription:
         self.omitSalts = model.omitSalts
         self.qsarReadyRuleSet = model.qsarReadyRuleSet
         self.is_binary = model.is_binary
+        
+        if hasattr(model, "num_categories"):
+            self.num_categories = model.num_categories
+        
         self.remove_log_p_descriptors = model.remove_log_p_descriptors
         self.hyperparameter_grid = model.hyperparameter_grid
         self.hyperparameters = model.hyperparameters  # final hyperparameters

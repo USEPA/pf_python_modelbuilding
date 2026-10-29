@@ -123,6 +123,8 @@ class DescriptorsAPI:
 
         response = self.call_descriptors_get(descriptors_api=descriptors_api, qsar_smiles=qsarSmiles,
                                                                 descriptor_name=descriptorService)
+        if response.status_code == 422:
+            return "Missing model descriptors: unsupported calculator input", 422
         if response.status_code != 200:
             logging.warning(
                 "Descriptor request failed for single SMILES; descriptor_service=%s status=%s smiles=%s body=%s",
@@ -203,6 +205,7 @@ class DescriptorsAPI:
         params = {
             "type": descriptor_name,
             "smiles": qsar_smiles,
+            "chemIdType": "SMILES",
             "headers": True,
             # some descriptors dont have header option? Should be fixed so this doesnt cause issue if must be false
         }

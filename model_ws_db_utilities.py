@@ -14,7 +14,8 @@ import base64
 from pathlib import Path
 
 
-from API_Utilities import QsarSmilesAPI, DescriptorsAPI
+from API_Utilities import QsarSmilesAPI, DescriptorsAPI, SearchAPI
+from util.preprocessing_cache import standardization_cache, descriptor_cache
 
 from db.mongo_cache import (
     cache_predictions,
@@ -58,7 +59,9 @@ from util.chemical_image_utils import build_render_image_url, get_render_smiles
 from utils import timer, print_first_row
 from applicability_domain import applicability_domain_utilities as adu
 from model_service_common.config import get_env as _get_env
-from API_Utilities import SearchAPI
+
+
+from model_service_common.postgres import postgres_connect_args
 
 # debug = False
 import logging
@@ -208,12 +211,15 @@ def getEngine():
                     drivername='postgresql+psycopg2',
                     username=os.getenv('POSTGRES_USER'),
                     password=os.getenv('POSTGRES_PASSWORD'),
-                    host=os.getenv('POSTGRES_HOST', 'localhost'),
-                    port=int(os.getenv('POSTGRES_PORT', 5432)),
                     database=os.getenv('POSTGRES_DB')
                 )
 
-                _engine = create_engine(connect_url, echo=False, pool_pre_ping=True)
+                _engine = create_engine(
+                    connect_url,
+                    connect_args=postgres_connect_args(),
+                    echo=False,
+                    pool_pre_ping=True,
+                )
                 _session_factory = sessionmaker(bind=_engine)
 
     return _engine
@@ -583,6 +589,8 @@ class ModelInitializer:
                 cached_model = model_cache.read_model_snapshot(model_id)
             except model_cache.ModelArtifactCacheUnavailableError as exc:
                 logging.warning("Predictor model artifact cache unavailable for model_id=%s: %s", model_id, exc)
+                if not model_cache.postgres_fallback_enabled():
+                    raise
             else:
                 if cached_model is not None:
                     cached_model.modelId = str(model_id)
@@ -1142,7 +1150,9 @@ class ModelDetails:
         else:
             self.propertyDescription = None
             
-        self.propertyIsBinary = model.is_binary
+        self.propertyIsBinary = model.is_binary                
+        if hasattr(model, 'num_categories'):
+            self.numCategories = model.num_categories
 
         self.datasetName = model.datasetName
         
@@ -2407,15 +2417,16 @@ class ModelPredictor:
 
         return results
 
+
     def _determine_applicability_domain_batch(self, model, applicability_domain_name, df_prediction):
         if df_prediction is None or df_prediction.empty:
             return []
-
+    
         if applicability_domain_name == pc.Applicability_Domain_TEST_Embedding_Euclidean:
             fast_results = self._fast_test_embedding_euclidean_ad_batch(model, applicability_domain_name, df_prediction)
             if fast_results is not None:
                 return fast_results
-
+    
         output, ad_cutoff = adu.generate_applicability_domain_with_preselected_descriptors_from_dfs(
             train_df=model.df_training,
             test_df=df_prediction,
@@ -2424,17 +2435,49 @@ class ModelPredictor:
             applicability_domain=applicability_domain_name,
             filterColumnsInBothSets=True,
         )
-
-        return [
-            self._build_applicability_domain_result_from_row(
-                model,
+    
+        if output is None or output.empty:
+            return [
+                {
+                    "AD": False,
+                    "adMethod": {"name": applicability_domain_name},
+                }
+                for _ in range(len(df_prediction.index))
+            ]
+    
+        # Prefer explicit row-position alignment if present
+        if '_row_pos' in output.columns:
+            output = output.sort_values('_row_pos').reset_index(drop=True)
+    
+        # Fallback if output row count doesn't match input
+        if len(output.index) != len(df_prediction.index):
+            logging.warning(
+                "AD output row count mismatch; attempting to align by idTest where possible. "
+                "ad=%s output_rows=%s input_rows=%s",
                 applicability_domain_name,
-                output.iloc[row_pos],
-                ad_cutoff,
+                len(output.index),
+                len(df_prediction.index),
             )
-            for row_pos in range(len(output.index))
-        ]
-
+    
+            input_ids = df_prediction.iloc[:, 0].tolist()
+            if 'idTest' in output.columns:
+                output = output.set_index('idTest').reindex(input_ids).reset_index()
+            else:
+                output = output.iloc[:len(df_prediction.index)].copy()
+    
+        results = []
+        for row_pos in range(len(df_prediction.index)):
+            row = output.iloc[row_pos]
+            results.append(
+                self._build_applicability_domain_result_from_row(
+                    model,
+                    applicability_domain_name,
+                    row,
+                    ad_cutoff,
+                )
+            )
+    
+        return results
     def _determine_applicability_domains_batch(self, model, df_prediction):
         row_count = 0 if df_prediction is None else len(df_prediction.index)
         results_by_row = [[] for _ in range(row_count)]
@@ -2794,6 +2837,35 @@ class ModelPredictor:
             return self._standardize_smiles_individually(stdizer_api, smiles_list, model)
 
     def _standardize_smiles_batch(self, stdizer_api, smiles_list, model):
+        return self._reuse_preprocessing(
+            standardization_cache,
+            (stdizer_api, model.qsarReadyRuleSet, bool(model.omitSalts)),
+            smiles_list,
+            lambda missing: self._standardize_smiles_batch_uncached(stdizer_api, missing, model),
+        )
+
+    @staticmethod
+    def _reuse_preprocessing(cache, context, structures, calculate):
+        results = [cache.get((context, structure)) for structure in structures]
+        missing_indices = [index for index, value in enumerate(results) if value is None]
+        if missing_indices:
+            calculated = calculate([structures[index] for index in missing_indices])
+            if len(calculated) != len(missing_indices):
+                raise ValueError("Preprocessing result count does not match input count")
+            for index, value in zip(missing_indices, calculated):
+                results[index] = value
+                if value[1] == 200:
+                    # Batch-local IDs must never leak into a later request.
+                    if isinstance(value[0], dict):
+                        value = (dict(value[0]), value[1])
+                        value[0].pop("id", None)
+                        value[0].pop("recordId", None)
+                    cache.put((context, structures[index]), value)
+        logging.info("Preprocessing reuse: inputs=%s hits=%s misses=%s", len(structures),
+                     len(structures) - len(missing_indices), len(missing_indices))
+        return results
+
+    def _standardize_smiles_batch_uncached(self, stdizer_api, smiles_list, model):
         if not smiles_list:
             return []
 
@@ -2878,6 +2950,14 @@ class ModelPredictor:
             ))
 
     def _calculate_descriptors_batch(self, descriptors_api, qsar_smiles_list, descriptor_service):
+        return self._reuse_preprocessing(
+            descriptor_cache,
+            (descriptors_api, descriptor_service),
+            qsar_smiles_list,
+            lambda missing: self._calculate_descriptors_batch_uncached(descriptors_api, missing, descriptor_service),
+        )
+
+    def _calculate_descriptors_batch_uncached(self, descriptors_api, qsar_smiles_list, descriptor_service):
         if not qsar_smiles_list:
             return []
 
@@ -2978,6 +3058,14 @@ class ModelPredictor:
                 )
                 continue
 
+            descriptor_error = self._descriptor_input_error(df_prediction, model.embedding)
+            if descriptor_error:
+                results[original_idx] = self._build_prediction_error_report(
+                    response_chemical, report_model_details, descriptor_error,
+                    standardized_chemical=standardized_chemical_for_response,
+                )
+                continue
+
             prediction_frames.append(df_prediction)
             prediction_indices.append(original_idx)
             prediction_chemicals.append(chemical)
@@ -3035,6 +3123,19 @@ class ModelPredictor:
 
         return results
 
+    @staticmethod
+    def _descriptor_input_error(frame, embedding):
+        missing = [name for name in embedding if name not in frame.columns]
+        if missing:
+            return "Required model descriptors are unavailable: " + ", ".join(map(str, missing[:10]))
+        try:
+            values = frame[embedding].to_numpy(dtype=float)
+        except (ValueError, TypeError):
+            return "Missing model descriptors: required values are non-numeric"
+        if not np.isfinite(values).all():
+            return "Missing model descriptors: required values are missing or non-finite"
+        return None
+
     @timer
     def predict_model_smiles_batch(self, model_id, smiles_list, generate_report=True, include_model_details=True):
         print(f"Predicting with model {model_id} and {STDIZER_API}, {DESCRIPTORS_API} for {len(smiles_list)} SMILES")
@@ -3047,6 +3148,7 @@ class ModelPredictor:
 
         report_model_details = model_details_dict if include_model_details else None
         standardized_results = self._standardize_smiles_batch(STDIZER_API, smiles_list, model)
+        
         return self._predict_model_smiles_batch_from_standardized_results(
             model,
             DESCRIPTORS_API,
@@ -3140,7 +3242,7 @@ class ModelPredictor:
                 generate_report=True,
             )
             cache_entries = []
-
+            
             for idx, cache_key, prediction in zip(missing_indices, missing_cache_keys, generated_results):
                 prediction_obj = self._prediction_from_cached_value(prediction)
                 results[idx] = prediction_obj
@@ -3168,7 +3270,7 @@ class ModelPredictor:
         :return:
         """
 
-        print(f"predictFromDB: {model_id} and {STDIZER_API}, {DESCRIPTORS_API} for {len(smiles)} SMILES")
+        # print(f"predictFromDB: {model_id} and {STDIZER_API}, {DESCRIPTORS_API} for {len(smiles)} SMILES")
 
         if isinstance(smiles, str):
             predictions = self._predict_from_db_batch(
@@ -3187,7 +3289,7 @@ class ModelPredictor:
 
     def addPerformance(self, md: ModelDetails):
         ms = md.modelStatistics or {}
-
+    
         def set_metric(block: dict, out_key: str, *candidates: str):
             """Put first existing metric from candidates into block[out_key]."""
             for k in candidates:
@@ -3195,26 +3297,31 @@ class ModelPredictor:
                     block[out_key] = ms[k]
                     return
             block[out_key] = None
-
+    
         md.performance = {}
-
+    
         md.performance["train"] = {}
         md.performance["fiveFoldICV"] = {}
-        md.performance["external"] = {}  # TODO rename to "prediction" since can have separate external set from another data source
+        md.performance["external"] = {}   # TODO rename to "prediction"
         md.performance["externalAD"] = {}
-        
-        if md.propertyIsBinary:
+    
+        num_categories = getattr(md, "num_categories", None)
+        if num_categories is None:
+            num_categories = getattr(md, "numCategories", None)
+    
+        is_multiclass_3 = bool(md.propertyIsBinary and num_categories == 3)
+    
+        if md.propertyIsBinary and not is_multiclass_3:
+            # Standard binary classification
             set_metric(md.performance["train"], "A", "Concordance_Training")
             set_metric(md.performance["train"], "BA", "BA_Training")
             set_metric(md.performance["train"], "SN", "SN_Training")
             set_metric(md.performance["train"], "SP", "SP_Training")
-
-            # set_metric(md.performance["fiveFoldICV"], "A", "Concordance_CV_Training") #doesnt exist in DB yet
+    
             set_metric(md.performance["fiveFoldICV"], "BA", "BA_CV_Training")
             set_metric(md.performance["fiveFoldICV"], "SN", "SN_CV_Training")
             set_metric(md.performance["fiveFoldICV"], "SP", "SP_CV_Training")
-            
-            
+    
             set_metric(md.performance["external"], "A", "Concordance_Test")
             set_metric(md.performance["external"], "BA", "BA_Test")
             set_metric(md.performance["external"], "SN", "SN_Test")
@@ -3223,16 +3330,40 @@ class ModelPredictor:
             set_metric(md.performance["externalAD"], "BA_inside_AD", "BA_Test_inside_AD")
             set_metric(md.performance["externalAD"], "BA_outside_AD", "BA_Test_outside_AD")
             set_metric(md.performance["externalAD"], "Fraction_inside_AD", "Coverage_Test")
-
+    
+        elif is_multiclass_3:
+            # 3-class classification: use recalls instead of SN/SP
+            set_metric(md.performance["train"], "A", "Concordance_Training")
+            set_metric(md.performance["train"], "BA", "BA_Training")
+            set_metric(md.performance["train"], "RECALL_CLASS_0", "RECALL_CLASS_0_Training")
+            set_metric(md.performance["train"], "RECALL_CLASS_1", "RECALL_CLASS_1_Training")
+            set_metric(md.performance["train"], "RECALL_CLASS_2", "RECALL_CLASS_2_Training")
+    
+            set_metric(md.performance["fiveFoldICV"], "BA", "BA_CV_Training")
+            set_metric(md.performance["fiveFoldICV"], "RECALL_CLASS_0", "RECALL_CLASS_0_CV_Training")
+            set_metric(md.performance["fiveFoldICV"], "RECALL_CLASS_1", "RECALL_CLASS_1_CV_Training")
+            set_metric(md.performance["fiveFoldICV"], "RECALL_CLASS_2", "RECALL_CLASS_2_CV_Training")
+    
+            set_metric(md.performance["external"], "A", "Concordance_Test")
+            set_metric(md.performance["external"], "BA", "BA_Test")
+            set_metric(md.performance["external"], "RECALL_CLASS_0", "RECALL_CLASS_0_Test")
+            set_metric(md.performance["external"], "RECALL_CLASS_1", "RECALL_CLASS_1_Test")
+            set_metric(md.performance["external"], "RECALL_CLASS_2", "RECALL_CLASS_2_Test")
+    
+            set_metric(md.performance["externalAD"], "BA_inside_AD", "BA_Test_inside_AD")
+            set_metric(md.performance["externalAD"], "BA_outside_AD", "BA_Test_outside_AD")
+            set_metric(md.performance["externalAD"], "Fraction_inside_AD", "Coverage_Test")
+    
         else:
+            # Regression
             set_metric(md.performance["train"], "R2", "PearsonRSQ_Training", "R2_Training")
             set_metric(md.performance["train"], "RMSE", "RMSE_Training")
             set_metric(md.performance["train"], "MAE", "MAE_Training")
-            
+    
             set_metric(md.performance["fiveFoldICV"], "R2", "PearsonRSQ_CV_Training", "PearsonRSQ_CV")
             set_metric(md.performance["fiveFoldICV"], "RMSE", "RMSE_CV_Training", "RMSE_CV", "RMSE_CV_Train")
             set_metric(md.performance["fiveFoldICV"], "MAE", "MAE_CV_Training", "MAE_CV")
-        
+    
             set_metric(md.performance["external"], "R2", "PearsonRSQ_Test", "R2_Test")
             set_metric(md.performance["external"], "RMSE", "RMSE_Test")
             set_metric(md.performance["external"], "MAE", "MAE_Test")
@@ -3240,8 +3371,10 @@ class ModelPredictor:
             set_metric(md.performance["externalAD"], "MAE_inside_AD", "MAE_Test_inside_AD")
             set_metric(md.performance["externalAD"], "MAE_outside_AD", "MAE_Test_outside_AD")
             set_metric(md.performance["externalAD"], "Fraction_inside_AD", "Coverage_Test")
-
+    
         md.modelStatistics = None
+    
+    
     
     def smiles_to_base64(self, smiles_string, width=400, height=400):
         '''
@@ -3287,8 +3420,8 @@ class ModelPredictor:
                         modelResults.experimentalValueSet = "Test"
                         modelResults.experimentalValueUnitsModel = neighborResultsPrediction["neighbors"][0]["exp"]
         
-        logging.info(f"experimentalValueSet={modelResults.experimentalValueSet}")        
-        logging.info(f"experimentalValueUnitsModel={ modelResults.experimentalValueUnitsModel}")
+        # logging.info(f"experimentalValueSet={modelResults.experimentalValueSet}")        
+        # logging.info(f"experimentalValueUnitsModel={ modelResults.experimentalValueUnitsModel}")
 
     def setExpPredValuesForADAnalogs(self, model, analogs):
         self._ensure_model_runtime_cache(model)
@@ -3390,15 +3523,44 @@ class ModelPredictor:
         else:
             tag = pc.TAG_TEST
         
+        
+        
+        if model.is_binary and getattr(model, "num_categories", None):
+            # Multiclass-as-binary path (e.g., 3 classes)
+            if model.num_categories == 3:
+                stats_test = stats.calculate_ternary_statistics_sklearn(df_neighbors, tag)
+        
+                BA = stats_test[pc.BALANCED_ACCURACY + tag]
+                REC0 = stats_test[pc.RECALL_CLASS_0 + tag]
+                REC1 = stats_test[pc.RECALL_CLASS_1 + tag]
+                REC2 = stats_test[pc.RECALL_CLASS_2 + tag]
+        
+                return {
+                    "set": set_name,
+                    "neighbors": enriched_neighbors,
+                    "BA": BA,
+                    "RECALL_CLASS_0": REC0,
+                    "RECALL_CLASS_1": REC1,
+                    "RECALL_CLASS_2": REC2,
+                    "unitNeighbor": units_model,
+                    "title": title
+                }
+        
+        
         if model.is_binary:
             binary_cutoff = 0.5
-            stats_test = stats.calculate_binary_statistics(df_neighbors, binary_cutoff, tag)
+            stats_test = stats.calculate_binary_statistics_sklearn(df_neighbors, binary_cutoff, tag)
             BA = stats_test[pc.BALANCED_ACCURACY + tag]
             SN = stats_test[pc.SENSITIVITY + tag]
             SP = stats_test[pc.SPECIFICITY + tag]
 
-            return {"set": "Training", "neighbors":enriched_neighbors, "BA":BA, "SN":SN, "SP":SP, "unitNeighbor":units_model,
-                                   "title": title}
+            return {"set": set_name, 
+                    "neighbors":enriched_neighbors, 
+                    "BA":BA, 
+                    "SN":SN, 
+                    "SP":SP, 
+                    "unitNeighbor":units_model,
+                    "title": title}
 
         else:
             mae_value = None
@@ -3598,6 +3760,10 @@ class ModelPredictor:
 
     @timer
     def standardizeStructure(self, stdizer_api, smiles, model: Model):
+        
+        if model.omitSalts and "." in smiles:
+            return f"{smiles}: model can't run mixtures", 400
+
         useFullStandardize = False
         try:
             chemicals, code = QsarSmilesAPI.call_qsar_ready_standardize_post(stdizer_api=stdizer_api, smiles=smiles, full=useFullStandardize,
@@ -3610,21 +3776,23 @@ class ModelPredictor:
         if code >= 400:
             return chemicals, code
                 
+        logging.info(f"len(chemicals){len(chemicals)}")
+                
         if len(chemicals) == 0:
             # logging.debug('Standardization failed')
             return f"{smiles} failed standardization" if smiles else 'No Structure', 400
 
-        if len(chemicals) > 1 and model.omitSalts:
-            # print('qsar smiles indicates mixture')
-            return f"{smiles}: model can't run mixtures", 400
-
-        chemical = chemicals[0]
-        qsarSmiles = chemical["canonicalSmiles"]
-        if not qsarSmiles:
-            logging.warning("Standardization returned empty canonicalSmiles for %s", smiles)
-            return f"{smiles} failed standardization", 400
-        logging.debug(f"qsarSmiles: {qsarSmiles}")
-        return chemical, 200
+        elif len(chemicals) > 1: # even if omitSalts = False it still shouldnt make prediction because the qsar ready smiles isnt a single component
+            # e.g. CccCCCCO.COCOCOCOC can't run model predictions but Cl.CCC(=O)OC1(CCN(CC#CC2=CC=CC=C2)CC1)C1=CC=CC=C1 will give single component
+            return f"{smiles}: chemical cannot be standardized to a single component", 400
+        else:
+            chemical = chemicals[0]
+            qsarSmiles = chemical["canonicalSmiles"]
+            if not qsarSmiles:
+                logging.warning("Standardization returned empty canonicalSmiles for %s", smiles)
+                return f"{smiles} failed standardization", 400
+            logging.debug(f"qsarSmiles: {qsarSmiles}")
+            return chemical, 200
         
     def standardizeStructure2(self, stdizer_api, smiles, qsarReadyRuleSet, omitSalts):
         useFullStandardize = False

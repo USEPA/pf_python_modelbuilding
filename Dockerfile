@@ -1,36 +1,33 @@
-FROM python:3.12-slim-bookworm AS builder
-
-ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PIP_NO_CACHE_DIR=1
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /build
-
-COPY requirements.txt .
-RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
-
-FROM python:3.12-slim-bookworm
-
-ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
+# Use Ubuntu's patched Python 3.12 runtime; keep compilers in the build stage.
+FROM ubuntu:24.04 AS runtime
+ENV PATH=/opt/venv/bin:$PATH \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_CACHE_DIR=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
+# Refresh cached OS package layers for the security rebuild.
+ARG SECURITY_REFRESH=2026-10-03
+RUN apt-get update && apt-get upgrade -y \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates python3 libfreetype6 libfontconfig1 fonts-dejavu-core libstdc++6 libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
 
-RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
-    libfreetype6 \
-    libfontconfig1 \
-    fonts-dejavu-core \
-    libstdc++6 \
-    libgomp1 \
-    && apt-get purge --allow-remove-essential --ignore-missing -y perl perl-base openssl libsqlite3-0 ncurses-base ncurses-bin libncursesw6 gzip attr expat libexpat1 libattr1 bash util-linux libtinfo6 || true  \
-    && apt-get autoremove -y --purge || true
+FROM runtime AS builder
+# Refresh cached OS package layers for the security rebuild.
+ARG SECURITY_REFRESH=2026-10-03
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential python3-dev python3-venv \
+    && rm -rf /var/lib/apt/lists/* \
+    && python3 -m venv /opt/venv
+WORKDIR /build
+COPY requirements.txt .
+RUN pip install --upgrade pip setuptools wheel
+RUN pip install -r requirements.txt
+RUN pip check && pip uninstall -y pip wheel
 
+FROM runtime
 WORKDIR /app
-
-COPY --from=builder /install /usr/local
+COPY --from=builder /opt/venv /opt/venv
 
 COPY . .
 
