@@ -3,7 +3,7 @@
 import json
 import logging
 import os
-from typing import Optional, Union, List, Dict, Iterator as _Iterator
+from typing import Optional, Union, List, Dict, Any, Iterator as _Iterator
 from io import StringIO
 from pathlib import Path
 from dataclasses import asdict, dataclass, field, fields
@@ -17,6 +17,7 @@ import numpy as np
 import math
 import time
 from datetime import datetime
+from sklearn.model_selection import KFold, StratifiedKFold, GroupKFold, TimeSeriesSplit
 
 from model_ws_utilities import \
     apply_outlier_filter, \
@@ -320,6 +321,53 @@ class StaticHelpers:
             return None
 
         return embedding
+
+    def create_cv_dict(
+            df: pd.DataFrame,
+            n: int = 5,
+            mode: str = "kfold",
+            seed: Optional[int] = None,
+            splitter_kwargs: Optional[Dict[str, Any]] = None
+    ) -> Optional[Dict[int, Dict[str, pd.DataFrame]]]:
+        """Create a cross-validation dictionary that can be saved to params.df_cv_dict to specify a new splitting."""
+        if splitter_kwargs is None:
+            splitter_kwargs = dict()
+
+        if mode == "kfold":
+            split_method = KFold
+        elif mode == "stratified":
+            split_method = StratifiedKFold
+        elif mode == "group":
+            split_method = GroupKFold
+        elif mode == "time":
+            split_method = TimeSeriesSplit
+        else:
+            logging.error("Invalid mode provided to create_cv_dict, must be one of {'kfold', 'stratified', 'group', 'time'}.")
+            return None
+
+        if seed is None:
+            cv_splitter = split_method(n_splits=n, **splitter_kwargs)
+        else:
+            cv_splitter = split_method(n_splits=n, random_state=seed, **splitter_kwargs)
+
+        if "Property" not in df.columns.to_list():
+            logging.error("'Property' must be a column in df provided to create_cv_dict.")
+            return None
+        
+        X = df.drop(columns=["Property"], inplace=False)
+        y = df.Property
+
+        df_cv_dict = dict()
+        for fold, (train_idx, test_idx) in enumerate(cv_splitter.split(X, y)):
+            df_train = df[train_idx]
+            df_pred = df[test_idx]
+
+            df_cv_dict[fold] = {
+                "train": df_train,
+                "pred": df_pred
+            }
+
+        return df_cv_dict
 
 
 @dataclass
@@ -1314,6 +1362,10 @@ class RunDataset:
         include_feature_count_in_subfolder: bool = False,
         engine: Optional[Engine] = None,
         session: Optional[Session] = None,
+        df_training: Optional[pd.DataFrame] = None,
+        df_prediction: Optional[pd.DataFrame] = None,
+        df_external: Optional[pd.DataFrame] = None,
+        dataset_name_ext: Optional[str] = None,
     ) -> RunParams:
         """Create run state and resolve model configuration in one object.
 
@@ -1343,6 +1395,10 @@ class RunDataset:
             include_feature_count_in_subfolder: Include feature limits in output naming.
             engine: Optional existing SQLAlchemy engine.
             session: Optional existing SQLAlchemy session.
+            df_training: Optional existing DataFrame for the training set.
+            df_prediction: Optional existing DataFrame for the prediction set.
+            df_external: Optional existing DataFrame for the external prediction set.
+            dataset_name_ext: Optional existing name for the external prediction set.
 
         Returns:
             RunParams containing the hyperparameters, run controls, and runtime state.
@@ -1447,6 +1503,11 @@ class RunDataset:
                 raise ValueError("outlier_filter_methods conflicts with hyperparameters.outlier_filter_methods")
             hyperparameters.outlier_filter_methods = outlier_filter_methods
 
+        if df_external is not None:
+            df_prediction_ext = df_external.copy()
+        else:
+            df_prediction_ext = df_external
+
         params = RunParams(
             embedding=embedding,
             folder_embedding=folder_embedding,
@@ -1464,6 +1525,11 @@ class RunDataset:
             include_feature_count_in_subfolder=include_feature_count_in_subfolder,
             engine=engine,
             session=session,
+            df_training=df_training,
+            df_prediction=df_prediction,
+            df_prediction_ext=df_prediction_ext,
+            df_external=df_external,
+            dataset_name_ext=dataset_name_ext
         )
         self.post_init(params)
         return params
@@ -1499,19 +1565,20 @@ class RunDataset:
                 params.hyperparameters.outlier_filter_trim_mode = "remove"
 
         # Set external dataset
-        params.df_prediction_ext = None
-        params.dataset_name_ext = None
-    
-        if params.hyperparameters.dataset_name == 'KOC v1 modeling' or params.hyperparameters.dataset_name == 'KOC v2 modeling':
-            params.dataset_name_ext = 'KOC v2 external'
-        elif params.hyperparameters.dataset_name == 'ECOTOX_2024_12_12_96HR_Fish_LC50_v3a modeling':
-            params.dataset_name_ext = 'QSAR_Toolbox_96HR_Fish_LC50_v3 modeling'
-        elif params.hyperparameters.dataset_name == 'ECOTOX_2024_12_12_96HR_Fish_LC50_v3b modeling':
-            params.dataset_name_ext = 'QSAR_Toolbox_96HR_Fish_LC50_v3b modeling'
-        elif params.hyperparameters.dataset_name == "exp_prop_BCF_v1_modeling":
-            params.dataset_name_ext = "exp_prop_BCF_v1_external"
-        elif params.hyperparameters.dataset_name == 'exp_prop_RBIODEG_RIFM_CHEMREG':
-            params.dataset_name_ext = 'exp_prop_RBIODEG_301F v1 modeling'
+        params.df_prediction_ext = getattr(params, "df_prediction_ext", None)
+        params.dataset_name_ext = getattr(params, "dataset_name_ext", None)
+
+        if params.dataset_name_ext is None:
+            if params.hyperparameters.dataset_name == 'KOC v1 modeling' or params.hyperparameters.dataset_name == 'KOC v2 modeling':
+                params.dataset_name_ext = 'KOC v2 external'
+            elif params.hyperparameters.dataset_name == 'ECOTOX_2024_12_12_96HR_Fish_LC50_v3a modeling':
+                params.dataset_name_ext = 'QSAR_Toolbox_96HR_Fish_LC50_v3 modeling'
+            elif params.hyperparameters.dataset_name == 'ECOTOX_2024_12_12_96HR_Fish_LC50_v3b modeling':
+                params.dataset_name_ext = 'QSAR_Toolbox_96HR_Fish_LC50_v3b modeling'
+            elif params.hyperparameters.dataset_name == "exp_prop_BCF_v1_modeling":
+                params.dataset_name_ext = "exp_prop_BCF_v1_external"
+            elif params.hyperparameters.dataset_name == 'exp_prop_RBIODEG_RIFM_CHEMREG':
+                params.dataset_name_ext = 'exp_prop_RBIODEG_301F v1 modeling'
 
         params.subfolder = params.subfolder if params.subfolder is not None else StaticHelpers.build_output_subfolder(
             params.hyperparameters,
@@ -1649,12 +1716,15 @@ class RunDataset:
         logging.info("Querying dataframes from database...")
 
         self.ensure_session(params)
-        df_training, df_prediction = du.get_training_prediction_instances(
-            params.session,
-            params.hyperparameters.dataset_name,
-            params.hyperparameters.descriptor_set_name,
-            params.hyperparameters.splitting_name,
-        )
+        if params.df_training is None or params.df_prediction is None:
+            df_training, df_prediction = du.get_training_prediction_instances(
+                params.session,
+                params.hyperparameters.dataset_name,
+                params.hyperparameters.descriptor_set_name,
+                params.hyperparameters.splitting_name,
+            )
+            df_training = params.df_training or df_training
+            df_prediction = params.df_prediction or df_prediction
         
         if df_training is None or df_prediction is None:
             logging.error("Failed to retrieve training or prediction dataframes from the database")
@@ -1664,22 +1734,24 @@ class RunDataset:
         params.df_prediction = df_prediction.copy()
 
         # Query external dataset if specified
-        params.df_external = None
-        params.dataset_description_ext = None
-        if params.dataset_name_ext is not None:
-            self.ensure_session(params)
-            params.dataset_description_ext = du.get_dataset_details(params.session, params.dataset_name_ext).get('dataset_description')
+        if params.df_external is None:
+            if params.dataset_name_ext is not None:
+                self.ensure_session(params)
+                params.dataset_description_ext = du.get_dataset_details(params.session, params.dataset_name_ext).get('dataset_description')
 
-            self.ensure_session(params)
-            df_prediction_ext = du.get_instances_excluding(
-                params.session,
-                params.dataset_name_ext,
-                params.hyperparameters.dataset_name,
-                params.hyperparameters.descriptor_set_name,
-            )
+                self.ensure_session(params)
+                df_prediction_ext = du.get_instances_excluding(
+                    params.session,
+                    params.dataset_name_ext,
+                    params.hyperparameters.dataset_name,
+                    params.hyperparameters.descriptor_set_name,
+                )
 
-            params.df_prediction_ext = df_prediction_ext.copy()
-            params.df_external = params.df_prediction_ext.copy()
+                params.df_prediction_ext = df_prediction_ext.copy()
+                params.df_external = params.df_prediction_ext.copy()
+        else:
+            self.ensure_session(params)
+            params.dataset_description_ext = du.get_dataset_details(params.session, params.dataset_name_ext).get("dataset_description")
 
         logging.info("Dataframes queried successfully")
 
@@ -1722,7 +1794,16 @@ class RunDataset:
 
     def setup_cross_validation(self, params: RunParams) -> None:
         """Load CV folds and prepare the cross-validation splitter."""
-        params.df_cv_dict = None
+        if getattr(params, "df_cv_dict", False):
+            # If a cv dict is provided, use that
+            # Format of a df_cv_dict is as follows:
+            #   {
+            #       fold_num (int): {
+            #                           "train": df_training   (DataFrame),
+            #                           "pred":  df_prediction (DataFrame)
+            #                       }
+            #   }
+            _, _, params.cv, _ = du.make_cv_for_base_training(params.df_training, params.df_cv_dict, "ID", "Property")
 
         if params.cross_validate:
             self.ensure_session(params)

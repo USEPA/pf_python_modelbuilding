@@ -1048,15 +1048,17 @@ def main():
     # run_BCF()
     # run_Koc_knn_ga()
     # run_fish_tox()
-    run_fish_tox_2()
-    # run_biodeg_rifm()
+    # run_fish_tox_2()
+    # run_biodeg_rifm() # need external set data file
     # run_RIFM_model_on_ECHA_test_set()
     # run_continuous_model_on_test_set()
     # run_percentage_biodegradation()
-    # run_other_test_set()
-    # run_biodeg_301F()
+    # run_biodeg_301F() # need external set data file
     # run_pchem()
-    # run_biodeg_nite()
+    run_biodeg_nite()
+
+    # Additional model running (should take in a model object and the name of a dataset)
+    # run_other_test_set()
 
     # Test Functions? (Says they should be able to run for the GCM model?)
     # test_model_summary_local()
