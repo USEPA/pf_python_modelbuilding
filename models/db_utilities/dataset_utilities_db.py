@@ -410,14 +410,13 @@ def make_cv_for_base_training(df_training_base, folds, id_col="ID", y_col="Prope
     id_to_fold = {}
     all_cv_test_ids = []
 
-    for fold_key, fold_dict in sorted(folds.items(), key=lambda kv: kv[0]):
+    for fold_id, (_, fold_dict) in enumerate(sorted(folds.items(), key=lambda kv: kv[0])):
         pred_df = fold_dict.get("pred")
         if pred_df is None or pred_df.empty:
             continue
 
         # Be robust to dtype mismatches
         pred_ids = pred_df[id_col].astype(str).tolist()
-        fold_id = int(fold_key) - 1  # keys are 1..K in your get_training_cv_instances()
 
         for _id in pred_ids:
             all_cv_test_ids.append(_id)

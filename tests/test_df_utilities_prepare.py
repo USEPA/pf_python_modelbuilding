@@ -1,3 +1,6 @@
+import io
+from contextlib import redirect_stdout
+import logging
 import pandas as pd
 
 from unittest import TestCase, main
@@ -112,6 +115,30 @@ class TestRemove(TestCase):
     def test_prepare_prediction_instances_features(self):
         ids, labels, features = prepare_prediction_instances(self.df_data, self.descriptor_names)
         self.assertEqual(features.shape, (4, 3))
+
+    def test_gcm_filtering_logs_counts_without_printing_column_names(self):
+        df = pd.DataFrame({
+            'ID': [f'ID-{index}' for index in range(8)],
+            'Property': [float(index) for index in range(8)],
+            'As [+5 valence, one double bond]': [1, 2, 3, 4, 5, 6, 7, 8],
+            'Rare fragment': [1, 0, 0, 0, 0, 0, 0, 0],
+            'Fragment A': [0, 1, 1, 2, 2, 3, 3, 4],
+            'Fragment B': [1, 0, 2, 0, 3, 0, 4, 0],
+            '-N=S=O': [2, 3, 1, 4, 0, 5, 6, 1],
+        })
+        stdout = io.StringIO()
+
+        with self.assertLogs(level=logging.DEBUG) as log_output:
+            with redirect_stdout(stdout):
+                prepare_instances_with_preselected_descriptors_gcm(
+                    df,
+                    "training",
+                    min_count=3,
+                    inv_diag_threshold=1_000_000_000,
+                )
+
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertTrue(any("1 low-count columns" in message for message in log_output.output))
 
     def test_prepare_instances_with_preselected_descriptors_gcm_appends_logp_martin(self):
         df = pd.DataFrame({

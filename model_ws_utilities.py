@@ -223,6 +223,7 @@ def instantiateModel(df_training, n_jobs, qsar_method, remove_log_p, use_pmml_pi
         model.num_categories = 3
         model.is_binary = True
     else:
+        model.num_categories = None # TODO: Is this the correct way to handle non-categorical models?
         model.is_binary = False
     
     model.use_pmml = use_pmml_pipeline
