@@ -2341,9 +2341,57 @@ def test_customized_run() -> None:
     runner.run(params)
 
 
+def test_wrongly_customized_run() -> None:
+    """Run a test of RunDataset using an intentionally misconfigured run configuration to test error handling."""
+    dataset_name = "exp_prop_BCF_v1_modeling"
+    qsar_method = "knn"
+    write_to_db = False
+    append_to_models_folder = "_RunDataset_test"
+
+    ad_measure = [pc.Applicability_Domain_TEST_Embedding_Euclidean, pc.Applicability_Domain_TEST_Fragment_Counts]
+    hyperparameters = {
+        "max_features": 25,
+        "descriptor_coefficient": 0.006,
+        "non_existent_hyperparameter": 123  # This hyperparameter does not exist and should trigger an error
+    }
+
+    runner = RunDataset()
+    params = runner.generate_params(
+        dataset_name = dataset_name,
+        qsar_method = qsar_method,
+        write_to_db = write_to_db,
+        append_to_models_folder = append_to_models_folder,
+        ad_measure = ad_measure,
+        hyperparameters = hyperparameters
+    )
+    runner.run(params)
+
+
+def test_binary_run() -> None:
+    """Run a test of RunDataset using a binary classification dataset."""
+    dataset_name = "exp_prop_RBIODEG_301F v1 modeling"
+    qsar_method = "gcm"
+    write_to_db = False
+    append_to_models_folder = "_RunDataset_test"
+
+    ad_measure = [pc.Applicability_Domain_TEST_Embedding_Euclidean, pc.Applicability_Domain_TEST_Fragment_Counts]
+
+    runner = RunDataset()
+    params = runner.generate_params(
+        dataset_name=dataset_name,
+        qsar_method=qsar_method,
+        write_to_db=write_to_db,
+        append_to_models_folder=append_to_models_folder,
+        ad_measure=ad_measure
+    )
+    runner.run(params)
+
+
 def main() -> None:
     test_run_dataset()
     # test_customized_run()
+    # test_wrongly_customized_run()
+    # test_binary_run()
 
 
 if __name__ == "__main__":
