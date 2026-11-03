@@ -560,8 +560,8 @@ def create_RBIODEG_external_set_tsvs_no_recalc():
 
 if __name__ == '__main__':
     
-    # create_RBIODEG_external_set_tsvs()
-    create_RBIODEG_external_set_tsvs_no_recalc()
+    create_RBIODEG_external_set_tsvs()
+    # create_RBIODEG_external_set_tsvs_no_recalc()
     
 
     # input_excel_path = r"C:\Users\tmarti02\OneDrive - Environmental Protection Agency (EPA)\0 java\0 model_management\ghs-data-gathering\data\experimental\RIFM_2026_08_12\excel files\SMILES_OECD 301F_RASD_NON CBI_v2.xlsx"
