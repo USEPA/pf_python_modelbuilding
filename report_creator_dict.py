@@ -1196,9 +1196,6 @@ table.compact td {
             elif set_name == "test":
                 perf = md["performance"]["external"]
 
-            print("neighborsInSet[set]", neighborsInSet["set"])
-            print(perf)    
-
             with td_tc:
                 p()
                 with table(border=1, cellpadding="5", cellspacing="0"):
