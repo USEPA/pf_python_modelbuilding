@@ -12,11 +12,20 @@ from pathlib import Path
 from io import StringIO
 
 import logging
-from utils import print_first_row
-logging.basicConfig(
-    level=logging.DEBUG,
-    format="%(asctime)s %(levelname)s %(name)s - %(message)s"
-)
+from logging import INFO, DEBUG, ERROR
+import coloredlogs
+
+custom_level_styles = {
+    'debug': {'color': 'cyan'},
+    'info': {'color': 'yellow'},
+    'warning': {'color': 'red', 'bold': True},
+    'error': {'color': 'white', 'background': 'red'},
+}
+
+level = INFO
+
+coloredlogs.install(level=level, milliseconds=True, level_styles=custom_level_styles,
+                    fmt='%(asctime)s - %(name)s - %(levelname)s - %(message)s (%(filename)s:%(lineno)d)')
 
 from dotenv import load_dotenv
 load_dotenv("../../personal.env")
@@ -1043,7 +1052,7 @@ def main():
     # _full_test_mte()
     
     # Run Functions?
-    # run_example()
+    run_example()
     # run_Koc()
     # run_BCF()
     # run_Koc_knn_ga()
@@ -1055,7 +1064,7 @@ def main():
     # run_percentage_biodegradation()
     # run_biodeg_301F() # need external set data file
     # run_pchem()
-    run_biodeg_nite()
+    # run_biodeg_nite()
 
     # Additional model running (should take in a model object and the name of a dataset)
     # run_other_test_set()
