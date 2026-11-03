@@ -1,7 +1,6 @@
 """Run database-backed QSAR model building and persist its outputs."""
 
 import json
-import logging
 import os
 from typing import Optional, Union, List, Dict, Any, Iterator as _Iterator
 from io import StringIO
@@ -38,6 +37,22 @@ from models.EmbeddingFromImportance import perform_iterative_recursive_feature_e
 from models.EmbeddingFromImportance import perform_iterative_sequential_feature_selection as run_sfs
 from applicability_domain import applicability_domain_utilities as adu
 from models import make_test_plots as mtp
+
+import logging
+from logging import INFO, DEBUG, ERROR
+import coloredlogs
+
+custom_level_styles = {
+    'debug': {'color': 'cyan'},
+    'info': {'color': 'yellow'},
+    'warning': {'color': 'red', 'bold': True},
+    'error': {'color': 'white', 'background': 'red'},
+}
+
+level = INFO
+
+coloredlogs.install(level=level, milliseconds=True, level_styles=custom_level_styles,
+                    fmt='%(asctime)s - %(name)s - %(levelname)s - %(message)s (%(filename)s:%(lineno)d)')
 
 PROJECT_ROOT: Optional[str] = os.getenv("PROJECT_ROOT")
 
@@ -322,6 +337,7 @@ class StaticHelpers:
 
         return embedding
 
+    @staticmethod
     def create_cv_dict(
             df: pd.DataFrame,
             n: int = 5,
@@ -579,7 +595,6 @@ class RunParams:
     include_feature_count_in_subfolder: bool = False
     engine: Optional[Engine] = None
     session: Optional[Session] = None
-    current_user_id: str = ""
     cv: object = 5
     is_binary: bool = False
     model: Optional[_QSARModel] = None
@@ -610,6 +625,8 @@ class RunParams:
     json_path: str = ""
     detailed_summary_path: str = ""
     results_dict: Dict[str, object] = field(default_factory=dict)
+    write_excel_files: bool = True
+    write_results_dict: bool = True
 
 
 class ModelBuilder:
@@ -642,16 +659,16 @@ class ModelBuilder:
         embedding: Optional[List[str]],
         is_binary: bool,
     ) -> tuple[pd.DataFrame, Dict[str, object]]:
-        """Build predictions and aggregate statistics across the five CV folds."""
+        """Build predictions and aggregate statistics across configured CV folds."""
         logging.info("Start running CV calculations ...")
     
         def _fold_predictions() -> _Iterator[pd.DataFrame]:
-            for i in range(1, 6):
-                splittingName = f"RND_REPRESENTATIVE_CV{i}"
+            for fold_index, (_, fold_dict) in enumerate(sorted(df_cv_dict.items())):
+                splittingName = f"RND_REPRESENTATIVE_CV{fold_index + 1}"
                 logging.debug(f"Running CV split = {splittingName}")
     
-                df_training = df_cv_dict[i]["train"]
-                df_prediction = df_cv_dict[i]["pred"]
+                df_training = fold_dict["train"]
+                df_prediction = fold_dict["pred"]
     
                 df_predictions = ModelBuilder.build_and_test_model2(
                     df_training.copy(),
@@ -661,7 +678,7 @@ class ModelBuilder:
                 )
     
                 # Add the fold index as a column
-                yield df_predictions.assign(cv_fold=i)
+                yield df_predictions.assign(cv_fold=fold_index)
     
         df_predictions_all = pd.concat(_fold_predictions(), ignore_index=True)
     
@@ -1366,6 +1383,9 @@ class RunDataset:
         df_prediction: Optional[pd.DataFrame] = None,
         df_external: Optional[pd.DataFrame] = None,
         dataset_name_ext: Optional[str] = None,
+        df_cv_dict: Optional[Dict[int, Dict[str, pd.DataFrame]]] = None,
+        write_excel_files: bool = True,
+        write_results_dict: bool = True,
     ) -> RunParams:
         """Create run state and resolve model configuration in one object.
 
@@ -1393,10 +1413,13 @@ class RunDataset:
             save_initial_dfs: Whether to save initial intermediate dataframes.
             outlier_filter_methods: Optional methods to set on the hyperparameter object.
             include_feature_count_in_subfolder: Include feature limits in output naming.
+            write_excel_files: Whether to create an Excel summary workbook.
+            write_results_dict: Whether to write the results dictionary to JSON.
             engine: Optional existing SQLAlchemy engine.
             session: Optional existing SQLAlchemy session.
             df_training: Optional existing DataFrame for the training set.
             df_prediction: Optional existing DataFrame for the prediction set.
+            df_cv_dict: Optional mapping of fold numbers to training and prediction DataFrames.
             df_external: Optional existing DataFrame for the external prediction set.
             dataset_name_ext: Optional existing name for the external prediction set.
 
@@ -1523,10 +1546,13 @@ class RunDataset:
             subfolder=subfolder,
             save_initial_dfs=save_initial_dfs,
             include_feature_count_in_subfolder=include_feature_count_in_subfolder,
+            write_excel_files=write_excel_files,
+            write_results_dict=write_results_dict,
             engine=engine,
             session=session,
             df_training=df_training,
             df_prediction=df_prediction,
+            df_cv_dict=df_cv_dict,
             df_prediction_ext=df_prediction_ext,
             df_external=df_external,
             dataset_name_ext=dataset_name_ext
@@ -1539,9 +1565,8 @@ class RunDataset:
         # Initialize database engine and session
         params.engine = params.engine or StaticHelpers.getEngine()
         params.session = params.session or StaticHelpers.getSession(params.engine)
-        params.current_user_id = StaticHelpers.get_current_user_id()
         if not params.user:
-            params.user = params.current_user_id
+            params.user = StaticHelpers.get_current_user_id()
 
         # Set embedding and feature selection based on provided parameters
         if params.embedding is not None:
@@ -1715,16 +1740,20 @@ class RunDataset:
         """Load training, test, and configured external datasets."""
         logging.info("Querying dataframes from database...")
 
-        self.ensure_session(params)
+        df_training = params.df_training
+        df_prediction = params.df_prediction
         if params.df_training is None or params.df_prediction is None:
-            df_training, df_prediction = du.get_training_prediction_instances(
+            self.ensure_session(params)
+            queried_training, queried_prediction = du.get_training_prediction_instances(
                 params.session,
                 params.hyperparameters.dataset_name,
                 params.hyperparameters.descriptor_set_name,
                 params.hyperparameters.splitting_name,
             )
-            df_training = params.df_training or df_training
-            df_prediction = params.df_prediction or df_prediction
+            if df_training is None:
+                df_training = queried_training
+            if df_prediction is None:
+                df_prediction = queried_prediction
         
         if df_training is None or df_prediction is None:
             logging.error("Failed to retrieve training or prediction dataframes from the database")
@@ -1749,7 +1778,7 @@ class RunDataset:
 
                 params.df_prediction_ext = df_prediction_ext.copy()
                 params.df_external = params.df_prediction_ext.copy()
-        else:
+        elif params.dataset_name_ext is not None:
             self.ensure_session(params)
             params.dataset_description_ext = du.get_dataset_details(params.session, params.dataset_name_ext).get("dataset_description")
 
@@ -1794,24 +1823,14 @@ class RunDataset:
 
     def setup_cross_validation(self, params: RunParams) -> None:
         """Load CV folds and prepare the cross-validation splitter."""
-        if getattr(params, "df_cv_dict", False):
-            # If a cv dict is provided, use that
-            # Format of a df_cv_dict is as follows:
-            #   {
-            #       fold_num (int): {
-            #                           "train": df_training   (DataFrame),
-            #                           "pred":  df_prediction (DataFrame)
-            #                       }
-            #   }
-            _, _, params.cv, _ = du.make_cv_for_base_training(params.df_training, params.df_cv_dict, "ID", "Property")
-
         if params.cross_validate:
-            self.ensure_session(params)
-            params.df_cv_dict = du.get_training_cv_instances(
-                params.session,
-                params.hyperparameters.dataset_name,
-                params.hyperparameters.descriptor_set_name,
-            )
+            if not params.df_cv_dict:
+                self.ensure_session(params)
+                params.df_cv_dict = du.get_training_cv_instances(
+                    params.session,
+                    params.hyperparameters.dataset_name,
+                    params.hyperparameters.descriptor_set_name,
+                )
 
             _, _, params.cv, _ = du.make_cv_for_base_training(params.df_training, params.df_cv_dict, "ID", "Property")
         else:
@@ -1899,10 +1918,7 @@ class RunDataset:
             )
 
     def generate_external_stats(self, params: RunParams) -> None:
-        """Predict an optional external dataset and calculate its statistics."""
-        params.ext_stats = None
-        params.df_pred_ext = None
-        
+        """Predict an optional external dataset and calculate its statistics."""                
         if params.df_prediction_ext is not None:
             params.model.external_dataset_name = params.dataset_name_ext
             params.df_pred_ext, params.ext_stats = ModelBuilder.predict(params.model, params.df_prediction_ext, '_External', params.is_binary)
@@ -1962,11 +1978,11 @@ class RunDataset:
         if params.cross_validate:
             # Add CV fold information to df_training
             cv_fold_data = []
-            for fold_num, fold_dict in sorted(params.df_cv_dict.items()):
+            for fold_index, (_, fold_dict) in enumerate(sorted(params.df_cv_dict.items())):
                 pred_df = fold_dict.get("pred")
                 if pred_df is not None and not pred_df.empty:
                     for idx, row in pred_df.iterrows():
-                        cv_fold_data.append({"ID": row["ID"], "cv_fold": fold_num})
+                        cv_fold_data.append({"ID": row["ID"], "cv_fold": fold_index})
         
             if cv_fold_data:
                 df_cv_folds = pd.DataFrame(cv_fold_data)
@@ -2009,7 +2025,6 @@ class RunDataset:
         session = self.ensure_session(params)
         params.df_dps = du.getMappedDatapoints(session, params.hyperparameters.dataset_name)
 
-        params.df_dps_ext = None
         if params.df_prediction_ext is not None:
             params.df_dps_ext = du.getMappedDatapoints(session, params.dataset_name_ext)
         
@@ -2185,25 +2200,26 @@ class RunDataset:
             self.ensure_session(params)
             ml = ModelLoader(params.session)
             ml.load_model(params.user, params.model, params.results_dict, params.df_pred_training, params.df_pred_test, params.df_pred_cv, params.folder_path, df_pred_external=params.df_pred_ext)
-        
-            # build excel after loading model so have model id number set:
-            mdo = ModelDataObjects(model=params.model, df_pv=params.df_pv, df_gmd=params.df_dps, df_gmd_external=params.df_dps_ext)
-            mte = ModelToExcel(mdo, params.detailed_summary_path)
-            mte.create_excel()
-        
-            # need to load model separately from rest of model objects since need to load model into db to get id then create the excel file that displays that id in the summary:
-            filePathOutExcelSummary = os.path.join(params.folder_path, "detailed_summary.xlsx")
-            image_id = ml.load_model_file(filePathOutExcelSummary, params.user, params.model.modelId, 2)
-            logging.info(f"Excel summary loaded to db with id: {image_id}")
+
+            if params.write_excel_files:
+                # build excel after loading model so have model id number set:
+                mdo = ModelDataObjects(model=params.model, df_pv=params.df_pv, df_gmd=params.df_dps, df_gmd_external=params.df_dps_ext)
+                mte = ModelToExcel(mdo, params.detailed_summary_path)
+                mte.create_excel()
+            
+                # need to load model separately from rest of model objects since need to load model into db to get id then create the excel file that displays that id in the summary:
+                image_id = ml.load_model_file(params.detailed_summary_path, params.user, params.model.modelId, 2)
+                logging.info(f"Excel summary loaded to db with id: {image_id}")
         else:
-            # build excel without loading model, so no id number will be set:
-            mdo = ModelDataObjects(model=params.model, df_pv=params.df_pv, df_gmd=params.df_dps, df_gmd_external=params.df_dps_ext)
-            mte = ModelToExcel(mdo, params.detailed_summary_path)
-            mte.create_excel()
+            if params.write_excel_files:
+                # build excel without loading model, so no id number will be set:
+                mdo = ModelDataObjects(model=params.model, df_pv=params.df_pv, df_gmd=params.df_dps, df_gmd_external=params.df_dps_ext)
+                mte = ModelToExcel(mdo, params.detailed_summary_path)
+                mte.create_excel()
         
-        
-        with open(params.json_path, 'w') as json_file:
-            json.dump(params.results_dict, json_file, indent=4)
+        if params.write_results_dict:
+            with open(params.json_path, 'w') as json_file:
+                json.dump(params.results_dict, json_file, indent=4)
 
     # -------------------------------------------------------------------------------------------------------------
 
