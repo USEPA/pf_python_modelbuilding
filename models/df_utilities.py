@@ -521,20 +521,14 @@ def prepare_instances_with_preselected_descriptors_gcm(
 
         column_names = list(features.columns)
 
-        # ---------------------------------------------------------------------
-        # 7) Reporting
-        # ---------------------------------------------------------------------
-        if cols_dropped_low:
-            print(f"Dropped low-nonzero columns (< {min_count} nonzeros): {cols_dropped_low}")
-
-        if len(rows_dropped_low) > 0:
-            print(f"Dropped {len(rows_dropped_low)} rows due to low-nonzero filtering.")
-
-        if all_high_cols:
-            print(f"Dropped high-inv_diag columns (> {inv_diag_threshold}): {all_high_cols}")
-
-        if len(all_high_rows) > 0:
-            print(f"Dropped {len(all_high_rows)} rows due to high-inv_diag filtering.")
+        logging.debug(
+            "GCM descriptor filtering removed %d low-count columns and %d rows, "
+            "plus %d high-inverse-diagonal columns and %d rows",
+            len(cols_dropped_low),
+            len(rows_dropped_low),
+            len(all_high_cols),
+            len(all_high_rows),
+        )
 
         return ids, labels, features, column_names, is_binary
 
