@@ -32,7 +32,7 @@ from util import predict_constants as pc
 import models.db_utilities.dataset_utilities_db as du
 from models.db_utilities.raw_exp_data_db import ExpDataGetter
 from models.ModelToExcel import ModelToExcel, ModelDataObjects
-from StatsCalculator import calculate_binary_statistics, calculate_continuous_statistics
+from StatsCalculator import calculate_binary_statistics_sklearn, calculate_continuous_statistics_sklearn, calculate_ternary_statistics_sklearn
 from models.EmbeddingFromImportance import perform_iterative_recursive_feature_elimination as run_rfe
 from models.EmbeddingFromImportance import perform_iterative_sequential_feature_selection as run_sfs
 from applicability_domain import applicability_domain_utilities as adu
@@ -643,25 +643,30 @@ class ModelBuilder:
         json_predictions = call_do_predictions_from_df(df, model)
         
         df_predictions = pd.read_json(StringIO(json_predictions), orient="records")
-                
-        if is_binary:
-            stats = calculate_binary_statistics(df_predictions, 0.5, tag)
+
+        if is_binary and getattr(model, "num_categories", None) == 3:
+            stats = calculate_ternary_statistics_sklearn(df_predictions, 0.5, tag)
+        elif is_binary:
+            stats = calculate_binary_statistics_sklearn(df_predictions, 0.5, tag)
         else:
             mean_exp_training = df_predictions["exp"].mean()
-            stats = calculate_continuous_statistics(df_predictions, mean_exp_training, tag)
+            stats = calculate_continuous_statistics_sklearn(df_predictions, mean_exp_training, tag)
     
         return df_predictions, stats
     
     @staticmethod
     def crossvalidate(
-        df_cv_dict: Dict[int, Dict[str, pd.DataFrame]],
         params: Parameters,
-        embedding: Optional[List[str]],
-        is_binary: bool,
     ) -> tuple[pd.DataFrame, Dict[str, object]]:
         """Build predictions and aggregate statistics across configured CV folds."""
         logging.info("Start running CV calculations ...")
-    
+
+        df_cv_dict = params.df_cv_dict
+        hyperparameters = params.hyperparameters
+        embedding = params.model.embedding
+        is_binary = params.is_binary
+        num_categories = getattr(params.model, "num_categories", None)
+
         def _fold_predictions() -> _Iterator[pd.DataFrame]:
             for fold_index, (_, fold_dict) in enumerate(sorted(df_cv_dict.items())):
                 splittingName = f"RND_REPRESENTATIVE_CV{fold_index + 1}"
@@ -673,7 +678,7 @@ class ModelBuilder:
                 df_predictions = ModelBuilder.build_and_test_model2(
                     df_training.copy(),
                     df_prediction.copy(),
-                    params,
+                    hyperparameters,
                     embedding
                 )
     
@@ -681,15 +686,20 @@ class ModelBuilder:
                 yield df_predictions.assign(cv_fold=fold_index)
     
         df_predictions_all = pd.concat(_fold_predictions(), ignore_index=True)
-    
-        if is_binary:
-            cv_stats = calculate_binary_statistics(
+
+        if is_binary and num_categories == 3:
+            cv_stats = calculate_ternary_statistics_sklearn(
+                df_predictions_all, 0.5, "_CV_Training"
+            )
+        
+        elif is_binary:
+            cv_stats = calculate_binary_statistics_sklearn(
                 df_predictions_all, 0.5, "_CV_Training"
             )
             
         else:
             mean_exp_training = df_predictions_all["exp"].mean()
-            cv_stats = calculate_continuous_statistics(
+            cv_stats = calculate_continuous_statistics_sklearn(
                 df_predictions_all, mean_exp_training, "_CV_Training"
             )
     
@@ -743,14 +753,16 @@ class ModelBuilder:
             
         # calculate stats for test set
         
-        if is_binary:
-            test_stats = calculate_binary_statistics(df_predictions_test, 0.5, "_Test")
-            training_stats = calculate_binary_statistics(df_predictions_training, 0.5, "_Training")
-
+        if is_binary and getattr(model, "num_categories", None) == 3:
+            test_stats = calculate_ternary_statistics_sklearn(df_predictions_test, 0.5, "_Test")
+            training_stats = calculate_ternary_statistics_sklearn(df_predictions_training, 0.5, "_Training")
+        elif is_binary:
+            test_stats = calculate_binary_statistics_sklearn(df_predictions_test, 0.5, "_Test")
+            training_stats = calculate_binary_statistics_sklearn(df_predictions_training, 0.5, "_Training")
         else:
             mean_exp_training = df_training["Property"].mean()
-            test_stats = calculate_continuous_statistics(df_predictions_test, mean_exp_training, "_Test")        
-            training_stats = calculate_continuous_statistics(df_predictions_training, mean_exp_training, "_Training")
+            test_stats = calculate_continuous_statistics_sklearn(df_predictions_test, mean_exp_training, "_Test")        
+            training_stats = calculate_continuous_statistics_sklearn(df_predictions_training, mean_exp_training, "_Training")
                 
         return df_predictions_training, df_predictions_test, training_stats, test_stats, model
 
@@ -1688,11 +1700,29 @@ class RunDataset:
         df_outside = df_predictions.loc[outside_mask, ['exp', 'pred']].copy()
 
         # Compute statistics using the provided functions
-        if is_binary:
+        if is_binary and getattr(params.model, "num_categories", None) == 3:
             cutoff = getattr(params.hyperparameters, 'cutoff', getattr(params.hyperparameters, 'classification_cutoff', 0.5))
 
-            stats_inside = calculate_binary_statistics(df_inside, cutoff=cutoff, tag=tag)
-            stats_outside = calculate_binary_statistics(df_outside, cutoff=cutoff, tag=tag)
+            stats_inside = calculate_ternary_statistics_sklearn(df_inside, cutoff=cutoff, tag=tag)
+            stats_outside = calculate_ternary_statistics_sklearn(df_outside, cutoff=cutoff, tag=tag)
+
+            ba_inside = stats_inside.get(pc.BALANCED_ACCURACY + tag, float("nan"))
+            ba_outside = stats_outside.get(pc.BALANCED_ACCURACY + tag, float("nan"))
+            ba_ratio = StaticHelpers.safe_div(ba_inside, ba_outside)
+
+            stats = {
+                "ad_measure": ad_measure,
+                f"BA_{stat_insert}_inside_AD": ba_inside,
+                f"BA_{stat_insert}_outside_AD": ba_outside,
+                "ba_ratio": ba_ratio,
+                f"Coverage_{stat_insert}": coverage_ad
+            }
+        
+        elif is_binary:
+            cutoff = getattr(params.hyperparameters, 'cutoff', getattr(params.hyperparameters, 'classification_cutoff', 0.5))
+
+            stats_inside = calculate_binary_statistics_sklearn(df_inside, cutoff=cutoff, tag=tag)
+            stats_outside = calculate_binary_statistics_sklearn(df_outside, cutoff=cutoff, tag=tag)
             
             ba_inside = stats_inside.get(pc.BALANCED_ACCURACY + tag, float('nan'))
             ba_outside = stats_outside.get(pc.BALANCED_ACCURACY + tag, float('nan'))
@@ -1710,15 +1740,15 @@ class RunDataset:
             # Mean of training exp for Q2/R2 in continuous stats
             mean_exp_training = float('nan')  # not needed for calculating MAE inside and outside
 
-            # calculate_continuous_statistics raises if no valid predictions; handle gracefully
+            # calculate_continuous_statistics_sklearn raises if no valid predictions; handle gracefully
             try:
-                stats_inside = calculate_continuous_statistics(df_inside, mean_exp_training=mean_exp_training, tag=tag)
+                stats_inside = calculate_continuous_statistics_sklearn(df_inside, mean_exp_training=mean_exp_training, tag=tag)
                 mae_inside = stats_inside.get(pc.MAE + tag, float('nan'))
             except Exception:
                 mae_inside = float('nan')
 
             try:
-                stats_outside = calculate_continuous_statistics(df_outside, mean_exp_training=mean_exp_training, tag=tag)
+                stats_outside = calculate_continuous_statistics_sklearn(df_outside, mean_exp_training=mean_exp_training, tag=tag)
                 mae_outside = stats_outside.get(pc.MAE + tag, float('nan'))
             except Exception:
                 mae_outside = float('nan')
@@ -1911,11 +1941,7 @@ class RunDataset:
     def run_cross_validation(self, params: RunParams) -> None:
         """Build held-out predictions and statistics for all CV folds."""
         if params.cross_validate:
-            params.df_pred_cv, params.cv_stats = ModelBuilder.crossvalidate(
-                params.df_cv_dict,
-                params.hyperparameters,
-                params.model.embedding,params.is_binary
-            )
+            params.df_pred_cv, params.cv_stats = ModelBuilder.crossvalidate(params)
 
     def generate_external_stats(self, params: RunParams) -> None:
         """Predict an optional external dataset and calculate its statistics."""                
