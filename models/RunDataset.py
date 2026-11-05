@@ -645,7 +645,7 @@ class ModelBuilder:
         df_predictions = pd.read_json(StringIO(json_predictions), orient="records")
 
         if is_binary and getattr(model, "num_categories", None) == 3:
-            stats = calculate_ternary_statistics_sklearn(df_predictions, 0.5, tag)
+            stats = calculate_ternary_statistics_sklearn(df_predictions, tag)
         elif is_binary:
             stats = calculate_binary_statistics_sklearn(df_predictions, 0.5, tag)
         else:
@@ -689,7 +689,7 @@ class ModelBuilder:
 
         if is_binary and num_categories == 3:
             cv_stats = calculate_ternary_statistics_sklearn(
-                df_predictions_all, 0.5, "_CV_Training"
+                df_predictions_all, "_CV_Training"
             )
         
         elif is_binary:
@@ -754,8 +754,8 @@ class ModelBuilder:
         # calculate stats for test set
         
         if is_binary and getattr(model, "num_categories", None) == 3:
-            test_stats = calculate_ternary_statistics_sklearn(df_predictions_test, 0.5, "_Test")
-            training_stats = calculate_ternary_statistics_sklearn(df_predictions_training, 0.5, "_Training")
+            test_stats = calculate_ternary_statistics_sklearn(df_predictions_test, "_Test")
+            training_stats = calculate_ternary_statistics_sklearn(df_predictions_training, "_Training")
         elif is_binary:
             test_stats = calculate_binary_statistics_sklearn(df_predictions_test, 0.5, "_Test")
             training_stats = calculate_binary_statistics_sklearn(df_predictions_training, 0.5, "_Training")
@@ -1701,10 +1701,8 @@ class RunDataset:
 
         # Compute statistics using the provided functions
         if is_binary and getattr(params.model, "num_categories", None) == 3:
-            cutoff = getattr(params.hyperparameters, 'cutoff', getattr(params.hyperparameters, 'classification_cutoff', 0.5))
-
-            stats_inside = calculate_ternary_statistics_sklearn(df_inside, cutoff=cutoff, tag=tag)
-            stats_outside = calculate_ternary_statistics_sklearn(df_outside, cutoff=cutoff, tag=tag)
+            stats_inside = calculate_ternary_statistics_sklearn(df_inside, tag=tag)
+            stats_outside = calculate_ternary_statistics_sklearn(df_outside, tag=tag)
 
             ba_inside = stats_inside.get(pc.BALANCED_ACCURACY + tag, float("nan"))
             ba_outside = stats_outside.get(pc.BALANCED_ACCURACY + tag, float("nan"))
@@ -1815,13 +1813,13 @@ class RunDataset:
         logging.info("Dataframes queried successfully")
 
     def set_is_binary(self, params: RunParams) -> None:
-        """Determine whether the target contains only binary labels."""
+        """Determine whether the target contains binary or ternary labels."""
         if params.df_training is None:
             logging.error("Training dataframe is not available. Please run query_dataframes() first.")
             return
 
         s = params.df_training.iloc[:, 1]  # Assuming the second column is the target variable
-        params.is_binary = s.isin([0, 1]).all()
+        params.is_binary = s.isin([0, 1, 2]).all()
 
     def apply_outlier_filtering(self, params: RunParams) -> None:
         """Apply the configured outlier filters to training data."""
@@ -2387,11 +2385,34 @@ def test_binary_run() -> None:
     runner.run(params)
 
 
+def test_ternary_run() -> None:
+    """Run a test of RunDataset using a ternary classification dataset."""
+    dataset_name = "exp_prop_RBIODEG_multiclass_301F v3 modeling"
+    qsar_method = "rf"
+    feature_selection = False
+    write_to_db = False
+    append_to_models_folder = "_RunDataset_test"
+
+    ad_measure = [pc.Applicability_Domain_TEST_Embedding_Euclidean, pc.Applicability_Domain_TEST_Fragment_Counts]
+
+    runner = RunDataset()
+    params = runner.generate_params(
+        dataset_name=dataset_name,
+        qsar_method=qsar_method,
+        write_to_db=write_to_db,
+        feature_selection=feature_selection,
+        append_to_models_folder=append_to_models_folder,
+        ad_measure=ad_measure
+    )
+    runner.run(params)
+
+
 def main() -> None:
-    test_run_dataset()
+    # test_run_dataset()
     # test_customized_run()
     # test_wrongly_customized_run()
     # test_binary_run()
+    test_ternary_run()
 
 
 if __name__ == "__main__":
