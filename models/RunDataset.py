@@ -2225,6 +2225,10 @@ class RunDataset:
             ml = ModelLoader(params.session)
             ml.load_model(params.user, params.model, params.results_dict, params.df_pred_training, params.df_pred_test, params.df_pred_cv, params.folder_path, df_pred_external=params.df_pred_ext)
 
+            if params.write_results_dict:
+                with open(params.json_path, 'w') as json_file:
+                    json.dump(params.results_dict, json_file, indent=4)
+            
             if params.write_excel_files:
                 # build excel after loading model so have model id number set:
                 mdo = ModelDataObjects(model=params.model, df_pv=params.df_pv, df_gmd=params.df_dps, df_gmd_external=params.df_dps_ext)
@@ -2235,15 +2239,15 @@ class RunDataset:
                 image_id = ml.load_model_file(params.detailed_summary_path, params.user, params.model.modelId, 2)
                 logging.info(f"Excel summary loaded to db with id: {image_id}")
         else:
+            if params.write_results_dict:
+                with open(params.json_path, 'w') as json_file:
+                    json.dump(params.results_dict, json_file, indent=4)
+            
             if params.write_excel_files:
                 # build excel without loading model, so no id number will be set:
                 mdo = ModelDataObjects(model=params.model, df_pv=params.df_pv, df_gmd=params.df_dps, df_gmd_external=params.df_dps_ext)
                 mte = ModelToExcel(mdo, params.detailed_summary_path)
                 mte.create_excel()
-        
-        if params.write_results_dict:
-            with open(params.json_path, 'w') as json_file:
-                json.dump(params.results_dict, json_file, indent=4)
 
     # -------------------------------------------------------------------------------------------------------------
 
