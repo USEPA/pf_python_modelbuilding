@@ -72,8 +72,9 @@ class ModelComparison:
 
 		Configuration mappings contain keyword arguments accepted by
 		``RunDataset.generate_params``. Alternatively, callers may pass its
-		``RunParams`` result. Both configurations must use the same dataset,
-		descriptor set, and source split so every score is paired fairly.
+		``RunParams`` result. Both configurations must use the same dataset and
+		source split. Different descriptor sets are restricted to their shared
+		training chemicals before common folds are generated.
 		"""
 		if n_repeats < 1:
 			raise ValueError("n_repeats must be at least 1")
@@ -95,16 +96,19 @@ class ModelComparison:
 
 		logging.info("Loading comparison training data")
 		runner.query_dataframes(params_a)
-		if params_a.df_training is None or params_a.df_training.empty:
-			raise ValueError("RunDataset did not provide a non-empty training dataframe")
-		if "Property" not in params_a.df_training.columns:
-			raise ValueError("Training dataframe must contain a 'Property' target column")
-
-		training_data = params_a.df_training.copy()
+		runner.query_dataframes(params_b)
+		if params_a.df_training is None or params_b.df_training is None:
+			raise ValueError("RunDataset did not provide both training dataframes")
+		training_data_a, training_data_b = self._align_training_dataframes(
+			[params_a.df_training, params_b.df_training]
+		)
+		training_data = training_data_a
 		logging.info("Loaded %d training rows and %d columns", *training_data.shape)
 		target = pd.to_numeric(training_data["Property"], errors="coerce")
-		if target.isna().any():
-			raise ValueError("Training target contains missing or non-numeric values")
+		if len(training_data) < n_splits:
+			raise ValueError(
+				f"Cannot create {n_splits} folds from {len(training_data)} shared training chemicals"
+			)
 		is_binary = target.isin([0, 1]).all()
 		if is_binary:
 			class_counts = target.value_counts()
@@ -126,7 +130,9 @@ class ModelComparison:
 		cache_path = self._make_cache_path(params_a.hyperparameters.dataset_name)
 		cache = self._load_run_cache(cache_path)
 		cache_configurations = [self._configuration_cache_data(params) for params in (params_a, params_b)]
-		training_fingerprint = self._training_fingerprint(training_data)
+		training_fingerprints = [
+			self._training_fingerprint(frame) for frame in (training_data_a, training_data_b)
+		]
 		for repeat in range(n_repeats):
 			seed = random_state + repeat
 			if is_binary:
@@ -142,8 +148,16 @@ class ModelComparison:
 					splits = splitter.split(training_data, target_bins)
 
 			for fold, (train_indices, test_indices) in enumerate(splits, start=1):
-				fold_training = training_data.iloc[train_indices].copy()
-				fold_prediction = training_data.iloc[test_indices].copy()
+				fold_training_data = [
+					frame.iloc[train_indices].copy()
+					for frame in (training_data_a, training_data_b)
+				]
+				fold_prediction_data = [
+					frame.iloc[test_indices].copy()
+					for frame in (training_data_a, training_data_b)
+				]
+				fold_training = fold_training_data[0]
+				fold_prediction = fold_prediction_data[0]
 				logging.info(
 					"Evaluating repeat %d/%d, fold %d/%d (%d train, %d test rows)",
 					repeat + 1,
@@ -153,9 +167,22 @@ class ModelComparison:
 					len(fold_training),
 					len(fold_prediction),
 				)
-				for label, params, (configuration_key, configuration_data) in zip(
-					labels, (params_a, params_b), cache_configurations
+				for (
+					label,
+					params,
+					cache_configuration,
+					training_fingerprint,
+					model_training,
+					model_prediction,
+				) in zip(
+					labels,
+					(params_a, params_b),
+					cache_configurations,
+					training_fingerprints,
+					fold_training_data,
+					fold_prediction_data,
 				):
+					configuration_key, configuration_data = cache_configuration
 					logging.debug("Building %s for repeat %d, fold %d", label, repeat + 1, fold)
 					row: dict[str, object] = {
 						"model": label,
@@ -182,8 +209,8 @@ class ModelComparison:
 						statistics = self._evaluate_fold(
 							runner,
 							params,
-							fold_training,
-							fold_prediction,
+							model_training,
+							model_prediction,
 							is_binary,
 							n_splits,
 						)
@@ -308,16 +335,51 @@ class ModelComparison:
 
 	@staticmethod
 	def _validate_configurations(params_a: RunParams, params_b: RunParams) -> None:
-		required_equal = (
-			"dataset_name",
-			"descriptor_set_name",
-			"splitting_name",
-		)
+		required_equal = ("dataset_name", "splitting_name")
 		for field_name in required_equal:
 			value_a = getattr(params_a.hyperparameters, field_name)
 			value_b = getattr(params_b.hyperparameters, field_name)
 			if value_a != value_b:
 				raise ValueError(f"Both configurations must use the same {field_name}")
+
+	@staticmethod
+	def _align_training_dataframes(
+		training_dataframes: Sequence[pd.DataFrame],
+	) -> list[pd.DataFrame]:
+		"""Align descriptor-specific dataframes to the first frame's shared IDs."""
+		if not training_dataframes:
+			raise ValueError("At least one training dataframe is required")
+		for training_data in training_dataframes:
+			if training_data.empty:
+				raise ValueError("RunDataset did not provide a non-empty training dataframe")
+			if "ID" not in training_data.columns:
+				raise ValueError("Training dataframe must contain an 'ID' column")
+			if training_data["ID"].isna().any():
+				raise ValueError("Training dataframe IDs must not be missing")
+			if training_data["ID"].duplicated().any():
+				raise ValueError("Training dataframe IDs must be unique")
+			if "Property" not in training_data.columns:
+				raise ValueError("Training dataframe must contain a 'Property' target column")
+
+		shared_ids = pd.Index(training_dataframes[0]["ID"])
+		for training_data in training_dataframes[1:]:
+			shared_ids = shared_ids[shared_ids.isin(training_data["ID"])]
+		if shared_ids.empty:
+			raise ValueError("Training dataframes do not share any chemical IDs")
+
+		aligned_dataframes = [
+			training_data.set_index("ID", drop=False).loc[shared_ids].reset_index(drop=True)
+			for training_data in training_dataframes
+		]
+		targets = [
+			pd.to_numeric(training_data["Property"], errors="coerce")
+			for training_data in aligned_dataframes
+		]
+		if any(target.isna().any() for target in targets):
+			raise ValueError("Training target contains missing or non-numeric values")
+		if any(not np.array_equal(targets[0].to_numpy(), target.to_numpy()) for target in targets[1:]):
+			raise ValueError("Training target values differ for shared chemical IDs")
+		return aligned_dataframes
 
 	def _evaluate_fold(
 		self,
@@ -805,6 +867,7 @@ class ModelComparison:
 			json.dump(cache, cache_file, indent=2, allow_nan=False)
 		temporary_path.replace(cache_path)
 
+# --------------------------------------------------------------------------------------------------------
 
 def test_model_comparison() -> pd.DataFrame:
 	"""Compare random forest and group contribution models on the KOC v1 dataset."""
