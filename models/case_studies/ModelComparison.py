@@ -1,7 +1,9 @@
 """Compare two RunDataset model configurations with repeated local CV."""
 
+import hashlib
+import json
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
@@ -12,6 +14,7 @@ import numpy as np
 import pandas as pd
 from scipy.stats import t as student_t
 from sklearn.model_selection import KFold, StratifiedKFold
+from utils import to_json_safe
 
 from models.RunDataset import (
 	RunDataset,
@@ -120,6 +123,10 @@ class ModelComparison:
 		if labels[0] == labels[1]:
 			raise ValueError("model_names must contain two distinct names")
 		results: list[dict[str, object]] = []
+		cache_path = self._make_cache_path(params_a.hyperparameters.dataset_name)
+		cache = self._load_run_cache(cache_path)
+		cache_configurations = [self._configuration_cache_data(params) for params in (params_a, params_b)]
+		training_fingerprint = self._training_fingerprint(training_data)
 		for repeat in range(n_repeats):
 			seed = random_state + repeat
 			if is_binary:
@@ -146,7 +153,9 @@ class ModelComparison:
 					len(fold_training),
 					len(fold_prediction),
 				)
-				for label, params in zip(labels, (params_a, params_b)):
+				for label, params, (configuration_key, configuration_data) in zip(
+					labels, (params_a, params_b), cache_configurations
+				):
 					logging.debug("Building %s for repeat %d, fold %d", label, repeat + 1, fold)
 					row: dict[str, object] = {
 						"model": label,
@@ -156,14 +165,42 @@ class ModelComparison:
 						"training_size": len(fold_training),
 						"test_size": len(fold_prediction),
 					}
-					row.update(self._evaluate_fold(
-						runner,
-						params,
-						fold_training,
-						fold_prediction,
-						is_binary,
+					cached_statistics = self._get_cached_fold(
+						cache,
+						configuration_key,
+						seed,
+						fold,
 						n_splits,
-					))
+						training_fingerprint,
+						len(fold_training),
+						len(fold_prediction),
+					)
+					if cached_statistics is not None:
+						logging.info("Reusing cached %s results for seed %d, fold %d", label, seed, fold)
+						row.update(cached_statistics)
+					else:
+						statistics = self._evaluate_fold(
+							runner,
+							params,
+							fold_training,
+							fold_prediction,
+							is_binary,
+							n_splits,
+						)
+						row.update(statistics)
+						self._store_cached_fold(
+							cache,
+							cache_path,
+							configuration_key,
+							configuration_data,
+							seed,
+							fold,
+							n_splits,
+							training_fingerprint,
+							len(fold_training),
+							len(fold_prediction),
+							statistics,
+						)
 					results.append(row)
 
 		results_df = self.process_results(pd.DataFrame(results))
@@ -600,11 +637,166 @@ class ModelComparison:
 			plt.close(fig)
 
 	def _make_output_dir(self, dataset_name: str, comparison_name: Optional[str]) -> Path:
-		root = self.output_root or Path(__file__).resolve().parents[2] / "data" / "model_comparisons"
+		root = self._model_comparisons_root()
 		timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 		name = comparison_name or f"comparison_{timestamp}"
 		safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", name).strip("._")
 		return root / dataset_name / "comparisons" / safe_name
+
+	def _make_cache_path(self, dataset_name: str) -> Path:
+		return self._model_comparisons_root() / dataset_name / "model_comparison_runs.json"
+
+	def _model_comparisons_root(self) -> Path:
+		return self.output_root or Path(__file__).resolve().parents[2] / "data" / "model_comparisons"
+
+	@classmethod
+	def _configuration_cache_data(cls, params: RunParams) -> tuple[str, dict[str, object]]:
+		configuration = {
+			"hyperparameters": cls._normalize_cache_value(vars(params.hyperparameters)),
+			"run_settings": cls._normalize_cache_value({
+				"embedding": params.embedding,
+				"folder_embedding": params.folder_embedding,
+				"run_AD": params.run_AD,
+				"fs_previous_embedding": params.fs_previous_embedding,
+				"add_LOGP_Martin": params.add_LOGP_Martin,
+			}),
+		}
+		canonical = json.dumps(configuration, sort_keys=True, separators=(",", ":"))
+		return hashlib.sha256(canonical.encode("utf-8")).hexdigest(), configuration
+
+	@classmethod
+	def _normalize_cache_value(cls, value: object) -> object:
+		if isinstance(value, Mapping):
+			return {str(key): cls._normalize_cache_value(item) for key, item in value.items()}
+		if isinstance(value, (list, tuple)):
+			return [cls._normalize_cache_value(item) for item in value]
+		if isinstance(value, set):
+			return sorted((cls._normalize_cache_value(item) for item in value), key=repr)
+		if isinstance(value, Path):
+			return str(value)
+		if callable(value):
+			return f"{value.__module__}.{value.__qualname__}"
+		if isinstance(value, np.generic):
+			return cls._normalize_cache_value(value.item())
+		if value is None or isinstance(value, (str, int, float, bool)):
+			return value
+		return f"{type(value).__module__}.{type(value).__qualname__}"
+
+	@staticmethod
+	def _training_fingerprint(training_data: pd.DataFrame) -> str:
+		digest = hashlib.sha256()
+		digest.update(json.dumps(
+			[(str(column), str(dtype)) for column, dtype in zip(training_data.columns, training_data.dtypes)],
+			separators=(",", ":"),
+		).encode("utf-8"))
+		digest.update(pd.util.hash_pandas_object(training_data, index=False).to_numpy().tobytes())
+		return digest.hexdigest()
+
+	@staticmethod
+	def _load_run_cache(cache_path: Path) -> dict[str, object]:
+		if not cache_path.exists():
+			return {"schema_version": 1, "configurations": {}}
+		try:
+			with cache_path.open(encoding="utf-8") as cache_file:
+				cache = json.load(cache_file)
+			if cache.get("schema_version") != 1 or not isinstance(cache.get("configurations"), dict):
+				raise ValueError("unsupported or malformed cache structure")
+			return cache
+		except (OSError, json.JSONDecodeError, AttributeError, ValueError) as error:
+			logging.warning("Unable to read model comparison cache %s: %s", cache_path, error)
+			return {"schema_version": 1, "configurations": {}}
+
+	@staticmethod
+	def _get_cached_fold(
+		cache: dict[str, object],
+		configuration_key: str,
+		seed: int,
+		fold: int,
+		n_splits: int,
+		training_fingerprint: str,
+		training_size: int,
+		test_size: int,
+	) -> Optional[dict[str, object]]:
+		configurations = cache.get("configurations")
+		if not isinstance(configurations, dict):
+			return None
+		configuration = configurations.get(configuration_key)
+		if not isinstance(configuration, dict):
+			return None
+		runs = configuration.get("runs")
+		if not isinstance(runs, dict):
+			return None
+		run = runs.get(str(seed))
+		if not isinstance(run, dict) or run.get("n_splits") != n_splits:
+			return None
+		if run.get("training_fingerprint") != training_fingerprint:
+			return None
+		folds = run.get("folds")
+		if not isinstance(folds, dict):
+			return None
+		fold_result = folds.get(str(fold))
+		if not isinstance(fold_result, dict):
+			return None
+		if fold_result.get("training_size") != training_size or fold_result.get("test_size") != test_size:
+			return None
+		statistics = fold_result.get("statistics")
+		return statistics if isinstance(statistics, dict) else None
+
+	@staticmethod
+	def _store_cached_fold(
+		cache: dict[str, object],
+		cache_path: Path,
+		configuration_key: str,
+		configuration_data: dict[str, object],
+		seed: int,
+		fold: int,
+		n_splits: int,
+		training_fingerprint: str,
+		training_size: int,
+		test_size: int,
+		statistics: dict[str, object],
+	) -> None:
+		configurations = cache.setdefault("configurations", {})
+		if not isinstance(configurations, dict):
+			configurations = {}
+			cache["configurations"] = configurations
+		configuration = configurations.setdefault(configuration_key, {
+			"configuration": configuration_data,
+			"runs": {},
+		})
+		if not isinstance(configuration, dict):
+			configuration = {"configuration": configuration_data, "runs": {}}
+			configurations[configuration_key] = configuration
+		runs = configuration.setdefault("runs", {})
+		if not isinstance(runs, dict):
+			runs = {}
+			configuration["runs"] = runs
+		run = runs.setdefault(str(seed), {
+			"n_splits": n_splits,
+			"training_fingerprint": training_fingerprint,
+			"folds": {},
+		})
+		if not isinstance(run, dict) or run.get("n_splits") != n_splits or run.get("training_fingerprint") != training_fingerprint:
+			run = {
+				"n_splits": n_splits,
+				"training_fingerprint": training_fingerprint,
+				"folds": {},
+			}
+			runs[str(seed)] = run
+		folds = run.setdefault("folds", {})
+		if not isinstance(folds, dict):
+			folds = {}
+			run["folds"] = folds
+		folds[str(fold)] = {
+			"training_size": training_size,
+			"test_size": test_size,
+			"statistics": to_json_safe(statistics),
+		}
+		cache_path.parent.mkdir(parents=True, exist_ok=True)
+		temporary_path = cache_path.with_suffix(cache_path.suffix + ".tmp")
+		with temporary_path.open("w", encoding="utf-8") as cache_file:
+			json.dump(cache, cache_file, indent=2, allow_nan=False)
+		temporary_path.replace(cache_path)
 
 
 def test_model_comparison() -> pd.DataFrame:
