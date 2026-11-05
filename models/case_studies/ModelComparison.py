@@ -565,7 +565,7 @@ class ModelComparison:
 					cell_format = cover_formats["number"] if column in (1, 2, 3, 4) else cover_formats["text"]
 					cover.write(start_row + row_index + 1, column, value, cell_format)
 			cover.set_column("A:A", 24)
-			cover.set_column("B:C", 20)
+			cover.set_column("B:C", 21)
 			cover.set_column("D:E", 22)
 			cover.set_column("F:F", 48)
 			cover.set_column("A:A", 24, cover_formats["label"])
@@ -608,7 +608,14 @@ class ModelComparison:
 				if len(dataframe.columns):
 					worksheet.autofilter(0, 0, max(len(dataframe), 1), len(dataframe.columns) - 1)
 					for column_index, column in enumerate(dataframe.columns):
-						width = min(max(len(str(column)) + 2, 12), 42)
+						if column in {"Conclusion"}:
+							width = 48
+						elif column in {"Metric"}:
+							width = 24
+						elif column in {"ad_measure"}:
+							width = min(max(len(str(dataframe[column].iloc[0])) + 2, 12), 42)
+						else:
+							width = min(max(len(str(column)) + 2, 12), 42)
 						worksheet.set_column(column_index, column_index, width)
 					worksheet.set_row(0, 32, cover_formats["header"])
 
