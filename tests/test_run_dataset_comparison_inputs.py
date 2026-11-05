@@ -2,6 +2,7 @@ from types import SimpleNamespace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from xml.etree import ElementTree
+import json
 import unittest
 import zipfile
 from unittest.mock import patch
@@ -20,6 +21,28 @@ class RunDatasetComparisonInputTests(unittest.TestCase):
             "Property": [0.0, 1.0, 0.0, 1.0],
             "descriptor": [0.1, 0.2, 0.3, 0.4],
         })
+
+    def test_set_is_binary_accepts_ternary_labels_as_categorical(self):
+        params = SimpleNamespace(
+            df_training=pd.DataFrame({"ID": ["a", "b", "c"], "Property": [0, 1, 2]})
+        )
+
+        RunDataset().set_is_binary(params)
+
+        self.assertTrue(params.is_binary)
+
+    def test_predict_uses_ternary_recall_statistics(self):
+        predictions_json = '[{"id":"a","exp":0,"pred":0},{"id":"b","exp":1,"pred":2},{"id":"c","exp":2,"pred":2}]'
+
+        with patch("models.RunDataset.call_do_predictions_from_df", return_value=predictions_json):
+            _, stats = ModelBuilder.predict(
+                SimpleNamespace(num_categories=3), pd.DataFrame(), "_Test", is_binary=True
+            )
+
+        self.assertIn("RECALL_CLASS_0_Test", stats)
+        self.assertIn("RECALL_CLASS_1_Test", stats)
+        self.assertIn("RECALL_CLASS_2_Test", stats)
+        self.assertNotIn("MAE_Test", stats)
 
     def test_generate_params_accepts_data_folds_and_output_controls(self):
         folds = {
@@ -99,7 +122,7 @@ class RunDatasetComparisonInputTests(unittest.TestCase):
             })
 
         with patch.object(ModelBuilder, "build_and_test_model2", side_effect=build_predictions) as build:
-            with patch("models.RunDataset.calculate_binary_statistics", return_value={"metric": 1.0}):
+            with patch("StatsCalculator.calculate_binary_statistics_sklearn", return_value={"metric": 1.0}):
                 predictions, stats = ModelBuilder.crossvalidate(
                     folds, SimpleNamespace(), None, is_binary=True
                 )
@@ -242,6 +265,222 @@ class RunDatasetComparisonInputTests(unittest.TestCase):
                 ["Comparison Summary", "Paired Summary", "Paired Differences", "Model Summary", "Fold Results"],
             )
             self.assertFalse(any(path.suffix == ".csv" for path in output_dir.iterdir()))
+
+    def test_build_configurations_populates_cache_for_later_comparison(self):
+        build_calls = []
+        built_ids = []
+        training_a = pd.concat(
+            [
+                self.training,
+                pd.DataFrame({"ID": ["e"], "Property": [0.0], "descriptor": [0.5]}),
+            ],
+            ignore_index=True,
+        )
+        training_frames = {
+            "descriptor_a": training_a,
+            "descriptor_b": self.training,
+        }
+        self_training = self.training
+
+        class FakeRunner:
+            def generate_params(self, **configuration):
+                return RunParams(
+                    hyperparameters=SimpleNamespace(
+                        dataset_name="test dataset",
+                        qsar_method=configuration["qsar_method"],
+                        descriptor_set_name=configuration["descriptor_set_name"],
+                        splitting_name="split",
+                    )
+                )
+
+            def query_dataframes(self, params):
+                params.df_training = training_frames[
+                    params.hyperparameters.descriptor_set_name
+                ].copy()
+
+            def apply_outlier_filtering(self, params):
+                pass
+
+            def setup_logp_martin(self, params):
+                pass
+
+            def run_feature_selection(self, params):
+                pass
+
+            def run_model_building(self, params):
+                build_calls.append(params.hyperparameters.qsar_method)
+                built_ids.extend(params.df_training["ID"].tolist())
+                params.test_stats = {"score": 1.0}
+
+            def run_post_build_feature_selection(self, params):
+                pass
+
+            def run_applicability_domain(self, params):
+                pass
+
+            def extract_ad_stats(self, params):
+                pass
+
+        configuration_a = {
+            "dataset_name": "test dataset",
+            "qsar_method": "rf",
+            "descriptor_set_name": "descriptor_a",
+        }
+        configuration_b = {
+            "dataset_name": "test dataset",
+            "qsar_method": "gcm",
+            "descriptor_set_name": "descriptor_b",
+        }
+        with TemporaryDirectory() as temporary_directory:
+            comparison = ModelComparison(output_root=Path(temporary_directory))
+            with patch("models.case_studies.ModelComparison.RunDataset", FakeRunner):
+                with patch.object(ModelComparison, "save_results"):
+                    built_results = comparison.build_configurations(
+                        [configuration_a, configuration_b], n_repeats=1, n_splits=2
+                    )
+                    self.assertEqual(len(build_calls), 4)
+                    self.assertEqual(len(built_results), 4)
+                    self.assertEqual(set(built_results["model"]), {"rf", "gcm"})
+                    self.assertEqual(set(built_results["training_size"]), {2})
+                    self.assertNotIn("e", built_ids)
+                    comparison.compare(configuration_a, configuration_b, n_repeats=1, n_splits=2)
+                    self.assertEqual(len(build_calls), 4)
+                    comparison.compare(
+                        configuration_a,
+                        {
+                            "dataset_name": "test dataset",
+                            "qsar_method": "svm",
+                            "descriptor_set_name": "descriptor_b",
+                        },
+                        n_repeats=1,
+                        n_splits=2,
+                    )
+
+            cache_path = Path(temporary_directory) / "test dataset" / "model_comparison_runs.json"
+            with cache_path.open(encoding="utf-8") as cache_file:
+                cache = json.load(cache_file)
+
+        self.assertEqual(len(build_calls), 6)
+        self.assertEqual(cache["schema_version"], 1)
+        self.assertEqual(len(cache["configurations"]), 3)
+        for cached_configuration in cache["configurations"].values():
+            self.assertEqual(cached_configuration["configuration"]["hyperparameters"]["dataset_name"], "test dataset")
+            cached_run = cached_configuration["runs"]["42"]
+            self.assertEqual(cached_run["n_splits"], 2)
+            self.assertEqual(set(cached_run["folds"]), {"1", "2"})
+            self.assertIn("score", cached_run["folds"]["1"]["statistics"])
+
+    def test_compare_different_descriptor_sets_uses_shared_ids_and_cached_folds(self):
+        descriptor_data = {
+            "descriptor_a": pd.DataFrame({
+                "ID": ["a", "b", "c", "d"],
+                "Property": [1.0, 2.0, 3.0, 4.0],
+                "descriptor_a": [0.1, 0.2, 0.3, 0.4],
+            }),
+            "descriptor_b": pd.DataFrame({
+                "ID": ["c", "a", "d", "e"],
+                "Property": [3.0, 1.0, 4.0, 5.0],
+                "descriptor_b": [0.5, 0.6, 0.7, 0.8],
+            }),
+        }
+        evaluated_folds = []
+
+        class FakeRunner:
+            def generate_params(self, **configuration):
+                return RunParams(
+                    hyperparameters=SimpleNamespace(
+                        dataset_name="shared dataset",
+                        qsar_method=configuration["qsar_method"],
+                        descriptor_set_name=configuration["descriptor_set_name"],
+                        splitting_name="split",
+                    )
+                )
+
+            def query_dataframes(self, params):
+                params.df_training = descriptor_data[
+                    params.hyperparameters.descriptor_set_name
+                ].copy()
+
+        def evaluate_fold(runner, params, training, prediction, is_binary, n_splits):
+            evaluated_folds.append((
+                params.hyperparameters.descriptor_set_name,
+                training["ID"].tolist(),
+                prediction["ID"].tolist(),
+                set(training.columns),
+            ))
+            return {"score": 1.0}
+
+        configuration_a = {
+            "dataset_name": "shared dataset",
+            "qsar_method": "rf",
+            "descriptor_set_name": "descriptor_a",
+        }
+        configuration_b = {
+            "dataset_name": "shared dataset",
+            "qsar_method": "gcm",
+            "descriptor_set_name": "descriptor_b",
+        }
+        expected_ids = {"a", "c", "d"}
+        with TemporaryDirectory() as temporary_directory:
+            comparison = ModelComparison(output_root=Path(temporary_directory))
+            with patch("models.case_studies.ModelComparison.RunDataset", FakeRunner):
+                with patch.object(ModelComparison, "save_results"):
+                    with patch.object(comparison, "_evaluate_fold", side_effect=evaluate_fold) as evaluate:
+                        results = comparison.compare(
+                            configuration_a,
+                            configuration_b,
+                            n_repeats=1,
+                            n_splits=2,
+                        )
+
+                    self.assertEqual(evaluate.call_count, 4)
+                    self.assertEqual(set(results["training_size"]), {1, 2})
+                    self.assertEqual(set(results["test_size"]), {1, 2})
+                    for first, second in zip(evaluated_folds[::2], evaluated_folds[1::2]):
+                        self.assertEqual(first[0], "descriptor_a")
+                        self.assertEqual(second[0], "descriptor_b")
+                        self.assertEqual(first[1], second[1])
+                        self.assertEqual(first[2], second[2])
+                        self.assertEqual(set(first[1]) | set(first[2]), expected_ids)
+                        self.assertTrue(set(first[1]).isdisjoint(first[2]))
+                        self.assertIn("descriptor_a", first[3])
+                        self.assertIn("descriptor_b", second[3])
+
+                    evaluated_folds.clear()
+                    with patch.object(comparison, "_evaluate_fold", side_effect=evaluate_fold) as evaluate:
+                        comparison.compare(
+                            configuration_a,
+                            configuration_b,
+                            n_repeats=1,
+                            n_splits=2,
+                        )
+                    self.assertEqual(evaluate.call_count, 0)
+
+            cache_path = (
+                Path(temporary_directory)
+                / "shared dataset"
+                / "model_comparison_runs.json"
+            )
+            with cache_path.open(encoding="utf-8") as cache_file:
+                cache = json.load(cache_file)
+
+        self.assertEqual(len(cache["configurations"]), 2)
+        cached_descriptor_sets = {
+            configuration["configuration"]["hyperparameters"]["descriptor_set_name"]
+            for configuration in cache["configurations"].values()
+        }
+        self.assertEqual(cached_descriptor_sets, {"descriptor_a", "descriptor_b"})
+        expected_fingerprints = {
+            ModelComparison._training_fingerprint(frame)
+            for frame in ModelComparison._align_training_dataframes(
+                list(descriptor_data.values())
+            )
+        }
+        for configuration in cache["configurations"].values():
+            cached_run = configuration["runs"]["42"]
+            self.assertEqual(cached_run["n_splits"], 2)
+            self.assertEqual(set(cached_run["folds"]), {"1", "2"})
+            self.assertIn(cached_run["training_fingerprint"], expected_fingerprints)
 
     def test_test_model_comparison_uses_requested_configs_and_output_root(self):
         with patch.object(ModelComparison, "compare", autospec=True, return_value=pd.DataFrame()) as compare:
