@@ -249,6 +249,179 @@ class ModelComparison:
 		logging.info("Comparison complete: %d result rows saved to %s", len(results_df), output_dir.resolve())
 		return results_df
 
+	def build_configurations(
+		self,
+		configurations: Sequence[RunConfiguration],
+		n_repeats: int = 10,
+		n_splits: int = 5,
+		random_state: int = 42,
+	) -> pd.DataFrame:
+		"""Build configurations on repeated local CV and save fold outputs to JSON.
+
+		Each configuration uses the same folds and the same cache format as
+		``compare``. No pairwise reports or plots are generated.
+		"""
+		if not configurations:
+			raise ValueError("At least one configuration is required")
+		if n_repeats < 1:
+			raise ValueError("n_repeats must be at least 1")
+		if n_splits < 2:
+			raise ValueError("n_splits must be at least 2")
+
+		runner = RunDataset()
+		params = [self._prepare_params(runner, configurations[0])]
+		params.extend(
+			self._prepare_params(runner, configuration, params[0])
+			for configuration in configurations[1:]
+		)
+		for candidate in params[1:]:
+			self._validate_configurations(params[0], candidate)
+
+		logging.info(
+			"Building %d configurations for %s (%d repeats, %d folds)",
+			len(params),
+			params[0].hyperparameters.dataset_name,
+			n_repeats,
+			n_splits,
+		)
+		logging.info("Loading comparison training data")
+		for candidate in params:
+			runner.query_dataframes(candidate)
+		if any(candidate.df_training is None for candidate in params):
+			raise ValueError("RunDataset did not provide every configuration's training dataframe")
+		training_dataframes = self._align_training_dataframes(
+			[candidate.df_training for candidate in params if candidate.df_training is not None]
+		)
+		training_data = training_dataframes[0]
+		logging.info("Loaded %d training rows and %d columns", *training_data.shape)
+		target = pd.to_numeric(training_data["Property"], errors="coerce")
+		if len(training_data) < n_splits:
+			raise ValueError(
+				f"Cannot create {n_splits} folds from {len(training_data)} shared training chemicals"
+			)
+		is_binary = target.isin([0, 1]).all()
+		if is_binary:
+			class_counts = target.value_counts()
+			if class_counts.min() < n_splits:
+				raise ValueError(
+					f"Cannot create {n_splits} balanced folds: each binary class must "
+					"contain at least n_splits records"
+				)
+
+		labels: list[str] = []
+		label_counts: dict[str, int] = {}
+		for candidate in params:
+			base_label = candidate.hyperparameters.qsar_method
+			label_counts[base_label] = label_counts.get(base_label, 0) + 1
+			labels.append(
+				base_label if label_counts[base_label] == 1
+				else f"{base_label}_{label_counts[base_label]}"
+			)
+
+		cache_path = self._make_cache_path(params[0].hyperparameters.dataset_name)
+		cache = self._load_run_cache(cache_path)
+		cache_configurations = [self._configuration_cache_data(candidate) for candidate in params]
+		training_fingerprints = [
+			self._training_fingerprint(frame) for frame in training_dataframes
+		]
+		results: list[dict[str, object]] = []		
+		for repeat in range(n_repeats):
+			seed = random_state + repeat
+			if is_binary:
+				splitter = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=seed)
+				splits = splitter.split(training_data, target)
+			else:
+				target_bins = self._balanced_regression_bins(target, n_splits)
+				if target_bins is None:
+					splitter = KFold(n_splits=n_splits, shuffle=True, random_state=seed)
+					splits = splitter.split(training_data)
+				else:
+					splitter = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=seed)
+					splits = splitter.split(training_data, target_bins)
+
+			for fold, (train_indices, test_indices) in enumerate(splits, start=1):
+				fold_training_data = [
+					frame.iloc[train_indices].copy() for frame in training_dataframes
+				]
+				fold_prediction_data = [
+					frame.iloc[test_indices].copy() for frame in training_dataframes
+				]
+				fold_training = fold_training_data[0]
+				fold_prediction = fold_prediction_data[0]
+				logging.info(
+					"Evaluating repeat %d/%d, fold %d/%d (%d train, %d test rows)",
+					repeat + 1,
+					n_repeats,
+					fold,
+					n_splits,
+					len(fold_training),
+					len(fold_prediction),
+				)
+				for (
+					label,
+					candidate,
+					cache_configuration,
+					training_fingerprint,
+					fold_training,
+					fold_prediction,
+				) in zip(
+					labels,
+					params,
+					cache_configurations,
+					training_fingerprints,
+					fold_training_data,
+					fold_prediction_data,
+				):
+					configuration_key, configuration_data = cache_configuration
+					logging.debug("Building %s for repeat %d, fold %d", label, repeat + 1, fold)
+					row: dict[str, object] = {
+						"model": label,
+						"repeat": repeat + 1,
+						"fold": fold,
+						"random_state": seed,
+						"training_size": len(fold_training),
+						"test_size": len(fold_prediction),
+					}
+					cached_statistics = self._get_cached_fold(
+						cache,
+						configuration_key,
+						seed,
+						fold,
+						n_splits,
+						training_fingerprint,
+						len(fold_training),
+						len(fold_prediction),
+					)
+					if cached_statistics is not None:
+						logging.info("Reusing cached %s results for seed %d, fold %d", label, seed, fold)
+						row.update(cached_statistics)
+					else:
+						cached_statistics = self._evaluate_fold(
+							runner,
+							candidate,
+							fold_training,
+							fold_prediction,
+							is_binary,
+							n_splits,
+						)
+						row.update(cached_statistics)
+						self._store_cached_fold(
+							cache,
+							cache_path,
+							configuration_key,
+							configuration_data,
+							seed,
+							fold,
+							n_splits,
+							training_fingerprint,
+							len(fold_training),
+							len(fold_prediction),
+							cached_statistics,
+						)
+						results.append(row)
+
+		return self.process_results(pd.DataFrame(results))
+
 	def process_results(self, results: pd.DataFrame) -> pd.DataFrame:
 		"""Apply configured result transformations; override to add analyses."""
 		processed = results.copy()
@@ -897,6 +1070,34 @@ def test_model_comparison() -> pd.DataFrame:
 	)
 
 
+def koc_rf_vs_gcm_10_repeats() -> pd.DataFrame:
+	"""Compare random forest and group contribution models on the KOC v1 dataset."""
+	ad_measures = [
+		pc.Applicability_Domain_TEST_Embedding_Euclidean,
+		pc.Applicability_Domain_TEST_Fragment_Counts,
+	]
+	
+	shared_configuration: dict[str, object] = {
+		"dataset_name": "KOC v1 modeling",
+		"feature_selection": False,
+		"ad_measure": ad_measures,
+		"run_AD": True,
+		"write_to_db": False,
+	}
+	
+	configuration_rf = shared_configuration | {"qsar_method": "rf"}
+	configuration_gcm = shared_configuration | {"qsar_method": "gcm"}
+	
+	comparison = ModelComparison()
+	
+	return comparison.compare(
+		configuration_rf,
+		configuration_gcm,
+		n_repeats=10,
+		comparison_name="KOC_v1_RF_vs_GCM_10_repeats",
+	)
+
+
 def koc_rf_vs_gcm() -> pd.DataFrame:
 	"""Compare random forest and group contribution models on the KOC v1 dataset."""
 	ad_measures = [
@@ -925,9 +1126,265 @@ def koc_rf_vs_gcm() -> pd.DataFrame:
 	)
 
 
+def koc_rf_vs_xgboost() -> pd.DataFrame:
+	"""Compare random forest and XGBoost models on the KOC v1 dataset."""
+	ad_measures = [
+		pc.Applicability_Domain_TEST_Embedding_Euclidean,
+		pc.Applicability_Domain_TEST_Fragment_Counts,
+	]
+	
+	shared_configuration: dict[str, object] = {
+		"dataset_name": "KOC v1 modeling",
+		"feature_selection": False,
+		"ad_measure": ad_measures,
+		"run_AD": True,
+		"write_to_db": False,
+	}
+	
+	configuration_rf = shared_configuration | {"qsar_method": "rf"}
+	configuration_xgb = shared_configuration | {"qsar_method": "xgb"}
+	
+	comparison = ModelComparison()
+	
+	return comparison.compare(
+		configuration_rf,
+		configuration_xgb,
+		n_repeats=10,
+		comparison_name="KOC_v1_RF_vs_XGB",
+	)
+
+
+def koc_rf_vs_knn() -> pd.DataFrame:
+	"""Compare random forest and KNN models on the KOC v1 dataset."""
+	ad_measures = [
+		pc.Applicability_Domain_TEST_Embedding_Euclidean,
+		pc.Applicability_Domain_TEST_Fragment_Counts,
+	]
+	
+	shared_configuration: dict[str, object] = {
+		"dataset_name": "KOC v1 modeling",
+		"feature_selection": False,
+		"ad_measure": ad_measures,
+		"run_AD": True,
+		"write_to_db": False,
+	}
+	
+	configuration_rf = shared_configuration | {"qsar_method": "rf"}
+	configuration_knn = shared_configuration | {"qsar_method": "knn"}
+	
+	comparison = ModelComparison()
+	
+	return comparison.compare(
+		configuration_rf,
+		configuration_knn,
+		n_repeats=10,
+		comparison_name="KOC_v1_RF_vs_KNN",
+	)
+
+
+def koc_rf_feature_selection_comparison() -> pd.DataFrame:
+	"""Compare random forest models with and without feature selection on the KOC v1 dataset."""
+	ad_measures = [
+		pc.Applicability_Domain_TEST_Embedding_Euclidean,
+		pc.Applicability_Domain_TEST_Fragment_Counts,
+	]
+	
+	shared_configuration: dict[str, object] = {
+		"dataset_name": "KOC v1 modeling",
+		"ad_measure": ad_measures,
+		"run_AD": True,
+		"write_to_db": False,
+		"qsar_method": "rf",
+	}
+	
+	configuration_fs = shared_configuration | {"feature_selection": True}
+	configuration_no_fs = shared_configuration | {"feature_selection": False}
+	
+	comparison = ModelComparison()
+	
+	result = comparison.compare(
+		configuration_fs,
+		configuration_no_fs,
+		n_repeats=5,
+		comparison_name="KOC_v1_RF_FS_vs_No_FS"
+	)
+
+	return result
+
+
+def koc_rf_feature_set_comparisons() -> pd.DataFrame:
+	"""Compare random forest models with different feature sets on the KOC v1 dataset."""
+	ad_measures = [
+		pc.Applicability_Domain_TEST_Embedding_Euclidean,
+		pc.Applicability_Domain_TEST_Fragment_Counts,
+	]
+
+	shared_configuration: dict[str, object] = {
+		"dataset_name": "KOC v1 modeling",
+		"ad_measure": ad_measures,
+		"run_AD": True,
+		"feature_selection": False,
+		"write_to_db": False,
+		"qsar_method": "rf"
+	}
+
+	descriptor_sets = {
+		"WebTEST": "WebTEST-default",
+		"Mordred": "Mordred-default",
+		"ToxPrints": "ToxPrints-default",
+		"RDKit": "RDKit-default",
+		"PaDEL": "PaDEL-default"
+	}
+
+	configurations = []
+	for descriptor_set in descriptor_sets:
+		configurations.append(shared_configuration | {"descriptor_set_name": descriptor_sets[descriptor_set]})
+
+	comparison = ModelComparison()
+
+	comparisons = comparison.build_configurations(
+		configurations,
+		n_repeats=10,
+	)
+
+	for i in range(len(configurations)):
+		for j in range(i + 1, len(configurations)):
+			comparison.compare(
+				configurations[i],
+				configurations[j],
+				n_repeats=10,
+				comparison_name=f"KOC_v1_RF_{list(descriptor_sets.keys())[i]}_vs_{list(descriptor_sets.keys())[j]}",
+			)
+
+	return comparisons
+
+
+def bcf_rf_vs_gcm() -> pd.DataFrame:
+	"""Compare random forest and group contribution models on the BCF v1 dataset."""
+	ad_measures = [
+		pc.Applicability_Domain_TEST_Embedding_Euclidean,
+		pc.Applicability_Domain_TEST_Fragment_Counts,
+	]
+	
+	shared_configuration: dict[str, object] = {
+		"dataset_name": "exp_prop_BCF_v1_modeling",
+		"feature_selection": False,
+		"ad_measure": ad_measures,
+		"run_AD": True,
+		"write_to_db": False,
+	}
+	
+	configuration_rf = shared_configuration | {"qsar_method": "rf"}
+	configuration_gcm = shared_configuration | {"qsar_method": "gcm"}
+	
+	comparison = ModelComparison()
+	
+	return comparison.compare(
+		configuration_rf,
+		configuration_gcm,
+		n_repeats=10,
+		comparison_name="BCF_v1_RF_vs_GCM",
+	)
+
+
+def bcf_rf_vs_xgboost() -> pd.DataFrame:
+	"""Compare random forest and XGBoost models on the BCF v1 dataset."""
+	ad_measures = [
+		pc.Applicability_Domain_TEST_Embedding_Euclidean,
+		pc.Applicability_Domain_TEST_Fragment_Counts,
+	]
+	
+	shared_configuration: dict[str, object] = {
+		"dataset_name": "exp_prop_BCF_v1_modeling",
+		"feature_selection": False,
+		"ad_measure": ad_measures,
+		"run_AD": True,
+		"write_to_db": False,
+	}
+	
+	configuration_rf = shared_configuration | {"qsar_method": "rf"}
+	configuration_xgb = shared_configuration | {"qsar_method": "xgb"}
+	
+	comparison = ModelComparison()
+	
+	return comparison.compare(
+		configuration_rf,
+		configuration_xgb,
+		n_repeats=10,
+		comparison_name="BCF_v1_RF_vs_XGB",
+	)
+
+
+def bcf_rf_vs_knn() -> pd.DataFrame:
+	"""Compare random forest and KNN models on the BCF v1 dataset."""
+	ad_measures = [
+		pc.Applicability_Domain_TEST_Embedding_Euclidean,
+		pc.Applicability_Domain_TEST_Fragment_Counts,
+	]
+	
+	shared_configuration: dict[str, object] = {
+		"dataset_name": "exp_prop_BCF_v1_modeling",
+		"feature_selection": False,
+		"ad_measure": ad_measures,
+		"run_AD": True,
+		"write_to_db": False,
+	}
+	
+	configuration_rf = shared_configuration | {"qsar_method": "rf"}
+	configuration_knn = shared_configuration | {"qsar_method": "knn"}
+	
+	comparison = ModelComparison()
+	
+	return comparison.compare(
+		configuration_rf,
+		configuration_knn,
+		n_repeats=10,
+		comparison_name="BCF_v1_RF_vs_KNN",
+	)
+
+
+def bcf_rf_feature_selection_comparison() -> pd.DataFrame:
+	"""Compare random forest models with and without feature selection on the BCF v1 dataset."""
+	ad_measures = [
+		pc.Applicability_Domain_TEST_Embedding_Euclidean,
+		pc.Applicability_Domain_TEST_Fragment_Counts,
+	]
+	
+	shared_configuration: dict[str, object] = {
+		"dataset_name": "exp_prop_BCF_v1_modeling",
+		"ad_measure": ad_measures,
+		"run_AD": True,
+		"write_to_db": False,
+		"qsar_method": "rf",
+	}
+	
+	configuration_fs = shared_configuration | {"feature_selection": True}
+	configuration_no_fs = shared_configuration | {"feature_selection": False}
+	
+	comparison = ModelComparison()
+	
+	result = comparison.compare(
+		configuration_fs,
+		configuration_no_fs,
+		n_repeats=5,
+		comparison_name="BCF_v1_RF_FS_vs_No_FS"
+	)
+
+	return result
+
+
 def main():
 	# test_model_comparison()
-	koc_rf_vs_gcm()
+	# koc_rf_vs_gcm_10_repeats()
+	# koc_rf_vs_gcm()
+	# koc_rf_vs_xgboost()
+	# koc_rf_vs_knn()
+	# koc_rf_feature_selection_comparison()
+	# koc_rf_feature_set_comparisons()
+	bcf_rf_vs_gcm()
+	# bcf_rf_vs_xgboost()
+	# bcf_rf_vs_knn()
+	# bcf_rf_feature_selection_comparison()
 
 
 if __name__ == "__main__":
