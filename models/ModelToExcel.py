@@ -1010,6 +1010,9 @@ class DataQuerier:
         if self.model is not None:
             self.dataset_name = getattr(self.model, "datasetName", None)
             self.dataset_name_external = getattr(self.model, "external_dataset_name", None)
+
+        if self.dataset_name_external is None:
+            logging.warning(f"Provided model for dataset {self.dataset_name} has no external dataset name. External set queries will be skipped.")
         
         self.query_df_pv(**self.query_args.get("query_df_pv", {}), external=False)
         self.query_df_pv(**self.query_args.get("query_df_pv", {}), external=True)
@@ -1230,7 +1233,7 @@ class DataQuerier:
             dataset_name = self.dataset_name_external
         elif external and self.dataset_name_external is None:
             # If external df_pv not already initialized and model doesn't have an external dataset, return nothing
-            logging.warning("Provided model has no external dataset provided, skipping initialization of external df_pv\n\t(If this is not desired, set dataset_name_external on the DataQuerier object before running query_df_pv with external = True)")
+            logging.debug("Provided model has no external dataset provided, skipping initialization of external df_pv\n\t(If this is not desired, set dataset_name_external on the DataQuerier object before running query_df_pv with external = True)")
             return None
         elif not external and self.df_pv is not None:
             # If df_pv already initialized, return it immediately
@@ -1288,7 +1291,7 @@ class DataQuerier:
             dataset_name = self.dataset_name_external
         elif external and self.dataset_name_external is None:
             # If external df_gmd not already initialized and model doesn't have an external dataset, return nothing
-            logging.warning("Provided model has no external dataset provided, skipping initialization of external GMD\n\t(If this is not desired, set dataset_name_external on the DataQuerier object before running query_df_gmd with external = True)")
+            logging.debug("Provided model has no external dataset provided, skipping initialization of external GMD\n\t(If this is not desired, set dataset_name_external on the DataQuerier object before running query_df_gmd with external = True)")
             return None
         elif not external and self.df_gmd is not None:
             # If df_gmd already initialized, return it immediately
@@ -1565,7 +1568,7 @@ class DataQuerier:
 
     def query_binary_stats_dict(self, model: Model) -> dict:
         num_categories = getattr(model, "num_categories", 2)
-    
+
         statistics_dict = {
             "nTraining": [model.num_training],
             "nTest": [model.num_prediction],
@@ -1579,7 +1582,7 @@ class DataQuerier:
             "BA_Test_outside_AD": [model.modelStatistics.get("BA_Test_outside_AD", float("nan"))],
             "Coverage_Test": [model.modelStatistics.get("Coverage_Test", float("nan"))]
         }
-    
+            
         if num_categories == 3:
             statistics_dict.update({
                 "RECALL_CLASS_0_Training": [model.modelStatistics.get("RECALL_CLASS_0_Training", float("nan"))],
@@ -1632,7 +1635,8 @@ class DataQuerier:
                     "Coverage_External": [model.modelStatistics.get("Coverage_External", float("nan"))]
                 })
     
-        return statistics_dict    
+        return statistics_dict
+    
     def query_records_df(self) -> pd.DataFrame:
         """Query database for detailed experimental records.
         
@@ -1663,7 +1667,7 @@ class DataQuerier:
         
         df_pv = self.query_df_pv(external=True)
         if df_pv is None:
-            logging.warning(f"Skipping External Records for model (model_id = {self.model_id}), as df_pv_external is None")
+            logging.debug(f"Skipping External Records for model (model_id = {self.model_id}), as df_pv_external is None")
             return None
         external_records_df = DataTransformer.get_records_df(df_pv)
         logging.debug(f"Finished building External Records from Model (model_id = {self.model_id})")
@@ -1702,7 +1706,7 @@ class DataQuerier:
             coefficients_df = DataTransformer.get_model_coefficients(model)
             results_dict["model_details"]["model_coefficients"] = coefficients_df
         else:
-            logging.warning(f"Model type {method_name} does not support coefficient retrieval, coefficient values will not be added to Model Descriptors sheet")
+            logging.debug(f"Model type {method_name} does not support coefficient retrieval, coefficient values will not be added to Model Descriptors sheet")
 
         results_dict["model_details"]["descriptor_set_name"] = model.descriptorSetName
         
@@ -1885,8 +1889,8 @@ class DataQuerier:
                 # ad_test_columns[f"AD_{ad.replace(' ', '_')}"] = df_ad_output["AD"].values
                 ad_test_columns[f"AD_{ad.replace(' ', '_')}"] = temp["id"].map(ad_map)
 
-            logging.warning(
-                "AD columns were missing from model predictions; recomputing AD as fallback. "
+            logging.debug(
+                "AD columns were missing from model test set predictions; recomputing AD as fallback. "
                 "This should not normally happen if run_model_building_db.py is the source of truth."
             )
 
@@ -1979,8 +1983,8 @@ class DataQuerier:
                 # ad_test_columns[f"AD_{ad.replace(" ", "_")}"] = temp["id"].map(ad_map)
                 ad_test_columns[f"AD_{ad.replace(' ', '_')}"] = temp["id"].map(ad_map)
 
-            logging.warning(
-                "AD columns were missing from model predictions; recomputing AD as fallback. "
+            logging.debug(
+                "AD columns were missing from model external set predictions; recomputing AD as fallback. "
                 "This should not normally happen if run_model_building_db.py is the source of truth."
             )
 
@@ -2271,7 +2275,6 @@ class DataTransformer:
     
     @staticmethod
     def get_modelStatistics(model: Model) -> dict:
-        # TODO: Fix entirely and get working, then test
         logging.warning("Running get_modelStatistics as modelStatistics was null or undefined for the provided model")
         try:
             is_binary = getattr(model, "is_binary", None)
@@ -2730,7 +2733,7 @@ class DataTransformer:
                 return None
             method_name = getattr(model, "qsar_method", False) or getattr(model, "regressor_name", False) or ""
             if not any(method in method_name for method in ["reg", "las", "gcm", "huber", "ransac", "theil_sen"]):
-                logging.warning(f"Model has QSAR method that does not support coefficient retrieval: {method_name}")
+                logging.debug(f"Model has QSAR method that does not support coefficient retrieval: {method_name}")
                 return None
             
             df_training = model.df_training
@@ -3082,8 +3085,6 @@ class ModelToExcel:
         else:
             # Binary / multiclass statistics layout
             num_categories = getattr(self.model, "num_categories", 2)
-
-            
         
             if num_categories == 2:
             
@@ -3139,7 +3140,7 @@ class ModelToExcel:
                     worksheet.write_number("E11", statistics.at[0, "BA_External_outside_AD"], format_number)
                     worksheet.write_number("F11", statistics.at[0, "Coverage_External"], format_number)
     
-                img_path = os.path.join(os.getenv("PROJECT_ROOT"), "resources", "binary_equations.png") #TODO add multiclass image
+                img_path = os.path.join(os.getenv("PROJECT_ROOT"), "resources", "binary_equations.png")
 
             elif num_categories == 3:
                     # Training
@@ -3195,7 +3196,7 @@ class ModelToExcel:
                         worksheet.write_number("E11", statistics.at[0, "BA_External_outside_AD"], format_number)
                         worksheet.write_number("F11", statistics.at[0, "Coverage_External"], format_number)
     
-                    img_path = os.path.join(os.getenv("PROJECT_ROOT"), "resources", "binary_equations.png")
+                    img_path = os.path.join(os.getenv("PROJECT_ROOT"), "resources", "ternary_equations.png")
 
 
         ExcelFormatter.set_column_width(writer, "Statistics", statistics, how="full")
@@ -4541,8 +4542,8 @@ def main():
 
     
     # update_excel_summaries(username='tmarti02', [1754], upload_to_db=False)
-    # update_models_in_db()
-    create_pfas_update_1754()
+    update_models_in_db()
+    # create_pfas_update_1754()
     
     # local_example()
     # test_model_details_pv()
