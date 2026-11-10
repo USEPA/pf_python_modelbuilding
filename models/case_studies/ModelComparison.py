@@ -40,6 +40,29 @@ coloredlogs.install(level=level, milliseconds=True, level_styles=custom_level_st
 
 RunConfiguration = Union[Mapping[str, object], RunParams]
 
+# Constants for testing functions
+AD_MEASURES = [
+	pc.Applicability_Domain_TEST_Embedding_Euclidean,
+	pc.Applicability_Domain_TEST_Fragment_Counts,
+]
+
+PHYSCHEM_PROPERTIES = [
+	"HLC",
+	"WS",
+	"VP",
+	"BP",
+	"LogP",
+	"MP"
+]
+
+DESCRIPTOR_SETS = {
+	"WebTEST": "WebTEST-default",
+	"Mordred": "Mordred-default",
+	"ToxPrints": "ToxPrints-default",
+	"RDKit": "RDKit-default",
+	"PaDEL": "PaDEL-default"
+}
+
 
 class ModelComparison:
 	"""Build and compare two model configurations on identical repeated CV folds.
@@ -1044,15 +1067,10 @@ class ModelComparison:
 
 def test_model_comparison() -> pd.DataFrame:
 	"""Compare random forest and group contribution models on the KOC v1 dataset."""
-	ad_measures = [
-		pc.Applicability_Domain_TEST_Embedding_Euclidean,
-		pc.Applicability_Domain_TEST_Fragment_Counts,
-	]
-	
 	shared_configuration: dict[str, object] = {
 		"dataset_name": "KOC v1 modeling",
 		"feature_selection": False,
-		"ad_measure": ad_measures,
+		"ad_measure": AD_MEASURES,
 		"run_AD": True,
 		"write_to_db": False,
 	}
@@ -1070,17 +1088,12 @@ def test_model_comparison() -> pd.DataFrame:
 	)
 
 
-def koc_rf_vs_gcm_10_repeats() -> pd.DataFrame:
+def koc_rf_vs_gcm() -> pd.DataFrame:
 	"""Compare random forest and group contribution models on the KOC v1 dataset."""
-	ad_measures = [
-		pc.Applicability_Domain_TEST_Embedding_Euclidean,
-		pc.Applicability_Domain_TEST_Fragment_Counts,
-	]
-	
 	shared_configuration: dict[str, object] = {
 		"dataset_name": "KOC v1 modeling",
 		"feature_selection": False,
-		"ad_measure": ad_measures,
+		"ad_measure": AD_MEASURES,
 		"run_AD": True,
 		"write_to_db": False,
 	}
@@ -1094,49 +1107,16 @@ def koc_rf_vs_gcm_10_repeats() -> pd.DataFrame:
 		configuration_rf,
 		configuration_gcm,
 		n_repeats=10,
-		comparison_name="KOC_v1_RF_vs_GCM_10_repeats",
-	)
-
-
-def koc_rf_vs_gcm() -> pd.DataFrame:
-	"""Compare random forest and group contribution models on the KOC v1 dataset."""
-	ad_measures = [
-		pc.Applicability_Domain_TEST_Embedding_Euclidean,
-		pc.Applicability_Domain_TEST_Fragment_Counts,
-	]
-	
-	shared_configuration: dict[str, object] = {
-		"dataset_name": "KOC v1 modeling",
-		"feature_selection": False,
-		"ad_measure": ad_measures,
-		"run_AD": True,
-		"write_to_db": False,
-	}
-	
-	configuration_rf = shared_configuration | {"qsar_method": "rf"}
-	configuration_gcm = shared_configuration | {"qsar_method": "gcm"}
-	
-	comparison = ModelComparison()
-	
-	return comparison.compare(
-		configuration_rf,
-		configuration_gcm,
-		n_repeats=100,
 		comparison_name="KOC_v1_RF_vs_GCM",
 	)
 
 
 def koc_rf_vs_xgboost() -> pd.DataFrame:
 	"""Compare random forest and XGBoost models on the KOC v1 dataset."""
-	ad_measures = [
-		pc.Applicability_Domain_TEST_Embedding_Euclidean,
-		pc.Applicability_Domain_TEST_Fragment_Counts,
-	]
-	
 	shared_configuration: dict[str, object] = {
 		"dataset_name": "KOC v1 modeling",
 		"feature_selection": False,
-		"ad_measure": ad_measures,
+		"ad_measure": AD_MEASURES,
 		"run_AD": True,
 		"write_to_db": False,
 	}
@@ -1156,15 +1136,10 @@ def koc_rf_vs_xgboost() -> pd.DataFrame:
 
 def koc_rf_vs_knn() -> pd.DataFrame:
 	"""Compare random forest and KNN models on the KOC v1 dataset."""
-	ad_measures = [
-		pc.Applicability_Domain_TEST_Embedding_Euclidean,
-		pc.Applicability_Domain_TEST_Fragment_Counts,
-	]
-	
 	shared_configuration: dict[str, object] = {
 		"dataset_name": "KOC v1 modeling",
 		"feature_selection": False,
-		"ad_measure": ad_measures,
+		"ad_measure": AD_MEASURES,
 		"run_AD": True,
 		"write_to_db": False,
 	}
@@ -1184,14 +1159,9 @@ def koc_rf_vs_knn() -> pd.DataFrame:
 
 def koc_rf_feature_selection_comparison() -> pd.DataFrame:
 	"""Compare random forest models with and without feature selection on the KOC v1 dataset."""
-	ad_measures = [
-		pc.Applicability_Domain_TEST_Embedding_Euclidean,
-		pc.Applicability_Domain_TEST_Fragment_Counts,
-	]
-	
 	shared_configuration: dict[str, object] = {
 		"dataset_name": "KOC v1 modeling",
-		"ad_measure": ad_measures,
+		"ad_measure": AD_MEASURES,
 		"run_AD": True,
 		"write_to_db": False,
 		"qsar_method": "rf",
@@ -1205,7 +1175,7 @@ def koc_rf_feature_selection_comparison() -> pd.DataFrame:
 	result = comparison.compare(
 		configuration_fs,
 		configuration_no_fs,
-		n_repeats=5,
+		n_repeats=10,
 		comparison_name="KOC_v1_RF_FS_vs_No_FS"
 	)
 
@@ -1214,62 +1184,46 @@ def koc_rf_feature_selection_comparison() -> pd.DataFrame:
 
 def koc_rf_feature_set_comparisons() -> pd.DataFrame:
 	"""Compare random forest models with different feature sets on the KOC v1 dataset."""
-	ad_measures = [
-		pc.Applicability_Domain_TEST_Embedding_Euclidean,
-		pc.Applicability_Domain_TEST_Fragment_Counts,
-	]
-
 	shared_configuration: dict[str, object] = {
 		"dataset_name": "KOC v1 modeling",
-		"ad_measure": ad_measures,
+		"ad_measure": AD_MEASURES,
 		"run_AD": True,
 		"feature_selection": False,
 		"write_to_db": False,
 		"qsar_method": "rf"
 	}
 
-	descriptor_sets = {
-		"WebTEST": "WebTEST-default",
-		"Mordred": "Mordred-default",
-		"ToxPrints": "ToxPrints-default",
-		"RDKit": "RDKit-default",
-		"PaDEL": "PaDEL-default"
-	}
-
 	configurations = []
-	for descriptor_set in descriptor_sets:
-		configurations.append(shared_configuration | {"descriptor_set_name": descriptor_sets[descriptor_set]})
+	for descriptor_set in DESCRIPTOR_SETS:
+		configurations.append(shared_configuration | {"descriptor_set_name": DESCRIPTOR_SETS[descriptor_set]})
 
 	comparison = ModelComparison()
 
-	comparisons = comparison.build_configurations(
-		configurations,
-		n_repeats=10,
-	)
+	# comparisons = comparison.build_configurations(
+	# 	configurations,
+	# 	n_repeats=10,
+	# )
 
+	comparisons = pd.DataFrame()
 	for i in range(len(configurations)):
 		for j in range(i + 1, len(configurations)):
-			comparison.compare(
+			temp = comparison.compare(
 				configurations[i],
 				configurations[j],
 				n_repeats=10,
-				comparison_name=f"KOC_v1_RF_{list(descriptor_sets.keys())[i]}_vs_{list(descriptor_sets.keys())[j]}",
+				comparison_name=f"KOC_v1_RF_{list(DESCRIPTOR_SETS.keys())[i]}_vs_{list(DESCRIPTOR_SETS.keys())[j]}",
 			)
+			comparisons = pd.concat([comparisons, temp], ignore_index=True)
 
 	return comparisons
 
 
 def bcf_rf_vs_gcm() -> pd.DataFrame:
 	"""Compare random forest and group contribution models on the BCF v1 dataset."""
-	ad_measures = [
-		pc.Applicability_Domain_TEST_Embedding_Euclidean,
-		pc.Applicability_Domain_TEST_Fragment_Counts,
-	]
-	
 	shared_configuration: dict[str, object] = {
 		"dataset_name": "exp_prop_BCF_v1_modeling",
 		"feature_selection": False,
-		"ad_measure": ad_measures,
+		"ad_measure": AD_MEASURES,
 		"run_AD": True,
 		"write_to_db": False,
 	}
@@ -1289,15 +1243,10 @@ def bcf_rf_vs_gcm() -> pd.DataFrame:
 
 def bcf_rf_vs_xgboost() -> pd.DataFrame:
 	"""Compare random forest and XGBoost models on the BCF v1 dataset."""
-	ad_measures = [
-		pc.Applicability_Domain_TEST_Embedding_Euclidean,
-		pc.Applicability_Domain_TEST_Fragment_Counts,
-	]
-	
 	shared_configuration: dict[str, object] = {
 		"dataset_name": "exp_prop_BCF_v1_modeling",
 		"feature_selection": False,
-		"ad_measure": ad_measures,
+		"ad_measure": AD_MEASURES,
 		"run_AD": True,
 		"write_to_db": False,
 	}
@@ -1317,15 +1266,10 @@ def bcf_rf_vs_xgboost() -> pd.DataFrame:
 
 def bcf_rf_vs_knn() -> pd.DataFrame:
 	"""Compare random forest and KNN models on the BCF v1 dataset."""
-	ad_measures = [
-		pc.Applicability_Domain_TEST_Embedding_Euclidean,
-		pc.Applicability_Domain_TEST_Fragment_Counts,
-	]
-	
 	shared_configuration: dict[str, object] = {
 		"dataset_name": "exp_prop_BCF_v1_modeling",
 		"feature_selection": False,
-		"ad_measure": ad_measures,
+		"ad_measure": AD_MEASURES,
 		"run_AD": True,
 		"write_to_db": False,
 	}
@@ -1345,14 +1289,9 @@ def bcf_rf_vs_knn() -> pd.DataFrame:
 
 def bcf_rf_feature_selection_comparison() -> pd.DataFrame:
 	"""Compare random forest models with and without feature selection on the BCF v1 dataset."""
-	ad_measures = [
-		pc.Applicability_Domain_TEST_Embedding_Euclidean,
-		pc.Applicability_Domain_TEST_Fragment_Counts,
-	]
-	
 	shared_configuration: dict[str, object] = {
 		"dataset_name": "exp_prop_BCF_v1_modeling",
-		"ad_measure": ad_measures,
+		"ad_measure": AD_MEASURES,
 		"run_AD": True,
 		"write_to_db": False,
 		"qsar_method": "rf",
@@ -1366,26 +1305,215 @@ def bcf_rf_feature_selection_comparison() -> pd.DataFrame:
 	result = comparison.compare(
 		configuration_fs,
 		configuration_no_fs,
-		n_repeats=5,
+		n_repeats=10,
 		comparison_name="BCF_v1_RF_FS_vs_No_FS"
 	)
 
 	return result
 
 
+def bcf_feature_set_comparisons() -> pd.DataFrame:
+	"""Compare random forest models with and without feature selection on the BCF v1 dataset."""
+	shared_configuration: dict[str, object] = {
+		"dataset_name": "exp_prop_BCF_v1_modeling",
+		"ad_measure": AD_MEASURES,
+		"run_AD": True,
+		"feature_selection": False,
+		"write_to_db": False,
+		"qsar_method": "rf"
+	}
+
+	configurations = []
+	for descriptor_set in DESCRIPTOR_SETS:
+		configurations.append(shared_configuration | {"descriptor_set_name": DESCRIPTOR_SETS[descriptor_set]})
+
+	comparison = ModelComparison()
+
+	comparisons = pd.DataFrame()
+	for i in range(len(configurations)):
+		for j in range(i + 1, len(configurations)):
+			temp = comparison.compare(
+				configurations[i],
+				configurations[j],
+				n_repeats=10,
+				comparison_name=f"BCF_v1_RF_{list(DESCRIPTOR_SETS.keys())[i]}_vs_{list(DESCRIPTOR_SETS.keys())[j]}",
+			)
+			comparisons = pd.concat([comparisons, temp], ignore_index=True)
+
+	return comparisons
+
+
+def physchem_rf_vs_gcm() -> pd.DataFrame:
+	"""Compare random forest and GCM models on the Physchem v1 datasets."""
+	shared_configuration: dict[str, object] = {
+		"ad_measure": AD_MEASURES,
+		"run_AD": True,
+		"write_to_db": False,
+		"feature_selection": False,
+	}
+	
+	configuration_rf = shared_configuration | {"qsar_method": "rf"}
+	configuration_gcm = shared_configuration | {"qsar_method": "gcm"}
+	
+	comparison = ModelComparison()
+	
+	results = []
+	for prop in PHYSCHEM_PROPERTIES:
+		configuration_rf["dataset_name"] = f"{prop} v1 modeling"
+		configuration_gcm["dataset_name"] = f"{prop} v1 modeling"
+
+		result = comparison.compare(
+			configuration_rf,
+			configuration_gcm,
+			n_repeats=10,
+			comparison_name=f"{prop}_v1_RF_vs_GCM"
+		)
+		results.append(result)
+
+	return results
+
+
+def physchem_rf_vs_xgboost() -> pd.DataFrame:
+	"""Compare random forest and XGBoost models on the Physchem v1 datasets."""
+	shared_configuration: dict[str, object] = {
+		"ad_measure": AD_MEASURES,
+		"run_AD": True,
+		"write_to_db": False,
+		"feature_selection": False,
+	}
+	
+	configuration_rf = shared_configuration | {"qsar_method": "rf"}
+	configuration_xgb = shared_configuration | {"qsar_method": "xgb"}
+	
+	comparison = ModelComparison()
+	
+	results = []
+	for prop in PHYSCHEM_PROPERTIES:
+		configuration_rf["dataset_name"] = f"{prop} v1 modeling"
+		configuration_xgb["dataset_name"] = f"{prop} v1 modeling"
+
+		result = comparison.compare(
+			configuration_rf,
+			configuration_xgb,
+			n_repeats=10,
+			comparison_name=f"{prop}_v1_RF_vs_XGB"
+		)
+		results.append(result)
+
+	return results
+
+
+def physchem_rf_vs_knn() -> pd.DataFrame:
+	"""Compare random forest and KNN models on the Physchem v1 datasets."""
+	shared_configuration: dict[str, object] = {
+		"ad_measure": AD_MEASURES,
+		"run_AD": True,
+		"write_to_db": False,
+		"feature_selection": False,
+	}
+	
+	configuration_rf = shared_configuration | {"qsar_method": "rf"}
+	configuration_knn = shared_configuration | {"qsar_method": "knn"}
+	
+	comparison = ModelComparison()
+	
+	results = []
+	for prop in PHYSCHEM_PROPERTIES:
+		configuration_rf["dataset_name"] = f"{prop} v1 modeling"
+		configuration_knn["dataset_name"] = f"{prop} v1 modeling"
+
+		result = comparison.compare(
+			configuration_rf,
+			configuration_knn,
+			n_repeats=10,
+			comparison_name=f"{prop}_v1_RF_vs_KNN"
+		)
+		results.append(result)
+
+	return results
+
+
+def physchem_rf_feature_selection_comparison() -> pd.DataFrame:
+	"""Compare random forest models with and without feature selection on the Physchem v1 datasets."""
+	shared_configuration: dict[str, object] = {
+		"ad_measure": AD_MEASURES,
+		"run_AD": True,
+		"write_to_db": False,
+		"qsar_method": "rf",
+	}
+	
+	configuration_fs = shared_configuration | {"feature_selection": True}
+	configuration_no_fs = shared_configuration | {"feature_selection": False}
+	
+	comparison = ModelComparison()
+	
+	results = []
+	for prop in PHYSCHEM_PROPERTIES:
+		configuration_fs["dataset_name"] = f"{prop} v1 modeling"
+		configuration_no_fs["dataset_name"] = f"{prop} v1 modeling"
+
+		result = comparison.compare(
+			configuration_fs,
+			configuration_no_fs,
+			n_repeats=5,
+			comparison_name=f"{prop}_v1_RF_FS_vs_No_FS"
+		)
+		results.append(result)
+
+	return results
+
+
+def physchem_feature_set_comparison() -> pd.DataFrame:
+	"""Compare random forest models with and without feature selection on the Physchem v1 datasets."""
+	shared_configuration: dict[str, object] = {
+		"ad_measure": AD_MEASURES,
+		"run_AD": True,
+		"write_to_db": False,
+		"feature_selection": False,
+		"qsar_method": "rf",
+	}
+	
+	comparison = ModelComparison()
+	
+	comparisons = pd.DataFrame()
+	for prop in PHYSCHEM_PROPERTIES:
+		configuration = shared_configuration | {"dataset_name": f"{prop} v1 modeling"}
+		for i in range(len(DESCRIPTOR_SETS)):
+			for j in range(i + 1, len(DESCRIPTOR_SETS)):
+				configuration_a = configuration | {"descriptor_set_name": DESCRIPTOR_SETS[list(DESCRIPTOR_SETS.keys())[i]]}
+				configuration_b = configuration | {"descriptor_set_name": DESCRIPTOR_SETS[list(DESCRIPTOR_SETS.keys())[j]]}
+
+			result = comparison.compare(
+				configuration_a,
+				configuration_b,
+				n_repeats=10,
+				comparison_name=f"{prop}_v1_RF_{list(DESCRIPTOR_SETS.keys())[i]}_vs_{list(DESCRIPTOR_SETS.keys())[j]}"
+			)
+			comparisons = pd.concat([comparisons, result], ignore_index=True)
+
+	return comparisons
+
+
 def main():
 	# test_model_comparison()
-	# koc_rf_vs_gcm_10_repeats()
+
 	# koc_rf_vs_gcm()
 	# koc_rf_vs_xgboost()
 	# koc_rf_vs_knn()
 	# koc_rf_feature_selection_comparison()
 	# koc_rf_feature_set_comparisons()
-	bcf_rf_vs_gcm()
+	
+	# bcf_rf_vs_gcm()
 	# bcf_rf_vs_xgboost()
 	# bcf_rf_vs_knn()
 	# bcf_rf_feature_selection_comparison()
-
+	bcf_feature_set_comparisons()
+	
+	physchem_rf_vs_gcm()
+	physchem_rf_vs_xgboost()
+	physchem_rf_vs_knn()
+	# physchem_rf_feature_selection_comparison()
+	physchem_feature_set_comparison()
 
 if __name__ == "__main__":
 	main()
