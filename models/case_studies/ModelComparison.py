@@ -63,6 +63,12 @@ DESCRIPTOR_SETS = {
 	"PaDEL": "PaDEL-default"
 }
 
+RF_HYPERPARAMETERS = {
+	'estimator__max_features': ['sqrt', 'log2'],
+	'estimator__min_impurity_decrease': [10 ** x for x in range(-5, 0)],
+	'estimator__n_estimators': [10, 100, 250, 500]
+}
+
 
 class ModelComparison:
 	"""Build and compare two model configurations on identical repeated CV folds.
@@ -1175,8 +1181,35 @@ def koc_rf_feature_selection_comparison() -> pd.DataFrame:
 	result = comparison.compare(
 		configuration_fs,
 		configuration_no_fs,
-		n_repeats=10,
+		n_repeats=5,
 		comparison_name="KOC_v1_RF_FS_vs_No_FS"
+	)
+
+	return result
+
+
+def koc_rf_hyperparameters_comparison() -> pd.DataFrame:
+	"""Compare random forest models with and without hyperparameter tuning on the KOC v1 dataset."""
+	shared_configuration: dict[str, object] = {
+		"dataset_name": "KOC v1 modeling",
+		"ad_measure": AD_MEASURES,
+		"run_AD": True,
+		"write_to_db": False,
+		"qsar_method": "rf",
+	}
+	
+	configuration_no_hp = shared_configuration
+	configuration_hp = shared_configuration | {
+		"hyperparameters": {"hyperparameter_grid": RF_HYPERPARAMETERS}
+	}
+	
+	comparison = ModelComparison()
+	
+	result = comparison.compare(
+		configuration_no_hp,
+		configuration_hp,
+		n_repeats=5,
+		comparison_name="KOC_v1_RF_hyperparameters_comparison"
 	)
 
 	return result
@@ -1305,8 +1338,35 @@ def bcf_rf_feature_selection_comparison() -> pd.DataFrame:
 	result = comparison.compare(
 		configuration_fs,
 		configuration_no_fs,
-		n_repeats=10,
+		n_repeats=5,
 		comparison_name="BCF_v1_RF_FS_vs_No_FS"
+	)
+
+	return result
+
+
+def bcf_rf_hyperparameters_comparison() -> pd.DataFrame:
+	"""Compare random forest models with and without hyperparameter tuning on the BCF v1 dataset."""
+	shared_configuration: dict[str, object] = {
+		"dataset_name": "exp_prop_BCF_v1_modeling",
+		"ad_measure": AD_MEASURES,
+		"run_AD": True,
+		"write_to_db": False,
+		"qsar_method": "rf",
+	}
+	
+	configuration_no_hp = shared_configuration
+	configuration_hp = shared_configuration | {
+		"hyperparameters": {"hyperparameter_grid": RF_HYPERPARAMETERS}
+	}
+	
+	comparison = ModelComparison()
+	
+	result = comparison.compare(
+		configuration_no_hp,
+		configuration_hp,
+		n_repeats=5,
+		comparison_name="BCF_v1_RF_hyperparameters_comparison"
 	)
 
 	return result
@@ -1463,7 +1523,38 @@ def physchem_rf_feature_selection_comparison() -> pd.DataFrame:
 	return results
 
 
-def physchem_feature_set_comparison() -> pd.DataFrame:
+def physchem_rf_hyperparameters_comparison() -> pd.DataFrame:
+	"""Compare random forest models with and without hyperparameter tuning on the Physchem v1 datasets."""
+	shared_configuration: dict[str, object] = {
+		"ad_measure": AD_MEASURES,
+		"run_AD": True,
+		"write_to_db": False,
+		"feature_selection": False,
+		"qsar_method": "rf",
+	}
+	
+	comparison = ModelComparison()
+	
+	comparisons = pd.DataFrame()
+	for prop in PHYSCHEM_PROPERTIES:
+		configuration = shared_configuration | {"dataset_name": f"{prop} v1 modeling"}
+		configuration_a = configuration
+		configuration_b = configuration | {
+			"hyperparameters": {"hyperparameter_grid": RF_HYPERPARAMETERS}
+		}
+
+		result = comparison.compare(
+			configuration_a,
+			configuration_b,
+			n_repeats=5,
+			comparison_name=f"{prop}_v1_RF_hyperparameters_comparison"
+		)
+		comparisons = pd.concat([comparisons, result], ignore_index=True)
+
+	return comparisons
+
+
+def physchem_feature_set_comparisons() -> pd.DataFrame:
 	"""Compare random forest models with and without feature selection on the Physchem v1 datasets."""
 	shared_configuration: dict[str, object] = {
 		"ad_measure": AD_MEASURES,
@@ -1494,6 +1585,310 @@ def physchem_feature_set_comparison() -> pd.DataFrame:
 	return comparisons
 
 
+def rbiodeg_rf_vs_gcm() -> pd.DataFrame:
+	"""Compare random forest and group contribution models on the RBIODEG_301F v2 dataset."""
+	shared_configuration: dict[str, object] = {
+		"dataset_name": "exp_prop_RBIODEG_301F v2 modeling",
+		"feature_selection": False,
+		"ad_measure": AD_MEASURES,
+		"run_AD": True,
+		"write_to_db": False,
+	}
+	
+	configuration_rf = shared_configuration | {"qsar_method": "rf"}
+	configuration_gcm = shared_configuration | {"qsar_method": "gcm"}
+	
+	comparison = ModelComparison()
+	
+	return comparison.compare(
+		configuration_rf,
+		configuration_gcm,
+		n_repeats=10,
+		comparison_name="RBIODEG_301F_v2_RF_vs_GCM",
+	)
+
+
+def rbiodeg_rf_vs_xgboost() -> pd.DataFrame:
+	"""Compare random forest and XGBoost models on the RBIODEG_301F v2 dataset."""
+	shared_configuration: dict[str, object] = {
+		"dataset_name": "exp_prop_RBIODEG_301F v2 modeling",
+		"feature_selection": False,
+		"ad_measure": AD_MEASURES,
+		"run_AD": True,
+		"write_to_db": False,
+	}
+	
+	configuration_rf = shared_configuration | {"qsar_method": "rf"}
+	configuration_xgb = shared_configuration | {"qsar_method": "xgb"}
+	
+	comparison = ModelComparison()
+	
+	return comparison.compare(
+		configuration_rf,
+		configuration_xgb,
+		n_repeats=10,
+		comparison_name="RBIODEG_301F_v2_RF_vs_XGB",
+	)
+
+
+def rbiodeg_rf_vs_knn() -> pd.DataFrame:
+	"""Compare random forest and KNN models on the RBIODEG_301F v2 dataset."""
+	shared_configuration: dict[str, object] = {
+		"dataset_name": "exp_prop_RBIODEG_301F v2 modeling",
+		"feature_selection": False,
+		"ad_measure": AD_MEASURES,
+		"run_AD": True,
+		"write_to_db": False,
+	}
+	
+	configuration_rf = shared_configuration | {"qsar_method": "rf"}
+	configuration_knn = shared_configuration | {"qsar_method": "knn"}
+	
+	comparison = ModelComparison()
+	
+	return comparison.compare(
+		configuration_rf,
+		configuration_knn,
+		n_repeats=10,
+		comparison_name="RBIODEG_301F_v2_RF_vs_KNN",
+	)
+
+
+def rbiodeg_rf_feature_selection_comparison() -> pd.DataFrame:
+	"""Compare random forest models with and without feature selection on the RBIODEG_301F v2 dataset."""
+	shared_configuration: dict[str, object] = {
+		"dataset_name": "exp_prop_RBIODEG_301F v2 modeling",
+		"ad_measure": AD_MEASURES,
+		"run_AD": True,
+		"write_to_db": False,
+		"qsar_method": "rf",
+	}
+	
+	configuration_fs = shared_configuration | {"feature_selection": True}
+	configuration_no_fs = shared_configuration | {"feature_selection": False}
+	
+	comparison = ModelComparison()
+	
+	result = comparison.compare(
+		configuration_fs,
+		configuration_no_fs,
+		n_repeats=5,
+		comparison_name="RBIODEG_301F_v2_RF_FS_vs_No_FS"
+	)
+
+	return result
+
+
+def rbiodeg_rf_hyperparameters_comparison() -> pd.DataFrame:
+	"""Compare random forest models with and without hyperparameter tuning on the RBIODEG_301F v2 dataset."""
+	shared_configuration: dict[str, object] = {
+		"dataset_name": "exp_prop_RBIODEG_301F v2 modeling",
+		"ad_measure": AD_MEASURES,
+		"run_AD": True,
+		"write_to_db": False,
+		"qsar_method": "rf",
+	}
+	
+	configuration_no_hp = shared_configuration
+	configuration_hp = shared_configuration | {
+		"hyperparameters": {"hyperparameter_grid": RF_HYPERPARAMETERS}
+	}
+	
+	comparison = ModelComparison()
+	
+	result = comparison.compare(
+		configuration_no_hp,
+		configuration_hp,
+		n_repeats=5,
+		comparison_name="RBIODEG_301F_v2_RF_hyperparameters_comparison"
+	)
+
+	return result
+
+
+def rbiodeg_feature_set_comparisons() -> pd.DataFrame:
+	"""Compare random forest models with and without feature selection on the RBIODEG_301F v2 dataset."""
+	shared_configuration: dict[str, object] = {
+		"dataset_name": "exp_prop_RBIODEG_301F v2 modeling",
+		"ad_measure": AD_MEASURES,
+		"run_AD": True,
+		"feature_selection": False,
+		"write_to_db": False,
+		"qsar_method": "rf"
+	}
+
+	configurations = []
+	for descriptor_set in DESCRIPTOR_SETS:
+		configurations.append(shared_configuration | {"descriptor_set_name": DESCRIPTOR_SETS[descriptor_set]})
+
+	comparison = ModelComparison()
+
+	comparisons = pd.DataFrame()
+	for i in range(len(configurations)):
+		for j in range(i + 1, len(configurations)):
+			temp = comparison.compare(
+				configurations[i],
+				configurations[j],
+				n_repeats=10,
+				comparison_name=f"RBIODEG_301F_v2_RF_{list(DESCRIPTOR_SETS.keys())[i]}_vs_{list(DESCRIPTOR_SETS.keys())[j]}",
+			)
+			comparisons = pd.concat([comparisons, temp], ignore_index=True)
+
+	return comparisons
+
+
+def fishtox_rf_vs_gcm() -> pd.DataFrame:
+	"""Compare random forest and group contribution models on the ECOTOX_2024_12_12_96HR_Fish_LC50_v3a dataset."""
+	shared_configuration: dict[str, object] = {
+		"dataset_name": "ECOTOX_2024_12_12_96HR_Fish_LC50_v3a modeling",
+		"feature_selection": False,
+		"ad_measure": AD_MEASURES,
+		"run_AD": True,
+		"write_to_db": False,
+	}
+	
+	configuration_rf = shared_configuration | {"qsar_method": "rf"}
+	configuration_gcm = shared_configuration | {"qsar_method": "gcm"}
+	
+	comparison = ModelComparison()
+	
+	return comparison.compare(
+		configuration_rf,
+		configuration_gcm,
+		n_repeats=10,
+		comparison_name="FISHTOX_v3a_RF_vs_GCM",
+	)
+
+
+def fishtox_rf_vs_xgboost() -> pd.DataFrame:
+	"""Compare random forest and XGBoost models on the ECOTOX_2024_12_12_96HR_Fish_LC50_v3a dataset."""
+	shared_configuration: dict[str, object] = {
+		"dataset_name": "ECOTOX_2024_12_12_96HR_Fish_LC50_v3a modeling",
+		"feature_selection": False,
+		"ad_measure": AD_MEASURES,
+		"run_AD": True,
+		"write_to_db": False,
+	}
+	
+	configuration_rf = shared_configuration | {"qsar_method": "rf"}
+	configuration_xgb = shared_configuration | {"qsar_method": "xgb"}
+	
+	comparison = ModelComparison()
+	
+	return comparison.compare(
+		configuration_rf,
+		configuration_xgb,
+		n_repeats=10,
+		comparison_name="FISHTOX_v3a_RF_vs_XGB",
+	)
+
+
+def fishtox_rf_vs_knn() -> pd.DataFrame:
+	"""Compare random forest and KNN models on the ECOTOX_2024_12_12_96HR_Fish_LC50_v3a dataset."""
+	shared_configuration: dict[str, object] = {
+		"dataset_name": "ECOTOX_2024_12_12_96HR_Fish_LC50_v3a modeling",
+		"feature_selection": False,
+		"ad_measure": AD_MEASURES,
+		"run_AD": True,
+		"write_to_db": False,
+	}
+	
+	configuration_rf = shared_configuration | {"qsar_method": "rf"}
+	configuration_knn = shared_configuration | {"qsar_method": "knn"}
+	
+	comparison = ModelComparison()
+	
+	return comparison.compare(
+		configuration_rf,
+		configuration_knn,
+		n_repeats=10,
+		comparison_name="FISHTOX_v3a_RF_vs_KNN",
+	)
+
+
+def fishtox_rf_feature_selection_comparison() -> pd.DataFrame:
+	"""Compare random forest models with and without feature selection on the ECOTOX_2024_12_12_96HR_Fish_LC50_v3a dataset."""
+	shared_configuration: dict[str, object] = {
+		"dataset_name": "ECOTOX_2024_12_12_96HR_Fish_LC50_v3a modeling",
+		"ad_measure": AD_MEASURES,
+		"run_AD": True,
+		"write_to_db": False,
+		"qsar_method": "rf",
+	}
+	
+	configuration_fs = shared_configuration | {"feature_selection": True}
+	configuration_no_fs = shared_configuration | {"feature_selection": False}
+	
+	comparison = ModelComparison()
+	
+	result = comparison.compare(
+		configuration_fs,
+		configuration_no_fs,
+		n_repeats=5,
+		comparison_name="FISHTOX_v3a_RF_FS_vs_No_FS"
+	)
+
+	return result
+
+
+def fishtox_rf_hyperparameters_comparison() -> pd.DataFrame:
+	"""Compare random forest models with and without hyperparameter tuning on the ECOTOX_2024_12_12_96HR_Fish_LC50_v3a dataset."""
+	shared_configuration: dict[str, object] = {
+		"dataset_name": "ECOTOX_2024_12_12_96HR_Fish_LC50_v3a modeling",
+		"ad_measure": AD_MEASURES,
+		"run_AD": True,
+		"write_to_db": False,
+		"qsar_method": "rf",
+	}
+	
+	configuration_no_hp = shared_configuration
+	configuration_hp = shared_configuration | {
+		"hyperparameters": {"hyperparameter_grid": RF_HYPERPARAMETERS}
+	}
+	
+	comparison = ModelComparison()
+	
+	result = comparison.compare(
+		configuration_no_hp,
+		configuration_hp,
+		n_repeats=5,
+		comparison_name="FISHTOX_v3a_RF_hyperparameters_comparison"
+	)
+
+	return result
+
+
+def fishtox_feature_set_comparisons() -> pd.DataFrame:
+	"""Compare random forest models with and without feature selection on the ECOTOX_2024_12_12_96HR_Fish_LC50_v3a dataset."""
+	shared_configuration: dict[str, object] = {
+		"dataset_name": "ECOTOX_2024_12_12_96HR_Fish_LC50_v3a modeling",
+		"ad_measure": AD_MEASURES,
+		"run_AD": True,
+		"feature_selection": False,
+		"write_to_db": False,
+		"qsar_method": "rf"
+	}
+
+	configurations = []
+	for descriptor_set in DESCRIPTOR_SETS:
+		configurations.append(shared_configuration | {"descriptor_set_name": DESCRIPTOR_SETS[descriptor_set]})
+
+	comparison = ModelComparison()
+
+	comparisons = pd.DataFrame()
+	for i in range(len(configurations)):
+		for j in range(i + 1, len(configurations)):
+			temp = comparison.compare(
+				configurations[i],
+				configurations[j],
+				n_repeats=10,
+				comparison_name=f"FISHTOX_v3a_RF_{list(DESCRIPTOR_SETS.keys())[i]}_vs_{list(DESCRIPTOR_SETS.keys())[j]}",
+			)
+			comparisons = pd.concat([comparisons, temp], ignore_index=True)
+
+	return comparisons
+
+
 def main():
 	# test_model_comparison()
 
@@ -1501,19 +1896,37 @@ def main():
 	# koc_rf_vs_xgboost()
 	# koc_rf_vs_knn()
 	# koc_rf_feature_selection_comparison()
+	# koc_rf_hyperparameters_comparison()
 	# koc_rf_feature_set_comparisons()
 	
 	# bcf_rf_vs_gcm()
 	# bcf_rf_vs_xgboost()
 	# bcf_rf_vs_knn()
 	# bcf_rf_feature_selection_comparison()
-	bcf_feature_set_comparisons()
+	# bcf_rf_hyperparameters_comparison()
+	# bcf_feature_set_comparisons()
 	
-	physchem_rf_vs_gcm()
-	physchem_rf_vs_xgboost()
-	physchem_rf_vs_knn()
-	# physchem_rf_feature_selection_comparison()
-	physchem_feature_set_comparison()
+	# physchem_rf_vs_gcm()
+	# physchem_rf_vs_xgboost()
+	# physchem_rf_vs_knn()
+	# physchem_rf_feature_selection_comparison() # TODO: This is taking a long time to run, so skipping for now
+	physchem_rf_hyperparameters_comparison()
+	physchem_feature_set_comparisons()
+
+	rbiodeg_rf_vs_gcm()
+	rbiodeg_rf_vs_xgboost()
+	rbiodeg_rf_vs_knn()
+	# rbiodeg_rf_feature_selection_comparison() # TODO: This is taking a long time to run, so skipping for now
+	rbiodeg_rf_hyperparameters_comparison()
+	rbiodeg_feature_set_comparisons()
+
+	fishtox_rf_vs_gcm()
+	fishtox_rf_vs_xgboost()
+	fishtox_rf_vs_knn()
+	# fishtox_rf_feature_selection_comparison() # TODO: This is taking a long time to run, so skipping for now
+	fishtox_rf_hyperparameters_comparison()
+	fishtox_feature_set_comparisons()
+
 
 if __name__ == "__main__":
 	main()
