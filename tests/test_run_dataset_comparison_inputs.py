@@ -70,6 +70,74 @@ class RunDatasetComparisonInputTests(unittest.TestCase):
         self.assertFalse(params.write_excel_files)
         self.assertFalse(params.write_results_dict)
 
+    def test_prepare_params_accepts_hyperparameter_grid_override(self):
+        grid = {"estimator__n_estimators": [10, 100]}
+        configuration = {
+            "dataset_name": "test",
+            "qsar_method": "rf",
+            "hyperparameters": {"hyperparameter_grid": grid},
+        }
+        runner = RunDataset()
+
+        with patch.object(runner, "post_init"):
+            params = ModelComparison()._prepare_params(runner, configuration)
+
+        self.assertEqual(params.hyperparameters.hyperparameter_grid, grid)
+
+    def test_generate_params_from_model_id_reuses_saved_configuration(self):
+        stored_model = SimpleNamespace(
+            qsar_method="rf",
+            datasetName="KOC v1 modeling",
+            descriptorSetName="WebTEST-default",
+            splittingName="RND_REPRESENTATIVE",
+            embedding=["descriptor_a", "LOGP_Martin"],
+            applicabilityDomainName=(
+                f"{pc.Applicability_Domain_TEST_Embedding_Euclidean} and "
+                f"{pc.Applicability_Domain_TEST_Fragment_Counts}"
+            ),
+            hyperparameters={
+                "estimator__max_features": "log2",
+                "estimator__n_estimators": 250,
+            },
+            hyperparameter_grid={"estimator__max_features": ["sqrt", "log2"]},
+            external_dataset_name="KOC v2 external",
+        )
+        runner = RunDataset()
+
+        with patch("models.RunDataset.ModelInitializer") as initializer:
+            initializer.return_value.initModel.return_value = stored_model
+            with patch.object(runner, "post_init"):
+                params = runner.generate_params_from_model_id(123)
+        comparison_params = ModelComparison()._prepare_params(runner, params)
+
+        self.assertEqual(params.hyperparameters.dataset_name, "KOC v1 modeling")
+        self.assertEqual(params.hyperparameters.qsar_method, "rf")
+        self.assertEqual(params.hyperparameters.descriptor_set_name, "WebTEST-default")
+        self.assertEqual(params.hyperparameters.splitting_name, "RND_REPRESENTATIVE")
+        self.assertEqual(
+            params.hyperparameters.hyperparameter_grid,
+            {
+                "estimator__max_features": ["log2"],
+                "estimator__n_estimators": [250],
+            },
+        )
+        self.assertEqual(params.embedding, ["descriptor_a", "LOGP_Martin"])
+        self.assertFalse(params.hyperparameters.feature_selection)
+        self.assertFalse(params.hyperparameters.run_rfe)
+        self.assertFalse(params.hyperparameters.run_sfs)
+        self.assertTrue(params.add_LOGP_Martin)
+        self.assertTrue(params.run_AD)
+        self.assertEqual(params.dataset_name_ext, "KOC v2 external")
+        self.assertFalse(comparison_params.cross_validate)
+        self.assertFalse(comparison_params.write_to_db)
+        self.assertIsNone(comparison_params.dataset_name_ext)
+
+    def test_generate_params_from_model_id_raises_for_unknown_model(self):
+        with patch("models.RunDataset.ModelInitializer") as initializer:
+            initializer.return_value.initModel.return_value = None
+            with self.assertRaisesRegex(LookupError, "Model 123"):
+                RunDataset().generate_params_from_model_id(123)
+
     def test_query_dataframes_uses_supplied_frames_without_database(self):
         params = SimpleNamespace(
             df_training=self.training,

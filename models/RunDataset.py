@@ -2,6 +2,7 @@
 
 import json
 import os
+from copy import deepcopy
 from typing import Optional, Union, List, Dict, Any, Iterator as _Iterator
 from io import StringIO
 from pathlib import Path
@@ -25,6 +26,7 @@ from model_ws_utilities import \
     call_do_predictions_from_df, \
     call_build_model_with_preselected_descriptors_from_df
 from models.ModelBuilder import Model as _QSARModel
+from model_ws_db_utilities import ModelInitializer
 
 from util.database_utilities import DatabaseUtilities
 from util.serialization_compat import serialize_model
@@ -1364,6 +1366,90 @@ class ModelLoader():
 
 class RunDataset:
     """Coordinate dataset retrieval, model building, and result persistence."""
+
+    def generate_params_from_model_id(self, model_id: int) -> RunParams:
+        """Create a comparison-ready configuration from a saved database model.
+
+        The stored descriptor embedding and selected estimator parameters are
+        reused as fixed inputs. The historical feature-selection process and
+        other run controls that were not saved with the model, such as
+        outlier-filter settings, cannot be reconstructed.
+        The returned ``RunParams`` can be passed directly to ``run`` or to
+        ``ModelComparison.compare``.
+        """
+        if not isinstance(model_id, int) or isinstance(model_id, bool) or model_id < 1:
+            raise ValueError("model_id must be a positive integer")
+
+        model = ModelInitializer().initModel(model_id)
+        if model is None:
+            raise LookupError(f"Model {model_id} could not be loaded from the database")
+
+        qsar_method = getattr(model, "qsar_method", None) or getattr(model, "regressor_name", None)
+        dataset_name = getattr(model, "datasetName", None)
+        descriptor_set_name = getattr(model, "descriptorSetName", None)
+        splitting_name = getattr(model, "splittingName", None)
+        embedding = getattr(model, "embedding", None)
+        if not all(
+            isinstance(value, str) and value
+            for value in (qsar_method, dataset_name, descriptor_set_name, splitting_name)
+        ):
+            raise ValueError(
+                f"Model {model_id} is missing required dataset, method, descriptor-set, or split metadata"
+            )
+        if (
+            not isinstance(embedding, list)
+            or not embedding
+            or not all(isinstance(descriptor, str) for descriptor in embedding)
+        ):
+            raise ValueError(f"Model {model_id} does not have a saved descriptor embedding")
+
+        ad_measure_name = getattr(model, "applicabilityDomainName", None)
+        ad_measure = ad_measure_name.split(" and ") if ad_measure_name else []
+        hyperparameters = Parameters.set_hyper_parameters(
+            qsar_method=qsar_method,
+            feature_selection=False,
+            descriptor_set_name=descriptor_set_name,
+            splitting_name=splitting_name,
+            dataset_name=dataset_name,
+            ad_measure=ad_measure,
+        )
+
+        selected_parameters = getattr(model, "hyperparameters", None)
+        if isinstance(selected_parameters, dict):
+            hyperparameters.hyperparameter_grid = {
+                name: [value] for name, value in selected_parameters.items()
+            }
+        else:
+            stored_grid = getattr(model, "hyperparameter_grid", None)
+            if not isinstance(stored_grid, dict):
+                raise ValueError(
+                    f"Model {model_id} does not have saved hyperparameter configuration"
+                )
+            hyperparameters.hyperparameter_grid = deepcopy(stored_grid)
+
+        for parameter_name, model_name in (
+            ("remove_log_p_descriptors", "remove_log_p_descriptors"),
+            ("scale_features", "scale_features"),
+            ("use_pmml_pipeline", "use_pmml"),
+            ("logp_columns", "logp_columns"),
+        ):
+            stored_value = getattr(model, model_name, None)
+            if stored_value is not None:
+                setattr(hyperparameters, parameter_name, stored_value)
+
+        for parameter_name in ("run_rfe", "run_sfs"):
+            if hasattr(hyperparameters, parameter_name):
+                setattr(hyperparameters, parameter_name, False)
+
+        return self.generate_params(
+            hyperparameters=hyperparameters,
+            embedding=embedding.copy(),
+            fs_previous_embedding=False,
+            add_LOGP_Martin="LOGP_Martin" in embedding,
+            run_AD=bool(ad_measure),
+            dataset_name_ext=getattr(model, "external_dataset_name", None),
+            subfolder=f"model_{model_id}_reconstruction",
+        )
 
     def generate_params(
         self,
