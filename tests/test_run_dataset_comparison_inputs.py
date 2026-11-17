@@ -334,6 +334,90 @@ class RunDatasetComparisonInputTests(unittest.TestCase):
             )
             self.assertFalse(any(path.suffix == ".csv" for path in output_dir.iterdir()))
 
+    def test_summarize_results_combines_completed_reports(self):
+        results = pd.DataFrame([
+            {"model": model, "repeat": 1, "fold": fold, "random_state": 1,
+             "training_size": 8, "test_size": 2, "MAE_Test": score}
+            for fold, scores in enumerate(((1.0, 2.0), (3.0, 4.0)), start=1)
+            for model, score in zip(("RF", "GCM"), scores)
+        ])
+
+        with TemporaryDirectory() as temporary_directory:
+            comparison = ModelComparison(output_root=Path(temporary_directory))
+            dataset_dir = Path(temporary_directory) / "KOC v1 modeling" / "comparisons"
+            baseline_dir = dataset_dir / "KOC_v1_RF_vs_GCM"
+            hyperparameter_dir = dataset_dir / "KOC_v1_hyperparameters"
+            for report_dir, configuration_details in (
+                (
+                    baseline_dir,
+                    (
+                        "qsar_method='rf'; descriptor_set_name='WebTEST-default'; "
+                        "feature_selection=False; additional_hyperparameters=False",
+                        "qsar_method='gcm'; descriptor_set_name='Mordred-default'; "
+                        "feature_selection=False; additional_hyperparameters=False",
+                    ),
+                ),
+                (
+                    hyperparameter_dir,
+                    (
+                        "qsar_method='rf'; descriptor_set_name='WebTEST-default'; "
+                        "feature_selection=True; additional_hyperparameters=False",
+                        "qsar_method='rf'; descriptor_set_name='WebTEST-default'; "
+                        "feature_selection=True; additional_hyperparameters=True",
+                    ),
+                ),
+            ):
+                comparison.save_results(
+                    results,
+                    report_dir,
+                    ("RF", "GCM"),
+                    "KOC v1 modeling",
+                    configuration_details,
+                    n_repeats=1,
+                    n_splits=2,
+                )
+
+            incomplete_dir = dataset_dir / "unfinished"
+            incomplete_dir.mkdir(parents=True)
+            with pd.ExcelWriter(incomplete_dir / "model_comparison.xlsx", engine="xlsxwriter") as writer:
+                pd.DataFrame({"partial": [1]}).to_excel(writer, index=False)
+
+            summary = comparison.summarize_results()
+
+            self.assertEqual(len(summary), 4)
+            self.assertEqual(
+                summary.columns.tolist(),
+                [
+                    "Dataset/Endpoint",
+                    "Comparison",
+                    "ML Method",
+                    "Descriptor Set",
+                    "Feature Selection",
+                    "Additional Hyperparameter Set",
+                    "Metric",
+                    "Available Fold Scores",
+                    "Mean Score",
+                    "Standard Deviation",
+                    "Median Score",
+                    "Minimum Score",
+                    "Maximum Score",
+                ],
+            )
+            gcm_row = summary.loc[summary["ML Method"] == "gcm"].iloc[0]
+            self.assertEqual(gcm_row["Descriptor Set"], "Mordred-default")
+            self.assertFalse(gcm_row["Feature Selection"])
+            self.assertFalse(gcm_row["Additional Hyperparameter Set"])
+            additional_hyperparameter_rows = summary.loc[
+                summary["Additional Hyperparameter Set"]
+            ]
+            self.assertEqual(len(additional_hyperparameter_rows), 1)
+            self.assertTrue(
+                (summary["Dataset/Endpoint"] == "KOC v1 modeling").all()
+            )
+            self.assertTrue((summary["Metric"] == "MAE_Test").all())
+            self.assertTrue((summary["Available Fold Scores"] == 2).all())
+            self.assertTrue((Path(temporary_directory) / "summary.xlsx").is_file())
+
     def test_build_configurations_populates_cache_for_later_comparison(self):
         build_calls = []
         built_ids = []

@@ -1,5 +1,6 @@
 """Compare two RunDataset model configurations with repeated local CV."""
 
+import ast
 import hashlib
 import json
 import re
@@ -451,6 +452,101 @@ class ModelComparison:
 
 		return self.process_results(pd.DataFrame(results))
 
+	def summarize_results(self) -> pd.DataFrame:
+		"""Combine completed model-comparison reports into ``summary.xlsx``."""
+		root = self._model_comparisons_root()
+		summary_columns = [
+			"Dataset/Endpoint",
+			"Comparison",
+			"ML Method",
+			"Descriptor Set",
+			"Feature Selection",
+			"Additional Hyperparameter Set",
+			"Metric",
+			"Available Fold Scores",
+			"Mean Score",
+			"Standard Deviation",
+			"Median Score",
+			"Minimum Score",
+			"Maximum Score",
+		]
+		summary_rows: list[dict[str, object]] = []
+
+		for report_path in sorted(root.rglob("model_comparison.xlsx")):
+			with pd.ExcelFile(report_path) as workbook:
+				required_sheets = {"Comparison Summary", "Model Summary"}
+				if not required_sheets.issubset(workbook.sheet_names):
+					logging.warning(
+						"Skipping incomplete model-comparison report %s: missing required worksheets",
+						report_path,
+					)
+					continue
+				comparison_summary = pd.read_excel(
+					workbook, sheet_name="Comparison Summary", header=None
+				)
+				model_summary = pd.read_excel(workbook, sheet_name="Model Summary")
+
+			if comparison_summary.shape[0] < 7 or comparison_summary.shape[1] < 2:
+				logging.warning("Skipping malformed model-comparison report %s", report_path)
+				continue
+			dataset_name = comparison_summary.iat[3, 1]
+			configuration_details = [
+				comparison_summary.iat[5, 1],
+				comparison_summary.iat[6, 1],
+			]
+			if not isinstance(dataset_name, str) or not all(
+				isinstance(details, str) for details in configuration_details
+			):
+				logging.warning("Skipping model-comparison report with missing metadata: %s", report_path)
+				continue
+			if not {"Model", "Metric"}.issubset(model_summary.columns):
+				logging.warning("Skipping model-comparison report with invalid summary sheet: %s", report_path)
+				continue
+
+			model_names = model_summary["Model"].drop_duplicates().tolist()
+			if len(model_names) != len(configuration_details):
+				logging.warning(
+					"Skipping model-comparison report with mismatched configurations and model summaries: %s",
+					report_path,
+				)
+				continue
+
+			for configuration_index, (model_name, details) in enumerate(
+				zip(model_names, configuration_details)
+			):
+				metadata = self._parse_configuration_metadata(details)
+				if (
+					metadata["additional_hyperparameters"] is None
+					and configuration_index == 1
+					and "hyperparameter" in report_path.parent.name.lower()
+				):
+					metadata["additional_hyperparameters"] = True
+				if metadata["additional_hyperparameters"] is None:
+					metadata["additional_hyperparameters"] = False
+				model_rows = model_summary.loc[model_summary["Model"] == model_name]
+				for _, statistics in model_rows.iterrows():
+					row: dict[str, object] = {
+						"Dataset/Endpoint": dataset_name,
+						"Comparison": report_path.parent.name,
+						"ML Method": metadata["qsar_method"],
+						"Descriptor Set": metadata["descriptor_set_name"],
+						"Feature Selection": metadata["feature_selection"],
+						"Additional Hyperparameter Set": metadata["additional_hyperparameters"],
+					}
+					row.update({
+						column: statistics[column]
+						for column in model_summary.columns
+						if column != "Model"
+					})
+					summary_rows.append(row)
+
+		summary = pd.DataFrame(summary_rows, columns=summary_columns)
+		root.mkdir(parents=True, exist_ok=True)
+		output_path = root / "summary.xlsx"
+		summary.to_excel(output_path, index=False)
+		logging.info("Saved model-comparison summary with %d rows to %s", len(summary), output_path)
+		return summary
+
 	def process_results(self, results: pd.DataFrame) -> pd.DataFrame:
 		"""Apply configured result transformations; override to add analyses."""
 		processed = results.copy()
@@ -497,8 +593,23 @@ class ModelComparison:
 	def _format_configuration(configuration: RunConfiguration, params: RunParams) -> str:
 		if isinstance(configuration, Mapping):
 			values = dict(configuration)
+			has_additional_hyperparameters = bool(configuration.get("hyperparameters"))
 		else:
 			values = vars(params.hyperparameters)
+			has_additional_hyperparameters = bool(params.hyperparameters.hyperparameter_grid)
+		dataset_name = getattr(params.hyperparameters, "dataset_name", "")
+		qsar_method = getattr(params.hyperparameters, "qsar_method", "")
+		values.setdefault("dataset_name", dataset_name)
+		values.setdefault("qsar_method", qsar_method)
+		values.setdefault(
+			"descriptor_set_name",
+			getattr(params.hyperparameters, "descriptor_set_name", "WebTEST-default"),
+		)
+		feature_selection = getattr(params.hyperparameters, "feature_selection", None)
+		if feature_selection is None:
+			feature_selection = qsar_method not in {"gcm", "svm"}
+		values.setdefault("feature_selection", feature_selection)
+		values["additional_hyperparameters"] = has_additional_hyperparameters
 		excluded = {"engine", "session", "df_training", "df_prediction", "df_external"}
 		display_values = []
 		for key, value in values.items():
@@ -507,6 +618,50 @@ class ModelComparison:
 			if value is None or isinstance(value, (str, bool, int, float, list, tuple)):
 				display_values.append(f"{key}={value!r}")
 		return "; ".join(display_values) or params.hyperparameters.qsar_method
+
+	@staticmethod
+	def _configuration_detail_value(details: str, key: str) -> Optional[object]:
+		match = re.search(
+			rf"(?:^|;\s*){re.escape(key)}=(.*?)(?=;\s*[A-Za-z_]\w*=|$)",
+			details,
+		)
+		if match is None:
+			return None
+		raw_value = match.group(1).strip()
+		try:
+			return ast.literal_eval(raw_value)
+		except (SyntaxError, ValueError):
+			return raw_value
+
+	@classmethod
+	def _parse_configuration_metadata(cls, details: str) -> dict[str, object]:
+		qsar_method = cls._configuration_detail_value(details, "qsar_method")
+		descriptor_set_name = cls._configuration_detail_value(details, "descriptor_set_name")
+		feature_selection = cls._configuration_detail_value(details, "feature_selection")
+		additional_hyperparameters = cls._configuration_detail_value(
+			details, "additional_hyperparameters"
+		)
+
+		if feature_selection is None:
+			feature_selection = qsar_method not in {"gcm", "svm"}
+		if descriptor_set_name is None:
+			descriptor_set_name = "WebTEST-default"
+		if not isinstance(additional_hyperparameters, bool):
+			hyperparameters = cls._configuration_detail_value(details, "hyperparameters")
+			hyperparameter_grid = cls._configuration_detail_value(details, "hyperparameter_grid")
+			if hyperparameters is not None:
+				additional_hyperparameters = hyperparameters not in ({}, [], "")
+			elif hyperparameter_grid is not None:
+				additional_hyperparameters = hyperparameter_grid not in ({}, [], "")
+			else:
+				additional_hyperparameters = None
+
+		return {
+			"qsar_method": qsar_method if isinstance(qsar_method, str) else "",
+			"descriptor_set_name": descriptor_set_name,
+			"feature_selection": bool(feature_selection),
+			"additional_hyperparameters": additional_hyperparameters,
+		}
 
 	def _prepare_params(
 		self,
@@ -1909,23 +2064,23 @@ def main():
 	# physchem_rf_vs_gcm()
 	# physchem_rf_vs_xgboost()
 	# physchem_rf_vs_knn()
-	# physchem_rf_feature_selection_comparison() # TODO: This is taking a long time to run, so skipping for now
-	physchem_rf_hyperparameters_comparison()
-	physchem_feature_set_comparisons()
+	physchem_rf_feature_selection_comparison() # TODO: This is taking a long time to run, so skipping for now
+	physchem_rf_hyperparameters_comparison() # TODO: This is taking a long time to run, so skipping for now (finished running for some datasets but not all)
+	physchem_feature_set_comparisons() # TODO: This is taking a long time to run, so skipping for now
 
-	rbiodeg_rf_vs_gcm()
-	rbiodeg_rf_vs_xgboost()
-	rbiodeg_rf_vs_knn()
-	# rbiodeg_rf_feature_selection_comparison() # TODO: This is taking a long time to run, so skipping for now
-	rbiodeg_rf_hyperparameters_comparison()
-	rbiodeg_feature_set_comparisons()
+	# rbiodeg_rf_vs_gcm()
+	# rbiodeg_rf_vs_xgboost()
+	# rbiodeg_rf_vs_knn()
+	rbiodeg_rf_feature_selection_comparison() # TODO: This is taking a long time to run, so skipping for now
+	rbiodeg_rf_hyperparameters_comparison() # TODO: This is taking a long time to run, so skipping for now
+	rbiodeg_feature_set_comparisons() # TODO: This is taking a long time to run, so skipping for now
 
-	fishtox_rf_vs_gcm()
-	fishtox_rf_vs_xgboost()
-	fishtox_rf_vs_knn()
-	# fishtox_rf_feature_selection_comparison() # TODO: This is taking a long time to run, so skipping for now
-	fishtox_rf_hyperparameters_comparison()
-	fishtox_feature_set_comparisons()
+	# fishtox_rf_vs_gcm()
+	# fishtox_rf_vs_xgboost()
+	# fishtox_rf_vs_knn()
+	fishtox_rf_feature_selection_comparison() # TODO: This is taking a long time to run, so skipping for now
+	fishtox_rf_hyperparameters_comparison() # TODO: This is taking a long time to run, so skipping for now
+	fishtox_feature_set_comparisons() # TODO: This is taking a long time to run, so skipping for now
 
 
 if __name__ == "__main__":
