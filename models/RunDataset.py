@@ -684,8 +684,8 @@ class ModelBuilder:
                     embedding
                 )
     
-                # Add the fold index as a column
-                yield df_predictions.assign(cv_fold=fold_index)
+                # Keep fold labels one-based to match the database CV split convention.
+                yield df_predictions.assign(cv_fold=fold_index + 1)
     
         df_predictions_all = pd.concat(_fold_predictions(), ignore_index=True)
 
@@ -1045,64 +1045,110 @@ class ModelLoader():
         if fk_model_id is None:
             raise ValueError("fk_model_id must be provided.")
 
+        prediction_df = df.copy()
+        prediction_df["canon_qsar_smiles"] = prediction_df["canon_qsar_smiles"].astype(str)
+        prediction_df["qsar_predicted_value"] = pd.to_numeric(
+            prediction_df["pred"], errors="coerce"
+        )
+
+        if "cv_fold" in prediction_df.columns:
+            cv = pd.to_numeric(prediction_df["cv_fold"], errors="coerce")
+            if cv.isna().any():
+                raise ValueError("cv_fold contains null or non-numeric values.")
+            prediction_df["fk_splitting_id"] = cv.astype(int) + 1
+        else:
+            if fk_splitting_id is None:
+                raise ValueError("fk_splitting_id must be provided when cv_fold is not present.")
+            prediction_df["fk_splitting_id"] = fk_splitting_id
+
+        prediction_key = ["canon_qsar_smiles", "fk_splitting_id"]
+        output_columns = [
+            "qsar_predicted_value",
+            *[
+                column
+                for column in prediction_df.columns
+                if column.startswith("AD_")
+                or column.endswith(("_value", "_conclusion", "_reasoning", "_cutoff"))
+            ],
+        ]
+        output_columns = list(dict.fromkeys(output_columns))
+        conflicting_outputs = (
+            prediction_df.groupby(prediction_key, dropna=False)[output_columns]
+            .nunique(dropna=False)
+            .gt(1)
+            .any(axis=1)
+        )
+        if conflicting_outputs.any():
+            conflicting_key = conflicting_outputs[conflicting_outputs].index[0]
+            raise ValueError(
+                "Duplicate prediction key has conflicting predicted or applicability-domain "
+                f"outputs: canon_qsar_smiles={conflicting_key[0]!r}, "
+                f"fk_splitting_id={conflicting_key[1]!r}."
+            )
+
+        duplicate_count = int(prediction_df.duplicated(subset=prediction_key).sum())
+        if duplicate_count:
+            logging.warning(
+                "For %s set, dropping %s duplicate prediction rows for identical "
+                "chemical/splitting keys.",
+                set_name,
+                duplicate_count,
+            )
+            prediction_df = prediction_df.drop_duplicates(
+                subset=prediction_key, keep="first"
+            ).reset_index(drop=True)
+
         total_count = 0
 
-        for start in range(0, len(df), chunk_size):
-            batch_df = df.iloc[start:start + chunk_size].copy()
-            created_at = datetime.now()
+        try:
+            for start in range(0, len(prediction_df), chunk_size):
+                batch_df = prediction_df.iloc[start:start + chunk_size].copy()
+                created_at = datetime.now()
 
-            rows_df = pd.DataFrame({
-                "canon_qsar_smiles": batch_df["canon_qsar_smiles"].astype(str),
-                "qsar_predicted_value": pd.to_numeric(batch_df["pred"], errors="coerce"),
-            })
+                rows_df = batch_df[
+                    ["canon_qsar_smiles", "qsar_predicted_value", "fk_splitting_id"]
+                ].copy()
 
-            if "cv_fold" in batch_df.columns:
-                cv = pd.to_numeric(batch_df["cv_fold"], errors="coerce")
-                if cv.isna().any():
-                    raise ValueError("cv_fold contains null or non-numeric values.")
-                rows_df["fk_splitting_id"] = cv.astype(int) + 1
-            else:
-                if fk_splitting_id is None:
-                    raise ValueError("fk_splitting_id must be provided when cv_fold is not present.")
-                rows_df["fk_splitting_id"] = fk_splitting_id
+                rows_df["fk_model_id"] = fk_model_id
+                rows_df["created_by"] = user
+                rows_df["updated_by"] = user
+                rows_df["created_at"] = created_at
+                rows_df["updated_at"] = created_at
 
-            rows_df["fk_model_id"] = fk_model_id
-            rows_df["created_by"] = user
-            rows_df["updated_by"] = user
-            rows_df["created_at"] = created_at
-            rows_df["updated_at"] = created_at
+                prediction_records = rows_df.replace({np.nan: None}).to_dict(orient="records")
 
-            prediction_records = rows_df.replace({np.nan: None}).to_dict(orient="records")
-
-            prediction_ids = self.dbl.create_many(
-                table="predictions",
-                records=prediction_records,
-                commit=False,
-            )
-
-            total_count += len(prediction_ids)
-            logging.info(
-                f"For {set_name} set, loaded prediction batch {start}..{start + len(batch_df) - 1} "
-                f"({len(prediction_ids)} rows)"
-            )
-
-            ad_cols = [c for c in batch_df.columns if c.startswith("AD_")]
-            if ad_cols:
-                ad_df = self.build_predictions_ad_estimates_df(
-                    df=batch_df,
-                    prediction_ids=prediction_ids,
-                    user=user,
+                prediction_ids = self.dbl.create_many(
+                    table="predictions",
+                    records=prediction_records,
+                    commit=False,
                 )
 
-                if ad_df is not None and not ad_df.empty:
-                    ad_records = ad_df.replace({np.nan: None}).to_dict(orient="records")
-                    self.dbl.create_many(
-                        table="predictions_ad_estimates",
-                        records=ad_records,
-                        commit=False,
+                total_count += len(prediction_ids)
+                logging.info(
+                    f"For {set_name} set, loaded prediction batch {start}..{start + len(batch_df) - 1} "
+                    f"({len(prediction_ids)} rows)"
+                )
+
+                ad_cols = [c for c in batch_df.columns if c.startswith("AD_")]
+                if ad_cols:
+                    ad_df = self.build_predictions_ad_estimates_df(
+                        df=batch_df,
+                        prediction_ids=prediction_ids,
+                        user=user,
                     )
 
-            self.dbl.session.commit()
+                    if ad_df is not None and not ad_df.empty:
+                        ad_records = ad_df.replace({np.nan: None}).to_dict(orient="records")
+                        self.dbl.create_many(
+                            table="predictions_ad_estimates",
+                            records=ad_records,
+                            commit=False,
+                        )
+
+                self.dbl.session.commit()
+        except SQLAlchemyError:
+            self.dbl.session.rollback()
+            raise
 
         logging.info(f"For {set_name} set, # predictions loaded: {total_count}")
         return total_count
@@ -2092,7 +2138,7 @@ class RunDataset:
                 pred_df = fold_dict.get("pred")
                 if pred_df is not None and not pred_df.empty:
                     for idx, row in pred_df.iterrows():
-                        cv_fold_data.append({"ID": row["ID"], "cv_fold": fold_index})
+                        cv_fold_data.append({"ID": row["ID"], "cv_fold": fold_index + 1})
         
             if cv_fold_data:
                 df_cv_folds = pd.DataFrame(cv_fold_data)
@@ -2378,7 +2424,7 @@ class RunDataset:
 
 def test_run_dataset() -> None:
     """Run the database-backed KOC example configuration."""
-    write_to_db = False
+    write_to_db = True
     dataset_name = "KOC v1 modeling"
     # descriptor_set_name = "WebTEST-default"
     qsar_method = "gcm"
@@ -2498,11 +2544,11 @@ def test_ternary_run() -> None:
 
 
 def main() -> None:
-    # test_run_dataset()
+    test_run_dataset()
     # test_customized_run()
     # test_wrongly_customized_run()
     # test_binary_run()
-    test_ternary_run()
+    # test_ternary_run()
 
 
 if __name__ == "__main__":

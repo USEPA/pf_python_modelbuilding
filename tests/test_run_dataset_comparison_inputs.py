@@ -176,7 +176,7 @@ class RunDatasetComparisonInputTests(unittest.TestCase):
         self.assertIs(params.df_cv_dict, folds)
         self.assertEqual(params.cv.get_n_splits(), 2)
 
-    def test_crossvalidate_uses_all_supplied_folds_and_zero_based_labels(self):
+    def test_crossvalidate_uses_all_supplied_folds_and_one_based_labels(self):
         folds = {
             0: {"train": self.training.iloc[2:].copy(), "pred": self.training.iloc[:2].copy()},
             1: {"train": self.training.iloc[:2].copy(), "pred": self.training.iloc[2:].copy()},
@@ -189,14 +189,19 @@ class RunDatasetComparisonInputTests(unittest.TestCase):
                 "pred": prediction["Property"],
             })
 
+        params = SimpleNamespace(
+            df_cv_dict=folds,
+            hyperparameters=SimpleNamespace(),
+            model=SimpleNamespace(embedding=None, num_categories=None),
+            is_binary=True,
+        )
         with patch.object(ModelBuilder, "build_and_test_model2", side_effect=build_predictions) as build:
-            with patch("StatsCalculator.calculate_binary_statistics_sklearn", return_value={"metric": 1.0}):
-                predictions, stats = ModelBuilder.crossvalidate(
-                    folds, SimpleNamespace(), None, is_binary=True
-                )
+            with patch("models.RunDataset.calculate_binary_statistics_sklearn", return_value={"metric": 1.0}):
+                with patch("builtins.breakpoint"):
+                    predictions, stats = ModelBuilder.crossvalidate(params)
 
         self.assertEqual(build.call_count, 2)
-        self.assertEqual(predictions["cv_fold"].tolist(), [0, 0, 1, 1])
+        self.assertEqual(predictions["cv_fold"].tolist(), [1, 1, 2, 2])
         self.assertEqual(stats, {"metric": 1.0})
 
     def test_comparison_fold_uses_run_dataset_stages_and_isolates_embedding(self):
