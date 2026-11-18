@@ -382,6 +382,29 @@ class RunDatasetComparisonInputTests(unittest.TestCase):
                     n_splits=2,
                 )
 
+            fewer_folds_dir = dataset_dir / "KOC_v1_RF_vs_GCM_fewer_folds"
+            fewer_folds_dir.mkdir(parents=True)
+            with pd.ExcelFile(baseline_dir / "model_comparison.xlsx") as workbook:
+                report_sheets = {
+                    sheet_name: pd.read_excel(
+                        workbook,
+                        sheet_name=sheet_name,
+                        header=None if sheet_name == "Comparison Summary" else 0,
+                    )
+                    for sheet_name in workbook.sheet_names
+                }
+            report_sheets["Model Summary"]["Available Fold Scores"] = 1
+            with pd.ExcelWriter(
+                fewer_folds_dir / "model_comparison.xlsx", engine="xlsxwriter"
+            ) as writer:
+                for sheet_name, dataframe in report_sheets.items():
+                    dataframe.to_excel(
+                        writer,
+                        sheet_name=sheet_name,
+                        index=False,
+                        header=sheet_name != "Comparison Summary",
+                    )
+
             incomplete_dir = dataset_dir / "unfinished"
             incomplete_dir.mkdir(parents=True)
             with pd.ExcelWriter(incomplete_dir / "model_comparison.xlsx", engine="xlsxwriter") as writer:
@@ -393,22 +416,22 @@ class RunDatasetComparisonInputTests(unittest.TestCase):
             self.assertEqual(
                 summary.columns.tolist(),
                 [
-                    "Dataset/Endpoint",
-                    "Comparison",
-                    "ML Method",
+                    "Dataset",
+                    "QSAR Method",
                     "Descriptor Set",
                     "Feature Selection",
                     "Additional Hyperparameter Set",
                     "Metric",
                     "Available Fold Scores",
                     "Mean Score",
+                    "Normalized Mean Score",
                     "Standard Deviation",
                     "Median Score",
                     "Minimum Score",
                     "Maximum Score",
                 ],
             )
-            gcm_row = summary.loc[summary["ML Method"] == "gcm"].iloc[0]
+            gcm_row = summary.loc[summary["QSAR Method"] == "gcm"].iloc[0]
             self.assertEqual(gcm_row["Descriptor Set"], "Mordred-default")
             self.assertFalse(gcm_row["Feature Selection"])
             self.assertFalse(gcm_row["Additional Hyperparameter Set"])
@@ -416,12 +439,31 @@ class RunDatasetComparisonInputTests(unittest.TestCase):
                 summary["Additional Hyperparameter Set"]
             ]
             self.assertEqual(len(additional_hyperparameter_rows), 1)
-            self.assertTrue(
-                (summary["Dataset/Endpoint"] == "KOC v1 modeling").all()
-            )
+            self.assertTrue((summary["Dataset"] == "KOC v1 modeling").all())
             self.assertTrue((summary["Metric"] == "MAE_Test").all())
-            self.assertTrue((summary["Available Fold Scores"] == 2).all())
-            self.assertTrue((Path(temporary_directory) / "summary.xlsx").is_file())
+            baseline_row = summary.loc[
+                (summary["QSAR Method"] == "rf")
+                & (summary["Descriptor Set"] == "WebTEST-default")
+                & ~summary["Feature Selection"]
+                & ~summary["Additional Hyperparameter Set"]
+            ].iloc[0]
+            self.assertEqual(baseline_row["Available Fold Scores"], 2)
+            self.assertEqual(baseline_row["Normalized Mean Score"], 1)
+            self.assertAlmostEqual(gcm_row["Normalized Mean Score"], 1.5)
+
+            summary_path = Path(temporary_directory) / "summary.xlsx"
+            self.assertTrue(summary_path.is_file())
+            namespace = {
+                "main": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+            }
+            with zipfile.ZipFile(summary_path) as workbook:
+                sheet = ElementTree.fromstring(
+                    workbook.read("xl/worksheets/sheet1.xml")
+                )
+            pane = sheet.find("main:sheetViews/main:sheetView/main:pane", namespace)
+            self.assertEqual(pane.attrib["ySplit"], "1")
+            self.assertIsNotNone(sheet.find("main:autoFilter", namespace))
+            self.assertIsNotNone(sheet.find("main:cols/main:col", namespace))
 
     def test_build_configurations_populates_cache_for_later_comparison(self):
         build_calls = []

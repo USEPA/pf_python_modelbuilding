@@ -456,15 +456,15 @@ class ModelComparison:
 		"""Combine completed model-comparison reports into ``summary.xlsx``."""
 		root = self._model_comparisons_root()
 		summary_columns = [
-			"Dataset/Endpoint",
-			"Comparison",
-			"ML Method",
+			"Dataset",
+			"QSAR Method",
 			"Descriptor Set",
 			"Feature Selection",
 			"Additional Hyperparameter Set",
 			"Metric",
 			"Available Fold Scores",
 			"Mean Score",
+			"Normalized Mean Score",
 			"Standard Deviation",
 			"Median Score",
 			"Minimum Score",
@@ -526,9 +526,9 @@ class ModelComparison:
 				model_rows = model_summary.loc[model_summary["Model"] == model_name]
 				for _, statistics in model_rows.iterrows():
 					row: dict[str, object] = {
-						"Dataset/Endpoint": dataset_name,
+						"Dataset": dataset_name,
 						"Comparison": report_path.parent.name,
-						"ML Method": metadata["qsar_method"],
+						"QSAR Method": metadata["qsar_method"],
 						"Descriptor Set": metadata["descriptor_set_name"],
 						"Feature Selection": metadata["feature_selection"],
 						"Additional Hyperparameter Set": metadata["additional_hyperparameters"],
@@ -541,9 +541,94 @@ class ModelComparison:
 					summary_rows.append(row)
 
 		summary = pd.DataFrame(summary_rows, columns=summary_columns)
+		unique_columns = [
+			"Dataset",
+			"QSAR Method",
+			"Descriptor Set",
+			"Feature Selection",
+			"Additional Hyperparameter Set",
+			"Metric",
+		]
+		summary = (
+			summary.sort_values("Available Fold Scores", ascending=False, kind="stable")
+			.drop_duplicates(subset=unique_columns, keep="first")
+			.reset_index(drop=True)
+		)
+		summary.sort_values(
+			by=["Dataset", "QSAR Method", "Descriptor Set", "Feature Selection", "Additional Hyperparameter Set", "Metric"],
+			ascending=[True, True, True, True, True, True],
+			kind="stable",
+			inplace=True,
+		)
+
+		baseline_mask = (
+			summary["QSAR Method"].eq("rf")
+			& summary["Descriptor Set"].eq("WebTEST-default")
+			& summary["Feature Selection"].eq(False)
+			& summary["Additional Hyperparameter Set"].eq(False)
+		)
+		baseline_scores = {
+			(dataset, metric): score
+			for dataset, metric, score in zip(
+				summary.loc[baseline_mask, "Dataset"],
+				summary.loc[baseline_mask, "Metric"],
+				summary.loc[baseline_mask, "Mean Score"],
+			)
+		}
+		normalized_scores: list[float] = []
+		missing_baselines: set[tuple[object, object]] = set()
+		zero_baselines: set[tuple[object, object]] = set()
+		for dataset, metric, mean_score in zip(
+			summary["Dataset"], summary["Metric"], summary["Mean Score"]
+		):
+			key = (dataset, metric)
+			baseline_score = baseline_scores.get(key)
+			if baseline_score is None or pd.isna(baseline_score):
+				missing_baselines.add(key)
+				normalized_scores.append(float("nan"))
+			elif baseline_score == 0:
+				zero_baselines.add(key)
+				normalized_scores.append(float("nan"))
+			elif pd.isna(mean_score):
+				normalized_scores.append(float("nan"))
+			else:
+				normalized_scores.append(mean_score / baseline_score)
+		summary["Normalized Mean Score"] = normalized_scores
+		for dataset, metric in sorted(missing_baselines):
+			logging.warning(
+				"No RF/WebTEST-default baseline score is available for dataset %s and metric %s",
+				dataset,
+				metric,
+			)
+		for dataset, metric in sorted(zero_baselines):
+			logging.warning(
+				"Cannot normalize scores for dataset %s and metric %s because the baseline is zero",
+				dataset,
+				metric,
+			)
+
 		root.mkdir(parents=True, exist_ok=True)
 		output_path = root / "summary.xlsx"
-		summary.to_excel(output_path, index=False)
+		with pd.ExcelWriter(output_path, engine="xlsxwriter") as writer:
+			summary.to_excel(writer, sheet_name="Summary", index=False)
+			worksheet = writer.sheets["Summary"]
+			header_format = writer.book.add_format({
+				"bold": True,
+				"bg_color": "#D9EAF7",
+				"border": 1,
+				"text_wrap": True,
+				"valign": "vcenter",
+			})
+			worksheet.freeze_panes(1, 0)
+			worksheet.autofilter(0, 0, max(len(summary), 1), len(summary.columns) - 1)
+			for column_index, column in enumerate(summary.columns):
+				if len(summary):
+					content_width = summary[column].astype(str).map(len).max()
+				else:
+					content_width = 0
+				width = min(max(len(str(column)), content_width) + 2, 42)
+				worksheet.set_column(column_index, column_index, max(width, 12))
+			worksheet.set_row(0, 32, header_format)
 		logging.info("Saved model-comparison summary with %d rows to %s", len(summary), output_path)
 		return summary
 
@@ -2044,6 +2129,12 @@ def fishtox_feature_set_comparisons() -> pd.DataFrame:
 	return comparisons
 
 
+def summarize_results() -> None:
+	"""Summarize the results of the model comparisons."""
+	summarizer = ModelComparison()
+	summarizer.summarize_results()
+
+
 def main():
 	# test_model_comparison()
 
@@ -2081,6 +2172,8 @@ def main():
 	fishtox_rf_feature_selection_comparison() # TODO: This is taking a long time to run, so skipping for now
 	fishtox_rf_hyperparameters_comparison() # TODO: This is taking a long time to run, so skipping for now
 	fishtox_feature_set_comparisons() # TODO: This is taking a long time to run, so skipping for now
+
+	summarize_results()
 
 
 if __name__ == "__main__":
