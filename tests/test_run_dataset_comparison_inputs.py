@@ -339,6 +339,31 @@ class RunDatasetComparisonInputTests(unittest.TestCase):
             )
             self.assertFalse(any(path.suffix == ".csv" for path in output_dir.iterdir()))
 
+    def test_get_dataset_average_std_uses_data_querier(self):
+        df_pv = pd.DataFrame({"canon_qsar_smiles": ["C"], "prop_value": [1.0]})
+        with (
+            patch(
+                "models.case_studies.ModelComparison.DataQuerier.getSession",
+                return_value=object(),
+            ),
+            patch(
+                "models.case_studies.ModelComparison.du.get_dataset_details",
+                return_value={"property_name": "KOC"},
+            ),
+            patch(
+                "models.case_studies.ModelComparison.ExpDataGetter.get_mapped_property_values",
+                return_value=(df_pv, {}),
+            ),
+            patch(
+                "models.case_studies.ModelComparison.DataQuerier.get_average_within_chemical_std",
+                return_value=0.25,
+            ) as average_std,
+        ):
+            result = ModelComparison._get_dataset_average_std("KOC v1 modeling")
+
+        self.assertEqual(result, 0.25)
+        average_std.assert_called_once_with(df_pv, property_name="KOC")
+
     def test_summarize_results_combines_completed_reports(self):
         results = pd.DataFrame([
             {"model": model, "repeat": 1, "fold": fold, "random_state": 1,
@@ -417,6 +442,7 @@ class RunDatasetComparisonInputTests(unittest.TestCase):
                 summary.columns.tolist(),
                 [
                     "Dataset",
+                    "Average Standard Deviation of Property Value",
                     "QSAR Method",
                     "Descriptor Set",
                     "Feature Selection",

@@ -21,6 +21,9 @@ from models.RunDataset import (
 	RunDataset,
 	RunParams,
 )
+from models.ModelToExcel import DataQuerier
+import models.db_utilities.dataset_utilities_db as du
+from models.db_utilities.raw_exp_data_db import ExpDataGetter
 from util import predict_constants as pc
 
 import logging
@@ -457,6 +460,7 @@ class ModelComparison:
 		root = self._model_comparisons_root()
 		summary_columns = [
 			"Dataset",
+			"Average Standard Deviation of Property Value",
 			"QSAR Method",
 			"Descriptor Set",
 			"Feature Selection",
@@ -471,6 +475,7 @@ class ModelComparison:
 			"Maximum Score",
 		]
 		summary_rows: list[dict[str, object]] = []
+		dataset_average_std: dict[str, float] = {}
 
 		for report_path in sorted(root.rglob("model_comparison.xlsx")):
 			with pd.ExcelFile(report_path) as workbook:
@@ -511,6 +516,9 @@ class ModelComparison:
 				)
 				continue
 
+			if dataset_name not in dataset_average_std:
+				dataset_average_std[dataset_name] = self._get_dataset_average_std(dataset_name)
+			average_std = dataset_average_std[dataset_name]
 			for configuration_index, (model_name, details) in enumerate(
 				zip(model_names, configuration_details)
 			):
@@ -527,6 +535,7 @@ class ModelComparison:
 				for _, statistics in model_rows.iterrows():
 					row: dict[str, object] = {
 						"Dataset": dataset_name,
+						"Average Standard Deviation of Property Value": average_std,
 						"Comparison": report_path.parent.name,
 						"QSAR Method": metadata["qsar_method"],
 						"Descriptor Set": metadata["descriptor_set_name"],
@@ -631,6 +640,35 @@ class ModelComparison:
 			worksheet.set_row(0, 32, header_format)
 		logging.info("Saved model-comparison summary with %d rows to %s", len(summary), output_path)
 		return summary
+
+	@staticmethod
+	def _get_dataset_average_std(dataset_name: str) -> float:
+		"""Get the average within-chemical target standard deviation for a dataset."""
+		try:
+			session = DataQuerier.getSession()
+			dataset_info = du.get_dataset_details(session, dataset_name)
+			property_name = dataset_info.get("property_name")
+			if not isinstance(property_name, str) or not property_name:
+				logging.warning(
+					"No property name is available for dataset %s", dataset_name
+				)
+				return float("nan")
+			df_pv, _ = ExpDataGetter().get_mapped_property_values(
+				session,
+				dataset_name,
+				4,
+				duplicate_strategy="id_suffix",
+			)
+			return DataQuerier.get_average_within_chemical_std(
+				df_pv,
+				property_name=property_name,
+			)
+		except Exception:
+			logging.exception(
+				"Could not calculate average within-chemical standard deviation for dataset %s",
+				dataset_name,
+			)
+			return float("nan")
 
 	def process_results(self, results: pd.DataFrame) -> pd.DataFrame:
 		"""Apply configured result transformations; override to add analyses."""
@@ -2137,6 +2175,7 @@ def summarize_results() -> None:
 
 def main():
 	# test_model_comparison()
+	summarize_results()
 
 	# koc_rf_vs_gcm()
 	# koc_rf_vs_xgboost()
