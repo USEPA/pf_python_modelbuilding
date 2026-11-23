@@ -1171,12 +1171,13 @@ class DataQuerier:
 
         temp = temp.dropna(subset=[value_col])
 
-        # Compute std dev per chemical; ignore groups with fewer than 2 values
+        # Compute std dev per chemical; ignore groups with fewer than 2 values or no variation in values
         per_chem_std = (
             temp.groupby(smiles_col)[value_col]
-            .std(ddof=1)
+            .std(ddof=0)
             .dropna()
         )
+        per_chem_std = per_chem_std[per_chem_std > 0]  # Exclude zero std devs (no variation)
 
         return float(per_chem_std.mean()) if not per_chem_std.empty else np.nan
 
