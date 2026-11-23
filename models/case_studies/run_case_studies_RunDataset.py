@@ -70,6 +70,40 @@ from StatsCalculator import calculate_binary_statistics, calculate_continuous_st
 from models.RunDataset import Parameters, RunDataset
 runner = RunDataset()
 
+AD_MEASURES = [
+	pc.Applicability_Domain_TEST_Embedding_Euclidean,
+	pc.Applicability_Domain_TEST_Fragment_Counts,
+]
+
+PHYSCHEM_PROPERTIES = [
+	"HLC",
+	"WS",
+	"VP",
+	"BP",
+	"LogP",
+	"MP"
+]
+
+DESCRIPTOR_SETS = {
+	"WebTEST": "WebTEST-default",
+	"Mordred": "Mordred-default",
+	"ToxPrints": "ToxPrints-default",
+	"RDKit": "RDKit-default",
+	"PaDEL": "PaDEL-default"
+}
+
+RF_HYPERPARAMETERS = {
+	'estimator__max_features': ['sqrt', 'log2'],
+	'estimator__min_impurity_decrease': [10 ** x for x in range(-5, 0)],
+	'estimator__n_estimators': [10, 100, 250, 500]
+}
+
+QSAR_METHODS = [
+    "gcm",
+    "rf",
+    "xgb",
+    "knn"
+]
 
 
 def run_example():
@@ -689,14 +723,46 @@ def run_other_test_set(model, dataset_name_other):
     print(stats)
 
 
+def run_biodeg_301F_v4():
+    dataset_name = 'exp_prop_RBIODEG_301F v4 modeling'
+    write_to_db = False
+    append_to_models_folder = "_RunDataset_test"
 
+    for qsar_method in QSAR_METHODS:
+        for descriptor_set_name in DESCRIPTOR_SETS.values():
+            for fs in [False, True]:
+                params = runner.generate_params(
+                    write_to_db=write_to_db,
+                    dataset_name=dataset_name,
+                    qsar_method=qsar_method,
+                    # descriptor_set_name=descriptor_set_name, # Uncomment once descriptor sets are available for this dataset
+                    # splitting_name="RND_REPRESENTATIVE",
+                    feature_selection=fs,
+                    append_to_models_folder=append_to_models_folder,
+                    ad_measure=AD_MEASURES
+                )
+                
+                runner.run(params)
 
-
+                if qsar_method == "rf":
+                    params = runner.generate_params(
+                        write_to_db=write_to_db,
+                        dataset_name=dataset_name,
+                        qsar_method=qsar_method,
+                        # descriptor_set_name=descriptor_set_name, # Uncomment once descriptor sets are available for this dataset
+                        # splitting_name="RND_REPRESENTATIVE",
+                        feature_selection=fs,
+                        append_to_models_folder=append_to_models_folder,
+                        ad_measure=AD_MEASURES,
+                        hyperparameters={"hyperparameter_grid": RF_HYPERPARAMETERS}
+                    )
+                    
+                    runner.run(params)
 
 
 def run_biodeg_301F():
     
-    dataset_name = 'exp_prop_RBIODEG_301F v2 modeling'  # automapped one
+    dataset_name = 'exp_prop_RBIODEG_301F v4 modeling'  # automapped one
 
     # write_to_db = True
     write_to_db = False
@@ -727,7 +793,7 @@ def run_biodeg_301F():
 
     descriptor_service = descriptor_set_name.replace("-default", "").lower()
     # tsv_file_path = Path(r"C:\Users\tmarti02\OneDrive - Environmental Protection Agency (EPA)\0 java\0 model_management\ghs-data-gathering\data\experimental\RIFM_2026_08_12\excel files\SMILES_OECD 301F_RASD_NON CBI.tsv")
-    tsv_file_name = f"SMILES_OECD 301F_RASD_NON CBI_v2_RBIODEG_{descriptor_service}.tsv"            
+    tsv_file_name = f"SMILES_OECD 301F_RASD_NON CBI_v4_RBIODEG_{descriptor_service}.tsv"            
     tsv_file_path = Path(PROJECT_ROOT) / "data" / "datasets" / "RBIODEG external" / tsv_file_name         
         
     df_external = pd.read_csv(tsv_file_path, delimiter='\t')
@@ -1052,7 +1118,7 @@ def main():
     # _full_test_mte()
     
     # Run Functions?
-    run_example()
+    # run_example()
     # run_Koc()
     # run_BCF()
     # run_Koc_knn_ga()
@@ -1062,6 +1128,7 @@ def main():
     # run_RIFM_model_on_ECHA_test_set()
     # run_continuous_model_on_test_set()
     # run_percentage_biodegradation()
+    run_biodeg_301F_v4()
     # run_biodeg_301F() # need external set data file
     # run_pchem()
     # run_biodeg_nite()
