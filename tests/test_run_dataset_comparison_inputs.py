@@ -381,10 +381,10 @@ class RunDatasetComparisonInputTests(unittest.TestCase):
                 (
                     baseline_dir,
                     (
-                        "qsar_method='rf'; descriptor_set_name='WebTEST-default'; "
-                        "feature_selection=False; additional_hyperparameters=False",
-                        "qsar_method='gcm'; descriptor_set_name='Mordred-default'; "
-                        "feature_selection=False; additional_hyperparameters=False",
+                    "qsar_method='rf'; descriptor_set_name='WebTEST-default'; "
+                    "feature_selection=False; additional_hyperparameters=False",
+                    "qsar_method='gcm'; descriptor_set_name='Mordred-default'; "
+                    "feature_selection=False; additional_hyperparameters=False",
                     ),
                 ),
                 (
@@ -418,7 +418,13 @@ class RunDatasetComparisonInputTests(unittest.TestCase):
                     )
                     for sheet_name in workbook.sheet_names
                 }
-            report_sheets["Model Summary"]["Available Fold Scores"] = 1
+                additional_metric = report_sheets["Model Summary"].copy()
+                additional_metric["Metric"] = "R2_Test"
+                report_sheets["Model Summary"] = pd.concat(
+                    [report_sheets["Model Summary"], additional_metric],
+                    ignore_index=True,
+                )
+                report_sheets["Model Summary"]["Available Fold Scores"] = 1
             with pd.ExcelWriter(
                 fewer_folds_dir / "model_comparison.xlsx", engine="xlsxwriter"
             ) as writer:
@@ -435,9 +441,36 @@ class RunDatasetComparisonInputTests(unittest.TestCase):
             with pd.ExcelWriter(incomplete_dir / "model_comparison.xlsx", engine="xlsxwriter") as writer:
                 pd.DataFrame({"partial": [1]}).to_excel(writer, index=False)
 
-            summary = comparison.summarize_results()
+            second_dataset_dir = (
+                Path(temporary_directory)
+                / "KOC v2 modeling"
+                / "comparisons"
+                / "KOC_v2_RF_vs_GCM"
+            )
+            second_dataset_results = pd.DataFrame([
+                {"model": model, "repeat": 1, "fold": fold, "random_state": 1,
+                 "training_size": 8, "test_size": 2, "MAE_Test": score}
+                for fold, scores in enumerate(((1.0, 4.0), (1.0, 4.0)), start=1)
+                for model, score in zip(("RF", "GCM"), scores)
+            ])
+            comparison.save_results(
+                second_dataset_results,
+                second_dataset_dir,
+                ("RF", "GCM"),
+                "KOC v2 modeling",
+                (
+                    "qsar_method='rf'; descriptor_set_name='WebTEST-default'; "
+                    "feature_selection=False; additional_hyperparameters=False",
+                    "qsar_method='gcm'; descriptor_set_name='Mordred-default'; "
+                    "feature_selection=False; additional_hyperparameters=False",
+                ),
+                n_repeats=1,
+                n_splits=2,
+            )
+            with patch.object(comparison, "_get_dataset_average_std", return_value=0.25):
+                summary = comparison.summarize_results()
 
-            self.assertEqual(len(summary), 4)
+            self.assertEqual(len(summary), 8)
             self.assertEqual(
                 summary.columns.tolist(),
                 [
@@ -465,8 +498,8 @@ class RunDatasetComparisonInputTests(unittest.TestCase):
                 summary["Additional Hyperparameter Set"]
             ]
             self.assertEqual(len(additional_hyperparameter_rows), 1)
-            self.assertTrue((summary["Dataset"] == "KOC v1 modeling").all())
-            self.assertTrue((summary["Metric"] == "MAE_Test").all())
+            self.assertEqual(set(summary["Dataset"]), {"KOC v1 modeling", "KOC v2 modeling"})
+            self.assertEqual(set(summary["Metric"]), {"MAE_Test", "R2_Test"})
             baseline_row = summary.loc[
                 (summary["QSAR Method"] == "rf")
                 & (summary["Descriptor Set"] == "WebTEST-default")
@@ -479,6 +512,34 @@ class RunDatasetComparisonInputTests(unittest.TestCase):
 
             summary_path = Path(temporary_directory) / "summary.xlsx"
             self.assertTrue(summary_path.is_file())
+            with pd.ExcelFile(summary_path) as workbook:
+                self.assertEqual(
+                    set(workbook.sheet_names),
+                    {"MAE_Test", "R2_Test", "Average Performance"},
+                )
+                for metric in ("MAE_Test", "R2_Test"):
+                    metric_summary = pd.read_excel(workbook, sheet_name=metric)
+                    self.assertNotIn("Metric", metric_summary.columns)
+                    self.assertEqual(
+                        set(metric_summary["Dataset"]),
+                        {"KOC v1 modeling"}
+                        if metric == "R2_Test"
+                        else {"KOC v1 modeling", "KOC v2 modeling"},
+                    )
+                self.assertEqual(
+                    len(pd.read_excel(workbook, sheet_name="R2_Test")),
+                    2,
+                )
+                average_performance = pd.read_excel(
+                    workbook, sheet_name="Average Performance"
+                )
+                average_mae = average_performance.loc[
+                    average_performance["Metric"] == "MAE_Test"
+                ]
+                self.assertEqual(average_mae["QSAR Method"].tolist(), ["rf", "gcm"])
+                self.assertEqual(average_mae["Datasets"].tolist(), [2, 2])
+                self.assertAlmostEqual(average_mae.iloc[0]["Average Mean Score"], 5 / 3)
+                self.assertEqual(average_mae.iloc[1]["Average Mean Score"], 3.5)
             namespace = {
                 "main": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
             }

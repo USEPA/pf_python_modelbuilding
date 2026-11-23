@@ -456,7 +456,7 @@ class ModelComparison:
 		return self.process_results(pd.DataFrame(results))
 
 	def summarize_results(self) -> pd.DataFrame:
-		"""Combine completed model-comparison reports into ``summary.xlsx``."""
+		"""Combine comparison reports into metric and average-performance sheets."""
 		root = self._model_comparisons_root()
 		summary_columns = [
 			"Dataset",
@@ -616,11 +616,71 @@ class ModelComparison:
 				metric,
 			)
 
+		average_stat_columns = [
+			"Average Standard Deviation of Property Value",
+			"Available Fold Scores",
+			"Mean Score",
+			"Normalized Mean Score",
+			"Standard Deviation",
+			"Median Score",
+			"Minimum Score",
+			"Maximum Score",
+		]
+		average_by_dataset = (
+			summary.groupby(
+				["Dataset", "QSAR Method", "Metric"], as_index=False, sort=False, dropna=False
+			)[average_stat_columns]
+			.mean()
+		)
+		average_column_names = {
+			column: (
+				column
+				if column == "Average Standard Deviation of Property Value"
+				else f"Average {column}"
+			)
+			for column in average_stat_columns
+		}
+		average_performance = (
+			average_by_dataset.groupby(
+				["QSAR Method", "Metric"], as_index=False, sort=False, dropna=False
+			).agg(
+				Datasets=("Dataset", "nunique"),
+				**{
+					average_column_names[column]: (column, "mean")
+					for column in average_stat_columns
+				},
+			)
+		)
+		mae_scores = (
+			average_performance.loc[
+				average_performance["Metric"].astype(str).str.contains("MAE", case=False),
+				["QSAR Method", "Average Mean Score"],
+			]
+			.groupby("QSAR Method", sort=False)["Average Mean Score"]
+			.mean()
+			.sort_values(kind="stable", na_position="last")
+		)
+		method_order = {
+			method: order for order, method in enumerate(mae_scores.index)
+		}
+		average_performance["_Method Order"] = average_performance["QSAR Method"].map(
+			method_order
+		)
+		average_performance.sort_values(
+			["_Method Order", "Metric"], kind="stable", inplace=True
+		)
+		average_performance.drop(columns="_Method Order", inplace=True)
+
 		root.mkdir(parents=True, exist_ok=True)
 		output_path = root / "summary.xlsx"
+		summary_sheets = [
+			(str(metric), metric_summary.drop(columns=["Metric"]))
+			for metric, metric_summary in summary.groupby("Metric", sort=False, dropna=False)
+		]
+		if not summary_sheets:
+			summary_sheets = [("Summary", summary.drop(columns=["Metric"]))]
+		summary_sheets.append(("Average Performance", average_performance))
 		with pd.ExcelWriter(output_path, engine="xlsxwriter") as writer:
-			summary.to_excel(writer, sheet_name="Summary", index=False)
-			worksheet = writer.sheets["Summary"]
 			header_format = writer.book.add_format({
 				"bold": True,
 				"bg_color": "#D9EAF7",
@@ -628,16 +688,21 @@ class ModelComparison:
 				"text_wrap": True,
 				"valign": "vcenter",
 			})
-			worksheet.freeze_panes(1, 0)
-			worksheet.autofilter(0, 0, max(len(summary), 1), len(summary.columns) - 1)
-			for column_index, column in enumerate(summary.columns):
-				if len(summary):
-					content_width = summary[column].astype(str).map(len).max()
-				else:
-					content_width = 0
-				width = min(max(len(str(column)), content_width) + 2, 42)
-				worksheet.set_column(column_index, column_index, max(width, 12))
-			worksheet.set_row(0, 32, header_format)
+			for sheet_name, metric_summary in summary_sheets:
+				metric_summary.to_excel(writer, sheet_name=sheet_name, index=False)
+				worksheet = writer.sheets[sheet_name]
+				worksheet.freeze_panes(1, 0)
+				worksheet.autofilter(
+					0, 0, max(len(metric_summary), 1), len(metric_summary.columns) - 1
+				)
+				for column_index, column in enumerate(metric_summary.columns):
+					if len(metric_summary):
+						content_width = metric_summary[column].astype(str).map(len).max()
+					else:
+						content_width = 0
+					width = min(max(len(str(column)), content_width) + 2, 42)
+					worksheet.set_column(column_index, column_index, max(width, 12))
+				worksheet.set_row(0, 32, header_format)
 		logging.info("Saved model-comparison summary with %d rows to %s", len(summary), output_path)
 		return summary
 
